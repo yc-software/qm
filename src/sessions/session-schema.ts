@@ -604,6 +604,38 @@ END $bot_work$`,
   ],
 };
 
+const BACKFILL_NULL_CALL_IDS: PgMigrationDefinition = {
+  id: "sessions/store/0065-backfill-null-call-ids",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TEMP TABLE null_call_items ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, kind, seq,
+             row_number() OVER (PARTITION BY tenant_id, session_id, turn_id, kind ORDER BY seq) AS rn
+        FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')`,
+    `CREATE TEMP TABLE backfilled_call_ids ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, rn, 'call_backfill_' || gen_random_uuid() AS call_id
+        FROM null_call_items WHERE kind = 'ToolCall'`,
+    `INSERT INTO backfilled_call_ids
+      SELECT r.tenant_id, r.session_id, r.turn_id, r.rn, 'call_backfill_' || gen_random_uuid()
+        FROM null_call_items r
+       WHERE r.kind = 'ToolResult' AND NOT EXISTS (
+         SELECT 1 FROM null_call_items c
+          WHERE c.kind = 'ToolCall' AND c.tenant_id = r.tenant_id AND c.session_id = r.session_id
+            AND c.turn_id IS NOT DISTINCT FROM r.turn_id AND c.rn = r.rn)`,
+    `ALTER TABLE items DISABLE TRIGGER items_append_only`,
+    `UPDATE items i SET call_id = b.call_id
+       FROM null_call_items n
+       JOIN backfilled_call_ids b
+         ON b.tenant_id = n.tenant_id AND b.session_id = n.session_id
+        AND b.turn_id IS NOT DISTINCT FROM n.turn_id AND b.rn = n.rn
+      WHERE i.tenant_id = n.tenant_id AND i.session_id = n.session_id AND i.seq = n.seq`,
+    `ALTER TABLE items ENABLE TRIGGER items_append_only`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_tool_call_id_present`,
+    `ALTER TABLE items ADD CONSTRAINT items_tool_call_id_present
+       CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult'))`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -626,6 +658,7 @@ export const SESSION_MIGRATIONS = [
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
   BOT_WORK_COLUMN,
+  BACKFILL_NULL_CALL_IDS,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

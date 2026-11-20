@@ -80,6 +80,8 @@ export type StepRecorder = ReturnType<typeof createStepRecorder>;
 
 export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown">, persist: Persist) {
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
+  const synthesizedIds: string[] = [];
+  const resolveCallId = (callId: string): string => callId || synthesizedIds[0] || callId;
   const called = new Set<string>();
   const executing = new Map<string, NewItem>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
@@ -105,38 +107,35 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
     }
     pending = null;
   };
-  const recordResult = (callId: string, content: ToolResultMessage["content"], isError: boolean): void => {
+  const recordResult = (rawCallId: string, content: ToolResultMessage["content"], isError: boolean): void => {
+    const callId = resolveCallId(rawCallId);
     const call = calls.get(callId);
     if (!call) return;
+    if (synthesizedIds[0] === callId) synthesizedIds.shift();
     calls.delete(callId);
-    if (!called.has(callId))
-      write(steppedCall({ kind: "ToolCall", tool: call.block.name, callId: call.block.id }, call));
+    if (!called.has(callId)) write(steppedCall({ kind: "ToolCall", tool: call.block.name, callId }, call));
     called.delete(callId);
     const logged = executing.get(callId);
     executing.delete(callId);
     const result: NewItem = logged ?? {
       kind: "ToolResult",
       tool: call.block.name,
-      callId: call.block.id,
+      callId,
       isError,
       text: resultText(content),
     };
-    write({
-      ...result,
-      callId: call.block.id,
-      body: { ...result.body, ...toolResultWire(result, content, isError) },
-    });
+    write({ ...result, body: { ...result.body, ...toolResultWire(result, content, isError) } });
   };
   return {
     emit: async (item: NewItem): Promise<Item | undefined> => {
-      const callId = item.callId ?? "";
+      const callId = resolveCallId(item.callId ?? "");
       const call = calls.get(callId);
       if (call && item.kind === "ToolCall") {
         called.add(callId);
-        return turn.emit(steppedCall({ ...item, callId: call.block.id }, call));
+        return turn.emit(steppedCall({ ...item, callId }, call));
       }
       if (call && item.kind === "ToolResult") {
-        executing.set(callId, item);
+        executing.set(callId, { ...item, callId });
         return undefined;
       }
       return turn.emit(item);
@@ -157,9 +156,15 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "shutdown
         } else if (block.type === "text") {
           if (block.text || block.textSignature !== undefined) parts.push({ index, block });
         } else {
-          // Some providers emit an empty tool-call id; synthesize one so it is never stored as NULL.
-          const stored = block.id ? block : { ...block, id: `call_${randomUUID()}` };
-          calls.set(block.id, { step: { ...step, index }, block: stored });
+          let stored = block;
+          if (!stored.id) {
+            stored = { ...block, id: `call_${randomUUID()}` };
+            synthesizedIds.push(stored.id);
+            console.warn(
+              `[agent] ${provider} ${model} sent tool call ${block.name} without an id; synthesized ${stored.id}`,
+            );
+          }
+          calls.set(stored.id, { step: { ...step, index }, block: stored });
         }
       });
       pending = { step, parts };

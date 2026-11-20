@@ -1,0 +1,50 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import pg from "pg";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
+import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { scopeId } from "../src/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+
+const MIGRATION = "sessions/store/0065-backfill-null-call-ids";
+
+test("the backfill pairs legacy NULL call ids in order and forbids new NULL tool call ids", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const session = await sessions.getOrCreateByThread("web:null-call-backfill", "dm", scopeId("personal", "U1"));
+  await sessions.appendMany({ sessionId: session.id }, [
+    { kind: "ToolCall", tool: "execute", callId: "seed-1" },
+    { kind: "ToolResult", tool: "execute", callId: "seed-1", text: "first" },
+    { kind: "ToolCall", tool: "execute", callId: "seed-2" },
+    { kind: "ToolResult", tool: "execute", callId: "seed-2", text: "second" },
+    { kind: "ToolResult", tool: "execute", callId: "seed-3", text: "orphan" },
+  ]);
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    await raw.query("ALTER TABLE items DROP CONSTRAINT items_tool_call_id_present");
+    await raw.query("ALTER TABLE items DISABLE TRIGGER items_append_only");
+    await raw.query("UPDATE items SET call_id = NULL WHERE session_id = $1", [session.id]);
+    await raw.query("ALTER TABLE items ENABLE TRIGGER items_append_only");
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = $1", [MIGRATION]);
+    await applyPgMigrations(raw, SESSION_MIGRATIONS.filter((m) => m.id === MIGRATION).map(definePgMigration));
+    const { rows } = await raw.query(
+      "SELECT kind, call_id FROM items WHERE session_id = $1 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq",
+      [session.id],
+    );
+    assert.equal(rows.length, 5);
+    for (const row of rows) assert.match(row.call_id, /^call_backfill_/);
+    assert.equal(rows[0]!.call_id, rows[1]!.call_id);
+    assert.equal(rows[2]!.call_id, rows[3]!.call_id);
+    assert.notEqual(rows[0]!.call_id, rows[2]!.call_id);
+    assert.notEqual(rows[4]!.call_id, rows[2]!.call_id);
+    assert.notEqual(rows[4]!.call_id, rows[0]!.call_id);
+    await raw.query("ALTER TABLE items DISABLE TRIGGER items_append_only");
+    await assert.rejects(
+      raw.query("UPDATE items SET call_id = NULL WHERE session_id = $1 AND kind = 'ToolCall'", [session.id]),
+      /items_tool_call_id_present/,
+    );
+  } finally {
+    await raw.end();
+  }
+});

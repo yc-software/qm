@@ -165,10 +165,16 @@ struct Transcript: Decodable {
   private enum CodingKeys: String, CodingKey {
     case latestPromptAt, items, earlierItems, pins, session, goal
   }
-  /// One undecodable item should not blank the whole conversation.
   private struct LossyItem: Decodable {
     let item: Item?
-    init(from decoder: Decoder) throws { item = try? Item(from: decoder) }
+    init(from decoder: Decoder) throws {
+      do {
+        item = try Item(from: decoder)
+      } catch {
+        Log.decoding.failure("Decoding transcript item", error)
+        item = nil
+      }
+    }
   }
 
   init(from decoder: Decoder) throws {
