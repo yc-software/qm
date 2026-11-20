@@ -242,33 +242,21 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     ),
     /"needsApproval":true/,
   );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "send-message" },
-      "alice@example.com",
-      "personal:alice@example.com",
-    ),
-    true,
-  );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "find-record" },
-      "alice@example.com",
-      "personal:alice@example.com",
-    ),
-    false,
-  );
+  const ask = (tool: string) =>
+    service.needsApproval("records", { operation: "invoke", tool }, "alice@example.com", "personal:alice@example.com");
+  assert.equal(await ask("send-message"), true);
+  assert.equal(await ask("find-record"), false);
+  assert.equal(await ask("send_message"), false, "an invented tool name is not an approval question");
   assert.equal(
     await service.needsApproval("records", { operation: "search" }, "alice@example.com", "personal:alice@example.com"),
     false,
   );
   await assert.rejects(
-    service.needsApproval(
+    service.call(
       "records",
       { operation: "invoke", tool: "send_message" },
       "alice@example.com",
+      undefined,
       "personal:alice@example.com",
     ),
     /Unknown Records tool: send_message\. Search for it first/,
