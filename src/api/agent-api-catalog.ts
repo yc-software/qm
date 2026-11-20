@@ -110,7 +110,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon, and one whose members are all from the organization saves memory to its notebook, which every conversation using it reads; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeActor, scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import type { PersonaResult } from "../src/personas/persona-service.ts";
 import { orgId } from "../src/config.ts";
@@ -52,7 +52,9 @@ function setup(overrides: Parameters<typeof buildApp>[1] = {}) {
     const session = await built.sessions.get(result.sessionId!);
     return { reply: result.reply ?? "", sessionId: result.sessionId!, scopeId: session!.scopeId };
   };
-  return { built, personas, enable, sysprompt };
+  const say = async (who: string, conversation: TurnRequest["conversation"], text: string) =>
+    (await built.app.turn({ surface: "test", actor: { externalId: who }, conversation, text })).reply ?? "";
+  return { built, personas, enable, sysprompt, say };
 }
 
 function ok<T>(result: PersonaResult<T>): T {
@@ -553,6 +555,45 @@ test("a persona pinned in a channel is worn by every conversation there until it
   ok(await personas.setAccess(ALICE, ada.id, [owner, { scopeId: "group:G_PIN", role: "read", pinned: true }]));
   const group = { kind: "group" as const, channelRef: "G_PIN", threadRef: "grp:G_PIN:t1" };
   assert.match((await sysprompt(CAROL, group)).reply, /## Persona: Ada/);
+});
+
+test("rooms that pin a persona share its notebook, read by every conversation that uses the persona", async () => {
+  const { built, personas, enable, sysprompt, say } = setup();
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada" }));
+  const pin = (id: string) => ({ scopeId: scopeId("channel", id), role: "read" as const, pinned: true });
+  const owner = { scopeId: scopeId("personal", ALICE), role: "owner" as const };
+  ok(await personas.setAccess(ALICE, ada.id, [owner, pin("C_ONE"), pin("C_TWO")]));
+  const publishMembers = [ALICE, BOB].map((externalId) => ({ externalId }));
+  const room = (id: string) => ({
+    kind: "channel" as const,
+    channelRef: id,
+    threadRef: `channel:${id}:t1`,
+    publishMembers,
+  });
+  const dm = (who: string) => ({ kind: "dm" as const, threadRef: `dm:${who}:notes` });
+  await built.memory.capture(scopeId("channel", "C_ONE"), ["The room met on Mondays."], Date.now());
+  assert.equal(await say(ALICE, room("C_ONE"), "!memorysearch Mondays"), "");
+  assert.equal(await say(ALICE, room("C_ONE"), "!memoryremember The launch moved to March 3."), "remembered 1");
+  assert.doesNotMatch(await built.memory.read(scopeId("channel", "C_ONE")), /March 3/);
+  assert.match(await say(BOB, room("C_TWO"), "!memorysearch launch moved"), /March 3/);
+  assert.equal(await say(BOB, dm(BOB), "!memorysearch launch moved"), "");
+  ok(await personas.assign(ALICE, (await built.sessions.get((await sysprompt(ALICE, dm(ALICE))).sessionId))!, ada.id));
+  assert.match(await say(ALICE, dm(ALICE), "!memorysearch launch moved"), /March 3/);
+  assert.equal(await say(ALICE, dm(ALICE), "!memoryremember Alice likes short replies."), "remembered 1");
+  assert.doesNotMatch(await built.memory.read(scopeId("persona", ada.id)), /short replies/);
+  const home = scopeId("personal", scopeActor(scopeId("persona", ada.id)));
+  let tidyTurn: ProvisionOptions | undefined;
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = (owner, opts) => provision(owner, (tidyTurn = opts));
+  const computers = built.sandboxResources.forTurn({ actorId: ALICE, scopeId: home, isCurrent: async () => true });
+  const computer = await computers.create(ALICE, home, await built.sandboxResources.defaultBackend());
+  await computers.setDefault(ALICE, home, computer.id);
+  const tidy = (await built.crons.list()).find((cron) => cron.ownerScopeId === scopeId("persona", ada.id))!;
+  await built.crons.update(tidy.id, { action: "!run true" });
+  await runNowSettled(built.scheduler, tidy.id);
+  const tidied = await verifyCapabilityToken(tidyTurn!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
+  assert.equal(tidied?.memory?.write, scopeId("persona", ada.id));
 });
 
 test("a persona's default model starts its new conversations, unless the turn asks for another", async () => {

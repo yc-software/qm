@@ -4,7 +4,7 @@ import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { Keychain } from "../credentials/keychain.ts";
-import { isSharedScope, parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
+import { actsAsScope, isSharedScope, parseScopeId, scopeId, type ScopeId, type Session } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { PERSONA_ROLES, activeHolder, atLeast, type PersonaRole } from "./persona-schema.ts";
 import {
@@ -323,25 +323,23 @@ export function createPersonaService(deps: {
     adopt,
     pinnedIn: (scope) => store.pinnedIn(scope),
     async forTurn(personaId, actorId, contextScope) {
-      if (!(await enabledFor(actorId)))
+      const own = personaId !== undefined && actsAsScope(actorId, personaScope(personaId));
+      if (!own && !(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
-      let pinned = false;
-      if (!personaId && isSharedScope(contextScope)) {
-        personaId = (await store.pinnedIn(contextScope)) ?? undefined;
-        pinned = Boolean(personaId);
-      }
+      const pinnedHere = isSharedScope(contextScope) ? ((await store.pinnedIn(contextScope)) ?? undefined) : undefined;
+      personaId ??= pinnedHere;
+      const pinned = personaId !== undefined && personaId === pinnedHere;
       if (!personaId) return PERSONAS_HINT;
       const persona = await store.get(personaId);
       if (!persona) return "This conversation's persona was deleted, so this turn runs without one.";
-      const held = await role(actorId, personaId, contextScope);
-      if (!held)
+      if (!own && !(await role(actorId, personaId, contextScope)))
         return `This conversation uses the persona "${persona.name}", but the person who sent this message has no access to it, so this turn runs without it.`;
       return { persona, scope: personaScope(personaId), ...(pinned ? { pinned: true } : {}) };
     },
   };
 }
 
-export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): string {
+export function personaPrompt({ persona, scope, pinned }: PersonaForTurn, sharesNotebook: boolean): string {
   const lines = [
     `## Persona: ${persona.name}`,
     `You are acting as the persona "${persona.name}" (${scope}). Its skills, notes and credentials come from that scope; who is in the room and where your writes land still come from this conversation. Organization instructions take precedence over the persona's.`,
@@ -349,6 +347,10 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   if (pinned)
     lines.push(
       `This channel or group pinned ${persona.name}. An owner can unpin it on the persona page; one conversation can pick another persona.`,
+    );
+  if (sharesNotebook)
+    lines.push(
+      `Memory is the exception to where writes land: what you save here goes to ${persona.name}'s notebook, which every conversation using ${persona.name} reads.`,
     );
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());

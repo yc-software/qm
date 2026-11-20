@@ -4,8 +4,8 @@
 
 A persona is a reusable agent — a name, icon, description and instructions, plus skills,
 notes and credentials — that people can use in any conversation. The conversation still
-decides **who is in the room and where writes land**; the persona decides **how the agent
-behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
+decides **who is in the room and where writes land**, except memory in a room that pins the
+persona ([Turns](#turns)); the persona decides **how the agent behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
 _wears_ rather than one it _lives in_.
 
 ## Storage
@@ -79,8 +79,24 @@ if the sender holds a role on the persona (counting the conversation's channel),
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
 - adds a `## Persona` block after the organization and conversation instructions.
 
-If the sender has no role, the persona is skipped and the block says so. Writes (memory,
-files, crons) stay in the conversation's scope.
+If the sender has no role, the persona is skipped and the block says so. Files and crons
+stay in the conversation's scope, and so does memory in a DM or in a conversation that only
+picked the persona.
+
+A channel or group that pins a persona uses the persona's notebook in place of its own:
+automatic capture and the `memory` tool save there, and the room's own notebook is kept but
+not read by those turns. Every conversation that uses the persona reads the persona's
+notebook, so what one pinned room remembers is shown in the others and to everyone who can
+use the persona, including people who are not in that room. A turn in a pinned room keeps
+to the room's own notebook when its member list is missing or names anyone from outside
+the organization, when the `personas` flag does not reach its sender, and when its
+conversation picked a different persona. A person's message in a Slack channel with a
+guest carries no member list, and neither does a web conversation opened in a Slack
+channel. A cron or other automation fire takes its member list from the stored roster,
+which leaves workspace guests out, so in a channel with a guest it uses the persona's
+notebook. The room's own nightly memory tidy keeps to the room's notebook, and the
+persona's notebook gets a nightly tidy of its own. With `MEMORY_PROVIDER_CONFIG` set, the
+`default` route has to serve the `persona` kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
 Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
@@ -110,8 +126,9 @@ identity, since Slack doesn't let an app rename those.
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
-even owner, shows you nothing of other people's chats with it; the sidebar groups only
-your own conversations under the persona.
+even owner, shows you nothing of other people's chats with it, apart from what a room that
+pins it saved to its notebook ([Turns](#turns)); the sidebar groups only your own
+conversations under the persona.
 
 ## Page
 
