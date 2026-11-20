@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { verifiedEmail, type ExternalOrg, type Workspace } from "./tenant-choice.ts";
+import { verifiedEmail, type ExternalOrg } from "./tenant-choice.ts";
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
 import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
 
@@ -79,7 +79,7 @@ export function createTrustedEntry(
   const key = deriveKey(sessionSecret, "trusted-entry-tmp");
   const ttl = 600;
   return {
-    start(returnTo: string, workspace?: { handle: string } & Workspace) {
+    start(returnTo: string) {
       const { verifier, challenge } = pkcePair();
       const now = Math.floor(Date.now() / 1000);
       const tmp: TmpClaims = {
@@ -88,20 +88,16 @@ export function createTrustedEntry(
         nonce: randomToken(),
         pkceVerifier: verifier,
         returnTo,
-        ...(workspace ? { workspace: workspace.handle } : {}),
         iat: now,
         exp: now + ttl,
       };
       return {
         cookie: seal(tmp, key),
-        location: buildAuthorizeUrl(
-          { ...cfg, ...workspace?.trustedClient },
-          { state: tmp.state, nonce: tmp.nonce, challenge },
-        ),
+        location: buildAuthorizeUrl(cfg, { state: tmp.state, nonce: tmp.nonce, challenge }),
         ttl,
       };
     },
-    async finish(cookie: string | null, url: URL, workspaceFor?: (handle: string) => Promise<Workspace | null>) {
+    async finish(cookie: string | null, url: URL) {
       const tmp = openTmp(cookie, key, Date.now());
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
@@ -110,12 +106,9 @@ export function createTrustedEntry(
       if (!tmp) throw new Error("Trusted login cookie missing or expired");
       if (!state || !code || !safeEqual(state, tmp.state)) throw new Error("Invalid trusted login state");
       if (!(await claim(`trusted-entry:${tmp.state}`, tmp.exp * 1000))) throw new Error("Trusted login already used");
-      const workspace = tmp.workspace === undefined ? undefined : await workspaceFor?.(tmp.workspace);
-      if (tmp.workspace !== undefined && !workspace) throw new Error("Unknown workspace");
-      const client = { ...cfg, ...workspace?.trustedClient };
-      const { accessToken, idToken } = await exchangeCode(client, { code, codeVerifier: tmp.pkceVerifier }, fetchImpl);
-      const claims = await verifyIdToken(client, idToken, tmp.nonce, fetchImpl);
-      const info = await fetchUserinfo(client, accessToken, fetchImpl);
+      const { accessToken, idToken } = await exchangeCode(cfg, { code, codeVerifier: tmp.pkceVerifier }, fetchImpl);
+      const claims = await verifyIdToken(cfg, idToken, tmp.nonce, fetchImpl);
+      const info = await fetchUserinfo(cfg, accessToken, fetchImpl);
       if (typeof claims.sub !== "string" || claims.sub !== info.sub)
         throw new Error("Trusted identity subject mismatch");
       return {
@@ -125,7 +118,6 @@ export function createTrustedEntry(
         email: verifiedEmail(info),
         orgs: trustedOrgs(info, claims),
         returnTo: tmp.returnTo,
-        tenant: workspace?.tenant,
       };
     },
   };
