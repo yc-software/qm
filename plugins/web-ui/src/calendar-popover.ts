@@ -207,10 +207,10 @@ export function popoverTpl(pop: Popover, calendars: Calendar[], act: PopoverActi
         ? html`<div class="cal-pop-row">
             ${icon(MapPin, 15)}
             ${
-            locationUrl
-              ? html`<a href=${locationUrl} target="_blank" rel="noopener noreferrer">${event.location}</a>`
-              : html`<span>${event.location}</span>`
-          }
+              locationUrl
+                ? html`<a href=${locationUrl} target="_blank" rel="noopener noreferrer">${event.location}</a>`
+                : html`<span>${event.location}</span>`
+            }
           </div>`
         : nothing
     }

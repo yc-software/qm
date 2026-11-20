@@ -154,9 +154,12 @@ export const LONG_DATE = formatter({ weekday: "long", month: "long", day: "numer
 export const MONTH_YEAR = formatter({ month: "long", year: "numeric" });
 export const SHORT_MONTH_YEAR = formatter({ month: "short", year: "numeric" });
 export const WEEKDAY = formatter({ weekday: "short" });
-export const NARROW_WEEKDAY = formatter({ weekday: "narrow" });
 export const MONTH_DAY = formatter({ month: "short", day: "numeric" });
 const DATE_TIME = formatter({ weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+export function timeRange(start: Date, end: Date): string {
+  return (start.getMinutes() || end.getMinutes() ? HOUR_MINUTE : HOUR_ONLY).formatRange(start, end);
+}
 
 export function timeLabel(date: Date): string {
   return (date.getMinutes() ? HOUR_MINUTE : HOUR_ONLY).format(date);

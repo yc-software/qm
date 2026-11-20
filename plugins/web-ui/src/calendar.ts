@@ -1,18 +1,7 @@
 import "./calendar.css";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { CalendarDays, ChevronLeft, ChevronRight, Plus } from "lucide";
-import {
-  addDays,
-  addMinutes,
-  addMonths,
-  format,
-  isSameDay,
-  isSameMonth,
-  isToday,
-  startOfDay,
-  startOfHour,
-  startOfMonth,
-} from "date-fns";
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide";
+import { addDays, addMinutes, format, isSameDay, isSameMonth, isToday, startOfDay, startOfHour } from "date-fns";
 import { ApiError, api } from "./core-bridge";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { icon } from "./icons";
@@ -32,17 +21,16 @@ import {
   dayBlocks,
   eventSpan,
   formatter,
-  HOUR_MINUTE,
   HOUR_ONLY,
   laneBars,
   LONG_DATE,
   MONTH_DAY,
   MONTH_YEAR,
-  NARROW_WEEKDAY,
   SHORT_MONTH_YEAR,
   shiftAnchor,
   spansDays,
   timeLabel,
+  timeRange,
   visibleDays,
   WEEKDAY,
   whenLabel,
@@ -56,7 +44,8 @@ import { popoverTpl, type Popover, type Reply } from "./calendar-popover";
 
 const HOUR_PX = 48;
 const MORNING_HOUR = 8;
-const MONTH_ROWS = 4;
+const MONTH_DATE_PX = 31;
+const MONTH_ITEM_PX = 22;
 const VIEW_KEY = "web-ui:calendar-view";
 const HIDDEN_KEY = "web-ui:calendar-hidden";
 const VIEW_LABELS: Record<CalendarView, string> = { day: "Day", week: "Week", month: "Month" };
@@ -73,13 +62,15 @@ interface Selection {
 const cal = {
   view: storedView(),
   anchor: startOfDay(new Date()),
-  miniMonth: startOfMonth(new Date()),
+  menu: false,
+  monthRows: 4,
   cache: new Map<string, CalendarEvents>(),
   calendars: [] as Calendar[],
   hidden: storedHidden(),
   loading: "",
   problem: null as Problem | null,
   connecting: false,
+  connectError: "",
   popover: null as Popover | null,
   selection: null as Selection | null,
 };
@@ -139,7 +130,13 @@ function draw(): void {
   const scroller = host.querySelector<HTMLElement>(".cal-scroll");
   if (scroller && !scroller.dataset.placed) {
     scroller.dataset.placed = "1";
-    scroller.scrollTop = MORNING_HOUR * HOUR_PX - 8;
+    scroller.scrollTop = MORNING_HOUR * HOUR_PX - HOUR_PX / 3;
+  }
+  const week = host.querySelector<HTMLElement>(".cal-week-row");
+  const rows = week ? Math.max(1, Math.floor((week.clientHeight - MONTH_DATE_PX) / MONTH_ITEM_PX)) : cal.monthRows;
+  if (rows !== cal.monthRows) {
+    cal.monthRows = rows;
+    render(pageTpl(), host);
   }
   placePopover();
 }
@@ -183,7 +180,6 @@ function go(next: { view?: CalendarView; anchor?: Date }): void {
   }
   if (next.anchor) {
     cal.anchor = startOfDay(next.anchor);
-    cal.miniMonth = startOfMonth(next.anchor);
   }
   cal.popover = null;
   cal.problem = cal.problem?.kind === "error" ? null : cal.problem;
@@ -258,6 +254,7 @@ function createNow(): void {
 
 async function connectGoogle(): Promise<void> {
   cal.connecting = true;
+  cal.connectError = "";
   draw();
   try {
     const result = await api<{ authorizeUrl?: string }>("/api/connectors/google/start", {
@@ -267,10 +264,7 @@ async function connectGoogle(): Promise<void> {
     if (!result.authorizeUrl) throw new Error("Google didn't return a sign-in page.");
     location.href = result.authorizeUrl;
   } catch (cause) {
-    cal.problem = {
-      kind: cal.problem?.kind ?? "not_connected",
-      message: errMessage(cause, "Couldn't start connecting Google."),
-    };
+    cal.connectError = errMessage(cause, "Couldn't start connecting Google.");
     cal.connecting = false;
     draw();
   }
@@ -392,30 +386,30 @@ function onEventClick(event: CalendarEvent): (e: MouseEvent) => void {
 
 function pageTpl(): TemplateResult {
   const problem = cal.problem;
-  const blocked = problem && problem.kind !== "error";
+  if (problem && problem.kind !== "error")
+    return html`<div class="pane-head"><h1 class="pane-title">Calendar</h1></div>
+      ${connectTpl(problem)}`;
   return html`
     <div class="pane-head">
       <h1 class="pane-title">Calendar</h1>
       <div class="pane-head-actions">
-        <button class="btn primary" type="button" ?disabled=${Boolean(blocked)} @click=${createNow}>
+        <button class="btn primary" type="button" title="Create (C)" @click=${createNow}>
           ${icon(Plus, 14)}<span>Create</span>
         </button>
       </div>
     </div>
-    <div class="cal-shell">
-      ${blocked ? nothing : railTpl()}
-      <section class="cal-main" aria-busy=${cal.loading ? "true" : "false"}>
-        ${toolbarTpl(Boolean(blocked))}
-        ${
-          problem?.kind === "error"
-            ? html`<div class="inbox-notice cal-notice" role="alert">
-                ${problem.message} <button class="btn" type="button" @click=${() => void load(true)}>Try again</button>
-              </div>`
-            : nothing
-        }
-        ${blocked ? connectTpl(problem) : viewTpl()}
-      </section>
-    </div>
+    <section class="cal-main" aria-busy=${cal.loading ? "true" : "false"}>
+      ${toolbarTpl()}
+      ${
+        problem
+          ? html`<div class="inbox-notice cal-notice" role="alert">
+              <span>${problem.message}</span>
+              <button class="btn" type="button" @click=${() => void load(true)}>Retry</button>
+            </div>`
+          : nothing
+      }
+      ${cal.view === "month" ? monthTpl() : timeGridTpl()}
+    </section>
     ${
       cal.popover
         ? popoverTpl(cal.popover, cal.calendars, {
@@ -433,22 +427,15 @@ function pageTpl(): TemplateResult {
   `;
 }
 
-function viewTpl(): TemplateResult {
-  return cal.view === "month" ? monthTpl() : timeGridTpl();
-}
-
-function toolbarTpl(blocked: boolean): TemplateResult {
+function toolbarTpl(): TemplateResult {
   const data = currentData();
   const quiet = data && !cal.loading && !visibleSpans().length;
   return html`<div class="cal-toolbar">
-    <button class="btn" type="button" ?disabled=${blocked} @click=${() => go({ anchor: new Date() })} title="Today (T)">
-      Today
-    </button>
+    <button class="btn" type="button" @click=${() => go({ anchor: new Date() })} title="Today (T)">Today</button>
     <span class="cal-steppers">
       <button
         class="icon-btn compact"
         type="button"
-        ?disabled=${blocked}
         aria-label=${`Previous ${cal.view}`}
         title="Previous (K)"
         @click=${() => step(-1)}
@@ -458,7 +445,6 @@ function toolbarTpl(blocked: boolean): TemplateResult {
       <button
         class="icon-btn compact"
         type="button"
-        ?disabled=${blocked}
         aria-label=${`Next ${cal.view}`}
         title="Next (J)"
         @click=${() => step(1)}
@@ -467,8 +453,8 @@ function toolbarTpl(blocked: boolean): TemplateResult {
       </button>
     </span>
     <h2 class="cal-range" aria-live="polite">${rangeLabel()}</h2>
-    ${cal.loading && !blocked ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
-    ${quiet && !blocked ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing}
+    ${cal.loading ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
+    ${quiet ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing} ${calendarsTpl()}
     <div class="cron-segments cal-views" role="radiogroup" aria-label="Calendar view">
       ${CALENDAR_VIEWS.map(
         (view) =>
@@ -478,7 +464,6 @@ function toolbarTpl(blocked: boolean): TemplateResult {
             aria-checked=${cal.view === view}
             class=${cal.view === view ? "active" : ""}
             title=${`${VIEW_LABELS[view]} (${view[0]!.toUpperCase()})`}
-            ?disabled=${blocked}
             @click=${() => go({ view })}
           >
             ${VIEW_LABELS[view]}
@@ -488,58 +473,29 @@ function toolbarTpl(blocked: boolean): TemplateResult {
   </div>`;
 }
 
-function railTpl(): TemplateResult {
-  const first = visibleDays("month", cal.miniMonth);
-  const shown = days();
-  return html`<aside class="cal-rail" aria-label="Calendars">
-    <div class="cal-mini">
-      <div class="cal-mini-head">
-        <span>${MONTH_YEAR.format(cal.miniMonth)}</span>
-        <button
-          class="icon-btn compact subtle"
-          type="button"
-          aria-label="Previous month"
-          @click=${() => {
-            cal.miniMonth = addMonths(cal.miniMonth, -1);
-            draw();
-          }}
-        >
-          ${icon(ChevronLeft, 14)}
-        </button>
-        <button
-          class="icon-btn compact subtle"
-          type="button"
-          aria-label="Next month"
-          @click=${() => {
-            cal.miniMonth = addMonths(cal.miniMonth, 1);
-            draw();
-          }}
-        >
-          ${icon(ChevronRight, 14)}
-        </button>
-      </div>
-      <div class="cal-mini-grid" role="grid">
-        ${first.slice(0, 7).map((day) => html`<span class="cal-mini-dow" aria-hidden="true">${NARROW_WEEKDAY.format(day)}</span>`)}
-        ${first.map((day) => {
-          const inRange = cal.view !== "month" && day >= shown[0]! && day <= shown.at(-1)!;
-          return html`<button
-            type="button"
-            class="cal-mini-day ${isSameMonth(day, cal.miniMonth) ? "" : "is-outside"} ${isToday(day) ? "is-today" : ""} ${inRange ? "is-range" : ""} ${isSameDay(day, cal.anchor) ? "is-anchor" : ""}"
-            aria-label=${LONG_DATE.format(day)}
-            @click=${() => go({ anchor: day })}
-          >
-            ${day.getDate()}
-          </button>`;
-        })}
-      </div>
-    </div>
+function calendarsTpl(): TemplateResult | typeof nothing {
+  if (!cal.calendars.length) return nothing;
+  const hidden = cal.calendars.filter((calendar) => cal.hidden.has(calendar.id)).length;
+  return html`<div class="cal-calendars">
+    <button
+      class="btn"
+      type="button"
+      aria-haspopup="true"
+      aria-expanded=${cal.menu}
+      @click=${() => {
+        cal.menu = !cal.menu;
+        draw();
+      }}
+    >
+      <span>${hidden ? `Calendars · ${cal.calendars.length - hidden} of ${cal.calendars.length}` : "Calendars"}</span
+      >${icon(ChevronDown, 14)}
+    </button>
     ${
-      cal.calendars.length
-        ? html`<div class="cal-list">
-            <div class="cal-list-head">My calendars</div>
+      cal.menu
+        ? html`<div class="session-menu-popover cal-calendars-menu" role="group" aria-label="Calendars to show">
             ${cal.calendars.map(
               (calendar) =>
-                html`<label class="cal-list-item" style=${`--ev:${calendar.color}`} title=${calendar.name}>
+                html`<label class="session-menu-option" style=${`--ev:${calendar.color}`} title=${calendar.name}>
                   <input
                     type="checkbox"
                     .checked=${!cal.hidden.has(calendar.id)}
@@ -551,7 +507,7 @@ function railTpl(): TemplateResult {
           </div>`
         : nothing
     }
-  </aside>`;
+  </div>`;
 }
 
 function connectTpl(problem: Problem): TemplateResult {
@@ -569,7 +525,7 @@ function connectTpl(problem: Problem): TemplateResult {
     <button class="btn primary" type="button" ?disabled=${cal.connecting} @click=${() => void connectGoogle()}>
       ${cal.connecting ? "Opening Google…" : `${reconnect ? "Reconnect" : "Connect"} Google`}
     </button>
-    ${cal.connecting || problem.message === "" || problem.kind === "not_connected" ? nothing : html`<p class="cal-connect-detail" role="alert">${problem.message}</p>`}
+    ${cal.connectError ? html`<p class="cal-connect-detail" role="alert">${cal.connectError}</p>` : nothing}
   </div>`;
 }
 
@@ -636,9 +592,7 @@ function blockTpl(block: Block): TemplateResult {
     @pointerdown=${(e: PointerEvent) => e.stopPropagation()}
   >
     <span class="cal-event-title">${event.title || "(No title)"}</span>
-    <span class="cal-event-time"
-      >${compact ? timeLabel(block.start) : HOUR_MINUTE.formatRange(block.start, block.end)}</span
-    >
+    <span class="cal-event-time">${compact ? timeLabel(block.start) : timeRange(block.start, block.end)}</span>
     ${!compact && event.location && height > 64 ? html`<span class="cal-event-where">${event.location}</span>` : nothing}
   </button>`;
 }
@@ -719,7 +673,7 @@ function timeGridTpl(): TemplateResult {
                   >
                     <span class="cal-event-title">(No title)</span>
                     <span class="cal-event-time"
-                      >${HOUR_MINUTE.formatRange(addMinutes(day, selection.from), addMinutes(day, selection.to))}</span
+                      >${timeRange(addMinutes(day, selection.from), addMinutes(day, selection.to))}</span
                     >
                   </div>`
                 : nothing
@@ -736,7 +690,7 @@ function monthTpl(): TemplateResult {
   const shown = days();
   const spans = visibleSpans();
   const weeks = Array.from({ length: shown.length / 7 }, (_, index) => shown.slice(index * 7, index * 7 + 7));
-  return html`<div class="cal-grid cal-month" style=${`--weeks:${weeks.length}`}>
+  return html`<div class="cal-grid cal-month" style=${`--weeks:${weeks.length};--rows:${cal.monthRows}`}>
     ${cal.loading ? html`<div class="cal-progress" aria-hidden="true"></div>` : nothing}
     <div class="cal-month-head">${weeks[0]!.map((day) => html`<span>${WEEKDAY.format(day)}</span>`)}</div>
     <div class="cal-month-body">${weeks.map((week) => weekRowTpl(week, spans))}</div>
@@ -757,10 +711,12 @@ function weekRowTpl(week: Date[], spans: Span[]): TemplateResult {
         return { span, col, row };
       }),
   );
-  const limit = MONTH_ROWS - 1;
-  const overflow = taken.map((rows) => (rows.size > MONTH_ROWS ? [...rows].filter((row) => row >= limit).length : 0));
+  const limit = cal.monthRows - 1;
+  const overflow = taken.map((rows) =>
+    rows.size > cal.monthRows ? [...rows].filter((row) => row >= limit).length : 0,
+  );
   const fits = (row: number, cols: number[]): boolean =>
-    row < limit || cols.every((col) => overflow[col] === 0 && row < MONTH_ROWS);
+    row < limit || cols.every((col) => overflow[col] === 0 && row < cal.monthRows);
   return html`<div class="cal-week-row">
     ${week.map(
       (day, col) =>
@@ -811,7 +767,7 @@ function weekRowTpl(week: Date[], spans: Span[]): TemplateResult {
         ? html`<button
             type="button"
             class="cal-more"
-            style=${`grid-column:${col + 1};grid-row:${MONTH_ROWS + 1}`}
+            style=${`grid-column:${col + 1};grid-row:${cal.monthRows + 1}`}
             @click=${() => go({ view: "day", anchor: week[col]! })}
           >
             ${count} more
@@ -821,11 +777,18 @@ function weekRowTpl(week: Date[], spans: Span[]): TemplateResult {
   </div>`;
 }
 
+window.addEventListener("resize", () => {
+  if (cal.view === "month" && host?.isConnected) draw();
+});
+
 document.addEventListener("pointerdown", (e) => {
-  if (!cal.popover || !host?.isConnected) return;
+  if (!host?.isConnected) return;
   const target = e.target as Element | null;
-  if (target?.closest(".cal-pop, .cal-event, .cal-col")) return;
-  closePopover();
+  if (cal.menu && !target?.closest(".cal-calendars")) {
+    cal.menu = false;
+    draw();
+  }
+  if (cal.popover && !target?.closest(".cal-pop, .cal-event, .cal-col")) closePopover();
 });
 
 document.addEventListener("keydown", (e) => {
@@ -838,6 +801,7 @@ document.addEventListener("keydown", (e) => {
   )
     return;
   if (e.key === "Escape") {
+    cal.menu = false;
     closePopover();
     return;
   }
