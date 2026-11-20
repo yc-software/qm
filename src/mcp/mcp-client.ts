@@ -129,8 +129,6 @@ export interface McpSkillLimits {
   maxTotalBytes: number;
 }
 
-const SKILL_READ_CONCURRENCY = 4;
-
 async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise<McpSkillEntry[]> {
   const entries: McpSkillEntry[] = [];
   let cursor: string | undefined;
@@ -154,18 +152,15 @@ async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise
 }
 
 async function readSkillEntries(client: Client, entries: McpSkillEntry[]): Promise<McpSkill[]> {
-  const skills: McpSkill[] = new Array(entries.length);
-  let next = 0;
-  const reader = async (): Promise<void> => {
-    for (let index = next++; index < entries.length; index = next++) {
-      const entry = entries[index]!;
-      const { contents } = await client.readResource({ uri: entry.uri });
-      const file = contents.find((content) => content.uri === entry.uri && "text" in content);
-      if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
-      skills[index] = { ...entry, text: file.text };
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(SKILL_READ_CONCURRENCY, entries.length) }, reader));
+  const skills: McpSkill[] = [];
+  for (const entry of entries) {
+    const { contents } = await client.readResource({ uri: entry.uri });
+    const file = contents.find((content) => content.uri === entry.uri && "text" in content);
+    if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
+    if (Buffer.byteLength(file.text, "utf8") !== entry.size)
+      throw new Error(`mcp resources/read returned ${entry.uri} at a size other than its listed ${entry.size} bytes`);
+    skills.push({ ...entry, text: file.text });
+  }
   return skills;
 }
 

@@ -82,7 +82,7 @@ test("an MCP pack's version follows the listed digests, and its files are each v
     commit: version,
     files: ["alpha", "beta"].map((name) => ({ path: `${name}/SKILL.md`, text: body(name), binary: false })),
   });
-  await assert.rejects(fetcherOver([server()], [{ ...skill("alpha"), text: "tampered" }]).fetch(pack), /digest and size/);
+  await assert.rejects(fetcherOver([server()], [{ ...skill("alpha"), text: "tampered" }]).fetch(pack), /listed digest/);
   await assert.rejects(fetcherOver([server()], [skill("../x")]).fetch(pack), /unusable name/);
 });
 

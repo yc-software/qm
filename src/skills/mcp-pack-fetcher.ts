@@ -4,18 +4,10 @@ import type { McpServer, McpServerStore } from "../mcp/mcp-server-store.ts";
 import { PACK_LIMITS, type SkillPackFetcher } from "./pack-fetcher.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 import { isSafeSkillName } from "./skill-name.ts";
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
+import { hashId } from "../util/crypto.ts";
 
 function listingVersion(entries: readonly McpSkillEntry[]): string {
-  return sha256(
-    entries
-      .map((entry) => `${entry.uri} ${entry.digest}`)
-      .sort()
-      .join("\n"),
-  ).slice(0, 40);
+  return hashId(entries.map((entry) => `${entry.uri} ${entry.digest}`).sort(), 40);
 }
 
 export function createMcpPackFetcher(opts: {
@@ -40,9 +32,8 @@ export function createMcpPackFetcher(opts: {
       const skills = await (await source(pack)).readSkills(PACK_LIMITS);
       const files = skills.map((skill) => {
         if (!isSafeSkillName(skill.name)) throw new Error(`MCP skill ${skill.uri} has an unusable name`);
-        const digest = `sha256:${sha256(skill.text)}`;
-        if (digest !== skill.digest || Buffer.byteLength(skill.text, "utf8") !== skill.size)
-          throw new Error(`MCP skill ${skill.uri} does not match its listed digest and size`);
+        if (`sha256:${createHash("sha256").update(skill.text, "utf8").digest("hex")}` !== skill.digest)
+          throw new Error(`MCP skill ${skill.uri} does not match its listed digest`);
         return { path: `${skill.name}/SKILL.md`, text: skill.text, binary: false };
       });
       files.sort((a, b) => a.path.localeCompare(b.path));
