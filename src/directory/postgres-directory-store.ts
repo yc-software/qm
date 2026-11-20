@@ -533,6 +533,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.map(memberRow);
     },
 
+    async teammateName(principalId) {
+      const ids = rosterIds(principalId);
+      const rows = await q(
+        `SELECT btrim(display_name) AS name FROM directory_members
+         WHERE org_id = $1 AND type = 'internal' AND is_bot IS NOT TRUE AND btrim(display_name) <> ''
+           AND NOT (principal_id = ANY($2::text[]) OR lower(principal_id) = ANY($2::text[])
+             OR coalesce(slack_id, '') = ANY($2::text[]))
+         ORDER BY display_name_lc LIMIT 1`,
+        [orgId, ids],
+      );
+      return (rows[0]?.name as string | undefined) ?? null;
+    },
+
     async listChannels() {
       const rows = await q(
         "SELECT channel_id, name, is_private, is_external FROM directory_channels WHERE org_id = $1",

@@ -82,7 +82,7 @@ export const DEMO = {
   },
 };
 
-const firstName = (name: string | null | undefined) => name?.trim().split(" ")[0] || undefined;
+export const firstName = (name: string | null | undefined) => name?.trim().split(" ")[0] || undefined;
 let cast = { company: DEMO.company, maya: DEMO.people.maya.name, dev: DEMO.people.dev.name };
 
 export function castAs(names: { company?: string | null; you?: string | null; teammate?: string | null }): void {

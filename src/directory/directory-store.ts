@@ -69,6 +69,7 @@ export interface DirectoryStore {
     partial?: boolean,
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
+  teammateName(principalId: string): Promise<string | null>;
   listChannels(): Promise<DirectoryChannel[]>;
   getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;

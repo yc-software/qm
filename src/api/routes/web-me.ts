@@ -3,7 +3,6 @@ import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-conf
 import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
 import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
 import { orgId } from "../../config.ts";
-import { samePerson } from "../../directory/person.ts";
 import { starterActivities } from "../../suggestions/company-seeds.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -88,13 +87,8 @@ async function me(ctx: ApiCtx): Promise<void> {
 async function teammate(ctx: ApiCtx): Promise<void> {
   const { res, deps, actor } = ctx;
   if (!actor || !deps.web?.me) return sendJson(res, 404, { error: "not_found" });
-  const members = (await deps.directory?.list().catch(swallowAs("web: teammate directory", []))) ?? [];
-  const names = members
-    .filter((m) => m.type === "internal" && !m.isBot && !samePerson(m.principalId, actor.p))
-    .map((m) => m.displayName.trim())
-    .filter(Boolean)
-    .sort();
-  return sendJson(res, 200, { name: names[0] ?? null });
+  const name = await deps.directory?.teammateName(actor.p).catch(swallowAs("web: teammate directory", null));
+  return sendJson(res, 200, { name: name ?? null });
 }
 
 export const webMeRoutes: ReadonlyArray<Route<ApiCtx>> = [
