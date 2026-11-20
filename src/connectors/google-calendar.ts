@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { googleApi } from "./google-api.ts";
 
-export type ResponseStatus = "needsAction" | "accepted" | "declined" | "tentative";
+type ResponseStatus = "needsAction" | "accepted" | "declined" | "tentative";
 
 export interface Calendar {
   id: string;

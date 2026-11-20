@@ -148,7 +148,7 @@ export function dayBlocks(spans: Span[], day: Date): Block[] {
 export const formatter = (options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat =>
   new Intl.DateTimeFormat(undefined, options);
 export const HOUR_ONLY = formatter({ hour: "numeric" });
-export const HOUR_MINUTE = formatter({ hour: "numeric", minute: "2-digit" });
+const HOUR_MINUTE = formatter({ hour: "numeric", minute: "2-digit" });
 const LONG_DAY = formatter({ weekday: "long", month: "long", day: "numeric" });
 export const LONG_DATE = formatter({ weekday: "long", month: "long", day: "numeric", year: "numeric" });
 export const MONTH_YEAR = formatter({ month: "long", year: "numeric" });

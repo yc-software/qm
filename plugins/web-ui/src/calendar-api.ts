@@ -10,7 +10,7 @@ export interface Calendar {
   writable: boolean;
 }
 
-export interface CalendarAttendee {
+interface CalendarAttendee {
   email: string;
   name?: string;
   responseStatus: ResponseStatus;
