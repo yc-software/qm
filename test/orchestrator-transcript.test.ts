@@ -77,7 +77,7 @@ test("inbound file problems reach the model in the environment footer, not a log
   const user = items.find((item) => item.kind === "UserMessage");
   assert.match(
     String(user!.body.environment),
-    /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
+    /<environment>[\s\S]*did not receive[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
 
   const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;

@@ -121,8 +121,6 @@ import { artifactImageLoader } from "../agent/replay-images.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import {
-  INBOX_DIR,
-  TURN_FILES_DIR,
   inboundIssuesNote,
   materializeInbound,
   turnFileId,
@@ -1031,9 +1029,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
-      const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
-      const turnFilesDir = `${turnSessionDir}/${transferId}`;
-      const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
+      const turnSessionKey = hashId([conversation.threadRef], 24);
 
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1354,8 +1350,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryScopeId,
         transferId,
         swarmSandboxId: swarmBinding?.sandboxId,
-        turnSessionDir,
-        turnFilesDir,
+        turnSessionKey,
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
@@ -1848,22 +1843,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
-          inboxDir: string,
           requestText: string,
         ): ReturnType<typeof materializeInbound> =>
           attachments?.length && !strictReadOnly
-            ? materializeInbound(
-                deps.sandbox,
-                provision,
-                attachments,
-                blobTransfer,
-                registration,
-                inboxDir,
-                screenInboundFile(requestText),
-              )
-            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
-          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
+            ? materializeInbound(attachments, blobTransfer, registration, screenInboundFile(requestText))
+            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unsaved: [], unscreened: [] };
+        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration) =>
+          intakeOf(await receiveInbound(message.attachments, registration, message.text), message, {
             strictReadOnly,
             enforceScreen,
           });
@@ -1880,7 +1866,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.inboundNotes ? { notes: input.inboundNotes } : {}),
           },
           fileRegistration,
-          turnInboxDir,
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
@@ -2365,7 +2350,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               recordScreenRequest,
               takeIn,
               fileRegistration,
-              turnInboxDir,
               ingestDocuments,
               initialDocuments,
               documentInputs,

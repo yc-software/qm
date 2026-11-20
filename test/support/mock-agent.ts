@@ -401,8 +401,7 @@ export function createMockAgent(): Agent {
         reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
       } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ")) {
         const tag = command0.startsWith("!scratch ") ? "!scratch " : "!run ";
-        const inboxDir = / shared \S+ \(\.\/(\S+)\/[^/)]+\)\./.exec(turn.environment ?? "")?.[1] ?? "inbox";
-        const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
+        const command = cmd.slice(cmd.indexOf(tag) + tag.length);
         if (gateTool("execute")) {
           await record({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
           usedTool = true;

@@ -103,11 +103,8 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
   const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const transfer = createMemoryBlobTransferStore();
   const { blobId } = await transfer.put(PNG);
-  const { sandbox } = memSandbox();
 
   const inb = await materializeInbound(
-    sandbox,
-    HANDLE,
     [{ name: "shared.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
     transfer,
     reg(store),
@@ -130,33 +127,22 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
   );
 });
 
-test("materializeInbound omits artifactId when registration fails or is absent", async () => {
+test("materializeInbound reports a file it could not save to Files instead of passing it on", async () => {
   const transfer = createMemoryBlobTransferStore();
-  const { blobId } = await transfer.put(PNG);
-  const { sandbox } = memSandbox();
-  const noReg = await materializeInbound(
-    sandbox,
-    HANDLE,
-    [{ name: "a.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
-    transfer,
-  );
-  assert.equal(noReg.metas[0]!.artifactId, undefined);
-
   const throwing = {
     put: async () => {
       throw new Error("doc store down");
     },
   } as unknown as FileArtifactStore;
-  const { blobId: blob2 } = await transfer.put(PNG);
+  const { blobId } = await transfer.put(PNG);
   const errors: unknown[] = [];
   const failed = await materializeInbound(
-    sandbox,
-    HANDLE,
-    [{ name: "b.png", mimetype: "image/png", sizeBytes: PNG.length, blobId: blob2 }],
+    [{ name: "b.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
     transfer,
     reg(throwing, { onError: (e) => errors.push(e) }),
   );
-  assert.equal(failed.metas.length, 1, "the file still reaches the inbox");
-  assert.equal(failed.metas[0]!.artifactId, undefined, "no artifactId is fabricated on a store fault");
+  assert.deepEqual(failed.metas, []);
+  assert.deepEqual(failed.images, []);
+  assert.deepEqual(failed.unsaved, ["b.png"]);
   assert.equal(errors.length, 1);
 });
