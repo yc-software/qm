@@ -727,29 +727,30 @@ test("the pass skips items without a usable source reference and logs model fail
   assert.equal(errors[0]!.code, "verdict_failed");
 });
 
-test("a failed draft keeps the verdict and records the model's reply in the error log", async () => {
-  const { items, item } = await slackFixture();
-  const world: SlackWorld = {
-    history: [{ ts: "1762275400.000100", user: "U_JOSH", text: "Do you have a link to the repo?" }],
-  };
-  const errors: Array<{ code: string; message: string }> = [];
-  const model: VerdictModel = {
-    verdict: async () => '{"state":"needs_reply","reason":"open ask","waiting_ts":"1762275400.000100"}',
-    draft: async () => "Sure thing, here you go",
-  };
-  await createInboxPass({
-    items,
-    model,
-    errors: { record: (_t, event: { code: string; message: string }) => void errors.push(event) },
-    fetch: createConversationFetcher(clientsFor(world)),
-    discover: async () => [],
-  })(loop, { discover: false });
-  const after = (await items.get(item.id))!;
-  assert.equal(after.verdict?.state, "needs_reply");
-  assert.equal(after.proposal, undefined);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0]!.code, "draft_failed");
-  assert.match(errors[0]!.message, /draft was not \{"draft": string\}: "Sure thing, here you go"/);
+test("a malformed draft keeps the verdict and logs the model's reply, an empty draft logs nothing", async () => {
+  for (const [reply, logged] of [
+    ["Sure thing, here you go", /^draft_failed .*draft was not \{"draft": string\}: "Sure thing, here you go"/],
+    ['{"draft": " "}', /^$/],
+  ] as const) {
+    const { items, item } = await slackFixture();
+    const history = [{ ts: "1762275400.000100", user: "U_JOSH", text: "Do you have a link to the repo?" }];
+    const errors: Array<{ code: string; message: string }> = [];
+    const model: VerdictModel = {
+      verdict: async () => '{"state":"needs_reply","reason":"open ask","waiting_ts":"1762275400.000100"}',
+      draft: async () => reply,
+    };
+    await createInboxPass({
+      items,
+      model,
+      errors: { record: (_t, event: { code: string; message: string }) => void errors.push(event) },
+      fetch: createConversationFetcher(clientsFor({ history })),
+      discover: async () => [],
+    })(loop, { discover: false });
+    const after = (await items.get(item.id))!;
+    assert.equal(after.verdict?.state, "needs_reply");
+    assert.equal(after.proposal, undefined);
+    assert.match(errors.map((e) => `${e.code} ${e.message}`).join(), logged);
+  }
 });
 
 test("long message bodies are cut with a visible marker instead of silently", () => {
