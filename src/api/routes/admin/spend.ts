@@ -1,3 +1,4 @@
+import { samePerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
 import type { Cron } from "../../../triggers/types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
@@ -614,14 +615,23 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     tenantOf(ctx),
     rows.map((r) => r.scopeId),
   );
+  const fullAdmin = actor.role === "org_admin";
   const crons =
     format === "csv" && breakdown !== "cron" ? new Map<string, SpendCronInfo>() : await cronInfoLookup(app, rows);
+  const visibleCron = (cronId: string): SpendCronInfo | null => {
+    const info = crons.get(cronId) ?? null;
+    if (!info || fullAdmin) return info;
+    const parsed = parseScopeId(info.ownerScopeId);
+    if (parsed.kind === "org") return info;
+    if (parsed.kind === "personal" && samePerson(parsed.ref, actor.id)) return info;
+    return null;
+  };
   const report = summarizeSpend(rows, {
     from,
     to,
     bucket,
     label: (id) => labels.get(id) ?? "",
-    cron: (cronId) => crons.get(cronId) ?? null,
+    cron: visibleCron,
     person: await peopleOf(deps, rows),
   });
   if (format === "json")

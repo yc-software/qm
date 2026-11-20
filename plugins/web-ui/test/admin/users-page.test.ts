@@ -243,3 +243,39 @@ test("user detail: opens by user id, lists every sign-in, and acts on the person
   assert.deepEqual(puts, [{ status: "completed" }]);
   page.close();
 });
+
+test("users as owner hides Keychain tab, user-detail links, and org_admin actions", async () => {
+  const page = await mountPage(
+    "/settings/users",
+    {
+      "GET /users": {
+        users: [
+          {
+            principalId: "admin-1",
+            displayName: "Admin",
+            admin: { isAdmin: true, role: "org_admin", scopeId: "org:acme" },
+            sessionCount: 2,
+            turnCount: 5,
+          },
+          {
+            principalId: "member-1",
+            displayName: "Member",
+            admin: { isAdmin: false },
+            sessionCount: 1,
+            turnCount: 1,
+          },
+        ],
+        grants: [{ principalId: "admin-1", role: "org_admin", scopeId: "org:acme" }],
+        externalUsers: [],
+      },
+    },
+    { fullAdmin: false },
+  );
+  await page.settle();
+  assert.ok(!page.host.textContent?.includes("Keychain"));
+  assert.equal(page.host.querySelector('a[href*="/settings/user"]'), null);
+  assert.equal(page.host.querySelector('option[value="org_admin"]'), null);
+  assert.ok(page.host.querySelector('option[value="owner"]'));
+  assert.ok(page.host.textContent?.includes("Make owner"));
+  assert.ok(!page.host.textContent?.includes("Revoke"));
+});

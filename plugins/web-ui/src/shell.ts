@@ -157,6 +157,7 @@ setSigninRequiredHandler((detail) => {
 onExitCanvas(() => exitSplitIfActive());
 
 export const ADMIN_HOME_URL = `${UI_BASE}/settings/history`;
+export const adminHomeUrl = (): string => (can("admin") ? ADMIN_HOME_URL : `${UI_BASE}/settings/governance`);
 
 export function syncUrlFromState(sessionOverride?: string | null, historyMode: "push" | "replace" = "replace"): void {
   if (navigationInFlight()) return;
@@ -316,7 +317,7 @@ export async function exitImpersonation(): Promise<void> {
   } catch {
     void 0;
   }
-  window.location.href = ADMIN_HOME_URL;
+  window.location.href = adminHomeUrl();
 }
 
 function impersonationBanner(by: string) {
@@ -599,8 +600,8 @@ export function renderSidebarFooter(): void {
         }
       </div>
       ${
-        can("admin")
-          ? html`<a class="icon-btn subtle" href=${ADMIN_HOME_URL} aria-label="Admin" ${tip("Admin")}>
+        can("admin") || can("owner")
+          ? html`<a class="icon-btn subtle" href=${adminHomeUrl()} aria-label="Admin" ${tip("Admin")}>
               ${icon(ShieldUser, 17)}
             </a>`
           : nothing

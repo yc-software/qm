@@ -239,9 +239,41 @@ export const adminOperations = {
   }),
 } satisfies Record<string, Operation>;
 
+export const OWNER_ADMIN_ACTIONS: ReadonlySet<string> = new Set([
+  "whoami",
+  "resources",
+  "config",
+  "configure",
+  "credential_usage",
+  "memory",
+  "add_memory",
+  "edit_memory",
+  "delete_memory",
+  "spend",
+  "users",
+  "directory",
+  "invite_external",
+  "revoke_external",
+  "slack_installation",
+  "slack_start",
+  "slack_delete",
+  "model_providers",
+  "model_provider_delete",
+  "custom_providers",
+  "custom_provider_delete",
+  "mcp_servers",
+  "mcp_delete",
+  "model_registry",
+  "model_lookup",
+  "model_enable",
+  "model_save",
+  "model_delete",
+]);
+
 export interface AdminToolAccess {
   call: AdminCall;
   operationsAvailable: boolean;
+  role?: "org_admin" | "owner";
 }
 
 type AdminCall = (input: Record<string, unknown>, signal?: AbortSignal) => Promise<SelfApiResponse>;

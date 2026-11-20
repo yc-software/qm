@@ -24,9 +24,11 @@ function users(page: AdminPage, initial: any) {
   let showOffboarded = false;
   let [email, role, message, inviteLink, inviteWarning] = ["", "member", "", "", ""];
   let busy = false;
-  const confirmAdmin = (id: string) =>
+  const confirmGrant = (id: string, targetRole: string) =>
     window.confirm(
-      "Make " + id + " an org admin?\n\nThey will be able to manage users, permissions, and organization settings.",
+      targetRole === "owner"
+        ? "Make " + id + " an org owner?\n\nThey will be able to manage organization settings and members."
+        : "Make " + id + " an org admin?\n\nThey will be able to manage users, permissions, and organization settings.",
     );
   async function act(work: () => Promise<any>, fallback: string, done?: (r: any) => void) {
     if (busy) return;
@@ -41,9 +43,15 @@ function users(page: AdminPage, initial: any) {
     busy = false;
     if (page.current()) draw();
   }
+  const grantRole = page.fullAdmin ? "org_admin" : "owner";
   const admin = (u: any) => {
     const revoke = u.admin?.isAdmin;
-    if (!(revoke ? window.confirm("Revoke admin access for " + u.principalId + "?") : confirmAdmin(u.principalId)))
+    const revokeLabel = u.admin?.role === "owner" ? "owner" : "admin";
+    if (
+      !(revoke
+        ? window.confirm(`Revoke ${revokeLabel} access for ${u.principalId}?`)
+        : confirmGrant(u.principalId, grantRole))
+    )
       return;
     void act(
       () =>
@@ -52,7 +60,7 @@ function users(page: AdminPage, initial: any) {
               "DELETE",
               `/api/grants/${encodeURIComponent(u.principalId)}?scope=${encodeURIComponent(u.admin.scopeId)}&role=${encodeURIComponent(u.admin.role)}`,
             )
-          : page.api("POST", "/api/grants", { principalId: u.principalId, role: "org_admin", scopeId: page.orgScope }),
+          : page.api("POST", "/api/grants", { principalId: u.principalId, role: grantRole, scopeId: page.orgScope }),
       "Could not update admin access",
     );
   };
@@ -67,7 +75,7 @@ function users(page: AdminPage, initial: any) {
   const invite = (event: Event) => {
     event.preventDefault();
     const body = { email: email.trim(), role };
-    if (body.role === "org_admin" && !confirmAdmin(body.email)) return;
+    if ((body.role === "org_admin" || body.role === "owner") && !confirmGrant(body.email, body.role)) return;
     [inviteLink, inviteWarning] = ["", ""];
     void act(
       () => page.api("POST", "/api/users/invite", body),
@@ -100,19 +108,28 @@ function users(page: AdminPage, initial: any) {
     );
     const hidden = showOffboarded ? 0 : offboarded;
     const admins = (data.grants || []).filter((g: any) => g.role === "org_admin").length;
-    const lastAdmin = (u: any) => u.admin?.isAdmin && admins <= 1;
+    const owners = (data.grants || []).filter((g: any) => g.role === "owner").length;
+    const makeLabel = page.fullAdmin ? "Make admin" : "Make owner";
+    const lastGovernor = (u: any) =>
+      (u.admin?.role === "org_admin" && admins <= 1) || (u.admin?.role === "owner" && admins === 0 && owners <= 1);
+    const lastGovernorTitle = (u: any) => {
+      if (!lastGovernor(u)) return "";
+      return u.admin?.role === "owner" ? "The last owner cannot be revoked." : "The last admin cannot be revoked.";
+    };
     render(
       html`${pageHeader({
-          count: `${roster.length} users · ${admins} admins${hidden ? ` · ${hidden} offboarded hidden` : ""}`,
+          count: `${roster.length} users · ${admins} admins${owners ? ` · ${owners} owners` : ""}${hidden ? ` · ${hidden} offboarded hidden` : ""}`,
           actions: offboarded
             ? html`<button class="btn" type="button" @click=${() => ((showOffboarded = !showOffboarded), draw())}>
                 ${showOffboarded ? "Hide offboarded" : `Show offboarded (${offboarded})`}
               </button>`
             : nothing,
-          tabs: [
-            { label: "Users", href: page.href("users"), active: true },
-            { label: "Keychain", href: page.href("keychain") },
-          ],
+          tabs: page.fullAdmin
+            ? [
+                { label: "Users", href: page.href("users"), active: true },
+                { label: "Keychain", href: page.href("keychain") },
+              ]
+            : undefined,
           search: {
             value: filter,
             placeholder: "sign-in, role, scope, or app",
@@ -143,7 +160,8 @@ function users(page: AdminPage, initial: any) {
                     @change=${(e: Event) => (role = (e.target as HTMLSelectElement).value)}
                   >
                     <option value="member">Member</option>
-                    <option value="org_admin">Admin</option>
+                    <option value="owner">Owner</option>
+                    ${page.fullAdmin ? html`<option value="org_admin">Admin</option>` : nothing}
                   </select>
                 </div>
                 <button class="btn primary" ?disabled=${busy}>Send invite</button>
@@ -159,26 +177,34 @@ function users(page: AdminPage, initial: any) {
                 ["Principal", "Role", "Last seen", "Sessions", "Turns", ""],
                 roster.map((u: any) => [
                   {
-                    node: html`<a href=${userHref(page, u)} title=${u.principalId}
-                        >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</a
-                      >
-                      ${u.kind === "app" ? badge("app") : ""}
-                      ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}
-                      ${u.aliases?.length > 1 ? subline(u.aliases.filter((a: string) => a !== u.principalId).join(", ")) : ""}`,
+                    node: html`${
+                      page.fullAdmin
+                        ? html`<a href=${userHref(page, u)} title=${u.principalId}
+                            >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</a
+                          >`
+                        : html`<span title=${u.principalId}
+                            >${u.displayName || html`<span class="mono">${u.principalId}</span>`}</span
+                          >`
+                    }
+                    ${u.kind === "app" ? badge("app") : ""}
+                    ${u.offboarded || u.deactivated ? badge(u.offboarded ? "offboarded" : "deactivated", "warn") : ""}
+                    ${u.aliases?.length > 1 ? subline(u.aliases.filter((a: string) => a !== u.principalId).join(", ")) : ""}`,
                   },
                   { node: subline(u.admin?.isAdmin ? labelRole(u.admin.role) : "member") },
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },
                   { text: String(u.sessionCount), cls: "num" },
                   { text: String(u.turnCount), cls: "num" },
-                  {
-                    action: {
-                      label: u.admin?.isAdmin ? "Revoke" : "Make admin",
-                      danger: !!u.admin?.isAdmin,
-                      disabled: busy || lastAdmin(u),
-                      title: lastAdmin(u) ? "The last admin cannot be revoked." : "",
-                      run: () => admin(u),
-                    },
-                  },
+                  !page.fullAdmin && u.admin?.role === "org_admin"
+                    ? ""
+                    : {
+                        action: {
+                          label: u.admin?.isAdmin ? "Revoke" : makeLabel,
+                          danger: !!u.admin?.isAdmin,
+                          disabled: busy || lastGovernor(u),
+                          title: lastGovernorTitle(u),
+                          run: () => admin(u),
+                        },
+                      },
                 ]),
                 "No users match.",
               )}`,
@@ -196,7 +222,8 @@ function users(page: AdminPage, initial: any) {
                   m.expiresAt === null ? "No expiration" : formatMessageTime(m.expiresAt),
                   m.invitedBy || "-",
                   { node: badge(m.status === "active" ? "Active" : "Expired", m.status === "active" ? "ok" : "warn") },
-                  m.status === "active" || (m.kind !== "teammate" && Date.now() - m.expiresAt >= 86400000)
+                  (page.fullAdmin || m.role !== "org_admin") &&
+                  (m.status === "active" || (m.kind !== "teammate" && Date.now() - m.expiresAt >= 86400000))
                     ? {
                         action: {
                           label: m.status === "active" ? "Revoke" : "Remove",

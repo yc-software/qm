@@ -47,7 +47,7 @@ export interface AdminRequest {
 export async function mountPage(
   url: string,
   routes: Record<string, Reply | Route> = {},
-  options: { org?: string; confirm?: (message: string) => boolean } = {},
+  options: { org?: string; fullAdmin?: boolean; confirm?: (message: string) => boolean } = {},
 ) {
   sectionsBundle ??= bundle("../../src/admin/sections.ts", "adminSections");
   const code = await sectionsBundle;
@@ -115,6 +115,7 @@ export async function mountPage(
     base: "/settings",
     apiBase: "/api/admin",
     org: () => options.org ?? "acme",
+    fullAdmin: () => options.fullAdmin ?? true,
     go: (next: string, replace = false) => {
       window.history[replace ? "replaceState" : "pushState"](null, "", next);
       void mount();

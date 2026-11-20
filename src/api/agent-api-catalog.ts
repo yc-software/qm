@@ -11,6 +11,7 @@ interface AgentApiRoute {
 interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
+  role?: string;
   swarmsEnabled: boolean;
   personasEnabled: boolean;
 }
@@ -698,7 +699,50 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.isAdmin && livePersonCapability(v.claims),
+    when: (v) => v.role === "owner" && livePersonCapability(v.claims),
+    guidance:
+      "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
+    routes: [
+      { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
+      { method: "GET", path: "/v1/admin/resources", summary: "list configurable org resources" },
+      {
+        method: "GET",
+        path: "/v1/admin/scopes/:orgScopeId",
+        summary: "org scope resolved config: command policy, SOUL, egress, flags, connectors, service credentials",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/scopes/:orgScopeId/:resource",
+        summary:
+          "govern the org scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime",
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/v1/admin/memory?scope=:orgScopeId",
+        summary: "read or update org-wide notebook facts ({facts:[text]}, {facts:[{id,text}]}, {ids})",
+      },
+      { method: "GET", path: "/v1/admin/spend", summary: "org-wide spend summary" },
+      { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
+      { method: "GET", path: "/v1/admin/users", summary: "org roster and external users" },
+      {
+        method: "POST",
+        path: "/v1/admin/external-users",
+        summary: "invite an outside collaborator by email ({email, expiresAt}); role changes are portal-only",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/external-users/:email",
+        summary: "revoke an external member's access",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/directory?q=",
+        summary: "resolve a name or principal id to org-directory candidates",
+      },
+    ],
+  },
+  {
+    when: (v) => v.isAdmin && v.role !== "owner" && livePersonCapability(v.claims),
     guidance:
       "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
@@ -817,6 +861,7 @@ export function renderAgentApis(
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
+    ...(admin.role ? { role: admin.role } : {}),
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };

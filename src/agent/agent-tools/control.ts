@@ -1,4 +1,4 @@
-import { adminOperations } from "../../tools/admin.ts";
+import { OWNER_ADMIN_ACTIONS, adminOperations } from "../../tools/admin.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { splitToScope } from "../../api/artifact-share.ts";
@@ -461,14 +461,22 @@ export function controlPlaneTools(kit: ToolKit) {
     });
   }
 
+  const adminRole = ref.current?.admin?.role;
+  let exposedAdminOps: Record<string, (typeof adminOperations)[keyof typeof adminOperations]> = {
+    whoami: adminOperations.whoami,
+  };
+  if (ref.current === null || (ref.current.admin?.operationsAvailable && adminRole !== "owner")) {
+    exposedAdminOps = adminOperations;
+  } else if (ref.current.admin?.operationsAvailable) {
+    exposedAdminOps = Object.fromEntries(
+      Object.entries(adminOperations).filter(([action]) => OWNER_ADMIN_ACTIONS.has(action)),
+    );
+  }
+
   const admin = resourceTool(
     "admin",
     Object.fromEntries(
-      Object.entries(
-        ref.current === null || ref.current.admin?.operationsAvailable
-          ? adminOperations
-          : { whoami: adminOperations.whoami },
-      ).map(([action, operation]) => [
+      Object.entries(exposedAdminOps).map(([action, operation]) => [
         action,
         defineTool({
           name: action,
@@ -505,7 +513,9 @@ export function controlPlaneTools(kit: ToolKit) {
 
   if (ref.current === null || ref.current.admin?.operationsAvailable)
     admin.description =
-      "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
+      (adminRole === "owner"
+        ? "Admin API (org owner); authority is rechecked on every call and audited. Org-wide settings, org memory, models, connectors, spend, and member roster/external invites are available; reading other people's private content requires org_admin. Role changes and teammate invitations are portal-only. Confirm every mutation and report exactly what changed. Never put secrets in arguments.\n\n"
+        : "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n") +
       admin.description;
 
   return { webhook, guidance, sharingTool, admin };

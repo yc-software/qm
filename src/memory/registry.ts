@@ -431,10 +431,10 @@ export function brainRefusal(
   record: MemoryRegistry,
   brain: Pick<RegistryBrain, "id" | "owner">,
   principalId: string,
-  standing: "inactive" | "admin" | "member",
+  standing: "inactive" | "org_admin" | "owner" | "member",
 ): string | undefined {
-  if (standing === "admin") return undefined;
-  if (standing === "member" && brain.owner === principalId)
+  if (standing === "org_admin") return undefined;
+  if ((standing === "member" || standing === "owner") && brain.owner === principalId)
     return memberBrainsOn(record) ? undefined : memberBrainsOff().message;
   return `only an org admin or the brain's owner can set brain ${brain.id}'s secret`;
 }

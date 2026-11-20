@@ -88,6 +88,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   captureLlmRequests: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
+  trustedOidcAdminRole?: "org_admin" | "owner";
   workspaceProvisionerUrl?: string;
   emailAuthPrincipals?: string[];
   emailAuthDomain?: string;
@@ -569,6 +570,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
+    ...(env.TRUSTED_OIDC_ADMIN_ROLE
+      ? {
+          trustedOidcAdminRole: choiceEnvStrict("TRUSTED_OIDC_ADMIN_ROLE", env.TRUSTED_OIDC_ADMIN_ROLE, [
+            "org_admin",
+            "owner",
+          ] as const),
+        }
+      : {}),
     ...(env.WORKSPACE_PROVISIONER_URL ? { workspaceProvisionerUrl: workspaceProvisionerUrl(env) } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
