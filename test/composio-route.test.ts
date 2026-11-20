@@ -1463,3 +1463,29 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
 });
+
+test("an app that takes a return page links back to QM from the catalog and the agent's refusal", async () => {
+  const f = fixture();
+  await f.own();
+  const apps = [
+    {
+      toolkit: "googlecalendar",
+      name: "Google Calendar",
+      connectUrl: "https://host.example/connect/googlecalendar",
+      returnParam: "return_url",
+    },
+  ];
+  f.deps.mcpServers = {
+    list: async () => [{ id: "host", enabled: true, apps }],
+  } as unknown as ServerDeps["mcpServers"];
+  f.replies.push({ items: [], next_cursor: null });
+  const [item] = (await f.invoke("/v1/composio/toolkits")).data.items;
+  assert.deepEqual([item.connectUrl, item.returnParam], ["https://host.example/connect/googlecalendar", "return_url"]);
+  const refused = await f.invoke("/v1/composio/authorize", { toolkit: "googlecalendar" });
+  assert.equal(refused.status, 409);
+  assert.equal(
+    refused.data.connectUrl,
+    "https://host.example/connect/googlecalendar?return_url=https%3A%2F%2Fqm.example",
+  );
+  assert.match(refused.data.message, /connects at https:\/\/host\.example\/connect\/googlecalendar\?return_url=/);
+});

@@ -17,7 +17,7 @@ import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { isToolkitId } from "../../../mcp/connector-apps.ts";
+import { isReturnParam, isToolkitId } from "../../../mcp/connector-apps.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
 const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
@@ -30,7 +30,8 @@ function parseApps(value: unknown): McpServerApp[] | null {
     const connectUrl = httpsUrl(app.connectUrl);
     const name = typeof app.name === "string" ? app.name.trim() : "";
     if (!isToolkitId(app.toolkit) || !name || !connectUrl) return null;
-    return { toolkit: app.toolkit, name, connectUrl };
+    if (app.returnParam !== undefined && !isReturnParam(app.returnParam)) return null;
+    return { toolkit: app.toolkit, name, connectUrl, ...(app.returnParam ? { returnParam: app.returnParam } : {}) };
   });
   return apps.every((app) => app !== null) ? apps : null;
 }
@@ -157,7 +158,15 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!apps) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
-      message: "apps must be a list of { toolkit, name, connectUrl (HTTPS) }",
+      message: "apps must be a list of { toolkit, name, connectUrl (HTTPS), returnParam? }",
+    });
+  }
+  const appStatusTool = b.appStatusTool;
+  if (apps.length ? typeof appStatusTool !== "string" || !appStatusTool : appStatusTool !== undefined) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message:
+        "a connector with apps needs appStatusTool, the tool that reports their status; other connectors take none",
     });
   }
   const credentialHost = b.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
@@ -234,6 +243,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     ...(attestActor ? { attestActor } : {}),
     ...(attestAudience === "any" ? { attestAudience } : {}),
     ...(apps.length ? { apps } : {}),
+    ...(appStatusTool ? { appStatusTool } : {}),
     readOnly: b.readOnly === true,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),

@@ -7,7 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { connectorApps, type ConnectorApp } from "./connector-apps.ts";
+import { connectedServices, connectorApps, type ConnectorApp } from "./connector-apps.ts";
 import {
   attestsInAudience,
   attestedPerson,
@@ -319,6 +319,11 @@ export function createMcpToolService(opts: {
     return listing;
   }
 
+  async function appStatus(server: McpServer, tool: string, principalId: string): Promise<string> {
+    const client = await callerClient(server, principalId);
+    return resultText(await client.callTool(tool, {}, headersFor(server, principalId)));
+  }
+
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
     if (typeof name !== "string" || !name) throw new Error("tool is required");
     const entry = (await catalogTools(server, principalId)).find((t) => t.name === name);
@@ -574,7 +579,12 @@ export function createMcpToolService(opts: {
           if (!apps.length) return [];
           let listed = new Set<string>();
           try {
-            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+            if (server.appStatusTool) {
+              const status = connectedServices(await appStatus(server, server.appStatusTool, principalId));
+              listed = status.connected;
+              if (status.unavailable.length)
+                record("list", server.id, `app status unavailable: ${status.unavailable.join(", ")}`, principalId);
+            }
           } catch (e) {
             record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }
