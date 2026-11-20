@@ -20,13 +20,14 @@ describe("agent projects self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string) =>
+  const capFor = (actorId: string, botActor?: true) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scopeId("personal", actorId),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...(botActor ? { botActor } : {}),
       },
       SECRET,
     );
@@ -76,6 +77,9 @@ describe("agent projects self-API", async () => {
     const { projects } = (await response.json()) as { projects: Array<{ id: string }> };
     assert.ok(projects.some((project) => project.id === mineId));
     assert.ok(!projects.some((project) => project.id === theirsId));
+    const bot = await capFor("U1", true);
+    assert.equal((await request("GET", "/v1/projects", undefined, bot)).status, 403);
+    assert.equal((await request("PATCH", `/v1/projects/${mineId}`, { name: "Renamed" }, bot)).status, 403);
   });
 
   it("creates, renames, adds a member, and removes a member as the token actor", async () => {

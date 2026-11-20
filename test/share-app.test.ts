@@ -12,9 +12,11 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { renameApp, archiveApp, restoreApp, getApp, setAppDisplayName } from "../src/api/routes/apps.ts";
-import { getAppShares, resolveShareTarget, shareApp } from "../src/api/routes/app-sharing.ts";
+import { changeShares as shareApp, readShares as getAppShares } from "../src/api/routes/sharing.ts";
+import { resolveShareTarget as resolveTarget } from "../src/api/artifact-share.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -65,6 +67,8 @@ function apiHarness(directory?: Dir) {
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
+    acl,
+    auditLog: { record() {} },
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     ...(directory ? { directory } : {}),
   } as unknown as Parameters<typeof createApp>[0]);
@@ -72,7 +76,7 @@ function apiHarness(directory?: Dir) {
 }
 
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
-  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999 }) as CapabilityClaims;
+  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999, liveActor: true }) as CapabilityClaims;
 
 const one = (principalId: string, displayName: string): RecipientResolution => ({
   kind: "one",
@@ -98,42 +102,32 @@ function callManage(
       out.body = d ? JSON.parse(d) : undefined;
     },
   };
-  const actor = person ? { p: person, exp: Date.now() + 60_000 } : null;
-  const ctx = { res, app, deps: { featureFlags }, params: { id }, body, capability, actor } as unknown as ApiCtx;
-  return handle(ctx).then(() => out);
-}
-
-const callShare = (
-  app: ReturnType<typeof createApp>,
-  capability: CapabilityClaims | null,
-  id: string,
-  body: unknown,
-  featureFlags = externalSharingOn,
-) => callManage(shareApp, app, capability, id, body, featureFlags);
-
-function callDetail(app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) {
-  const out: { status?: number; body?: any } = {};
-  const res = {
-    getHeader() {},
-    writeHead(s: number) {
-      out.status = s;
-    },
-    end(d?: string) {
-      out.body = d ? JSON.parse(d) : undefined;
-    },
-  };
   const ctx = {
     res,
     app,
-    params: { id },
-    capability,
+    params: { type: "deploy", id },
+    body,
+    capability: capability && { ...liveRunClaims(capability.actorId), ...capability },
+    actor: person ? { p: person, exp: Date.now() + 60_000 } : null,
+    tenant,
     secret: "test-secret",
-    deps: { apiBaseUrl: "https://api.example", publicUrl: "https://web.example" },
+    deps: {
+      featureFlags,
+      control: createControlService(app),
+      runs: liveRunStore(),
+      apiBaseUrl: "https://api.example",
+      publicUrl: "https://web.example",
+    },
     url: new URL(`http://localhost/v1/apps/${id}`),
     req: { headers: { host: "localhost" } },
   } as unknown as ApiCtx;
-  return getApp(ctx).then(() => out);
+  return handle(ctx).then(() => out);
 }
+
+const callShare = callManage.bind(null, shareApp);
+
+const callDetail = (app: ReturnType<typeof createApp>, capability: CapabilityClaims, id: string) =>
+  callManage(getApp, app, capability, id, undefined);
 
 test("manage endpoints (rename/display-name/archive): agent capability is owner-scoped, no principal is refused", async () => {
   const { app, deploy } = apiHarness();
@@ -249,7 +243,6 @@ test('share endpoint: "everyone" grants org reach — a non-owner can reach it; 
   const r = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org" });
   assert.equal(r.status, 200);
   assert.equal(r.body.target.scope, scopeId("org", "default-org"));
-  assert.match(r.body.reach, /everyone in default-org/);
   assert.equal((await deploy.reachApp("dead-reckoning", "U2")).status, "ok");
 
   const off = await callShare(app, cap("U1"), "dead-reckoning", { scope: "org", access: "none" });
@@ -324,7 +317,7 @@ test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/
   assert.equal((await callShare(app, cap("U1"), "a", { scope: "not-a-scope" })).status, 400, "bad scope id → 400");
 });
 
-test("share endpoint: access:manage grants write (reach + manage)", async () => {
+test("share endpoint: access:manage grants write, and a later view grant replaces it", async () => {
   const directory: Dir = { resolve: async () => one("U-eng", "Eng") };
   const { app, deploy } = apiHarness(directory);
   await app.deploy({
@@ -337,6 +330,15 @@ test("share endpoint: access:manage grants write (reach + manage)", async () => 
   const r = await callShare(app, cap("U1"), "mgmt", { recipient: "eng", access: "manage" });
   assert.equal(r.status, 200);
   assert.deepEqual(await deploy.appGrantees("mgmt"), [{ scope: scopeId("personal", "U-eng"), permission: "write" }]);
+  const d = (await app.getApp("mgmt"))!;
+  await app.grant(tenant, {
+    ownerScopeId: d.ownerScopeId,
+    ref: `deployment:${d.id}`,
+    granteeScopeId: scopeId("personal", "U-eng"),
+    permission: "read",
+    grantedBy: "U1",
+  });
+  assert.deepEqual(await deploy.appGrantees("mgmt"), [{ scope: scopeId("personal", "U-eng"), permission: "read" }]);
 });
 
 test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→personal, none/ambiguous/invalid', async () => {
@@ -356,6 +358,8 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
     },
   };
   const { app } = apiHarness(directory);
+  const resolveShareTarget = (app: ReturnType<typeof createApp>, input: { scope?: string; recipient?: string }) =>
+    resolveTarget(app, input, { invalidScope: (scope) => scope, targetRequired: "target required" });
   assert.deepEqual(await resolveShareTarget(app, { scope: "org" }), {
     kind: "ok",
     scope: "org:default-org",
@@ -397,7 +401,7 @@ const appSandbox = (): Sandbox => {
   } as unknown as Sandbox;
 };
 
-function toolCtx(deploy: DeployService): ToolContext {
+function toolCtx(deploy: DeployService, controlClaims = cap("U1")): ToolContext {
   return createToolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
@@ -409,6 +413,7 @@ function toolCtx(deploy: DeployService): ToolContext {
     deploy,
     acl: {} as never,
     createdBy: "U1",
+    controlClaims,
   } as never);
 }
 
@@ -480,7 +485,7 @@ test("republish, rename and rollback never change visibility; only the separate 
   assert.equal(after?.public, undefined);
   assert.equal(after?.name, "vis");
   assert.equal((await deploy.reachApp("vis", "U2")).status, "denied");
-  await deploy.setAppPublic(d.id, true, { createdBy: "U1" });
+  await deploy.setAppPublic(d.id, true, { createdBy: "U1", personAtKeyboard: true });
   assert.equal((await deploy.getApp(d.id))?.public, true);
   await deploy.deployOrUpdate({ ...owner, name: "vis" });
   await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
@@ -582,11 +587,35 @@ test("without an apps domain, a public link is refused on the share route and th
   assert.equal((await callShare(app, cap("U1"), "path-only", { public: false })).status, 200);
 });
 
-test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
-  const { deploy } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
+test("the apps tool and the share action change public access only with a person at the keyboard", async () => {
+  const { deploy } = makeDeploy();
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
     deploy,
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+  } as unknown as Parameters<typeof createApp>[0]);
+  await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "solo",
+  });
+  const fired = { ...cap("U1"), triggered: true };
+  await assert.rejects(() => toolCtx(deploy, fired).setAppPublic("solo", true), /Only the person/);
+  assert.equal((await callShare(app, fired, "solo", { public: true })).body.error, "human_consent_required");
+  assert.equal((await app.getApp("solo"))?.public, undefined);
+  assert.equal((await toolCtx(deploy).setAppPublic("solo", true)).public, true);
+  assert.equal((await callShare(app, null, "solo", { public: false }, externalSharingOn, "U1")).body.public, false);
+});
+
+test("with external app sharing off, public links and outside emails are refused while org sharing still works", async () => {
+  const { deploy, acl } = makeDeploy(async (email) => email.endsWith("@acme.test"), false);
+  const app = createApp({
+    advisoryLock: testAdvisoryLock(),
+    deploy,
+    acl,
+    auditLog: { record() {} },
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const off = { enabled: async () => false } as unknown as FeatureFlagStore;

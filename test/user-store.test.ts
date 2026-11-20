@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { foldPrincipalId, installPrincipalLinks } from "../src/directory/person.ts";
-import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
+import { createPrincipalLinkService, PrincipalLinkError } from "../src/identity/principal-links.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresUserStore, fold, type UserStore } from "../src/identity/user-store.ts";
 import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -30,7 +31,7 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
 });
 
-test("a user is a person until QM records it as an app; then what its sign-ins made is bot work, and a person's is not", async () => {
+test("a user is a person until QM records it as an app by its own sign-in; then what its sign-ins made is bot work, and a person's is not", async () => {
   const [roster, pg] = [store(), createPgPool(url)];
   const [bot, synced, pat, absent] = [unique("bot"), unique("synced"), unique("pat"), unique("absent")];
   for (const id of [bot, synced, pat]) await roster.record({ id, source: "turn", at: 1 });
@@ -58,14 +59,35 @@ test("a user is a person until QM records it as an app; then what its sign-ins m
   await recordUser(roster, bot, true);
   assert.equal((await roster.get(bot))?.kind, "app");
   assert.deepEqual(await rows(), [...made, ...grants(bot)].sort());
-  assert.equal(await roster.markApps([synced, bot, absent]), 1, "marking an app again changes nothing");
+  await roster.applyDirectoryBots(
+    [synced, bot, absent].map(
+      (principalId) => ({ principalId, displayName: principalId, type: "internal", isBot: true }) as const,
+    ),
+  );
   assert.deepEqual(await rows(), [...made, ...grants(bot, synced)].sort());
   assert.equal(await roster.get(absent), null, "marking never creates a row");
+  await roster.link({ principalId: absent, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() });
+  assert.deepEqual([await roster.markApps([absent]), (await roster.get(pat))?.kind], [0, "person"]);
   const audit = `SELECT string_agg(action || ' ' || resource, ', ' ORDER BY action, resource) AS r FROM audit_log
     WHERE principal_id = 'system'`;
   const logged = `loop_update ${bot}, loop_update marked, ship_grant_revoke ${bot}, ship_grant_revoke ${synced}`;
   assert.equal((await pg.q(audit))[0]!.r, logged);
   await pg.close();
+});
+
+test("a link refuses an app user unless its directory row says it is a person, and the merge keeps a person", async () => {
+  const app = `U-${randomUUID().slice(0, 8)}`;
+  const pat = unique("pat");
+  const roster = store();
+  await roster.record({ id: app, source: "turn", at: Date.now() });
+  await roster.markApps([app]);
+  const link = { principalId: app, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() };
+  await assert.rejects(roster.link(link), PrincipalLinkError);
+  await createPostgresDirectoryStore(url).replace([
+    { principalId: app, displayName: "Sam", type: "internal", isBot: false },
+  ]);
+  await roster.link(link);
+  assert.deepEqual([(await roster.get(app))?.principalId, (await roster.get(pat))?.kind], [pat, "person"]);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {

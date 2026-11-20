@@ -10,6 +10,7 @@ import { claimFunction, claimRows, claimThenLoad, servingTenant } from "../tenan
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
   AND (claim_expires_at IS NULL OR claim_expires_at <= ${NOW_MS_SQL})`;
+const PENDING = "delivered_at IS NULL AND expired_at IS NULL AND NOT shadow";
 const OVERAGED = `${CLAIMABLE} AND destination->'webTranscript'->>'kind' IS DISTINCT FROM 'slack_reply'
   AND created_at <= ${NOW_MS_SQL} - $1`;
 function rowToDelivery(r: Record<string, unknown>): Delivery {
@@ -28,6 +29,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
+    ...(r.message_ts != null ? { messageTs: r.message_ts as string } : {}),
   };
 }
 
@@ -169,10 +171,37 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       id: "delivery/store/0013-serving-claims",
       statements: [claimDeliveries(servingTenant), undeliveredTenants(servingTenant)],
     },
+    {
+      id: "delivery/store/0014-pending-heads",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deliveries_pending_heads
+        ON deliveries (tenant_id, (destination->>'type'), (destination->>'target'), created_at, id)
+        WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
+      ],
+    },
+    {
+      id: "delivery/store/0015-pending-head-claims",
+      statements: [
+        claimFunction(
+          "pending_delivery_heads",
+          "text[]",
+          `SELECT DISTINCT tenant_id, jsonb_build_array(destination->>'type', destination->>'target')::text
+             FROM deliveries
+            WHERE ${PENDING} AND destination->>'type' = ANY($1)${servingTenant("tenant_id")}`,
+        ),
+      ],
+    },
+    {
+      id: "delivery/store/0016-message-ts",
+      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS message_ts TEXT`],
+    },
   ]);
   const { q, query } = pg;
 
-  const enqueueListeners = tenantListeners<[string]>("delivery enqueue");
+  const enqueueListeners = tenantListeners<[string, string, string]>("delivery enqueue");
+
+  const load = async (ids: string[]) =>
+    (await q("SELECT * FROM deliveries WHERE id = ANY($1)", [ids])).map(rowToDelivery);
 
   async function get(id: string): Promise<Delivery | null> {
     const rows = await q("SELECT * FROM deliveries WHERE id = $1", [id]);
@@ -222,7 +251,8 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) enqueueListeners.emit(input.destination.type);
+        if (input.shadow !== true)
+          enqueueListeners.emit(input.destination.type, input.destination.target, String(inserted[0].tenant_id));
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -252,13 +282,42 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
     async claimDue(type, ttlMs) {
-      const load = async (ids: string[]) =>
-        (await q("SELECT * FROM deliveries WHERE id = ANY($1)", [ids])).map(rowToDelivery);
       for (const d of await claimThenLoad(() => claimRows(pg, "expire_deliveries", [maxAgeMs]), load))
         logDeliveryExpiry(d, d.expiredAt ?? Date.now());
       const claimed = await claimThenLoad(() => claimRows(pg, "claim_deliveries", [type, ttlMs]), load);
       return claimed.sort((a, b) => a.createdAt - b.createdAt);
     },
+    async claimHead(tenant, type, target, ttlMs) {
+      const rows = await pg.forTenant(tenant).q(
+        `WITH head AS (
+           SELECT id, claim_expires_at FROM deliveries
+            WHERE tenant_id = $1 AND ${PENDING} AND destination->>'type' = $2 AND destination->>'target' = $3
+            ORDER BY created_at, id LIMIT 1 FOR UPDATE)
+         UPDATE deliveries d
+            SET claim_expires_at = CASE WHEN head.claim_expires_at > ${NOW_MS_SQL}
+              THEN head.claim_expires_at ELSE ${NOW_MS_SQL} + $4 END
+           FROM head WHERE d.tenant_id = $1 AND d.id = head.id
+         RETURNING d.*, head.claim_expires_at > ${NOW_MS_SQL} AS held`,
+        [tenant.id, type, target, ttlMs],
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const delivery = rowToDelivery(row);
+      return row.held === true ? { delivery, heldUntil: Number(row.claim_expires_at) } : { delivery };
+    },
+    async defer(tenant, id, until) {
+      await pg
+        .forTenant(tenant)
+        .query(
+          "UPDATE deliveries SET claim_expires_at = $3 WHERE tenant_id = $1 AND id = $2 AND delivered_at IS NULL",
+          [tenant.id, id, until],
+        );
+    },
+    pendingHeads: async (types) =>
+      (await claimRows(pg, "pending_delivery_heads", [types])).map(({ tenantId, id }) => {
+        const [type, target] = JSON.parse(id) as [string, string];
+        return { tenantId, type, target };
+      }),
     undeliveredTenants: (type) => claimRows(pg, "undelivered_delivery_tenants", [type]),
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
@@ -268,16 +327,17 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, slackApiMs, messageTs) {
       await query(
         `UPDATE deliveries
             SET delivered_at = $2,
                 expired_at = NULL,
                 failed_reason = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
-                slack_api_ms = COALESCE($3, slack_api_ms)
+                slack_api_ms = COALESCE($3, slack_api_ms),
+                message_ts = COALESCE($4, message_ts)
           WHERE id = $1 AND delivered_at IS NULL`,
-        [id, at, slackApiMs ?? null],
+        [id, at, slackApiMs ?? null, messageTs ?? null],
       );
     },
     async fail(id, reason, at) {

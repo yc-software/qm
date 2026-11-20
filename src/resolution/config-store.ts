@@ -10,6 +10,7 @@ import { composeSecurityPosture, type SecurityPosture } from "../security/securi
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import type { SpendLimit } from "../ratelimit/spend-limits.ts";
+import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 import {
   deriveConnectorKey,
   encryptSecret,
@@ -182,6 +183,8 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
+  getActivitySeeds(id: ScopeId): Promise<ActivitySeeds | null>;
+  setActivitySeeds(id: ScopeId, seeds: ActivitySeeds | null): Promise<void>;
   getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
@@ -219,6 +222,7 @@ export interface ConfigStoreMaps {
   ackEmoji?: DurableMap<ScopedRow<"names", string[]>>;
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
+  activitySeeds?: DurableMap<ScopedRow<"seeds", ActivitySeeds>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
@@ -243,6 +247,7 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   ackEmoji: "ack_emoji",
   slackEmojiCatalog: "slack_emoji_catalog",
   branding: "branding_configs",
+  activitySeeds: "activity_seeds_configs",
   browseMaxSteps: "browse_max_steps_configs",
   spendLimits: "spend_limit_configs",
   deploymentIdentity: "deployment_identity",
@@ -342,6 +347,7 @@ export function createConfigStore(
     webuiModels: field("webuiModels", "ids"),
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
+    activitySeeds: field("activitySeeds", "seeds"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     spendLimits: field("spendLimits", "limit"),
   } satisfies Partial<Record<SettingKey, unknown>>;
@@ -749,6 +755,8 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
+    getActivitySeeds: async (id) => (await settings.activitySeeds.durable(id)) ?? null,
+    setActivitySeeds: (id, seeds) => settings.activitySeeds.set(id, seeds),
     getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,

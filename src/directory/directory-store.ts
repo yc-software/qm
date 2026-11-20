@@ -49,6 +49,7 @@ interface SignInTenant {
 
 export interface DirectoryMeta {
   workspaceUrl: string | null;
+  appIconUrl: string | null;
 }
 
 export type RecipientResolution =
@@ -95,12 +96,13 @@ export interface DirectoryStore {
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
-  setWorkspaceUrl(url: string): Promise<void>;
+  setWorkspace(meta: DirectoryMeta): Promise<void>;
   meta(): Promise<DirectoryMeta>;
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
-  setAppHandle?(handle: string): Promise<"ok" | "taken">;
+  setAppHandle?(handle: string): Promise<"ok" | "taken" | "app_taken">;
   tenantForAppHandle?(handle: string): Promise<string | undefined>;
+  tenantForAppHost?(label: string): Promise<string | undefined>;
   trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 

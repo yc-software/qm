@@ -21,6 +21,7 @@ export interface SearchRequest {
   principals: readonly Principal[];
   limit: number;
   botActor?: boolean;
+  ownScopeBotWork?: boolean;
 }
 export interface SearchBackend {
   name: string;
@@ -32,6 +33,7 @@ export interface CoreSearch {
     principals: readonly Principal[];
     limit?: number;
     botActor?: boolean;
+    ownScopeBotWork?: boolean;
   }): Promise<{ hits: SearchHit[]; failedBackends: string[] }>;
 }
 function canonicalPrincipals(principals: readonly Principal[]): Principal[] {
@@ -65,7 +67,7 @@ export function createCoreSearch(
       if (!query || !principals.length) return { hits: [], failedBackends: [] };
       const limit = searchLimit(input.limit);
       const settled = await Promise.allSettled(
-        backends.map((backend) => backend.search({ query, principals, limit, botActor: input.botActor })),
+        backends.map((backend) => backend.search({ ...input, query, principals, limit })),
       );
       const hits: SearchHit[] = [];
       const failedBackends: string[] = [];

@@ -6,39 +6,52 @@ import {
   PUBLIC_ACCESS_NOTE,
   type GeneralAccess,
 } from "../../chassis/src/app-access.ts";
-import { html, render, nothing } from "lit";
+import { html, render, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Building2, Globe, Lock, Search, X } from "lucide";
+import { Building2, Globe, Lock, Search, Share2, X } from "lucide";
 import { api } from "./core-bridge";
 import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { icon } from "./icons";
-import { scopeChip } from "./contexts";
+import { ensureContexts, scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./app-view";
 import { errMessage } from "../../chassis/src/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
+import { COPY_STATUS } from "./cron-delivery";
 
 interface Grant {
   scope: string;
   permission: "read" | "write";
+  status?: "on" | "paused" | "edited";
 }
 
 const isOrgGrant = (grant: Grant): boolean => isOrgScope(grant.scope);
 
-export async function openAppPermissions(
-  id: string,
-  title: string,
-  owner: string,
+interface Shareable {
+  type: "deploy" | "cron" | "skill" | "file";
+  id: string;
+  title: string;
+  owner: string;
+}
+
+const NOUN = { deploy: "app", cron: "cron", skill: "skill", file: "file" };
+
+const scopeOf = (match: DirectoryMatch): string =>
+  match.type === "context" ? match.principalId : `personal:${match.principalId}`;
+
+export async function openShare(
+  { type, id, title, owner }: Shareable,
   hooks: { onChange?: () => void; onClose?: () => void } = {},
 ): Promise<void> {
   const opener = document.activeElement as HTMLElement | null;
   const dialog = document.createElement("dialog");
-  dialog.className = "project-dialog app-permissions-dialog";
-  dialog.setAttribute("aria-labelledby", "app-permissions-heading");
+  dialog.className = "project-dialog share-dialog";
+  dialog.setAttribute("aria-labelledby", "share-heading");
   document.body.append(dialog);
   let grantees: Grant[] = [];
   let publicAccess = false;
   let externalSharing = true;
+  let offers = { org: true, manage: true, email: true, public: true };
   let matches: DirectoryMatch[] = [];
   let query = "";
   let access = "view";
@@ -51,7 +64,7 @@ export async function openAppPermissions(
   let loaded = false;
   let error = "";
   let searched = false;
-  const endpoint = `/api/apps/${encodeURIComponent(id)}/share`;
+  const endpoint = `/api/shares/${type}/${encodeURIComponent(id)}`;
   const close = () => {
     clearTimeout(timer);
     searchSequence++;
@@ -73,14 +86,14 @@ export async function openAppPermissions(
     error = "";
     draw();
     try {
-      const response = await api<{ public: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
+      const response = await api<{ public?: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
         endpoint,
         {
           method: "POST",
           body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
         },
       );
-      publicAccess = response.public;
+      publicAccess = response.public === true;
       grantees = response.grantees;
       hooks.onChange?.();
       if (response.invitation?.emailProblem)
@@ -100,11 +113,11 @@ export async function openAppPermissions(
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
   const generalAccess = (): GeneralAccess => generalAccessOf({ public: publicAccess, grantees });
   const post = async (body: Record<string, unknown>) => {
-    const response = await api<{ public: boolean; grantees: Grant[] }>(endpoint, {
+    const response = await api<{ public?: boolean; grantees: Grant[] }>(endpoint, {
       method: "POST",
       body: JSON.stringify(body),
     });
-    publicAccess = response.public;
+    publicAccess = response.public === true;
     grantees = response.grantees;
     hooks.onChange?.();
   };
@@ -143,16 +156,16 @@ export async function openAppPermissions(
     error = "";
     draw();
     try {
-      const response = await api<{ matches?: DirectoryMatch[] }>(
-        `/api/directory/resolve?q=${encodeURIComponent(term)}`,
-      );
+      const [response, contexts] = await Promise.all([
+        api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(term)}`),
+        ensureContexts(),
+      ]);
       if (sequence !== searchSequence || !dialog.isConnected) return;
-      matches = (response.matches ?? [])
-        .filter(
-          (person) =>
-            `personal:${person.principalId}` !== owner &&
-            !grantees.some((grant) => grant.scope === `personal:${person.principalId}`),
-        )
+      const places = contexts
+        .filter((c) => c.kind !== "personal" && c.name?.toLowerCase().includes(term.toLowerCase()))
+        .map((c) => ({ principalId: c.scopeId, displayName: c.name!, type: "context" }));
+      matches = [...(response.matches ?? []), ...places]
+        .filter((match) => scopeOf(match) !== owner && !grantees.some((grant) => grant.scope === scopeOf(match)))
         .slice(0, 8);
       searched = true;
     } catch (e) {
@@ -173,7 +186,7 @@ export async function openAppPermissions(
   };
   const emailCandidate = (): string | null => {
     const email = query.trim().toLowerCase();
-    if (!externalSharing) return null;
+    if (!externalSharing || !offers.email) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
     if (
       owner.toLowerCase() === `personal:${email}` ||
@@ -190,7 +203,7 @@ export async function openAppPermissions(
         ariaLabel: label,
         options: [
           { value: "view", label: "Can view" },
-          { value: "manage", label: "Can manage" },
+          ...(offers.manage ? [{ value: "manage", label: "Can manage" }] : []),
           ...(removable ? [{ value: "none", label: "Remove access" }] : []),
         ],
         onSelect: (next) => {
@@ -203,7 +216,7 @@ export async function openAppPermissions(
       html`
         <div class="project-dialog-head">
           <div>
-            <h2 id="app-permissions-heading">App permissions</h2>
+            <h2 id="share-heading">Share ${NOUN[type]}</h2>
             <p>${title}</p>
           </div>
           <button class="chip-x" type="button" aria-label="Close" @click=${close}>${icon(X, 16)}</button>
@@ -247,12 +260,8 @@ export async function openAppPermissions(
                             ?disabled=${busy}
                             @click=${() => {
                               if (selected) {
-                                names.set(`personal:${selected.principalId}`, selected.displayName);
-                                void change(
-                                  `personal:${selected.principalId}`,
-                                  selected.email ? "view" : access,
-                                  selected.email,
-                                );
+                                names.set(scopeOf(selected), selected.displayName);
+                                void change(scopeOf(selected), selected.email ? "view" : access, selected.email);
                               }
                             }}
                           >
@@ -271,7 +280,7 @@ export async function openAppPermissions(
                           ${icon(Search, 16)}<input
                             id="app-people-query"
                             aria-label="Add people"
-                            placeholder="Add people by name or email"
+                            placeholder=${offers.email ? "Add people or channels by name or email" : "Add people or channels by name"}
                             type="search"
                             autocomplete="off"
                             maxlength="254"
@@ -331,50 +340,58 @@ export async function openAppPermissions(
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${grant.status ? html`<span class="badge">${COPY_STATUS[grant.status].label}</span>` : nothing}${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
-        <div class="permission-section-label permission-general-label">General access</div>
-        <div class="project-member-list">
-          <div class="permission-row">
-            <span class="project-member-avatar" aria-hidden="true"
-              >${icon({ public: Globe, org: Building2, restricted: Lock }[generalAccess()], 16)}</span
-            >
-            <span class="permission-person-label">
-              <fieldset class="permission-control general-access-control" ?disabled=${busy}>
-                ${menuSelect({
-                  value: generalAccess(),
-                  ariaLabel: "General access",
-                  className: "general-access-menu",
-                  options: [
-                    { value: "restricted", label: "Restricted" },
-                    { value: "org", label: orgName() },
-                    {
-                      value: "public",
-                      label: "Anyone with the link",
-                      ...(externalSharing
-                        ? {}
-                        : { disabledHint: "An org admin must turn on external app sharing first." }),
-                    },
-                  ],
-                  onSelect: (next) => {
-                    if (next === "restricted" || next === "org" || next === "public") void changeGeneral(next);
-                  },
-                })}
-              </fieldset>
-              <small>${generalAccessNote()}</small>
-            </span>
-            ${(() => {
-              const grant = generalAccess() === "org" ? orgGrant() : undefined;
-              return grant
-                ? permissionMenu(
-                    grant.permission === "write" ? "manage" : "view",
-                    `Access for ${orgName()}`,
-                    (value) => void change(grant.scope, value),
-                  )
-                : nothing;
-            })()}
-          </div>
-        </div>
+        ${
+          offers.org
+            ? html`<div class="permission-section-label permission-general-label">General access</div>
+                <div class="project-member-list">
+                  <div class="permission-row">
+                    <span class="project-member-avatar" aria-hidden="true"
+                      >${icon({ public: Globe, org: Building2, restricted: Lock }[generalAccess()], 16)}</span
+                    >
+                    <span class="permission-person-label">
+                      <fieldset class="permission-control general-access-control" ?disabled=${busy}>
+                        ${menuSelect({
+                          value: generalAccess(),
+                          ariaLabel: "General access",
+                          className: "general-access-menu",
+                          options: [
+                            { value: "restricted", label: "Restricted" },
+                            { value: "org", label: orgName() },
+                            ...(offers.public
+                              ? [
+                                  {
+                                    value: "public",
+                                    label: "Anyone with the link",
+                                    ...(externalSharing
+                                      ? {}
+                                      : { disabledHint: "An org admin must turn on external app sharing first." }),
+                                  },
+                                ]
+                              : []),
+                          ],
+                          onSelect: (next) => {
+                            if (next === "restricted" || next === "org" || next === "public") void changeGeneral(next);
+                          },
+                        })}
+                      </fieldset>
+                      <small>${generalAccessNote()}</small>
+                    </span>
+                    ${(() => {
+                      const grant = generalAccess() === "org" ? orgGrant() : undefined;
+                      return grant
+                        ? permissionMenu(
+                            grant.permission === "write" ? "manage" : "view",
+                            `Access for ${orgName()}`,
+                            (value) => void change(grant.scope, value),
+                          )
+                        : nothing;
+                    })()}
+                  </div>
+                </div>`
+            : nothing
+        }
         ${
           publicAccess
             ? html`<p class="share-external-warning" role="status">⚠️ Public. Anyone can open this app.</p>`
@@ -389,9 +406,15 @@ export async function openAppPermissions(
   draw();
   dialog.showModal();
   try {
-    const response = await api<{ public: boolean; externalSharing?: boolean; grantees: Grant[] }>(endpoint);
-    publicAccess = response.public;
+    const response = await api<{
+      public?: boolean;
+      externalSharing?: boolean;
+      offers: typeof offers;
+      grantees: Grant[];
+    }>(endpoint);
+    publicAccess = response.public === true;
     externalSharing = response.externalSharing !== false;
+    offers = response.offers;
     grantees = response.grantees;
     loaded = true;
   } catch (e) {
@@ -401,3 +424,8 @@ export async function openAppPermissions(
     if (dialog.isConnected) draw();
   }
 }
+
+export const shareButton = (target: Shareable): TemplateResult =>
+  html`<button class="btn" type="button" @click=${() => void openShare(target)}>
+    ${icon(Share2, 15)}<span>Share</span>
+  </button>`;

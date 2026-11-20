@@ -92,12 +92,12 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
   throw e;
 }
 
-async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
+async function orgMember(ctx: ApiCtx, email: string, uninvited: boolean): Promise<boolean> {
   const { deps } = ctx;
   if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
   if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
+  if (!uninvited) return false;
   if (await deps.directory?.get(email)) return true;
-  if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   return participants.some((participant) => samePerson(participant.principalId, email));
 }
@@ -128,7 +128,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   if (role !== "member" && role !== "org_admin") return bad("role must be member or org_admin");
   const expiry = normalizeInboundExpiresAt(endOfDayUtc(b.expiresAt));
   if (!expiry.ok) return bad(expiry.message);
-  if (teammate && (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe))
+  if (!deps.portalUrl || !deps.portalIdentitySecret || !deps.replayDedupe)
     return sendJson(res, 503, {
       error: "not_configured",
       message: "Invitation sign-in requires a portal and durable token storage.",
@@ -168,11 +168,13 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     audit(ctx, { principalId: actor.id, action: grantChange, resource: `${email}/org_admin`, scopeLabel: scope });
   const created = existing === undefined;
   const readmitted = existing !== undefined && !externalMemberActive(existing, now);
+  const sendInvite = teammate || created || readmitted || b.resendInvite === true;
   const member: ExternalMember = {
     email,
     role: teammate && holdsGrant ? "org_admin" : role,
     expiresAt: expiry.value ?? null,
-    ...(teammate ? { kind: "teammate" as const, inviteId: randomUUID() } : {}),
+    ...(teammate ? { kind: "teammate" as const } : {}),
+    inviteId: sendInvite || !existing?.inviteId ? randomUUID() : existing.inviteId,
     invitedBy: existing?.invitedBy ?? actor.id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -186,29 +188,25 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     resource: email,
     scopeLabel: scope,
   });
-  const signInUrl = teammate
-    ? `${trimTrailingSlashes(deps.portalUrl!)}/auth/invite#token=${encodeURIComponent(
-        await mintSignedPayload(
-          {
-            purpose: "teammate-invite",
-            inviteId: member.inviteId,
-            email,
-            org: scope,
-            aud: trimTrailingSlashes(deps.portalUrl!),
-            iat: now,
-            exp: now + 24 * 60 * 60 * 1000,
-            jti: randomUUID(),
-          },
-          deps.portalIdentitySecret!,
-        ),
-      )}`
-    : signInUrlOf(deps);
+  const signInUrl = `${trimTrailingSlashes(deps.portalUrl)}/auth/invite#token=${encodeURIComponent(
+    await mintSignedPayload(
+      {
+        purpose: "invite",
+        inviteId: member.inviteId,
+        email,
+        org: scope,
+        aud: trimTrailingSlashes(deps.portalUrl),
+        iat: now,
+        exp: now + 24 * 60 * 60 * 1000,
+        jti: randomUUID(),
+      },
+      deps.portalIdentitySecret,
+    ),
+  )}`;
   let emailSent = false;
   let emailProblem: string | undefined;
-  if (teammate || created || readmitted || b.resendInvite === true) {
+  if (sendInvite) {
     if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
-    else if (!signInUrl)
-      emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
     else {
       const branding = await resolveBranding(deps.config, scope, deps.brandingDefault);
       try {
@@ -220,7 +218,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             invitedBy: actor.id,
             signInUrl,
             expiresAt: member.expiresAt,
-            magicLink: teammate,
+            magicLink: true,
           }),
         });
         emailSent = true;
@@ -235,7 +233,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     created,
     emailSent,
     ...(emailProblem ? { emailProblem } : {}),
-    ...(!emailSent && signInUrl ? { signInUrl } : {}),
+    ...(emailSent ? {} : { signInUrl: ctx.capability ? signInUrlOf(deps) : signInUrl }),
   });
 }
 

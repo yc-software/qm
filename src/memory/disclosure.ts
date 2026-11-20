@@ -154,9 +154,9 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       );
       await memory.edit!(scope, edits, by, context);
     },
-    async delete(scope, ids, by) {
+    async delete(scope, ids, by, context) {
       await editable(scope, ids);
-      await memory.delete!(scope, ids, by);
+      await memory.delete!(scope, ids, by, context);
     },
     read: async (scope) => renderFacts(await visible(scope)),
     async recall(scope, context) {

@@ -1,3 +1,4 @@
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { personIds } from "../directory/person.ts";
 import { validProjectIcon } from "../projects/project-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
@@ -38,6 +39,7 @@ export interface PersonaForTurn {
   persona: Persona;
   scope: ScopeId;
   pinned?: boolean;
+  routedBy?: string;
 }
 
 export interface PersonaService {
@@ -48,7 +50,7 @@ export interface PersonaService {
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
-  remove(principalId: string, id: string): Promise<PersonaResult<true>>;
+  remove(principalId: string, id: string, onRevoked: (grantId: string) => void): Promise<PersonaResult<true>>;
   versions(
     principalId: string,
     id: string,
@@ -57,12 +59,20 @@ export interface PersonaService {
   restore(principalId: string, id: string, version: number): Promise<PersonaResult<PersonaView>>;
   setAccess(principalId: string, id: string, access: unknown): Promise<PersonaResult<PersonaAccess[]>>;
   attachCredential(principalId: string, id: string, credentialId: unknown): Promise<PersonaResult<{ grantId: string }>>;
-  detachCredential(principalId: string, id: string, grantId: string): Promise<PersonaResult<true>>;
+  detachCredential(
+    principalId: string,
+    id: string,
+    grantId: string,
+    onRevoked: (grantId: string) => void,
+  ): Promise<PersonaResult<true>>;
   assign(
     principalId: string,
-    session: Pick<Session, "id" | "scopeId">,
+    session: Pick<Session, "id" | "scopeId" | "runtime">,
     personaId: string | null,
-  ): Promise<PersonaResult<PersonaView | null>>;
+  ): Promise<PersonaResult<(PersonaView & { sessionModelId?: string }) | null>>;
+  startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
+  adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S>;
+  pinnedIn(scope: ScopeId): Promise<string | null>;
   forTurn(
     personaId: string | undefined,
     actorId: string,
@@ -87,7 +97,7 @@ function fieldsFrom(input: unknown, requireName: boolean): PersonaFields | strin
   if (requireName && !fields.name) return "name required";
   if (body.icon !== undefined) {
     if (!validProjectIcon(body.icon))
-      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, or null';
+      return 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<custom emoji name>}, {kind:"image",url:<https image URL>}, or null';
     fields.icon = body.icon;
   }
   return fields;
@@ -98,9 +108,10 @@ export function createPersonaService(deps: {
   flags: Pick<FeatureFlagStore, "enabled">;
   orgScope: ScopeId;
   teams?: Pick<TeamStore, "forTurn">;
-  sessions: Pick<SessionStore, "setPersona">;
+  sessions: Pick<SessionStore, "setPersona" | "setRuntime">;
   isActive: (principalId: string) => boolean;
   keychain?: Pick<Keychain, "grantsForScope" | "createGrant" | "revokeGrant">;
+  config?: Pick<ScopedConfigStore, "getRuntimeSelectionDurable">;
 }): PersonaService {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
@@ -133,6 +144,14 @@ export function createPersonaService(deps: {
     return fn(persona, held);
   }
 
+  async function revoke(
+    credentials: { ownerId: string; grantId: string }[],
+    onRevoked: (grantId: string) => void,
+  ): Promise<void> {
+    for (const { ownerId, grantId } of credentials)
+      if (await deps.keychain?.revokeGrant(ownerId, grantId)) onRevoked(grantId);
+  }
+
   async function credentialsOf(id: string) {
     const grants = (await deps.keychain?.grantsForScope(personaScope(id), { includePersonGrants: true })) ?? [];
     return grants.map(({ grant, credential }) => ({
@@ -140,6 +159,22 @@ export function createPersonaService(deps: {
       service: credential.service,
       ownerId: credential.ownerId,
     }));
+  }
+
+  async function startOnDefaultModel<S extends Pick<Session, "id" | "runtime">>(
+    session: S,
+    personaId: string,
+  ): Promise<S> {
+    if (session.runtime) return session;
+    const modelId = (await deps.config?.getRuntimeSelectionDurable(personaScope(personaId)))?.modelId;
+    if (!modelId) return session;
+    await deps.sessions.setRuntime(session.id, { modelId });
+    return { ...session, runtime: { modelId } };
+  }
+
+  async function adopt<S extends Pick<Session, "id" | "runtime">>(session: S, personaId: string): Promise<S> {
+    await deps.sessions.setPersona(session.id, personaId);
+    return startOnDefaultModel(session, personaId);
   }
 
   return {
@@ -201,10 +236,9 @@ export function createPersonaService(deps: {
         return restored ? { status: "ok", value: { ...restored, role: held } } : { status: "not_found" };
       });
     },
-    remove(principalId, id) {
+    remove(principalId, id, onRevoked) {
       return guarded<true>(principalId, id, "owner", async () => {
-        for (const credential of await credentialsOf(id))
-          await deps.keychain?.revokeGrant(credential.ownerId, credential.grantId);
+        await revoke(await credentialsOf(id), onRevoked);
         return (await store.remove(id)) ? { status: "ok", value: true } : { status: "not_found" };
       });
     },
@@ -262,11 +296,11 @@ export function createPersonaService(deps: {
         return { status: "ok", value: { grantId: grant.id } };
       });
     },
-    detachCredential(principalId, id, grantId) {
+    detachCredential(principalId, id, grantId, onRevoked) {
       return guarded<true>(principalId, id, "owner", async () => {
         const credential = (await credentialsOf(id)).find((c) => c.grantId === grantId);
         if (!credential) return { status: "not_found" };
-        await deps.keychain?.revokeGrant(credential.ownerId, grantId);
+        await revoke([credential], onRevoked);
         return { status: "ok", value: true };
       });
     },
@@ -279,9 +313,15 @@ export function createPersonaService(deps: {
       const persona = await store.get(personaId);
       const held = persona ? await role(principalId, personaId, session.scopeId) : null;
       if (!persona || !held) return { status: "not_found" };
-      await deps.sessions.setPersona(session.id, personaId);
-      return { status: "ok", value: { ...persona, role: held } };
+      const { runtime } = await adopt(session, personaId);
+      return {
+        status: "ok",
+        value: { ...persona, role: held, ...(runtime ? { sessionModelId: runtime.modelId } : {}) },
+      };
     },
+    startOnDefaultModel,
+    adopt,
+    pinnedIn: (scope) => store.pinnedIn(scope),
     async forTurn(personaId, actorId, contextScope) {
       if (!(await enabledFor(actorId)))
         return personaId ? "Personas are turned off for this person, so this turn runs without one." : null;
@@ -313,4 +353,30 @@ export function personaPrompt({ persona, scope, pinned }: PersonaForTurn): strin
   if (persona.description.trim()) lines.push(`Purpose: ${persona.description.trim()}`);
   if (persona.instructions.trim()) lines.push("", persona.instructions.trim());
   return lines.join("\n");
+}
+
+export async function routedPersonaTurn(
+  personas: Pick<PersonaService, "forTurn">,
+  routed: { persona?: string; ruleId: string } | undefined,
+  personaId: string | undefined,
+  actorId: string,
+  contextScope: ScopeId,
+): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
+  const current = await personas.forTurn(personaId, actorId, contextScope);
+  if (!routed?.persona || routed.persona === personaId) return { turn: current };
+  if (current && typeof current === "object")
+    return {
+      turn: current,
+      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence.`,
+    };
+  const picked = await personas.forTurn(routed.persona, actorId, contextScope);
+  if (picked && typeof picked === "object")
+    return {
+      turn: { ...picked, routedBy: routed.ruleId },
+      note: `The decision rule ${routed.ruleId} routed this conversation to the persona ${picked.persona.name} from this message, and the conversation keeps it. PUT /v1/sessions/:id/persona switches to another persona, or null drops it.`,
+    };
+  return {
+    turn: current,
+    note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but the sender can't use it here, so the conversation's persona is unchanged. A persona owner can share it with them, or an org admin can change ${routed.ruleId} in Settings → Decision rules.`,
+  };
 }

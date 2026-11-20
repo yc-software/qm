@@ -15,6 +15,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -30,6 +31,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         scopeId: scope,
         destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding(actorId),
         ...extra,
       },
       SECRET,
@@ -58,6 +60,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         destinations: [THREAD, ROOT],
         defaultDestinationKey: THREAD.key,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        ...liveRunBinding(actorId),
         ...extra,
       },
       SECRET,
@@ -80,6 +83,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       scheduler: built.scheduler,
       config: built.config,
       admin: built.admin,
+      runs: liveRunStore(),
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -360,6 +364,75 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(got.soul, "Channel C instruction.");
     assert.ok(got.effectiveSoul.includes("Channel C instruction."));
     assert.equal(got.effectiveSoul.includes("Private U8 instruction."), false);
+  });
+
+  it("keeps a person's own soul, files and skills from a Slack bot's work in their name", async () => {
+    const own = scopeId("personal", "U5");
+    await built.config.setSoul(own, "U5 private instruction.");
+    const bytes = async function* (text: string) {
+      yield Buffer.from(text);
+    };
+    const file = async (owner: string) =>
+      (await built.app.uploadFileForViewer(testTenant, owner, { name: "n.txt", data: bytes(owner) }))!.id;
+    const skill = async (principalId: string) =>
+      (await built.app.createOwnedSkill({ principalId, name: `s-${principalId}`, description: "d", body: "b" }))!.id;
+    const [mine, theirs, mySkill, theirSkill] = [
+      await file("U5"),
+      await file("U6"),
+      await skill("U5"),
+      await skill("U6"),
+    ];
+    for (const ref of [theirs, `skill:${theirSkill}`]) {
+      const grant = { ownerScopeId: scopeId("personal", "U6"), ref, granteeScopeId: own, permission: "read" } as const;
+      await built.acl.grant(testTenant, { ...grant, grantedBy: "U6" }, "U6");
+    }
+    const as = async (botActor: boolean) => ({
+      "x-agent-capability": await capFor("U5", own, botActor ? { botActor } : {}),
+    });
+    const reads = [
+      `/v1/files/${mine}/content`,
+      `/v1/files/${theirs}/content`,
+      `/v1/skills/${mySkill}`,
+      `/v1/skills/${theirSkill}`,
+    ];
+    const statuses = async (botActor: boolean) =>
+      Promise.all(reads.map(async (path) => (await get(path, await as(botActor))).status));
+    assert.deepEqual(await statuses(false), [200, 200, 200, 200]);
+    assert.deepEqual(await statuses(true), [404, 404, 404, 404]);
+    const bot = await as(true);
+    assert.deepEqual(await (await get("/v1/files", bot)).json(), { owned: [], shared: [] });
+    assert.equal(((await (await get("/v1/soul", bot)).json()) as { soul: string | null }).soul, null);
+    const writes = [
+      await post("/v1/soul", { content: "bot rewrite" }, bot),
+      await post("/v1/skills", { name: "bot-skill", description: "d", body: "b" }, bot),
+      await fetch(`${base}/v1/skills/${mySkill}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...bot },
+        body: JSON.stringify({ body: "bot" }),
+      }),
+      await del(`/v1/skills/${mySkill}`, bot),
+    ];
+    assert.deepEqual(
+      writes.map((res) => res.status),
+      [403, 403, 404, 403],
+    );
+    await built.app.deleteOwnedSkill({ principalId: "U5", id: mySkill });
+    const room = scopeId("channel", "C");
+    const roomBot = { "x-agent-capability": await capChannel("U5", { botActor: true }) };
+    for (const caller of [bot, roomBot])
+      assert.equal((await post(`/v1/skills/${mySkill}/restore`, {}, caller)).status, 404);
+    assert.equal(built.config.getSoul(own), "U5 private instruction.");
+    const shared = async (from: string, to = room, type: "file" | "skill" = "file", id = mine) => {
+      const share = await createControlService(built.app).shareArtifact(
+        { type, id, scope: to },
+        { actorId: "U5", scopeId: from, botActor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+      );
+      return share.ok ? "shared" : share.code;
+    };
+    assert.deepEqual(
+      [await shared(own), await shared(room), await shared(room, own), await shared(room, room, "skill", mySkill)],
+      ["forbidden", "shared", "forbidden", "forbidden"],
+    );
   });
 
   it("rejects an invalid/expired token with 401", async () => {
@@ -810,10 +883,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("registers a destination-less webhook when the token carries no destination (side-effect-only)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", liveAuthor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const noDest = await capFor("U9", undefined, { liveAuthor: true, destination: undefined });
     const res = await post(
       "/v1/webhooks",
       { action: "mirror the event to a file", verification: { scheme: "hmac-sha256", secret: "side-effect-secret" } },

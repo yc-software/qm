@@ -23,14 +23,15 @@ import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
 import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./contexts";
-import { openSession, renderList, replacePendingSession, sessionsState, startNewChat } from "./sessions";
+import { openSession, renderList, replacePendingSession, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
+import { contextModelSection, loadContextModel } from "./context-model";
+import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
-import { canvasToast } from "./split";
 import { tip } from "./tooltip";
 import { openSkillById, startSkillCreateIn } from "./skills";
 import { cronTitle, openCronById, type CronView } from "./crons";
@@ -298,10 +299,11 @@ async function startPersonaChat(personaId: string): Promise<CoreSession> {
     method: "POST",
     body: JSON.stringify({ scopeId }),
   });
-  await api(`/api/sessions/${encodeURIComponent(session.id)}/persona`, {
-    method: "PUT",
-    body: JSON.stringify({ personaId }),
-  });
+  const { persona } = await api<{ persona: { sessionModelId?: string } | null }>(
+    `/api/sessions/${encodeURIComponent(session.id)}/persona`,
+    { method: "PUT", body: JSON.stringify({ personaId }) },
+  );
+  if (persona?.sessionModelId) rememberThreadPick(session.threadRef, persona.sessionModelId);
   return { ...session, personaId };
 }
 
@@ -1109,12 +1111,14 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
                 </div>
               `
         }
+        ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
     );
   redrawDetail = draw;
   draw();
+  if (editable) void loadContextModel(`persona:${persona.id}`, draw);
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {
@@ -1137,11 +1141,9 @@ export function personaName(personaId: string): string {
 
 export function sessionPersonaChip(
   session: Pick<CoreSession, "id" | "personaId"> | null | undefined,
-  redraw: () => void,
 ): TemplateResult | typeof nothing {
   const personaId = session?.personaId;
   if (!session?.id || !personaId) return nothing;
-  const sessionId = session.id;
   const persona = personasState.list.find((p) => p.id === personaId);
   const name = personaName(personaId);
   return html`<span class="session-fork-badge session-persona-badge">
@@ -1158,34 +1160,5 @@ export function sessionPersonaChip(
     >
       ${personaIconTpl(persona?.icon, 13)}<span dir="auto">${name}</span>
     </button>
-    <button
-      class="session-persona-clear"
-      type="button"
-      aria-label=${`Stop using ${name}`}
-      @pointerdown=${(e: Event) => e.stopPropagation()}
-      @click=${(e: Event) => {
-        e.stopPropagation();
-        void clearSessionPersona(sessionId, redraw);
-      }}
-    >
-      ${icon(X, 11)}
-    </button>
   </span>`;
-}
-
-async function clearSessionPersona(sessionId: string, redraw: () => void): Promise<void> {
-  try {
-    await api(`/api/sessions/${encodeURIComponent(sessionId)}/persona`, {
-      method: "PUT",
-      body: JSON.stringify({ personaId: null }),
-    });
-    sessionsState.list = sessionsState.list.map((s) => {
-      if (s.id !== sessionId) return s;
-      const { personaId: _cleared, ...rest } = s;
-      return rest;
-    });
-    redraw();
-  } catch (e) {
-    canvasToast(errMessage(e, "Couldn't stop using this persona."));
-  }
 }

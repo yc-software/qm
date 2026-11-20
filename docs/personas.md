@@ -54,8 +54,8 @@ Checks sit where every path already flows: turn resolution (below) and the scope
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
 write. Only an owner can attach a credential, only their own, and only on a turn they
 sent that is still running; readers use it through the persona but never hold it.
-Detaching a credential and deleting the persona also take an owner, on a turn they sent
-that is still running.
+Detaching a credential, changing who holds a role and deleting the persona also take an
+owner, on a turn they sent that is still running.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named
@@ -82,6 +82,17 @@ if the sender holds a role on the persona (counting the conversation's channel),
 If the sender has no role, the persona is skipped and the block says so. Writes (memory,
 files, crons) stay in the conversation's scope.
 
+An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
+Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
+its `turn_start` rules once, before it settles its persona, and model selection reuses the same
+verdicts, so one enforcing rule may pick a persona while another picks a runtime: the hook
+allows one enforcing rule per action. The state the rules see includes the conversation kind
+(`dm`, `group` or `channel`), so "only in DMs" and "addressed to this persona" belong in the
+rule's question and options. Ambient turns are not routed. When the enforcing rule picks a
+persona the conversation isn't already wearing and the sender holds a role on it, the
+conversation adopts it and that turn's context names the rule and how to switch; otherwise the
+persona is unchanged and the context names the rule, the persona and who can fix it.
+
 A cron set up in a conversation with a persona fires as that persona: when it fires, the
 scheduler looks up the persona of the cron's home conversation and the fire's turn wears it
 under the same role check.
@@ -91,7 +102,7 @@ destination: replies, posts to other conversations, and cron output. Slack posts
 edits those messages under the persona's name and icon, ahead of any deployment-wide
 `SLACK_BOT_DISPLAY_NAME`/`SLACK_BOT_ICON_EMOJI` override (needs `chat:write.customize`, which
 the app manifest requests) (a Unicode emoji maps to its Slack
-shortcode; a custom emoji is used by name; no icon keeps the default), and ends them with a
+shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
 link when there is one. File uploads and the in-progress task card still show the app's own
 identity, since Slack doesn't let an app rename those.
@@ -140,3 +151,13 @@ access are never copied.
 `?before=&limit=`; who and when, with content only on `&full=1`),
 `POST /v1/personas/:id/versions/:version/restore`, `PUT /v1/sessions/:id/persona`. Listed in
 `/v1/apis` when the flag is on.
+
+## Default model
+
+A persona can carry a default model, stored as the runtime selection of its `persona:<id>`
+scope and set from the Model panel on the persona's page (or `PUT /v1/runtime-config` with
+that scope; writers only). When a conversation that has no model yet takes the persona,
+core sets the conversation's model to it: on `PUT /v1/sessions/:id/persona`, which returns
+it as `sessionModelId` so the web composer opens on it, and on the first turn in a channel
+or group that pins the persona. From there it is the conversation's own model: a model the
+person picks for the turn still wins, and later turns keep whatever model it last used.

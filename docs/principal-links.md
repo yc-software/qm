@@ -26,14 +26,45 @@ before proxying, and the keychain stores credentials under the canonical owner.
   can only be linked to a canonical principal that is already an admin.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
-- **Only people are linked.** A QM system actor (`system:…`) is QM itself, not
-  a person, so the admin API refuses a link with one on either side (400).
+- **Only people are linked.** A QM system actor (`system:…`) is QM itself, and a
+  Slack bot or app is software, so a link with either one on either side is
+  refused. The admin API answers 400, and the Slack connect flow answers 409
+  with "These accounts need an administrator's help to connect. Your existing
+  data has not been moved."
+- **The directory says who is a bot.** Each directory sync copies Slack's
+  `is_bot` for every member into `directory_members.is_bot`, as true or false.
+  It stays empty (NULL) until a sync has written it, and a sign-in Slack doesn't
+  list, such as an OIDC sign-in, has no row at all. QM never reads an empty flag
+  as "a person":
+  - **Linking.** A sign-in whose row says it is a bot counts as a bot on either
+    side of a link. When the flag is empty, the link check falls back to the
+    sign-in's QM user, which is marked as an app once the bot has spoken to QM or
+    a sync has listed it as a bot.
+  - **Repair at each sync.** A sign-in whose row says it is a bot, but that is
+    linked onto someone else's user, moves to a new app user of its own. The same
+    transaction writes a `user_sign_in_split` audit event with the link's
+    evidence and the admin who made it. An app user becomes a person again only
+    when every one of its sign-ins is listed and listed as a person: a sign-in
+    Slack doesn't list is no evidence, the same as an empty flag. Any other app
+    user with more than one sign-in stays an app, and the audit log records a
+    `user_sign_in_review` event with each sign-in's signal, once for each
+    distinct set of signals. An empty flag neither splits nor resets anyone.
+  - **Turns.** A turn is refused until an admin deletes the link when its speaker
+    is a bot joined to anyone by a link, or when the speaker's sign-in or its
+    canonical sign-in counts as a bot by the link check's rule. A user whose main
+    sign-in is a Slack bot is not split automatically, so their turns stay
+    refused. So does an app user the sync leaves for review, even when one of its
+    sign-ins is listed as a person; once an admin deletes the link, each sign-in
+    works on its own again.
+- **Bot work stays out of a person's projects.** Work that carries the bot marker
+  gets 403 from the project tools, even when the bot is a project member through a
+  channel roster.
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Linking merges the users row.** If the linked sign-in already has its own
   user (it is that user's only sign-in), linking folds it into the canonical
   person's user in the same transaction (earliest first-seen time, earliest
-  offboarding) and deletes it.
+  offboarding, and the person's kind) and deletes it.
 - **Links are reversible.** Deleting a link restores two separate principals.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only
@@ -74,7 +105,25 @@ links have no `linked_by`. Sign-ins are stored folded: emails lower-cased.
 
 Memory providers with `attestActor` and attested MCP connectors receive the
 canonical id in the `x-qm-actor` header, so every linked sign-in reaches them
-as one person. QM attests only ids of 1 to 256 visible ASCII characters (`!`
+as one person. Actor-attested MCP and broker requests also carry
+`x-qm-actor-aliases`: a JSON array of the person's other linked sign-ins (visible
+ASCII, excluding the actor itself). For example, an invented actor
+`old@example.test` can carry `["provider:stable-7"]`. Only QM supplies these
+headers. Consumers can resolve a provider identity without treating the canonical
+email as the provider's account id. Audience checks are unchanged; aliases are
+sent only to the same destination already trusted to receive the attested actor.
+No identity records are changed.
+
+The attestation category covers shared-credential MCP discovery, probes and tool
+calls; MCP memory reads, writes and forgets (including registry brains); and broker
+calls with `injection.actor`, from turns and permitted deployments. Each of those
+recipients intentionally receives the linked sign-ins as part of the person
+attestation. `attestAudience: "any"` retains its existing person-turn requirement.
+Unattested requests and per-user MCP authentication send neither attestation
+header. The MCP admin route, memory provider parser/brain registry and credential
+injection validator remain the configuration owners; there is no separate alias
+mode. Enabling actor attestation now trusts that destination with the linked
+identities as well as the canonical one. QM attests only ids of 1 to 256 visible ASCII characters (`!`
 through `~`), the rule the credential broker also applies to its actor; the
 broker checks the turn's own principal id and sends it unchanged. Slack
 ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email
@@ -85,7 +134,8 @@ link them to a conforming canonical id.
 An attested call reads as that person, so its answer can hold what only they may
 see. QM therefore attests a person only to that person, in their own personal
 scope: never where others read the answer, never in someone else's personal
-scope, and never for a QM system actor (`system:…`). A memory route to an
+scope, and never for a QM system actor (`system:…`) or for a Slack bot's work
+that runs in the person's name. A memory route to an
 `attestActor` provider may list only `personal` or `personal:<id>` selectors, and
 QM refuses any other at startup. Attested MCP connectors are offered and called
 only in the person's direct conversation with QM, not in channels, group

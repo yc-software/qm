@@ -1,6 +1,6 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
-import { MemoryFactsMissing } from "../memory/facts.ts";
+import { MemoryFactsMissing, MemoryForgetRefused } from "../memory/facts.ts";
 import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
@@ -51,6 +51,7 @@ import {
 } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
+import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
@@ -199,7 +200,13 @@ async function verifyCapability(
     });
     return null;
   }
-  return capability;
+  return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
+    ? {
+        ...capability,
+        triggered: true,
+        ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined } } : {}),
+      }
+    : capability;
 }
 
 async function gate(
@@ -374,7 +381,11 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
-  if (err instanceof MemoryDisclosureDenied || err instanceof MemoryFactsMissing) {
+  if (
+    err instanceof MemoryDisclosureDenied ||
+    err instanceof MemoryFactsMissing ||
+    err instanceof MemoryForgetRefused
+  ) {
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });

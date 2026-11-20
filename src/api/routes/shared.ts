@@ -36,11 +36,15 @@ export function personalCapability(ctx: Pick<ApiCtx, "capability" | "actor">): C
   return ctx.actor ? { actorId: ctx.actor.p, scopeId: scopeId("personal", ctx.actor.p), exp: ctx.actor.exp } : null;
 }
 
-export function audit(ctx: Pick<ApiCtx, "deps" | "tenant">, e: Omit<AuditEvent, "at">): void {
-  ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e });
+export function audit(
+  ctx: Pick<ApiCtx, "deps" | "tenant" | "actor">,
+  e: Omit<AuditEvent, "at" | "impersonatedBy">,
+): void {
+  const impersonatedBy = ctx.actor?.imp;
+  ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
 }
 
-export async function runIsActive(ctx: ApiCtx): Promise<boolean> {
+export async function runIsActive(ctx: Pick<ApiCtx, "deps" | "capability">): Promise<boolean> {
   const cap = ctx.capability;
   if (!cap) return true;
   const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
@@ -56,26 +60,20 @@ export async function runIsActive(ctx: ApiCtx): Promise<boolean> {
   );
 }
 
-export function refuseInactiveRun(ctx: ApiCtx): void {
+export async function activeRun(ctx: ApiCtx): Promise<boolean> {
+  if (await runIsActive(ctx)) return true;
   sendJson(ctx.res, 403, {
     error: "inactive_run",
     message:
       "This call needs the current token of a running turn: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses this access; make the call from a foreground command while the turn is running.",
   });
-}
-
-export async function activeRun(ctx: ApiCtx): Promise<boolean> {
-  if (await runIsActive(ctx)) return true;
-  refuseInactiveRun(ctx);
   return false;
 }
 
-export async function livePersonTurn(ctx: ApiCtx): Promise<boolean> {
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) {
-    refuseWithoutPerson(ctx.res);
-    return false;
-  }
-  return activeRun(ctx);
+export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
+  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+  refuseWithoutPerson(ctx.res);
+  return false;
 }
 
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {

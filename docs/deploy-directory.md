@@ -187,11 +187,16 @@ A publisher can let their app call any of their connected apps (mail, calendar, 
 files, and so on) as them, the same way apps use org credentials through the broker.
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
 `POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
-withdraws. Only the publisher may call it, from a live turn or a signed-in session. Public
+withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
+sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
+same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
-withdrawn before that version runs. The token comes from the publisher's personal
-connection, else their default, else their company one.
+withdrawn before that version runs. Moving the app out of the publisher's own library, to
+a teammate or a shared home, withdraws it as the app moves, and an app outside that library
+can't borrow again until it moves back; `[]` still withdraws. While the app borrows
+connectors, only the publisher can share it with anyone else. The token comes from the
+publisher's personal connection, else their default, else their company one.
 
 The app's server sends the broker `connector` (the host) instead of `credential`, with
 the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
@@ -218,6 +223,12 @@ and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
 
+Preflight rejects any other listener rule unless it carries the
+`qm:operator-managed` tag. Tag a rule only when you run the service behind it
+and keep it correct yourself; qm does not check what a tagged rule matches or
+where it sends traffic. Shared ALBs never skip rules. The deploy role needs
+`elasticloadbalancing:DescribeTags`.
+
 ### Sandbox egress proxy
 
 Add `"egress-proxy"` to `services` to deploy the sandbox egress proxy
@@ -233,7 +244,7 @@ services' private network, so it relays audit records through `apiUrl` (or
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
 port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
-`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations

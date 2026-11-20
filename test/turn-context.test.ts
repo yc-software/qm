@@ -44,6 +44,8 @@ async function fixture() {
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },
     useMemory: true,
+    botActor: false,
+    ownScopeBotWork: false,
     memory,
     files,
     auditLog,

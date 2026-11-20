@@ -56,3 +56,58 @@ test("Slack conversations show directory Slack photos on messages and in the hea
     await h.close();
   }
 });
+
+test("a Slack channel transcript sets other people apart, groups a speaker's run and shows the Slack app icon", async () => {
+  const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
+  const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: Record<string, unknown>) =>
+    item(kind, { seq, createdAt: seq, turnId: "t", text, body });
+  const h = await harness({
+    path: `/s/${session.id}`,
+    session,
+    listSessions: [session],
+    api: (path) =>
+      path === "/me"
+        ? Response.json({ user: "tester", org: "test", slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png" })
+        : undefined,
+    items: [
+      said("UserMessage", 1, "deploys broke", { name: "Pete", overheard: true }),
+      said("UserMessage", 2, "@qm DM me", { name: "T", speakerId: "tester" }),
+      item("ToolCall", { seq: 3, turnId: "t", callId: "c", tool: "slack", body: { action: "reach" } }),
+      item("ToolResult", { seq: 4, turnId: "t", callId: "c", tool: "slack", body: { ok: true } }),
+      said("SteeringMessage", 5, "thanks!", { name: "T", speakerId: "tester" }),
+      item("AgentMessage", { seq: 6, turnId: "t", body: { workStartedAt: 1, workFinishedAt: 6 } }),
+      item("AgentMessage", { seq: 7, turnId: "u", text: "as Ada", body: { personaId: "ada", workFinishedAt: 7 } }),
+    ],
+  });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    const rows = [...document.querySelectorAll(".message-stack > .message-row")];
+    assert.deepEqual(
+      rows.map((row) => [
+        row.classList.contains("others-row"),
+        row.querySelector(".pin-content")?.textContent?.trim(),
+        row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
+        row.classList.contains("continued-row"),
+      ]),
+      [
+        [true, "deploys broke", undefined, false],
+        [false, "@qm DM me", undefined, false],
+        [false, "thanks!", undefined, true],
+        [false, undefined, "https://avatars.slack-edge.com/app_72.png", false],
+        [false, undefined, undefined, false],
+      ],
+    );
+    assert.deepEqual(
+      rows.map((row) => Boolean(row.querySelector(":scope > .speaker-label"))),
+      [true, true, false, true, true],
+    );
+    assert.ok(
+      rows.at(-1)!.querySelector(":scope > .speaker-label > .brand-mark"),
+      "a persona's reply keeps the brand mark",
+    );
+    assert.equal(rows.at(-2)!.querySelectorAll(".user-row").length, 0);
+  } finally {
+    await h.close();
+  }
+});

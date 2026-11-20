@@ -19,6 +19,7 @@ interface McpRequest {
   rpc?: string;
   authorization?: string;
   actor?: string;
+  aliases?: string;
   approval?: string;
 }
 
@@ -146,6 +147,7 @@ export async function startMcpTestServer(
       path,
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
+      aliases: req.headers["x-qm-actor-aliases"] as string | undefined,
       ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
       ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
@@ -224,3 +226,11 @@ export const routedTo =
     Object.assign(url, { protocol, host });
     return loopbackFetch(url, init);
   };
+
+export async function closedPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((r) => server.close(() => r()));
+  return port;
+}

@@ -1,6 +1,6 @@
 import { html, svg, type TemplateResult } from "lit";
 
-const SLACK_PATHS = [
+export const SLACK_PATHS = [
   [
     "M27.2 80c0 7.3-5.9 13.2-13.2 13.2C6.7 93.2.8 87.3.8 80c0-7.3 5.9-13.2 13.2-13.2h13.2V80zm6.6 0c0-7.3 5.9-13.2 13.2-13.2 7.3 0 13.2 5.9 13.2 13.2v33c0 7.3-5.9 13.2-13.2 13.2-7.3 0-13.2-5.9-13.2-13.2V80z",
     "#E01E5A",

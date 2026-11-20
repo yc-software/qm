@@ -126,7 +126,6 @@ export interface SpawnMeta {
   conversation: Conversation;
   actor: Principal;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   timezone?: string;
   readOnly?: boolean;
   memoryNotebookOnly?: boolean;
@@ -159,6 +158,7 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  botWork?: true;
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   personaId?: string;
@@ -189,6 +189,7 @@ export interface Resolution {
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
   guidance?: string;
+  soulScopeId?: ScopeId;
 }
 
 export type Permission = "read" | "write";
@@ -209,13 +210,7 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
-export interface DeliveryWebhook {
-  binding: string;
-  url: string;
-}
-
 export interface Destination {
-  webhook?: DeliveryWebhook;
   account?: SurfaceAccount;
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
@@ -226,6 +221,7 @@ export interface Destination {
   onBehalfOf?: string;
   relaySender?: string;
   persona?: WornPersona;
+  project?: { id: string; name: string };
   threadTs?: string;
   editRef?: string;
   unfurlLinks?: boolean;
@@ -238,7 +234,7 @@ export interface Destination {
   editNote?: string;
   webTranscript?:
     | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
+    | { kind: "slack_reply"; sessionId: string; ts: string; name: string; speakerId: string }
     | { kind: "turn_failure"; notBefore: number; runId?: string };
 }
 
@@ -250,8 +246,6 @@ export interface CandidateDestination extends Destination {
 export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {});
 
 export interface DeliveryProvenance {
-  sourceRequestId?: string;
-  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
@@ -278,6 +272,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  messageTs?: string;
 }
 
 export interface EgressPolicy {
@@ -348,6 +343,7 @@ export interface OverheardMessage {
   ts: string;
   role: "user" | "bot" | "self";
   name?: string;
+  speakerId?: string;
   text: string;
   files?: string[];
   mentions?: Record<string, string>;
@@ -391,7 +387,6 @@ export interface TurnRequest {
   surface: string;
   scopeVersion?: string;
   deliveryTarget?: string;
-  deliveryWebhook?: DeliveryWebhook;
   deliveryCandidates?: { target: string; label: string }[];
   actor: ActorAssertion;
   conversation: {
@@ -520,7 +515,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only" | "linked_bot";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

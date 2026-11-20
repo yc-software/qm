@@ -167,6 +167,19 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   function onClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
     if (target?.nodeType !== 1) return;
+    const disclosure = target.closest("a, button")
+      ? null
+      : target.closest<HTMLElement>(":is(.thinking-row, .work-fold, .stopped-work, .tool-expandable) > summary");
+    if (disclosure && stack?.contains(disclosure) && scroller) {
+      cancelFollow();
+      anchor = {
+        element: disclosure,
+        text: "",
+        row: rowKey(disclosure),
+        offset: disclosure.getBoundingClientRect().top - viewportTop(),
+      };
+      return;
+    }
     const toggle = target.closest<HTMLButtonElement>(".pin-toggle");
     if (!toggle || !prompt?.contains(toggle)) return;
     cancelFollow();

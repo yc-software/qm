@@ -558,6 +558,13 @@ export function createMockAgent(): Agent {
         const written = await turn.tools.memoryAdd([fact]);
         usedTool = true;
         reply = written === null ? "(memory unavailable)" : `remembered ${written.added}`;
+      } else if (command0.startsWith("!memoryforget ")) {
+        const ids = command0.slice("!memoryforget ".length).trim().split(" ");
+        usedTool = true;
+        reply = await turn.tools.memoryDelete(ids, "forget").then(
+          (forgot) => (forgot === null ? "(memory unavailable)" : `forgot ${forgot.forgotten}`),
+          (error: Error) => error.message,
+        );
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();
         const sp = rest.indexOf(" ");
@@ -616,7 +623,9 @@ export function createMockAgent(): Agent {
           }
         }
         await record({ kind: "ToolCall", tool: "attach", body: { files: paths } });
-        const r = await turn.tools.attach(paths);
+        const r = await turn.tools.attach(
+          paths.map((p) => (p.startsWith("file_id:") ? { file_id: p.slice("file_id:".length) } : p)),
+        );
         await record({ kind: "ToolResult", tool: "attach", body: r.ok ? { ok: true, files: r.files } : { ok: false } });
         usedTool = true;
         if (tag === "!attachsilent ") silent = turn.replyOptional === true;

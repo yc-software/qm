@@ -92,6 +92,7 @@ export interface AgentTurnInput {
     images?: TurnImage[];
     documents?: DocumentInput[];
     author?: string;
+    speakerId?: string;
     authorName?: string;
     withheld?: boolean;
   }>;
@@ -128,6 +129,7 @@ export interface AgentTurnInput {
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
+  turnStart?: () => Promise<import("../decisions/decisions.ts").DecisionResult[]>;
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;

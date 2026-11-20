@@ -4,10 +4,13 @@ import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
+import { orgId } from "../config.ts";
+import type { DirectoryMember } from "../directory/directory-store.ts";
+import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
-import { markBotWork } from "../triggers/trigger-store.ts";
+import { markBotWork, unlessSlackListsAPerson } from "../triggers/trigger-store.ts";
 import { holdBotLoopShips } from "../loops/loop-store.ts";
 
 export { fold };
@@ -66,6 +69,8 @@ export interface UserStore extends UserLinkStore {
   markOffboarded(id: string, by: string): Promise<UserRecord>;
   markReactivated(id: string): Promise<UserRecord | null>;
   markApps(ids: readonly string[]): Promise<number>;
+  applyDirectoryBots(members: readonly DirectoryMember[]): Promise<number>;
+  botSignIns(aliases: readonly string[]): Promise<string[]>;
   setDisplayName(alias: string, name: string): Promise<boolean>;
 }
 
@@ -258,6 +263,89 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   },
 ].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
 
+export const SPLIT_LINKED_BOTS_MIGRATION = {
+  id: "users/v2/0009-split-linked-bots",
+  statements: [
+    `DO $$
+    BEGIN
+      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('runs') IS NULL
+         OR to_regclass('audit_log') IS NULL OR to_regclass('directory_members') IS NULL THEN
+        RETURN;
+      END IF;
+      CREATE TEMP TABLE app_sign_ins ON COMMIT DROP AS
+        SELECT l.tenant_id, l.user_id, l.alias_id, l.evidence, l.linked_by, l.alias_id = u.primary_alias AS is_primary
+          FROM users u JOIN user_links l ON l.tenant_id = u.tenant_id AND l.user_id = u.id
+         WHERE u.kind = 'app';
+      IF NOT EXISTS (SELECT 1 FROM app_sign_ins) THEN
+        RETURN;
+      END IF;
+      CREATE TEMP TABLE app_signals ON COMMIT DROP AS
+        SELECT tenant_id, user_id, alias_id, evidence, linked_by, is_primary, first_spoke,
+               CASE WHEN bot AND person THEN 'bot and person' WHEN bot THEN 'bot' WHEN person THEN 'person' ELSE 'none'
+               END AS signal
+          FROM (SELECT s.tenant_id, s.user_id, s.alias_id, s.evidence, s.linked_by, s.is_primary,
+                       min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
+                       EXISTS (SELECT 1 FROM directory_members m
+                                WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
+                                  AND ${fold("m.principal_id")} = s.alias_id)
+                       OR EXISTS (SELECT 1 FROM directory_members m
+                                   WHERE m.tenant_id = s.tenant_id AND m.slack_id = s.alias_id) AS person
+                  FROM app_sign_ins s
+                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
+                               FROM runs r
+                              CROSS JOIN LATERAL (
+                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author
+                                      FROM (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
+                                                        THEN r.request::jsonb END AS j OFFSET 0) parsed
+                                     WHERE j @> '{"botActor": true, "surfaceOrigin": {"author": {"surface": "slack"}}}'
+                                       AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
+                                       AND (j #>> '{origin,kind}' IN ('human', 'direct')
+                                            OR j @> '{"origin": {"kind": "ambient", "live": true}}')
+                                       AND coalesce(j ->> 'sessionSenderId', '') = ''
+                                       AND coalesce(j ->> 'delegatingRunId', '') = ''
+                                    OFFSET 0) p
+                               LEFT JOIN directory_members d ON d.tenant_id = r.tenant_id AND d.slack_id = p.author
+                              CROSS JOIN LATERAL (VALUES (${fold("p.author")}), (${fold("d.principal_id")})) v(speaker)) t
+                    ON t.tenant_id = s.tenant_id AND t.speaker = s.alias_id
+                 GROUP BY 1, 2, 3, 4, 5, 6) g;
+      CREATE TEMP TABLE person_users ON COMMIT DROP AS
+        SELECT tenant_id, user_id FROM app_signals GROUP BY 1, 2
+        HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person');
+      CREATE TEMP TABLE mixed_splits ON COMMIT DROP AS
+        SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM app_signals
+         WHERE signal = 'bot' AND NOT is_primary
+           AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM app_signals WHERE signal <> 'bot');
+      INSERT INTO users(tenant_id, primary_alias, kind, first_seen_at, source)
+        SELECT tenant_id, alias_id, 'app', ${ts("first_spoke")}, 'turn' FROM mixed_splits;
+      UPDATE user_links l SET user_id = n.id, evidence = 'primary', linked_by = NULL
+        FROM mixed_splits s JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
+       WHERE l.tenant_id = s.tenant_id AND l.alias_id = s.alias_id;
+      UPDATE users u SET kind = 'person' FROM person_users p WHERE u.tenant_id = p.tenant_id AND u.id = p.user_id;
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, user_id::text, 'users', detail::text
+        FROM (SELECT p.tenant_id, p.user_id, 'user_sign_in_split' AS action,
+                     jsonb_build_object('movedSignIns', coalesce(jsonb_agg(
+                       jsonb_build_object('alias', s.alias_id, 'userId', n.id, 'evidence', s.evidence, 'linkedBy', s.linked_by)
+                       ORDER BY s.alias_id) FILTER (WHERE s.alias_id IS NOT NULL), '[]')) AS detail
+                FROM (SELECT tenant_id, user_id FROM person_users UNION SELECT tenant_id, user_id FROM mixed_splits) p
+                LEFT JOIN mixed_splits s ON s.tenant_id = p.tenant_id AND s.user_id = p.user_id
+                LEFT JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
+               GROUP BY 1, 2
+              UNION ALL
+              SELECT tenant_id, user_id, 'user_sign_in_review',
+                     jsonb_build_object(
+                       'reason', CASE WHEN bool_or(signal NOT IN ('bot', 'person')) THEN 'some sign-ins have no certain signal'
+                                      ELSE 'the primary sign-in is not a person' END,
+                       'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
+                                            ORDER BY is_primary DESC, alias_id))
+                FROM app_signals
+               WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
+               GROUP BY 1, 2
+              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries;
+    END $$`,
+  ],
+};
+
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
@@ -365,11 +453,37 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 }
 
 const MARKED = "string_to_array(current_setting('qm.marked_apps'), ',')::uuid[]";
-const BOT_WORK = [markBotWork(MARKED), holdBotLoopShips("system", MARKED)];
+const BOT_WORK = [markBotWork(unlessSlackListsAPerson("l"), MARKED), holdBotLoopShips("system", MARKED)];
+
+async function markAppsIn(client: PoolClient, aliases: readonly string[]): Promise<number> {
+  const { rows } = await client.query(
+    `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`,
+    [aliases],
+  );
+  if (!rows.length) return 0;
+  await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [rows.map((row) => row.id).join(",")]);
+  for (const statement of BOT_WORK) await client.query(statement);
+  return rows.length;
+}
+
+async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<string[]> {
+  const rows = await q(
+    `SELECT s.alias FROM unnest($1::text[]) AS s(alias)
+      WHERE coalesce(
+        (SELECT bool_or(m.is_bot) FROM directory_members m
+          WHERE m.org_id = $2 AND (lower(m.principal_id) = lower(s.alias) OR m.slack_id = s.alias)),
+        EXISTS (SELECT 1 FROM user_links l JOIN users u ON u.id = l.user_id
+                 WHERE l.alias_id = s.alias AND u.kind = 'app'))`,
+    [aliases.map(foldPrincipalId), orgId()],
+  );
+  return rows.map((r) => r.alias as string);
+}
 
 async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
+  if ((await findBotSignIns(q, [link.principalId, link.canonicalId])).length)
+    throw new PrincipalLinkError(400, APP_IS_NOT_A_PERSON);
   const target = await ensureUserIn(client, link.canonicalId);
   const current = (
     await q(
@@ -386,7 +500,6 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     const source = current.user_id as string;
     await q(
       `UPDATE users c SET
-         kind = CASE WHEN a.kind = 'app' THEN 'app' ELSE c.kind END,
          first_seen_at = least(c.first_seen_at, a.first_seen_at),
          source = CASE WHEN a.first_seen_at < c.first_seen_at OR c.first_seen_at IS NULL THEN a.source ELSE c.source END,
          offboarded_at = least(c.offboarded_at, a.offboarded_at),
@@ -476,19 +589,66 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     },
     async markApps(ids) {
       if (!ids.length) return 0;
+      return transaction((client) => markAppsIn(client, ids.map(foldPrincipalId)));
+    },
+    async applyDirectoryBots(members) {
+      const signIns = (isBot: boolean | undefined) =>
+        members
+          .filter((m) => m.isBot === isBot)
+          .flatMap((m) => [m.principalId, m.slackId].map(foldPrincipalId).filter(Boolean));
+      const bots = signIns(true);
       return transaction(async (client) => {
-        const { rows } = await client.query(
-          `UPDATE users SET kind = 'app'
-            WHERE kind <> 'app' AND id IN (SELECT user_id FROM user_links WHERE alias_id = ANY($1::text[]))
-            RETURNING id`,
-          [ids.map((id) => foldPrincipalId(id))],
+        const split = await client.query(
+          `WITH moving AS (
+             SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
+           ), created AS (
+             INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+           ), moved AS (
+             UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
+               FROM moving m JOIN created c ON c.primary_alias = m.alias_id
+              WHERE l.alias_id = m.alias_id
+             RETURNING m.user_id AS from_user, c.id AS to_user, m.alias_id, m.evidence, m.linked_by
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail)
+           SELECT $2::bigint, 'system:directory-sync', 'user_sign_in_split', from_user::text, 'users',
+                  jsonb_build_object('movedSignIns', jsonb_agg(jsonb_build_object(
+                    'alias', alias_id, 'userId', to_user, 'evidence', evidence, 'linkedBy', linked_by)
+                    ORDER BY alias_id))::text
+             FROM moved GROUP BY from_user`,
+          [bots, Date.now()],
         );
-        if (!rows.length) return 0;
-        await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [rows.map((row) => row.id).join(",")]);
-        for (const statement of BOT_WORK) await client.query(statement);
-        return rows.length;
+        await markAppsIn(client, bots);
+        await client.query(
+          `WITH app_sign_ins AS (
+             SELECT l.user_id, l.alias_id, l.evidence, l.alias_id = u.primary_alias AS is_primary,
+                    CASE WHEN l.alias_id = ANY($1::text[]) THEN 'bot'
+                         WHEN l.alias_id = ANY($2::text[]) THEN 'none'
+                         WHEN l.alias_id = ANY($3::text[]) THEN 'person' ELSE 'none' END AS signal
+               FROM user_links l JOIN users u ON u.id = l.user_id
+              WHERE u.kind = 'app'
+           ), people AS (
+             UPDATE users u SET kind = 'person'
+               FROM (SELECT user_id FROM app_sign_ins GROUP BY user_id HAVING bool_and(signal = 'person')) p
+              WHERE u.id = p.user_id
+           )
+           INSERT INTO audit_log(at, principal_id, action, resource, scope_label, detail, idempotency_key)
+           SELECT $4::bigint, 'system:directory-sync', 'user_sign_in_review', user_id::text, 'users', detail,
+                  'user_sign_in_review:' || user_id || ':' || md5(detail)
+             FROM (SELECT user_id, jsonb_build_object(
+                            'reason', CASE WHEN bool_or(signal = 'none') THEN 'some sign-ins have no certain signal'
+                                           ELSE 'the primary sign-in is not a person' END,
+                            'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
+                                                 ORDER BY is_primary DESC, alias_id))::text AS detail
+                     FROM app_sign_ins GROUP BY user_id
+                    HAVING count(*) > 1 AND NOT bool_and(signal = 'bot') AND NOT bool_and(signal = 'person')) r
+           ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+          [bots, signIns(undefined), signIns(false), Date.now()],
+        );
+        return split.rowCount ?? 0;
       });
     },
+    botSignIns: (aliases) => findBotSignIns(q, aliases),
     async setDisplayName(alias, raw) {
       const name = cleanDisplayName(raw);
       if (!name) return false;

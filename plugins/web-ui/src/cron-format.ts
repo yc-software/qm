@@ -156,3 +156,124 @@ function formatTitleDateTime(ms: number, timeZone?: string): string {
     return new Date(ms).toLocaleString();
   }
 }
+
+export type SchedulePreset =
+  | { kind: "hourly"; minute: number }
+  | { kind: "daily"; hour: number; minute: number }
+  | { kind: "weekdays"; hour: number; minute: number }
+  | { kind: "weekly"; day: number; hour: number; minute: number };
+
+export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function cronNumber(field: string, max: number): number | null {
+  return /^\d{1,2}$/.test(field) && Number(field) <= max ? Number(field) : null;
+}
+
+export function schedulePreset(expression: string): SchedulePreset | null {
+  const fields = expression.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+  const [minuteField, hourField, dayOfMonth, month, dayOfWeek] = fields as [string, string, string, string, string];
+  const minute = cronNumber(minuteField, 59);
+  if (minute === null || dayOfMonth !== "*" || month !== "*") return null;
+  if (hourField === "*" && dayOfWeek === "*") return { kind: "hourly", minute };
+  const hour = cronNumber(hourField, 23);
+  if (hour === null) return null;
+  if (dayOfWeek === "*") return { kind: "daily", hour, minute };
+  if (dayOfWeek === "1-5" || dayOfWeek.toUpperCase() === "MON-FRI") return { kind: "weekdays", hour, minute };
+  const day = cronNumber(dayOfWeek, 7);
+  return day === null ? null : { kind: "weekly", day: day % 7, hour, minute };
+}
+
+export function presetCron(preset: SchedulePreset): string {
+  if (preset.kind === "hourly") return `${preset.minute} * * * *`;
+  let dayOfWeek = "*";
+  if (preset.kind === "weekdays") dayOfWeek = "1-5";
+  if (preset.kind === "weekly") dayOfWeek = String(preset.day);
+  return `${preset.minute} ${preset.hour} * * ${dayOfWeek}`;
+}
+
+function clockTime(hour: number, minute: number): string {
+  return new Date(Date.UTC(2000, 0, 1, hour, minute)).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+}
+
+function everyPhrase(ms: number): string {
+  const units: Array<[number, string]> = [
+    [604_800_000, "week"],
+    [86_400_000, "day"],
+    [3_600_000, "hour"],
+    [60_000, "minute"],
+  ];
+  for (const [size, unit] of units) {
+    if (ms >= size && ms % size === 0) return ms === size ? `Every ${unit}` : `Every ${ms / size} ${unit}s`;
+  }
+  return `Every ${humanizeCronInterval(ms)}`;
+}
+
+export function describeSchedule(schedule: CronTimingView["schedule"]): string {
+  if (schedule.cron) {
+    const preset = schedulePreset(schedule.cron);
+    if (!preset) return `Custom: ${schedule.cron.trim().replace(/\s+/g, " ")}`;
+    if (preset.kind === "hourly") return `Every hour at :${String(preset.minute).padStart(2, "0")}`;
+    const time = clockTime(preset.hour, preset.minute);
+    if (preset.kind === "daily") return `Every day at ${time}`;
+    if (preset.kind === "weekdays") return `Weekdays at ${time}`;
+    return `Every ${WEEKDAYS[preset.day]} at ${time}`;
+  }
+  if (schedule.everyMs != null) return everyPhrase(schedule.everyMs);
+  return schedule.firstFireAt != null
+    ? `Once, ${formatCronDateTime(schedule.firstFireAt, Date.now(), schedule.timezone)}`
+    : "Once";
+}
+
+export function timezoneLabel(timeZone: string | undefined): string {
+  const zone = timeZone?.trim() || calendarTimezone({});
+  if (!zone || !isIntlTimezone(zone)) return zone ?? "";
+  const part = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "longGeneric" })
+    .formatToParts(Date.now())
+    .find((p) => p.type === "timeZoneName")?.value;
+  return part && !part.startsWith("GMT") ? part : zone;
+}
+
+export function browserTimezone(): string | undefined {
+  return calendarTimezone({});
+}
+
+export function presetNextRuns(preset: SchedulePreset, timeZone: string, count = 3, now = Date.now()): number[] {
+  if (!isIntlTimezone(timeZone)) return [];
+  const runs: number[] = [];
+  const today = new TZDate(now, timeZone);
+  if (preset.kind === "hourly") {
+    let at = new TZDate(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate(),
+      today.getHours(),
+      preset.minute,
+      timeZone,
+    );
+    while (runs.length < count) {
+      if (at.getTime() > now) runs.push(at.getTime());
+      at = new TZDate(at.getTime() + 3_600_000, timeZone);
+    }
+    return runs;
+  }
+  for (let offset = 0; runs.length < count && offset < 21; offset++) {
+    const at = new TZDate(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + offset,
+      preset.hour,
+      preset.minute,
+      timeZone,
+    );
+    const day = at.getDay();
+    if (preset.kind === "weekdays" && (day === 0 || day === 6)) continue;
+    if (preset.kind === "weekly" && day !== preset.day) continue;
+    if (at.getTime() > now) runs.push(at.getTime());
+  }
+  return runs;
+}

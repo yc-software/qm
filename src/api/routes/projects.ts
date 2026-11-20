@@ -5,6 +5,10 @@ import { validProjectIcon, type ProjectIcon } from "../../projects/project-store
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
+  if (ctx.capability.botActor === true) {
+    sendJson(ctx.res, 403, { error: "forbidden", message: "bot work can't use project tools" });
+    return null;
+  }
   if (requested && requested !== ctx.capability.actorId) {
     sendJson(ctx.res, 404, { error: "not_found" });
     return null;
@@ -42,7 +46,8 @@ function mutationResponse(ctx: ApiCtx, result: Awaited<ReturnType<ApiCtx["app"][
   if (result.status === "invalid_icon")
     return sendJson(ctx.res, 400, {
       error: "invalid_icon",
-      message: 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<workspace custom emoji>}, or null',
+      message:
+        'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<workspace custom emoji>}, {kind:"image",url:<https image URL>}, or null',
     });
   if (result.status === "invalid_channel")
     return sendJson(ctx.res, 400, {

@@ -71,7 +71,7 @@ export const DROP_RECIPIENT_CONSENT_MIGRATION = {
   ]),
 };
 
-export const markBotWork = (users?: string): string => `DO $$
+export const markBotWork = (skip = "", users?: string): string => `DO $$
     BEGIN
       IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL THEN
         RETURN;
@@ -87,7 +87,7 @@ ${[
         UPDATE ${table} t SET json = t.json || '{"botActor": true}'::jsonb
           FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
          WHERE u.kind = 'app' AND l.tenant_id = t.tenant_id${users ? ` AND u.id = ANY(${users})` : ""}
-           AND l.alias_id = ${fold(`t.json ->> '${creator}'`)} AND NOT t.json ? 'botActor';
+           AND l.alias_id = ${fold(`t.json ->> '${creator}'`)} AND NOT t.json ? 'botActor'${skip};
         ${
           users
             ? `IF FOUND THEN
@@ -104,6 +104,17 @@ ${[
 export const BACKFILL_BOT_MARKER_MIGRATION = {
   id: "users/v2/0008-bot-marker-backfill",
   statements: [markBotWork()],
+};
+
+export const unlessSlackListsAPerson = (link: string): string => `
+           AND NOT EXISTS (SELECT 1 FROM directory_members m WHERE m.tenant_id = ${link}.tenant_id AND m.is_bot IS FALSE
+                              AND ${fold("m.principal_id")} = ${link}.alias_id)
+           AND NOT EXISTS (SELECT 1 FROM directory_members m WHERE m.tenant_id = ${link}.tenant_id AND m.is_bot IS FALSE
+                              AND m.slack_id = ${link}.alias_id)`;
+
+export const RERUN_BOT_MARKER_BACKFILL_MIGRATION = {
+  id: "users/v2/0010-rerun-bot-marker-backfill",
+  statements: [markBotWork(unlessSlackListsAPerson("l"))],
 };
 
 export const MARK_BOT_EDITED_CRONS_MIGRATION = {

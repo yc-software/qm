@@ -590,6 +590,68 @@ const HUMAN_PROMPT_INDEX: PgMigrationDefinition = {
   ],
 };
 
+const BOT_WORK_COLUMN: PgMigrationDefinition = {
+  id: "sessions/store/0064-bot-work",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE OR REPLACE FUNCTION session_bot_work(spawn_meta TEXT) RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $bot_work$
+BEGIN
+  RETURN COALESCE(spawn_meta::jsonb -> 'botActor' = 'true'::jsonb, false);
+EXCEPTION WHEN invalid_text_representation OR untranslatable_character THEN
+  RETURN false;
+END $bot_work$`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bot_work BOOLEAN NOT NULL GENERATED ALWAYS AS (session_bot_work(spawn_meta)) STORED`,
+  ],
+};
+
+const BACKFILL_NULL_CALL_IDS: PgMigrationDefinition = {
+  id: "sessions/store/0065-backfill-null-call-ids",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TEMP TABLE null_call_items ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, kind, seq,
+             row_number() OVER (PARTITION BY tenant_id, session_id, turn_id, kind ORDER BY seq) AS rn
+        FROM items WHERE call_id IS NULL AND kind IN ('ToolCall', 'ToolResult')`,
+    `CREATE TEMP TABLE backfilled_call_ids ON COMMIT DROP AS
+      SELECT tenant_id, session_id, turn_id, rn, 'call_backfill_' || gen_random_uuid() AS call_id
+        FROM null_call_items WHERE kind = 'ToolCall'`,
+    `INSERT INTO backfilled_call_ids
+      SELECT r.tenant_id, r.session_id, r.turn_id, r.rn, 'call_backfill_' || gen_random_uuid()
+        FROM null_call_items r
+       WHERE r.kind = 'ToolResult' AND NOT EXISTS (
+         SELECT 1 FROM null_call_items c
+          WHERE c.kind = 'ToolCall' AND c.tenant_id = r.tenant_id AND c.session_id = r.session_id
+            AND c.turn_id IS NOT DISTINCT FROM r.turn_id AND c.rn = r.rn)`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items DISABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
+    `UPDATE items i SET call_id = b.call_id
+       FROM null_call_items n
+       JOIN backfilled_call_ids b
+         ON b.tenant_id = n.tenant_id AND b.session_id = n.session_id
+        AND b.turn_id IS NOT DISTINCT FROM n.turn_id AND b.rn = n.rn
+      WHERE i.tenant_id = n.tenant_id AND i.session_id = n.session_id AND i.seq = n.seq`,
+    `DO $backfill_null_call_ids$ BEGIN
+       IF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+         ALTER TABLE items ENABLE TRIGGER items_append_only;
+       END IF;
+     END $backfill_null_call_ids$`,
+  ],
+};
+
+const TOOL_CALL_ID_CONSTRAINT: PgMigrationDefinition = {
+  id: "sessions/store/0066-tool-call-id-constraint",
+  autocommit: true,
+  statements: [
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_tool_call_id_present`,
+    `ALTER TABLE items ADD CONSTRAINT items_tool_call_id_present
+       CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult')) NOT VALID`,
+    `ALTER TABLE items VALIDATE CONSTRAINT items_tool_call_id_present`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -611,6 +673,9 @@ export const SESSION_MIGRATIONS = [
   DROP_ITEMS_TARGET_SEQ,
   DROP_PARTICIPANT_WINDOWS,
   HUMAN_PROMPT_INDEX,
+  BOT_WORK_COLUMN,
+  BACKFILL_NULL_CALL_IDS,
+  TOOL_CALL_ID_CONSTRAINT,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

@@ -41,6 +41,7 @@ docs/master.html
 !desktop/assets/qm.icns
 !desktop/assets/qm.png
 !docs/images/qm-logo.png
+!plugins/web-ui/public/qm.png
 !docs/images/slack-app-config-token-setup.gif
 !ios/QM/Resources/Assets.xcassets/Activity-book-open.imageset/book-open.svg
 !ios/QM/Resources/Assets.xcassets/Activity-bot.imageset/bot.svg

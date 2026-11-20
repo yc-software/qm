@@ -88,7 +88,7 @@ test("owner sees their own file in owned[] and can open its bytes", async () => 
   assert.equal(page.owned[0]!.openable, true);
   assert.equal(page.shared.length, 0);
 
-  const opened = await app.openFileForViewer(tenant, id, "U1");
+  const opened = await app.openFileForViewer(tenant, id, "U1", false);
   assert.ok(opened);
   assert.deepEqual(await drain(opened!.stream), PNG);
 });
@@ -125,7 +125,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
   assert.equal(u2.shared[0]!.id, id);
   assert.equal(u2.shared[0]!.ownerScopeId, owner, "shared rows retain their provenance for an accurate UI label");
 
-  const opened = await app.openFileForViewer(tenant, id, "U2");
+  const opened = await app.openFileForViewer(tenant, id, "U2", false);
   assert.ok(opened, "the grant authorizes the bytes");
   assert.deepEqual(await drain(opened!.stream), Buffer.from("v1"));
 });
@@ -152,7 +152,7 @@ test("a stranger sees nothing and cannot open the file (404 = null)", async () =
   assert.equal(page.owned.length, 0);
   assert.equal(page.shared.length, 0);
   assert.equal(
-    await app.openFileForViewer(tenant, id, "U3"),
+    await app.openFileForViewer(tenant, id, "U3", false),
     null,
     "not-authorized is indistinguishable from not-found",
   );
@@ -186,7 +186,7 @@ test("an org grant surfaces the file to any org member", async () => {
 
   const page = await app.listFilesForViewer(tenant, "U9");
   assert.equal(page.shared.length, 1, "any org member sees an org-granted file");
-  assert.ok(await app.openFileForViewer(tenant, id, "U9"));
+  assert.ok(await app.openFileForViewer(tenant, id, "U9", false));
 });
 
 test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
@@ -218,7 +218,7 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
   );
 
   assert.equal(
-    await app.openFileForViewer(tenant, id, "U1"),
+    await app.openFileForViewer(tenant, id, "U1", false),
     null,
     "owner is authorized but the bytes are unavailable → 404",
   );
@@ -246,7 +246,10 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
     page.owned.map((f) => f.id),
     [file!.id],
   );
-  assert.deepEqual(await drain((await app.openFileForViewer(tenant, file!.id, "U1"))!.stream), Buffer.from("hello"));
+  assert.deepEqual(
+    await drain((await app.openFileForViewer(tenant, file!.id, "U1", false))!.stream),
+    Buffer.from("hello"),
+  );
 });
 
 test("uploadFileForViewer to a shared context is visible to another context member", async () => {
@@ -275,7 +278,7 @@ test("uploadFileForViewer to a shared context is visible to another context memb
     context?.files.map((f) => f.name),
     ["brief.pdf"],
   );
-  assert.deepEqual(await drain((await app.openFileForViewer(tenant, file!.id, "U2"))!.stream), PNG);
+  assert.deepEqual(await drain((await app.openFileForViewer(tenant, file!.id, "U2", false))!.stream), PNG);
 });
 
 test("scoped file listing pages within the requested context", async () => {
@@ -357,7 +360,7 @@ test("project files collapse across contributors and turns before paging owned a
     assert.equal(all.length, 4);
     assert.equal(new Set(all.map((f) => f.name)).size, 4);
     assert.equal(owned.length, viewer === "U1" ? 2 : 4, "owned copies remain owned in the grouped listing");
-    for (const file of all) assert.ok(await app.openFileForViewer(tenant, file.id, viewer));
+    for (const file of all) assert.ok(await app.openFileForViewer(tenant, file.id, viewer, false));
   }
   for (const id of ledger) assert.ok(await files.get(id), "deduplication does not delete the artifact ledger");
   const stranger = await app.listFilesForViewer(tenant, "U3", undefined, channel);
@@ -441,11 +444,11 @@ test("file grants name one Files record, not its path or another generation", as
     (await app.listFilesForViewer(tenant, "U2")).shared.map((file) => file.id),
     [original.id],
   );
-  const opened = await app.openFileForViewer(tenant, original.id, "U2");
+  const opened = await app.openFileForViewer(tenant, original.id, "U2", false);
   assert.ok(opened);
   assert.equal((await drain(opened.stream)).toString(), "old");
-  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2"), null);
+  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2", false), null);
   await files.delete(original.id);
   assert.deepEqual((await app.listFilesForViewer(tenant, "U2")).shared, []);
-  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2"), null);
+  assert.equal(await app.openFileForViewer(tenant, replacement.id, "U2", false), null);
 });

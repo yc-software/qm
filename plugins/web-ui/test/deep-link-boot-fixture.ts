@@ -61,6 +61,22 @@ export const SESSION = {
   canContinue: true,
 };
 
+export const settle = async (done: () => boolean): Promise<void> => {
+  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+};
+
+export function connectWidget(): HTMLElement {
+  const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    me: { org: "test", user: "tester" },
+    widget: "apps",
+    setupOnly: true,
+    toolkit: "gmail",
+    returnKey: "reply:1:0:0",
+  });
+  document.querySelector(".message-stack")!.append(widget);
+  return widget;
+}
+
 export async function harness(opts: HarnessOptions): Promise<Harness> {
   const session = opts.session ?? SESSION;
   let transcriptStatus = opts.transcriptStatus;
@@ -314,5 +330,43 @@ function sessionPage(all: CoreSession[], params: URLSearchParams) {
     sessions,
     ...(pinned ? { pinned, hasArchived: all.some((row) => row.archived) } : {}),
     nextCursor: rows.length > limit && last ? `${activity(last)}.${last.id}` : null,
+  };
+}
+
+export const runtimeConfig = {
+  scopeId: "personal:tester",
+  models: ["test-model"],
+  modelCatalog: {
+    "test-model": {
+      id: "test-model",
+      name: "Test",
+      label: "Test",
+      buttonLabel: "Test",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 10000,
+      maxTokens: 1000,
+    },
+  },
+  effective: { modelId: "test-model" },
+  orgDefault: { modelId: "test-model", revision: 1 },
+  scopeOverride: null,
+  upgradeAvailable: false,
+};
+
+export function stubMotion(): () => void {
+  Object.defineProperty(window.Element.prototype, "getAnimations", { configurable: true, value: () => [] });
+  Object.defineProperty(window.Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel() {}, currentTime: 0 }),
+  });
+  const matrixDescriptor = Object.getOwnPropertyDescriptor(globalThis, "DOMMatrix");
+  Object.defineProperty(globalThis, "DOMMatrix", { configurable: true, value: class {} });
+  return () => {
+    if (matrixDescriptor) Object.defineProperty(globalThis, "DOMMatrix", matrixDescriptor);
+    else Reflect.deleteProperty(globalThis, "DOMMatrix");
   };
 }

@@ -75,7 +75,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.personasEnabled,
     guidance:
-      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Use the persona-fork skill to copy one.",
+      "Personas are reusable agents (instructions, skills, notes, credentials) living in a persona:<id> scope; people hold owner, write or read on them through people (personal:), teams (team:), the org (org:) or Slack channels (channel:, read only, usable only in that channel). Writers edit instructions with PATCH and add a skill by creating it with scopeId persona:<id> on POST /v1/skills or moving one in with the skills tool; only owners share, attach credentials or delete. Writers set its default model (new conversations wearing it start on it) with PUT /v1/runtime-config and scopeId persona:<id>. Use the persona-fork skill to copy one.",
     routes: [
       { method: "GET", path: "/v1/personas", summary: "personas you hold a role on, with your role" },
       {
@@ -92,7 +92,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/personas/:id",
         summary:
-          "{name?,description?,instructions?,icon?} edits it (write or owner); each change that alters a field records a new version",
+          '{name?,description?,instructions?,icon?} edits it (write or owner); icon is {kind:"emoji",value}, {kind:"custom",name} (Slack custom emoji), {kind:"image",url} (any https image URL) or null; each change that alters a field records a new version',
       },
       {
         method: "GET",
@@ -110,7 +110,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",
@@ -236,7 +236,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PATCH",
         path: "/v1/projects/:id",
         summary:
-          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji or {kind:"custom",name} with a workspace custom emoji, or null to clear (any member)',
+          'update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon — {kind:"emoji",value} with one emoji, {kind:"custom",name} with a workspace custom emoji, {kind:"image",url} with an https image URL, or null to clear (any member)',
       },
       {
         method: "POST",
@@ -409,7 +409,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/apps/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/apps (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/apps/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/shares/deploy/:id with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/apps/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
@@ -443,14 +443,15 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/apps/:id/share",
-        summary: "inspect access for an app you own (:id is its name or id) — returns {public, grantees}; owner-only",
+        path: "/v1/shares/:type/:id",
+        summary:
+          "inspect who can reach a resource you may share (:type deploy|cron|skill|file; an app's :id is its name or id) — returns {owner, offers, grantees[{scope, permission, status?}]}, plus {public, externalSharing} for apps",
       },
       {
         method: "POST",
-        path: "/v1/apps/:id/share",
+        path: "/v1/shares/:type/:id",
         summary:
-          'change who can reach a published app you own (:id is its name or id). For anonymous link access, pass only `public` (boolean). Otherwise target ONE of: `scope` — "org" (everyone in the org) or a scope id like personal:<id>; or `recipient` — a teammate\'s name (resolved in the directory); or `email` — an exact email address, including someone outside the directory (view-only). `access`: view (reach, default), manage (reach + redeploy/rollback), or none (stop sharing). Owner-only (from any conversation), no redeploy',
+          'change who can reach a resource you may share (:type deploy|cron|skill|file). Target ONE of: `scope` — "org" or a scope id like personal:<id> or channel:<id>; `recipient` — a teammate\'s name; or (apps only) `email` — an exact address, view-only. `access`: view (default), manage, or none (stop sharing). Apps only: pass just `public` (boolean) for anonymous link access. `offers` from GET says which of these the resource allows. Apps: owner-only, on a turn you sent',
       },
       {
         method: "POST",
@@ -506,7 +507,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH|DELETE",
         path: "/v1/memory/facts",
-        summary: "edit facts ({facts:[{id,text}]}) or forget them ({ids}); any unknown id fails the whole call",
+        summary:
+          "edit facts ({facts:[{id,text}]}) or forget them ({ids}: notebook ids or brain refs); an unknown notebook id fails the whole call, each brain ref reports its own outcome, and notebook ids stay while a ref's outcome is unknown",
       },
     ],
   },
@@ -539,7 +541,19 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]) / list participants' registered logins (metadata)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
+      },
+      {
+        method: "POST",
+        path: "/v1/keychain/login-tickets",
+        summary:
+          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+      },
+      {
+        method: "POST|DELETE",
+        path: "/v1/keychain/credentials/:id/writer",
+        summary:
+          "claim {holder, until} / release ?holder= the single-writer lease on one of the user's own credentials, such as a browser profile; 409 writer_held while another holder's lease runs",
       },
       {
         method: "GET",
@@ -640,6 +654,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/emoji",
         summary:
           "add one Slack custom emoji — {name, image:<base64 PNG/GIF>} (optional workspace); runs under your own Slack session or a configured fallback. An error here is a real result to relay, not a reason to ask the user to upload manually",
+      },
+      {
+        method: "PUT",
+        path: "/v1/emoji/session",
+        summary:
+          "save your Slack sign-in for the uploader — {cookies:[…]} from a browser the person just signed in to Slack on (optional workspace); checked against the workspace before it's stored. Use it when an upload says the session expired",
       },
     ],
   },
@@ -745,7 +765,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/admin/external-users",
         summary:
-          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; they sign in at the portal with that address until expiry; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem and hand the user signInUrl to share. org_admin role is portal-only",
+          "invite an outside collaborator by email — {email, role?: member|org_admin, expiresAt (ISO date-time, a bare YYYY-MM-DD meaning end of that day UTC, or epoch ms)}; until expiry they count as members everywhere, including as guests in the org's own Slack, and the invitation email carries a single-use sign-in link; 409 if the address already belongs to an org member (org email domain, Slack directory, sign-in allow-list, or anyone who has used the agent). The invitation email needs Resend on core (RESEND_API_KEY + AUTH_EMAIL_FROM); when the response says emailSent:false, relay emailProblem; the signInUrl you get is the plain portal address, so once email works, re-invite with resendInvite:true to send a link. org_admin role is portal-only",
       },
       {
         method: "DELETE",

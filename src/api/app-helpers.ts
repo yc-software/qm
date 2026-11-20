@@ -19,7 +19,7 @@ import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
+import { deployRef, encodeRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -39,6 +39,7 @@ import type { PublishedApp } from "../deploy/deploy-store.ts";
 import { reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { adminSessionUrl } from "../util/admin-links.ts";
 import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import {
   openGroupViaSurface,
   resolveReachTarget,
@@ -48,6 +49,7 @@ import {
   type ReachDirectory,
 } from "../reach/reach.ts";
 import { createSurfaceContextPuller } from "./surface-context-puller.ts";
+import { authorPublishesSkill } from "./artifact-share.ts";
 import {
   isProjectGroupRef,
   projectGroupRef,
@@ -415,10 +417,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function filesForViewer(
     tenant: Tenant,
     principalId: string,
+    ownScopeBotWork: boolean,
     opts?: ListOwnedOptions,
     inScope?: ScopeId,
   ): Promise<FileListPage> {
-    const myScopes = await currentResourceScopesForViewer(principalId);
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
     const handles = await deps.acl.handlesFor(tenant, myScopes);
     const page = await deps.files.listDocuments(
       myScopes,
@@ -435,7 +438,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function currentResourceScopesForViewer(principalId: string): Promise<ScopeId[]> {
+  async function currentResourceScopesForViewer(principalId: string, ownScopeBotWork: boolean): Promise<ScopeId[]> {
     const actor = deps.identity?.classify(principalId);
     if (actor && !deps.identity?.isInternal(actor)) return [];
     const scopes = new Set<ScopeId>([
@@ -462,7 +465,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     } catch (error) {
       swallow("app: current resource scopes for viewer", error);
     }
-    return [...scopes];
+    return [...scopes].filter((scope) => loadsScopeContext(principalId, scope, ownScopeBotWork));
   }
 
   async function canUseContext(principalId: string, targetScope: ScopeId): Promise<boolean> {
@@ -630,14 +633,37 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     recordErrorInBinding(deps.errors, e, error);
   }
 
-  function canManageSkill(skill: Pick<Skill, "scopeId" | "createdBy">, principalId: string): Promise<boolean> {
-    return principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId);
+  async function canManageSkill(
+    skill: Pick<Skill, "id" | "scopeId" | "createdBy">,
+    principalId: string,
+    botWork: boolean,
+    grants?: readonly Grant[],
+  ): Promise<boolean> {
+    if (!loadsScopeContext(principalId, skill.scopeId, botWork)) return false;
+    if (await principalManagesArtifactHome(skill.scopeId, skill.createdBy, principalId)) return true;
+    const ref = encodeRef(skillRef(skill.id));
+    return (await artifactGrantPermission(skill.scopeId, ref, principalId, grants)) === "write";
+  }
+
+  async function manageableSkills(
+    tenant: Tenant,
+    skills: readonly Pick<Skill, "id" | "scopeId" | "createdBy">[],
+    principalId: string,
+    botWork: boolean,
+  ): Promise<Set<string>> {
+    const resources = skills.map((s) => ({ ownerScopeId: s.scopeId, ref: encodeRef(skillRef(s.id)) }));
+    const grants = resources.length
+      ? ((await deps.acl?.find(tenant, { resources }).catch(reportFailureAs("skill grants", []))) ?? [])
+      : [];
+    const of = (s: Pick<Skill, "id" | "scopeId">) =>
+      grants.filter((g) => g.ownerScopeId === s.scopeId && g.ref === encodeRef(skillRef(s.id)));
+    const ok = await Promise.all(skills.map((s) => canManageSkill(s, principalId, botWork, of(s))));
+    return new Set(skills.filter((_, i) => ok[i]).map((s) => s.id));
   }
 
   async function republishIfShared(skill: Skill, editorId: string): Promise<Skill> {
     if (skill.status === "published") return skill;
-    const { kind } = parseScopeId(skill.scopeId);
-    if (kind !== "channel" && kind !== "group") return skill;
+    if (!authorPublishesSkill(skill.scopeId)) return skill;
     await deps.skills.review(skill.id, "system:skill-authoring", skill.manifest.requiredCapabilities);
     const published = await deps.skills.publish(skill.id);
     recordAudit({
@@ -654,9 +680,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     ownerScopeId: ScopeId,
     ref: string,
     principalId: string,
+    preloaded?: readonly Grant[],
   ): Promise<Permission | null> {
     let best: Permission | null = null;
     const grants =
+      preloaded ??
       (await deps.acl?.grantsFor(ambientTenant(), ownerScopeId, ref).catch(reportFailureAs("artifact grants", []))) ??
       [];
     for (const g of grants) {
@@ -997,6 +1025,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     principalManagesArtifactHome,
     artifactAuthor,
     canManageSkill,
+    manageableSkills,
     republishIfShared,
     effectiveAppPermission,
     artifactGrantPermission,

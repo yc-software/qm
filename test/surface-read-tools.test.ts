@@ -261,15 +261,17 @@ test("search source=slack routes through the live-search seam; an unconfigured p
   }
 });
 
-test("search source=slack with no connected login for the asker tells the agent to offer a connect link (§4.3)", async () => {
+test("search source=slack with no connected login for the asker tells the agent to offer a connect link, and a Slack bot's turn never searches live (§4.3)", async () => {
   const built = freshApp();
   built.runtime.start();
   const root = "C32:3200.1";
   let running = true;
+  let liveSearches = 0;
   const loop = (async () => {
     while (running) {
       for (const r of await built.app.pendingContextRequests("slack")) {
         const q = (r as any).query ?? {};
+        if (q.searchAll) liveSearches++;
         const body =
           q.searchAll && !q.viewerToken ? { messages: [], liveSearch: "unconnected" as const } : { messages: [] };
         await built.app.fulfillContextRequest(r.id, { result: body });
@@ -282,6 +284,9 @@ test("search source=slack with no connected login for the asker tells the agent 
     const reply = await subToolResult(built, root, "search");
     assert.match(reply, /no connected one/, "the miss explains the missing login");
     assert.match(reply, /self-connect|Connectors page/, "and points at the session-gated self-connect page");
+    await built.app.turn({ ...mention("!search source=slack budget", "C33", "3300.1"), botActor: true });
+    assert.match(await subToolResult(built, "C33:3300.1", "search"), /a Slack bot's turn cannot use it/);
+    assert.equal(liveSearches, 1);
   } finally {
     running = false;
     await loop;

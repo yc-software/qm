@@ -1266,10 +1266,7 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${sessionPersonaChip(paneSession(panel), () => {
-          this.draw();
-          paneContents.get(panel.id)?.conversation?.redraw();
-        })}
+        ${sessionPersonaChip(paneSession(panel))}
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}

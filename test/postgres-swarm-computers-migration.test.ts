@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { MARK_SWARM_FORUMS_PERSON_USED_MIGRATION, STAMP_SWARM_COMPUTERS_MIGRATION } from "../src/swarms/swarm-store.ts";
+import { MARK_ADMIN_CREATED_COMPUTERS_MIGRATION } from "../src/sandbox/sandbox-resources.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 test("the swarm computer migration marks each swarm's board and worker computers and nothing else", async () => {
   const url = testDatabaseUrl();
@@ -74,4 +77,22 @@ test("the swarm computer migration marks each swarm's board and worker computers
   } finally {
     await pg.close();
   }
+});
+
+test("the admin computer migration marks only computers the admin API recorded creating", async () => {
+  const url = testDatabaseUrl();
+  const records = createPostgresMapFactory(url).map<{ id: string; personUsed?: true }>("sandbox_resources");
+  for (const id of ["admin-1", "tool-1"]) await records.put(id, { id });
+  const event = {
+    at: 1,
+    principalId: "U1",
+    action: "sandbox.create",
+    resource: "admin-1",
+    scopeLabel: "channel:C1" as const,
+  };
+  await createPostgresAuditLog(url).recordOnce!(testTenant, "admin-1", event);
+  const pg = createPgPool(url);
+  await pg.migrate(MARK_ADMIN_CREATED_COMPUTERS_MIGRATION).finally(() => pg.close());
+  const marks = Object.fromEntries((await records.all()).map((record) => [record.id, record.personUsed ?? null]));
+  assert.deepEqual(marks, { "admin-1": true, "tool-1": null });
 });

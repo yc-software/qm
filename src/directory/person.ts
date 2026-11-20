@@ -46,16 +46,30 @@ export function attestableAudience(actorId: string | undefined, scope: string | 
   return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }
 
+export function ownPrivateConversation(
+  actorId: string | undefined,
+  scope: string | undefined,
+  audienceScope: string | undefined,
+): boolean {
+  return attestableAudience(actorId, scope) && attestableAudience(actorId, audienceScope);
+}
+
 export type AttestAudience = "personal" | "any";
+
+export interface AttestingTurn {
+  actAsActor?: boolean;
+  botActor?: boolean;
+}
 
 export function attestsInAudience(
   audience: AttestAudience | undefined,
   actorId: string | undefined,
   scope: string | undefined,
-  actAsActor: boolean | undefined,
+  turn: AttestingTurn,
 ): boolean {
+  if (turn.botActor === true) return false;
   if (attestableAudience(actorId, scope)) return true;
-  return audience === "any" && actAsActor === true && !!actorId && !isSystemActor(actorId);
+  return audience === "any" && turn.actAsActor === true && !!actorId && !isSystemActor(actorId);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {
@@ -70,6 +84,13 @@ export function personIds(id: string): string[] {
   if (!key) return [];
   const canonical = links?.canonical(key) ?? id.trim();
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+}
+
+export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases"];
+
+export function attestedActorHeaders(actor: string): Record<string, string> {
+  const aliases = [...new Set(personIds(actor))].filter((id) => id !== actor && attestableActor(id));
+  return { "x-qm-actor": actor, "x-qm-actor-aliases": JSON.stringify(aliases) };
 }
 
 export function ownsWebThread(threadRef: string, id: string): boolean {

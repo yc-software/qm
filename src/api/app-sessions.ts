@@ -1,9 +1,12 @@
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
+import { loadsScopeContext } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyAppShared } from "../deploy/share-notice.ts";
 import { appShareScope } from "../deploy/email-access.ts";
-import { sessionVisibleTo, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
+import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { sessionVisibleTo } from "../sessions/session-rows.ts";
 import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
@@ -23,7 +26,7 @@ import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../a
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { swallowAs } from "../util/errors.ts";
-import { waitForNoRunningRun } from "../runs/run-store.ts";
+import { waitForNoRunningRun, type Run } from "../runs/run-store.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -117,6 +120,7 @@ export function createSessionMethods(
   | "forkSession"
   | "grant"
   | "revokeGrant"
+  | "grantees"
   | "promoteSkill"
   | "belongsToScope"
   | "canManageArtifactHome"
@@ -257,6 +261,9 @@ export function createSessionMethods(
       }));
   };
 
+  const ownRunState = (run: Run | undefined) =>
+    run ? { working: true as const, workingSince: run.startedAt ?? run.createdAt } : {};
+
   async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
     const all = rows.map(withoutStoredFacts);
     const visibleById = new Map(all.map((session) => [session.id, session]));
@@ -356,7 +363,7 @@ export function createSessionMethods(
     const workingChildren = new Map(
       childRuns.map(({ id, run }) => {
         const purpose = steps.get(run.id.toLowerCase())?.purpose;
-        return [id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) }];
+        return [id, { ...ownRunState(run), ...(purpose ? { purpose } : {}) }];
       }),
     );
     const subagents = new Map<string, { running: number; waiting: number }>();
@@ -426,9 +433,8 @@ export function createSessionMethods(
       const principalId = viewer.actorId;
       const found = await sessionForViewer(sessionId, principalId);
       if (!found || !sessionVisibleTo(viewer, found)) return null;
-      const session = { ...withoutStoredFacts(found), canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals, latestPromptAt] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -437,7 +443,13 @@ export function createSessionMethods(
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
         window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
+        window?.beforeSeq === undefined ? deps.runs.activeForThread(found.threadRef) : undefined,
       ]);
+      const session = {
+        ...withoutStoredFacts(found),
+        canContinue: await canContinueOnWeb(principalId, found),
+        ...ownRunState(run ?? undefined),
+      };
       const goal = openGoal(goals.get(sessionId));
       const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
       let read = initialRead;
@@ -516,8 +528,8 @@ export function createSessionMethods(
       return item ? { item } : null;
     },
 
-    listFilesForViewer(tenant, principalId, opts, inScope) {
-      return filesForViewer(tenant, principalId, opts, inScope);
+    listFilesForViewer(tenant, principalId, opts, inScope, ownScopeBotWork) {
+      return filesForViewer(tenant, principalId, ownScopeBotWork === true, opts, inScope);
     },
 
     async uploadFileForViewer(tenant, principalId, input) {
@@ -559,10 +571,10 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
       const art = await deps.files.get(id);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId);
+      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
       let allowed = myScopes.includes(art.ownerScopeId);
       if (!allowed) {
         const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
@@ -627,13 +639,14 @@ export function createSessionMethods(
         principalId,
       );
       const sharedAccess = new Map<string, Promise<boolean>>();
+      const visible = rows.filter((row) => membership.get(row.scopeId) !== false);
+      const running = await deps.runs.activeForThreads(visible.map((row) => row.threadRef));
       return Promise.all(
-        rows
-          .filter((row) => membership.get(row.scopeId) !== false)
-          .map(async (row) => ({
-            ...withoutStoredFacts(row),
-            canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
-          })),
+        visible.map(async (row) => ({
+          ...withoutStoredFacts(row),
+          canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
+          ...ownRunState(running.get(row.threadRef)),
+        })),
       );
     },
 
@@ -943,7 +956,7 @@ export function createSessionMethods(
     async listScopeResources(tenant, principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       const [page, allCrons, allWebhooks, allApps, allSkills] = await Promise.all([
-        filesForViewer(tenant, principalId, undefined, scope),
+        filesForViewer(tenant, principalId, false, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listApps(),
@@ -952,7 +965,7 @@ export function createSessionMethods(
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
       while (cursor) {
-        const next = await filesForViewer(tenant, principalId, { limit: 200, cursor }, scope);
+        const next = await filesForViewer(tenant, principalId, false, { limit: 200, cursor }, scope);
         files.push(...next.owned, ...next.shared);
         cursor = next.nextCursor;
       }
@@ -1112,9 +1125,6 @@ export function createSessionMethods(
           source.channelName,
           "web",
         );
-        await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
-        );
         const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
           copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
@@ -1127,6 +1137,9 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
+        await Promise.all(
+          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
@@ -1210,7 +1223,10 @@ export function createSessionMethods(
     },
 
     async grant(tenant, g, opts) {
-      if (parseRef(g.ref).kind === "deploy") {
+      const ref = parseRef(g.ref);
+      const publishedApp = ref.kind === "deploy" ? await deps.deploy.getApp(ref.id) : null;
+      if (ref.kind === "deploy") {
+        if (!publishedApp) throw new DeployAccessError("not_found", `no such app: ${ref.id}`);
         g = {
           ...g,
           granteeScopeId: await appShareScope(
@@ -1221,7 +1237,7 @@ export function createSessionMethods(
               (await h.directoryMember(email))?.type === "internal",
           ),
         };
-        await deps.deploy.assertShareAllowed(g.ownerScopeId, g.granteeScopeId, g.permission);
+        await deps.deploy.assertShareAllowed(publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
       }
       await deps.acl.grant(tenant, g, await artifactAuthor(g.ownerScopeId, g.ref));
       deps.auditLog.record(tenant, {
@@ -1231,9 +1247,14 @@ export function createSessionMethods(
         resource: g.ref,
         scopeLabel: g.granteeScopeId,
       });
-      const ref = parseRef(g.ref);
-      if (ref.kind === "deploy" && opts?.notify !== false)
-        await notifyAppShared(deps, deps.deploy.getApp(ref.id), g.granteeScopeId, g.permission, g.grantedBy);
+      if (publishedApp && opts?.notify !== false)
+        await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
+    },
+    async grantees(tenant, ownerScopeId, ref) {
+      return (await deps.acl.grantsFor(tenant, ownerScopeId, ref)).map((g) => ({
+        scope: g.granteeScopeId,
+        permission: g.permission,
+      }));
     },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(
@@ -1326,14 +1347,15 @@ export function createSessionMethods(
       });
     },
 
-    getSoul(scopeIdValue) {
+    getSoul(scopeIdValue, reader) {
       const orgScopeId = scopeId("org", orgIdOf());
       const orgSoul = deps.config.getSoul(orgScopeId);
-      const soul = deps.config.getSoul(scopeIdValue);
+      const readable = loadsScopeContext(reader.actorId, scopeIdValue, reader.ownScopeBotWork);
+      const soul = readable ? deps.config.getSoul(scopeIdValue) : null;
       return {
         scopeId: scopeIdValue,
         soul,
-        soulVersion: deps.config.soulVersion(scopeIdValue),
+        soulVersion: readable ? deps.config.soulVersion(scopeIdValue) : 0,
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
@@ -1343,7 +1365,10 @@ export function createSessionMethods(
 
     async updateSoul(scopeIdValue, content, actorId, opts) {
       const { kind, ref } = parseScopeId(scopeIdValue);
-      const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
+      const allowedPersonal =
+        kind === "personal" &&
+        samePerson(ref, actorId) &&
+        loadsScopeContext(actorId, scopeIdValue, opts?.botActor === true);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
         throw new SoulUpdateDeniedError();
@@ -1383,9 +1408,9 @@ export function createSessionMethods(
   };
 }
 
-function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "surfaceBinding">>(
+function withoutStoredFacts<T extends Pick<Session, "spawnMeta" | "botWork" | "surfaceBinding">>(
   session: T,
-): Omit<T, "spawnMeta" | "surfaceBinding"> {
-  const { spawnMeta: _spawnMeta, surfaceBinding: _surfaceBinding, ...shown } = session;
+): Omit<T, "spawnMeta" | "botWork" | "surfaceBinding"> {
+  const { spawnMeta: _spawnMeta, botWork: _botWork, surfaceBinding: _surfaceBinding, ...shown } = session;
   return shown;
 }

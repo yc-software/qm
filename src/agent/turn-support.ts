@@ -29,6 +29,7 @@ export interface SteerIntake {
   attachments?: AgentTurnInput["attachments"];
   images?: AgentTurnInput["images"];
   author?: string;
+  speakerId?: string;
   authorName?: string;
   withheld?: boolean;
   acknowledge?: () => Promise<void>;
@@ -53,6 +54,7 @@ export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake
       author: steer.author ?? null,
       body: {
         ...(steer.authorName ? { name: steer.authorName } : {}),
+        ...(steer.speakerId ? { speakerId: steer.speakerId } : {}),
         ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
         ...(steer.ts ? { ts: steer.ts } : {}),
         ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
@@ -208,11 +210,12 @@ export async function resumeInterruptedToolCall(
   turn: AgentTurnInput,
   ref: ToolContextRef,
   tools: readonly BridgedTool[],
+  cancel = turn.cancel,
 ): Promise<ResumedToolResult | null> {
   const call = turn.resumeToolCall;
   if (!call) return null;
   const ran = await runToolCallOnce(call, ref, tools, {
-    ...(turn.cancel ? { cancel: turn.cancel } : {}),
+    ...(cancel ? { cancel } : {}),
     notRun: () => INTERRUPTED_TOOL_RESULT,
     fallbackBody: { interrupted: true },
   });

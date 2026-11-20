@@ -22,7 +22,7 @@ export async function externalSlackCapabilityAllowed(
     run.request.conversation.audience,
     claims.scopeId,
     scopeId("org", orgId()),
-    entitledScopes,
+    entitledScopes(false),
   );
   const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));
   return !!claims.credentials?.length && claims.credentials.every((slug) => allowed.has(slug) && granted.has(slug));

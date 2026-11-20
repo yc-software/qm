@@ -605,6 +605,9 @@ struct WorkspaceTests {
     conversation.awaitingInput = true
     #expect(!ConversationFilter.active.includes(conversation))
     #expect(ConversationFilter.waiting.includes(conversation))
+    conversation.pinned = true
+    #expect(ConversationFilter.active.includes(conversation))
+    #expect(ConversationFilter.waiting.includes(conversation))
     conversation.archived = true
     #expect(!ConversationFilter.active.includes(conversation))
     #expect(!ConversationFilter.waiting.includes(conversation))

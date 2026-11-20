@@ -40,6 +40,7 @@ export const tenantSettingsSchema = z
     sandboxBackend,
     sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
     serving: z.boolean(),
+    deploymentModelKey: z.boolean(),
   })
   .partial()
   .strict();
