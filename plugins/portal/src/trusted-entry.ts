@@ -3,7 +3,9 @@ import { verifiedEmail, type ExternalOrg, type Workspace } from "./tenant-choice
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
 import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
 
-export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): OidcConfig | null {
+export type TrustedOidcConfig = OidcConfig & { identityIssuer: string };
+
+export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): TrustedOidcConfig | null {
   const raw = env.PORTAL_TRUSTED_OIDC;
   const secret = env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET;
   if (!raw && !secret) return null;
@@ -26,8 +28,11 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
       throw new Error(`Invalid trusted OIDC ${field}`);
   }
   if (typeof obj.clientId !== "string" || !obj.clientId.trim()) throw new Error("Trusted OIDC requires clientId");
+  if ("identityIssuer" in obj && (typeof obj.identityIssuer !== "string" || !obj.identityIssuer.trim()))
+    throw new Error("Invalid trusted OIDC identityIssuer");
   return {
     issuer: obj.issuer as string,
+    identityIssuer: (obj.identityIssuer as string | undefined) ?? (obj.issuer as string),
     authEndpoint: obj.authEndpoint as string,
     tokenEndpoint: obj.tokenEndpoint as string,
     userinfoEndpoint: obj.userinfoEndpoint as string,
@@ -36,7 +41,6 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
     clientSecret: secret,
     redirectUri: `${publicUrl}/auth/trusted/callback`,
     scopes: "openid profile",
-    prompt: "login",
   };
 }
 
@@ -71,7 +75,7 @@ export function trustedPrincipal(issuer: string, sub: string): string {
 }
 
 export function createTrustedEntry(
-  cfg: OidcConfig,
+  cfg: TrustedOidcConfig,
   sessionSecret: string,
   claim: (key: string, expiresAt: number) => Promise<boolean>,
   fetchImpl: typeof fetch = fetch,
@@ -120,7 +124,7 @@ export function createTrustedEntry(
         throw new Error("Trusted identity subject mismatch");
       return {
         subject: claims.sub,
-        sub: trustedPrincipal(cfg.issuer, claims.sub),
+        sub: trustedPrincipal(cfg.identityIssuer, claims.sub),
         name: typeof info.name === "string" ? info.name.trim().slice(0, 200) : "",
         email: verifiedEmail(info),
         orgs: trustedOrgs(info, claims),

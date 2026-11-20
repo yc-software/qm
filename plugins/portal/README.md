@@ -51,6 +51,12 @@ An optional OIDC entry route at `/auth/trusted/login` operates alongside the
 existing `/auth/login` provider. Configure `PORTAL_TRUSTED_OIDC` as JSON with
 `issuer`, `authEndpoint`, `tokenEndpoint`, `userinfoEndpoint`, `jwksUri`, and
 `clientId`; supply its distinct `PORTAL_TRUSTED_OIDC_CLIENT_SECRET` separately.
+An optional `identityIssuer` (default `issuer`) names principals, administrator
+grants and self-serve workspace links, while ID tokens are still verified against
+`issuer`. Set it to the previous issuer when moving to a provider that issues the
+same subjects and organization ids, so people keep their identity; core's
+`TRUSTED_OIDC_ADMIN_ISSUER` keeps that same value. Sign-in does not send `prompt`:
+the provider's own session decides whether the person signs in again.
 Register the exact `${PUBLIC_WEB_URL}/auth/trusted/callback` URL at that provider.
 Endpoints must use HTTPS in production. This is an operator-configured trust
 relationship: the additional provider must enforce the destination company's
