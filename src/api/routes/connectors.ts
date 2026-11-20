@@ -699,7 +699,7 @@ export async function googleCalendarEvents(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return sendGoogleFailure(ctx, error, "calendar_unavailable", {
       reconnect: "Reconnect Google to use your calendar.",
-      retry: "Couldn't reach Google Calendar. Try again.",
+      retry: "Couldn't reach Google Calendar.",
     });
   }
 }
