@@ -2,7 +2,7 @@ import { LRUCache } from "lru-cache";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
-import { isBackendCredential } from "../../credentials/keychain.ts";
+import { COMPOSIO_ENV_KEY, isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
@@ -12,7 +12,7 @@ import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
-import { entitledScopes, principalEntitledToScope } from "../../resolution/context-filter.ts";
+import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
 import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
@@ -114,14 +114,13 @@ export async function credential(
       entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
-  const session = ctx.capability?.scopeId ?? personal;
-  const orgWide = audience.every((p) => principalEntitledToScope(p, org, session, org, false));
+  const orgWide = entitledOrgWide(audience, ctx.capability?.scopeId ?? personal, org);
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
     (c) =>
       c.enabled &&
       c.hasSecret &&
       c.delivery === "env" &&
-      c.envKey === "COMPOSIO_API_KEY" &&
+      c.envKey === COMPOSIO_ENV_KEY &&
       (allowed.has(c.slug) || (orgWide && c.source === "deployment")),
   );
   if (!records.length && optional) return { key: null, principal };

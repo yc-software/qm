@@ -16,7 +16,7 @@ import {
 } from "../../credentials/keychain.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
-import { entitledScopes, principalEntitledToScope } from "../../resolution/context-filter.ts";
+import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
 import type { IsCurrentSharedScopeMember } from "../../resolution/scope-membership.ts";
 import type { CommandCredential } from "../../tools/primitives.ts";
@@ -466,11 +466,7 @@ export async function loadServiceCredentialGrants(turn: {
         )
       ).map((g) => parseRef(g.ref).id),
     );
-  const orgWideAudience =
-    conversation.audience.length > 0 &&
-    conversation.audience.every((p) =>
-      principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId, false),
-    );
+  const orgWideAudience = entitledOrgWide(conversation.audience, scopeId, resolution.orgScopeId);
   const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
     const granted = await aclGrantedServiceCredSlugs();
     if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
