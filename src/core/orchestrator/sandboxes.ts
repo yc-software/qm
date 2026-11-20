@@ -21,7 +21,6 @@ import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { createTurnSkills } from "../../skills/turn-skills.ts";
-import { clearStaleTurnFiles } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
@@ -57,8 +56,7 @@ export interface TurnSandboxContext {
   memoryScopeId: ScopeId;
   transferId: string;
   swarmSandboxId: string | undefined;
-  turnSessionDir: string;
-  turnFilesDir: string;
+  turnSessionKey: string;
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy: (policy: Resolution["egress"]) => Promise<string | undefined>;
@@ -99,8 +97,8 @@ interface TurnPool {
 }
 
 async function releasePool(t: TurnPool): Promise<void> {
-  const { tenant, deps, input, session, scopeId, turnFilesDir } = t.ctx;
-  const { pool, writableScopeId, scopedUsed, audit } = t;
+  const { tenant, deps, input, session, scopeId } = t.ctx;
+  const { pool, scopedUsed, audit } = t;
   const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
     const runs = deps.runs;
     if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
@@ -109,16 +107,10 @@ async function releasePool(t: TurnPool): Promise<void> {
       return run?.status === "running" && !leaseLapsed(run, Date.now());
     });
   };
-  const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
-    retried("turn file cleanup failed", () => deps.sandbox.removeDir(handle, turnFilesDir)).catch((err: unknown) =>
-      swallow("orchestrator: turn file cleanup", err),
-    );
   const releaseHandle = async (
-    { handle, scoped, unchanged }: Release,
+    { handle, unchanged }: Release,
     hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
   ): Promise<void> => {
-    if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
-      await clearTurnFiles(handle);
     const keepWarm =
       (await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true))) ||
       (await hasLiveJob(handle).catch(swallowAs("orchestrator: live process check", true)));
@@ -350,7 +342,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     memoryScopeId,
     transferId,
     swarmSandboxId,
-    turnSessionDir,
+    turnSessionKey,
     connectorEnv,
     egressTokenForTurn,
     openResourceAccess,
@@ -464,7 +456,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     deps,
     scopeId,
     sessionId: session.id,
-    turnSessionDir,
+    turnSessionKey,
     visibleSkillsForTurn,
     accessResource,
     provisionResource,
@@ -472,7 +464,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   });
 
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
-    await Promise.all([turnSkills.pruneSkills(handle), clearStaleTurnFiles(deps.sandbox, handle, turnSessionDir)]);
+    await turnSkills.pruneSkills(handle);
   };
   const turnPool: TurnPool = {
     ctx,

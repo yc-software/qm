@@ -6,7 +6,6 @@ import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
-  removeDirAndList,
   SandboxProvisionCleanupError,
   supportsBlobStaging,
   supportsProcessSessions,
@@ -229,9 +228,6 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     removeDir(handle, relDir) {
       const remove = () => forHandle(handle).removeDir(handle, relDir);
       return useHandle(handle, remove);
-    },
-    removeDirAndList(handle, removeRelDir, listRelDir) {
-      return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const resourceId = handle.resourceId;

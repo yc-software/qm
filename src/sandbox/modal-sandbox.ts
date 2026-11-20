@@ -520,7 +520,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
   );
 
   const execFileOps = createExecFileOps({
-    combineRemoveAndList: true,
     label: "modal",
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),

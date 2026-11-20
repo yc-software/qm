@@ -3,9 +3,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { selectComputer, freshApp, spyProvisioning, internalActor, dm } from "./support/orchestrator-app.ts";
-import { settle } from "./support/settle.ts";
-import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
-import { hashId } from "../src/util/crypto.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
@@ -57,41 +54,6 @@ test("an attached file is recorded in the attach tool result", async () => {
   assert.equal(files[0]!.artifactId, t1.attachments![0]!.artifactId);
 });
 
-test("turn-private transfer files are removed after staging", async () => {
-  const { app, sandbox, blobTransfer } = freshApp();
-  const blob = await blobTransfer.put(Buffer.from("inbound"));
-  let usedHandle: Parameters<typeof sandbox.listDir>[0] | undefined;
-  let cleanupAttempts = 0;
-  const removeDir = sandbox.removeDir.bind(sandbox);
-  sandbox.removeDir = async (handle, path) => {
-    if (/^\.agent-turn\/[a-f0-9]{24}\/[a-z0-9]+-[a-f0-9]{24}$/.test(path) && ++cleanupAttempts < 3) {
-      throw new Error("transient cleanup failure");
-    }
-    return removeDir(handle, path);
-  };
-  const run = sandbox.run.bind(sandbox);
-  sandbox.run = async (handle, command, opts) => {
-    usedHandle = handle;
-    return run(handle, command, opts);
-  };
-
-  const result = await app.turn(
-    dm("!writeattach result.txt outbound", {
-      attachments: [{ name: "input.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
-    }),
-  );
-
-  assert.deepEqual(
-    result.attachments?.map((a) => a.name),
-    ["result.txt"],
-  );
-  assert.ok(usedHandle);
-  await settle(async () => cleanupAttempts === 3);
-  assert.equal(cleanupAttempts, 3);
-  await settle(async () => (await sandbox.listDir(usedHandle!, TURN_FILES_DIR)).length === 0);
-  assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
-});
-
 test("an attachment's name stays out of the screen's source labels", async () => {
   const parts: Array<{ source: string; content: string }> = [];
   const screener: SecurityScreener = {
@@ -111,7 +73,7 @@ test("an attachment's name stays out of the screen's source labels", async () =>
   assert.equal(parts.find((part) => part.content === "quarterly numbers")?.source, "attachment");
 });
 
-test("an attachment name over the file name limit reaches the inbox at 255 bytes and the agent is told", async () => {
+test("an attachment name over the file name limit is saved at 255 bytes and the agent is told", async () => {
   const { app, blobTransfer } = freshApp();
   const blob = await blobTransfer.put(Buffer.from("notes"));
   const file = {
@@ -124,24 +86,6 @@ test("an attachment name over the file name limit reaches the inbox at 255 bytes
   const note = "saved under a shortened name to fit the 255-byte file name limit (the shared name was 304 bytes).";
   assert.ok(reply.includes(`${"a".repeat(251)}.txt), ${note}`), reply);
   assert.ok(reply.includes(`${"a".repeat(249)}-2.txt), ${note}`), reply);
-});
-
-test("a later turn removes same-conversation and expired transfer files", async () => {
-  const built = freshApp();
-  const { app, sandbox } = built;
-  await selectComputer(built, "U1", scopeId("personal", "U1"));
-  const handle = await sandbox.provision(scopeId("personal", "U1"));
-  const sessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:t1"], 24)}`;
-  await sandbox.writeFile(handle, `${sessionDir}/abandoned/inbox/stale.bin`, "stale");
-  const expiredSessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:other"], 24)}`;
-  const expiredTurnDir = `${expiredSessionDir}/${turnFileId("abandoned-run", 1, Date.now() - 25 * 60 * 60_000)}`;
-  await sandbox.writeFile(handle, `${expiredTurnDir}/inbox/stale.bin`, "stale");
-  await sandbox.teardown(handle);
-
-  const result = await app.turn(dm("!run true"));
-
-  assert.equal(result.status, "ok");
-  assert.deepEqual(await sandbox.listDir(handle, TURN_FILES_DIR), []);
 });
 
 test("concurrent conversations sharing one computer attach only their own file", async () => {
@@ -188,48 +132,24 @@ test("concurrent conversations sharing one computer attach only their own file",
   );
 });
 
-test("concurrent conversations sharing one computer read only their own inbound file", async () => {
-  const { app, sandbox, blobTransfer } = freshApp();
-  const alpha = await blobTransfer.put(Buffer.from("alpha"));
-  const beta = await blobTransfer.put(Buffer.from("beta"));
-  let firstMaterialized!: () => void;
-  let releaseFirst!: () => void;
-  const firstReady = new Promise<void>((resolve) => {
-    firstMaterialized = resolve;
-  });
-  const firstMayRead = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
-  const run = sandbox.run.bind(sandbox);
-  sandbox.run = async (handle, command, opts) => {
-    if (command.includes("first-read")) {
-      firstMaterialized();
-      await firstMayRead;
-    }
-    return run(handle, command, opts);
+test("an inbound file reaches the agent from Files even when the default computer cannot start", async () => {
+  const built = freshApp();
+  const { app, sandbox, blobTransfer } = built;
+  await selectComputer(built, "U1", scopeId("personal", "U1"));
+  sandbox.provision = async () => {
+    throw new Error("409: sandbox cannot be resumed with its memory");
   };
-  const readOwnInbox = "cat {INBOX}/report.txt";
-
-  const first = app.turn(
-    dm(`!run ${readOwnInbox}; echo first-read`, {
-      conversation: { kind: "dm", threadRef: "dm:U1:first-inbound" },
-      attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: alpha.sizeBytes, blobId: alpha.blobId }],
+  const blob = await blobTransfer.put(Buffer.from("alpha"));
+  const result = await app.turn(
+    dm("read this", {
+      attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     }),
   );
-  await firstReady;
-  const second = app.turn(
-    dm(`!run ${readOwnInbox}`, {
-      conversation: { kind: "dm", threadRef: "dm:U1:second-inbound" },
-      attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: beta.sizeBytes, blobId: beta.blobId }],
-    }),
-  );
-  const r2 = await second.finally(releaseFirst);
-  const r1 = await first;
-
-  assert.match(r1.reply ?? "", /alpha/);
-  assert.doesNotMatch(r1.reply ?? "", /beta/);
-  assert.match(r2.reply ?? "", /beta/);
-  assert.doesNotMatch(r2.reply ?? "", /alpha/);
+  assert.equal(result.status, "ok", result.reason);
+  assert.match(result.reply ?? "", /shared report\.txt \(Files ID [^:]+: send it with/);
+  const session = await app.getSession(result.sessionId!);
+  const user = session!.items.find((e) => e.kind === "UserMessage" && e.text === "read this");
+  assert.equal((user?.body.attachments as Array<{ name: string }> | undefined)?.[0]?.name, "report.txt");
 });
 
 test("a file posted in a GROUP conversation is granted read to the conversation scope", async () => {

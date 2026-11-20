@@ -183,7 +183,7 @@ the CSS media queries, the composer, and the split canvas.
   (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the agent applies them
   server-side, bypassing pi-ai's stale thinking-level clamp for newer effort values and falling
   back to its default on any unknown value. Attachments are forwarded as `IncomingAttachment`s
-  and materialized into the agent's sandbox inbox (same path as Slack file shares).
+  and saved to the conversation's Files (same path as Slack file shares).
 - **Unified history** — every session you participated in (DMs, channels, web), via
   `GET /v1/sessions?principalId=`. The same person sees the same history here and in Slack
   (surface-independence, spec B6).
