@@ -836,6 +836,23 @@ export function createChatSurface(
     void resumeTrackedRun(agent, chatState.threadRef, chatState.normalStreamFn, chatState.onWork);
   }
 
+  let catchingUp = false;
+
+  function catchUp(): void {
+    if (readOnlyView) return onDelivery(readOnlyView.threadRef);
+    const { agent, threadRef, normalStreamFn, onWork } = chatState;
+    if (!agent || agent.state.isStreaming || !threadRef || catchingUp) return;
+    catchingUp = true;
+    const resumed = normalStreamFn && onWork ? resumeTrackedRun(agent, threadRef, normalStreamFn, onWork) : false;
+    void Promise.resolve(resumed)
+      .then((ok) =>
+        ok || agent !== chatState.agent || agent.state.isStreaming ? undefined : refreshTranscriptFromItems(agent),
+      )
+      .finally(() => {
+        catchingUp = false;
+      });
+  }
+
   function syncLocation(): void {
     if (ctx.ownsUrl) syncUrlFromState();
     else postCurrentPaneState();
@@ -1073,7 +1090,6 @@ export function createChatSurface(
       agent.state.messages === originalMessages &&
       agent.state.messages.at(-1) === last;
     if (last?.stopReason === "error" && !last.interruptedRunId) return drawActiveChat(agent);
-    if (last?.stopReason === "aborted") return drawActiveChat(agent);
     try {
       if (last?.stopReason === "error" && last.interruptedRunId) {
         const run = await api<RunPoll>(`/api/runs/${encodeURIComponent(last.interruptedRunId)}`, {
@@ -1093,6 +1109,8 @@ export function createChatSurface(
       if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
       const messages = pageMessages(page);
+      if (last?.stopReason === "aborted" && !savedStopOrNewerTurn(originalMessages, messages))
+        return drawActiveChat(agent);
       await syncPendingApprovals(agent, messages);
       if (!isCurrent()) return;
       commitTranscriptPage(agent, page, messages);
@@ -1101,6 +1119,11 @@ export function createChatSurface(
       reportHandledError("web:transcript_refresh", error);
     }
     drawActiveChat(agent);
+  }
+
+  function savedStopOrNewerTurn(local: AgentMessage[], saved: AgentMessage[]): boolean {
+    const turns = (messages: AgentMessage[]) => messages.filter((message) => message.role === "user").length;
+    return (saved.at(-1) as AssistantWork | undefined)?.stopReason === "aborted" || turns(saved) > turns(local);
   }
 
   function observeLiveWork(agent: Agent): (work: WorkBlock) => void {
@@ -3945,6 +3968,7 @@ export function createChatSurface(
     mountReadOnlyPage,
     transcriptAnchor,
     resumeIfIdle,
+    catchUp,
     redraw: () => drawActiveChat(),
     dispose,
   };
