@@ -308,7 +308,7 @@ test("queued refreshes recover a failed read and retain the latest patch epoch",
     const outdated = refreshSessions({ silent: true, patchEpoch: -1 });
     const current = refreshSessions({ silent: true });
     assert.equal(pending.length, 1);
-    pending[0]!(Response.json({ error: "unavailable" }, { status: 503 }));
+    pending[0]!(Response.json({ error: "unavailable" }, { status: 500 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pending.length, 2);
     const session = { id: "s", threadRef: "web:alex:s", scopeId: "personal:alex", title: "Current" };
