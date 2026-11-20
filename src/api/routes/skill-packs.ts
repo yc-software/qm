@@ -70,6 +70,11 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
   if (b.kind !== undefined && b.kind !== "git" && b.kind !== "mcp")
     return sendJson(ctx.res, 400, { error: "bad_request", message: "kind must be 'git' or 'mcp'" });
+  if (b.kind === "mcp" && (b.ref !== undefined || b.authCredentialSlug !== undefined))
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "an mcp pack takes its credentials from its MCP server and has no ref",
+    });
   const input: NewSkillPack = {
     kind: b.kind === "mcp" ? "mcp" : "git",
     url: b.url.trim(),

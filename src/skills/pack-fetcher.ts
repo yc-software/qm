@@ -18,6 +18,8 @@ export interface SkillPackFetcher {
   resolveRef(pack: SkillPack): Promise<string>;
 }
 
+export const PACK_LIMITS = { maxFiles: 5000, maxTotalBytes: 32 * 1024 * 1024 } as const;
+
 export function packFetcherByKind(fetchers: Record<PackKind, SkillPackFetcher>): SkillPackFetcher {
   return {
     fetch: (pack) => fetchers[pack.kind].fetch(pack),
@@ -160,8 +162,8 @@ function scrub(s: string, auth: GitAuth | undefined): string {
 export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher {
   const gitBin = opts.gitBin ?? "git";
   const timeoutMs = opts.timeoutMs ?? 60_000;
-  const maxFiles = opts.maxFiles ?? 5000;
-  const maxTotalBytes = opts.maxTotalBytes ?? 32 * 1024 * 1024;
+  const maxFiles = opts.maxFiles ?? PACK_LIMITS.maxFiles;
+  const maxTotalBytes = opts.maxTotalBytes ?? PACK_LIMITS.maxTotalBytes;
   const allowLocalRepos = opts.allowLocalRepos === true;
   const lookup =
     opts.lookup ??

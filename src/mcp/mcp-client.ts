@@ -124,7 +124,14 @@ export interface McpSkill extends McpSkillEntry {
   text: string;
 }
 
-async function listSkillEntries(client: Client): Promise<McpSkillEntry[]> {
+export interface McpSkillLimits {
+  maxFiles: number;
+  maxTotalBytes: number;
+}
+
+const SKILL_READ_CONCURRENCY = 4;
+
+async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise<McpSkillEntry[]> {
   const entries: McpSkillEntry[] = [];
   let cursor: string | undefined;
   do {
@@ -137,9 +144,29 @@ async function listSkillEntries(client: Client): Promise<McpSkillEntry[]> {
       if (!file) throw new Error(`mcp skills/list gave ${skill.uri} no digest for its SKILL.md, so it cannot be verified`);
       entries.push({ uri: skill.uri, name: skill.frontmatter.name, digest: file.digest, size: file.size });
     }
+    if (entries.length > limits.maxFiles) throw new Error(`mcp skills/list lists more than ${limits.maxFiles} skills`);
     cursor = page.nextCursor;
   } while (cursor);
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
+  if (totalBytes > limits.maxTotalBytes)
+    throw new Error(`mcp skills/list lists ${totalBytes} bytes of skills, over ${limits.maxTotalBytes}`);
   return entries;
+}
+
+async function readSkillEntries(client: Client, entries: McpSkillEntry[]): Promise<McpSkill[]> {
+  const skills: McpSkill[] = new Array(entries.length);
+  let next = 0;
+  const reader = async (): Promise<void> => {
+    for (let index = next++; index < entries.length; index = next++) {
+      const entry = entries[index]!;
+      const { contents } = await client.readResource({ uri: entry.uri });
+      const file = contents.find((content) => content.uri === entry.uri && "text" in content);
+      if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
+      skills[index] = { ...entry, text: file.text };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SKILL_READ_CONCURRENCY, entries.length) }, reader));
+  return skills;
 }
 
 export type McpAuth =
@@ -158,8 +185,8 @@ export interface McpClient {
 }
 
 export interface McpSkillClient {
-  listSkills(): Promise<McpSkillEntry[]>;
-  readSkills(): Promise<McpSkill[]>;
+  listSkills(limits: McpSkillLimits): Promise<McpSkillEntry[]>;
+  readSkills(limits: McpSkillLimits): Promise<McpSkill[]>;
 }
 
 export function createMcpClient(opts: {
@@ -274,18 +301,9 @@ export function createMcpClient(opts: {
         },
         opts?.headers,
       ),
-    listSkills: () => session("skills/list", listSkillEntries),
-    readSkills: () =>
-      session("skills/list", async (client) =>
-        Promise.all(
-          (await listSkillEntries(client)).map(async (entry) => {
-            const { contents } = await client.readResource({ uri: entry.uri });
-            const file = contents.find((content) => content.uri === entry.uri && "text" in content);
-            if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
-            return { ...entry, text: file.text };
-          }),
-        ),
-      ),
+    listSkills: (limits) => session("skills/list", (client) => listSkillEntries(client, limits)),
+    readSkills: (limits) =>
+      session("skills/list", async (client) => readSkillEntries(client, await listSkillEntries(client, limits))),
     async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",

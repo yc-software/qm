@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
@@ -157,7 +158,7 @@ async function reconcilePack(
       at: Date.now(),
       commit: pack.ref,
       status: "error",
-      error: e instanceof Error ? e.message : String(e),
+      error: errMessage(e),
     });
     throw e;
   }
@@ -223,7 +224,7 @@ async function reconcilePack(
         at: Date.now(),
         commit: pack.ref,
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errMessage(e),
       });
       throw e;
     }
@@ -345,7 +346,7 @@ export function createSkillMethods(
           at: Date.now(),
           commit: pack.ref,
           status: "error",
-          error: e instanceof Error ? e.message : String(e),
+          error: errMessage(e),
         });
         return (await packs.get(pack.id)) ?? pack;
       }

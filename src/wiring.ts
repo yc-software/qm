@@ -106,7 +106,13 @@ import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, packFetcherByKind, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import {
+  createGitFetcher,
+  PACK_LIMITS,
+  packFetcherByKind,
+  resolvePackAuth,
+  type SkillPackFetcher,
+} from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
@@ -2372,7 +2378,8 @@ export function buildApp(
     git: gitSkillFetcher,
     mcp: createMcpPackFetcher({
       servers: mcpServers,
-      clientFor: (server) => createMcpClient({ url: server.url, auth: mcpServerAuth(server) }),
+      clientFor: (server) =>
+        createMcpClient({ url: server.url, auth: mcpServerAuth(server), maxResponseBytes: PACK_LIMITS.maxTotalBytes }),
     }),
   });
   const reaper: Reaper = createReaper(runs, {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { McpSkillClient, McpSkillEntry } from "../mcp/mcp-client.ts";
 import type { McpServer, McpServerStore } from "../mcp/mcp-server-store.ts";
-import type { SkillPackFetcher } from "./pack-fetcher.ts";
+import { PACK_LIMITS, type SkillPackFetcher } from "./pack-fetcher.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 import { isSafeSkillName } from "./skill-name.ts";
 
@@ -34,10 +34,10 @@ export function createMcpPackFetcher(opts: {
 
   return {
     async resolveRef(pack) {
-      return listingVersion(await (await source(pack)).listSkills());
+      return listingVersion(await (await source(pack)).listSkills(PACK_LIMITS));
     },
     async fetch(pack) {
-      const skills = await (await source(pack)).readSkills();
+      const skills = await (await source(pack)).readSkills(PACK_LIMITS);
       const files = skills.map((skill) => {
         if (!isSafeSkillName(skill.name)) throw new Error(`MCP skill ${skill.uri} has an unusable name`);
         const digest = `sha256:${sha256(skill.text)}`;

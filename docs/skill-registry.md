@@ -93,14 +93,9 @@ screening, sync, removal) is the same as for a git pack.
   person, so it cannot supply an org-wide pack. Exactly one enabled server may have the pack's URL. QM calls it as itself, without attesting a
   person, so a server that answers per person should answer that call with what everyone
   in the org may see.
-- This is opt-in twice over. Registering an MCP server never turns it into a skill
-  source; only an admin registering a pack does. And the import reads every listed skill
-  when the pack is fetched, ahead of any skill being used, which the extension otherwise
-  asks hosts not to do; an admin chooses that by registering the pack.
-- Packs register as `pinned`. `PATCH` `{ "syncMode": "tracked" }` keeps imported skills
-  current, and the background sync runs only when `SKILL_SYNC_POLL_MS` is set (default
-  `0`, off); `POST /v1/admin/skill-packs/:id/sync` runs it on demand. As for git packs,
-  sync refreshes the skills already imported; import again to add new ones.
+- An MCP server becomes a skill source only when an admin registers a pack for it. The
+  pack reads every listed skill when it is fetched, which the extension otherwise asks
+  hosts not to do. Sync works as for git packs.
 
 ## Loading published skills
 

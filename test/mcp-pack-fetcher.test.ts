@@ -63,7 +63,10 @@ test("the MCP client lists skills and reads each SKILL.md over the skills extens
   try {
     const { port } = http.address() as AddressInfo;
     const client = createMcpClient({ url: `http://127.0.0.1:${port}/mcp`, auth: { mode: "none" }, fetch: (url, init) => fetch(url, init) });
-    assert.deepEqual(await client.readSkills(), listed);
+    assert.deepEqual(await client.readSkills({ maxFiles: 5000, maxTotalBytes: 1 << 20 }), listed);
+    await assert.rejects(client.listSkills({ maxFiles: 1, maxTotalBytes: 1 << 20 }), (e: Error) =>
+      String((e.cause as Error).message).includes("more than 1 skills"),
+    );
   } finally {
     http.close();
   }
