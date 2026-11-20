@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
-import { ensureDeps } from "../scripts/dev/lib/deps.ts";
+import { ensureDeps, webUiSourceHash } from "../scripts/dev/lib/deps.ts";
 import { run, spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -362,8 +362,15 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY or OPENAI_API_KEY is required/,
+    /ANTHROPIC_API_KEY, OPENAI_API_KEY or MODEL_GATEWAY_URL is required/,
   );
+  const gatewayOnly = await assembleEnv({
+    worktree,
+    callerEnv: { MODEL_GATEWAY_URL: "https://gateway.example" },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(gatewayOnly.env.ANTHROPIC_API_KEY, undefined);
   const openaiOnly = await assembleEnv({
     worktree,
     callerEnv: { OPENAI_API_KEY: "sk-openai" },
@@ -498,6 +505,28 @@ test("Slack-only dependency preparation needs no web installation or build", asy
     await ensureDeps(worktree, { web: false, webUiBasePath: "/" }, () => {
       assert.fail("Slack-only startup must not install or build web dependencies");
     });
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
+test("an unchanged web UI source tree skips the vite build", async () => {
+  const worktree = mkdtempSync(join(tmpdir(), "qm-dev-web-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: worktree });
+    for (const dir of ["node_modules/emoji-datasource", "plugins/web-ui/node_modules/vite", "plugins/web-ui/dist-web"])
+      mkdirSync(join(worktree, dir), { recursive: true });
+    mkdirSync(join(worktree, "plugins/chassis"));
+    writeFileSync(join(worktree, "plugins/chassis/a.ts"), "1");
+    writeFileSync(join(worktree, "plugins/web-ui/.gitignore"), "dist-web/\n");
+    const built = webUiSourceHash(worktree, "/");
+    writeFileSync(join(worktree, "plugins/web-ui/dist-web/.source-hash"), built);
+    const logs: string[] = [];
+    await ensureDeps(worktree, { webUiBasePath: "/" }, (m) => logs.push(m));
+    assert.deepEqual(logs, ["web-ui SPA unchanged since the last build -- skipping vite"]);
+    assert.notEqual(webUiSourceHash(worktree, "/app/"), built);
+    writeFileSync(join(worktree, "plugins/chassis/a.ts"), "2");
+    assert.notEqual(webUiSourceHash(worktree, "/"), built);
   } finally {
     rmSync(worktree, { recursive: true, force: true });
   }

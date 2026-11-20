@@ -16,7 +16,13 @@ import {
 import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
 import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
-import { destroyLocalDevSandboxes, resolveSandbox, startQuickTunnel, type SandboxResolution } from "../lib/sandbox.ts";
+import {
+  destroyDevSprites,
+  destroyLocalDevSandboxes,
+  resolveSandbox,
+  startQuickTunnel,
+  type SandboxResolution,
+} from "../lib/sandbox.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
 import { killTree, pidAlive } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
@@ -74,8 +80,9 @@ let bootDone = false;
 let bootResult: BootResult | null = null;
 let phaseName = "boot";
 let shuttingDown = false;
+let exiting = false;
 
-type Prepared = SpecInputs & { sandbox: SandboxResolution; tunnelPid: number | null };
+type Prepared = SpecInputs & { sandbox: SandboxResolution; tunnelPid: number | null; ownsDatabase: boolean };
 
 const children = new Map<ChildName, Child>();
 const healthFails = new Map<ChildName, number>();
@@ -334,7 +341,17 @@ async function assembleAndPrepare(spec: BootSpec, tunnel: { pid: number | null }
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
+  phase(
+    "env",
+    "ok",
+    `live turns (${assembled.env.MODEL_GATEWAY_URL ? "model gateway" : `anthropic key from ${assembled.anthropicKeySource}`})`,
+  );
+
+  const configuredDatabaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
+  const pendingDatabaseUrl = configuredDatabaseUrl
+    ? Promise.resolve(configuredDatabaseUrl)
+    : ensureLocalPostgres(worktree, log).then((pg) => pg.url);
+  pendingDatabaseUrl.catch(() => {});
 
   phase("deps", "start");
   await ensureDeps(worktree, { web: spec.web, webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/" }, log);
@@ -362,35 +379,21 @@ async function assembleAndPrepare(spec: BootSpec, tunnel: { pid: number | null }
   phase("sandbox", "ok", sandbox.detail);
 
   phase("durability", "start");
-  let databaseUrl = assembled.env.DATABASE_URL || envFileGet(join(worktree, ".env"), "DATABASE_URL");
+  const databaseUrl = await pendingDatabaseUrl.catch((err: unknown) => {
+    throw new Error(
+      `DATABASE_URL is required and local Postgres could not be started (${errMessage(err)}). Export DATABASE_URL or add it to ${assembled.liveEnvFile} or .env.`,
+      { cause: err },
+    );
+  });
   let adminGrantsSeed = assembled.env.ADMIN_GRANTS || envFileGet(join(worktree, ".env"), "ADMIN_GRANTS");
-  let localPg = false;
-  if (!databaseUrl) {
-    try {
-      const pg = await ensureLocalPostgres(worktree, log);
-      databaseUrl = pg.url;
-      localPg = true;
-    } catch (err) {
-      throw new Error(
-        `DATABASE_URL is required and local Docker Postgres could not be started (${errMessage(err)}). Export DATABASE_URL or add it to ${assembled.liveEnvFile} or .env.`,
-        { cause: err },
-      );
-    }
-  }
   await checkPostgres(worktree, databaseUrl).catch((err) => {
     throw new Error(`could not connect to DATABASE_URL: ${errMessage(err)}`, { cause: err });
   });
   const grants = await adminGrantCount(worktree, databaseUrl);
   if (grants === 0 && !adminGrantsSeed) {
-    if (localPg) {
-      const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
-      adminGrantsSeed = `${principal}:org_admin`;
-      log(`admin grants: local Postgres will seed ${principal}:org_admin if the store is empty`);
-    } else {
-      throw new Error(
-        "Postgres has no existing admin grants and ADMIN_GRANTS is unset. Set ADMIN_GRANTS=<principal>:org_admin for the first boot of this dev DB, or point DATABASE_URL at a DB that already has admin_grants.",
-      );
-    }
+    const principal = assembled.env.DEV_INSTANCE_ADMIN_PRINCIPAL || assembled.env.USER || "dev-admin";
+    adminGrantsSeed = `${principal}:org_admin`;
+    log(`admin grants: seeding ${principal}:org_admin into the empty store`);
   }
   const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
   phase("durability", "ok", `Postgres (${grants} durable grant(s))`);
@@ -418,6 +421,7 @@ async function assembleAndPrepare(spec: BootSpec, tunnel: { pid: number | null }
     webUiBasePath: spec.callerEnv.DEV_INSTANCE_WEB_UI_BASE || "/",
     ...(tokens ? { slack: { botToken: tokens.botToken, appToken: tokens.appToken } } : {}),
     databaseUrl,
+    ownsDatabase: !configuredDatabaseUrl,
     adminGrantsSeed,
     coreSigningSecret: assembled.env.CORE_SIGNING_SECRET || "",
     portalSessionSecret,
@@ -608,8 +612,23 @@ async function teardown(reason: string): Promise<void> {
   if (specInputs?.sandbox.backend === "local") await destroyLocalDevSandboxes(log);
 }
 
+async function destroyRecordedSandboxes(): Promise<{ notes: string[]; residue: string[] }> {
+  await teardown("down");
+  if (specInputs?.sandbox.backend !== "sprites") return { notes: [], residue: [] };
+  if (!specInputs.ownsDatabase)
+    return {
+      notes: ["left the sprites recorded in the supplied DATABASE_URL: other instances may share it"],
+      residue: [],
+    };
+  const { deleted, failures } = await destroyDevSprites(specInputs.sandbox.env, specInputs.databaseUrl).catch(
+    (err: unknown) => ({ deleted: 0, failures: [`sprite cleanup failed: ${errMessage(err)}`] }),
+  );
+  return { notes: [`deleted ${deleted} recorded sprite sandbox(es)`], residue: failures };
+}
+
 async function shutdownSelf(removeLock: boolean): Promise<void> {
-  if (shuttingDown) return;
+  if (exiting) return;
+  exiting = true;
   await teardown("shutdown requested");
   if (removeLock) rmSync(lock, { recursive: true, force: true });
   process.exit(EXIT.ok);
@@ -676,7 +695,8 @@ function serveApi(): Server {
         return;
       }
       if (req.method === "POST" && req.url === "/shutdown") {
-        respond(200, { ok: true });
+        const sandboxes = body.destroySandboxes === true ? await destroyRecordedSandboxes() : undefined;
+        respond(200, { ok: true, ...sandboxes });
         setTimeout(() => void shutdownSelf(true), 50);
         return;
       }

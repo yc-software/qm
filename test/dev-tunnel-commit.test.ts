@@ -10,7 +10,12 @@ function fakeCloudflared(dir: string): void {
   const bin = join(dir, "cloudflared");
   writeFileSync(
     bin,
-    `#!/bin/sh\n[ "$1" = "--version" ] && exit 0\necho "https://t$$.trycloudflare.com"\nexec sleep 60\n`,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") process.exit(0);
+const [host, port] = args[args.indexOf("--metrics") + 1].split(":");
+require("node:http").createServer((_, res) => res.end(JSON.stringify({ hostname: "t" + process.pid + ".trycloudflare.com" }))).listen(Number(port), host);
+`,
   );
   chmodSync(bin, 0o755);
 }
@@ -30,6 +35,25 @@ test("a quick tunnel writes no supervisor pid file and reports its own URL, not 
     assert.ok(pidAlive(first.pid) && pidAlive(second.pid));
     await killTree(first.pid, 1000);
     await killTree(second.pid, 1000);
+  } finally {
+    process.env.PATH = path;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a quick tunnel that fails reports no URL instead of the cloudflared API host", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-tunnel-"));
+  const bin = join(dir, "cloudflared");
+  writeFileSync(
+    bin,
+    `#!/bin/sh\n[ "$1" = "--version" ] && exit 0\necho 'failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": EOF'\nexit 1\n`,
+  );
+  chmodSync(bin, 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  try {
+    const started = await startQuickTunnel(1, dir, () => {});
+    assert.equal(started?.url, null);
   } finally {
     process.env.PATH = path;
     rmSync(dir, { recursive: true, force: true });
