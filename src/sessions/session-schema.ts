@@ -638,9 +638,17 @@ const BACKFILL_NULL_CALL_IDS: PgMigrationDefinition = {
          ALTER TABLE items ENABLE TRIGGER items_append_only;
        END IF;
      END $backfill_null_call_ids$`,
+  ],
+};
+
+const TOOL_CALL_ID_CONSTRAINT: PgMigrationDefinition = {
+  id: "sessions/store/0066-tool-call-id-constraint",
+  autocommit: true,
+  statements: [
     `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_tool_call_id_present`,
     `ALTER TABLE items ADD CONSTRAINT items_tool_call_id_present
-       CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult'))`,
+       CHECK (call_id IS NOT NULL OR kind NOT IN ('ToolCall', 'ToolResult')) NOT VALID`,
+    `ALTER TABLE items VALIDATE CONSTRAINT items_tool_call_id_present`,
   ],
 };
 
@@ -667,6 +675,7 @@ export const SESSION_MIGRATIONS = [
   HUMAN_PROMPT_INDEX,
   BOT_WORK_COLUMN,
   BACKFILL_NULL_CALL_IDS,
+  TOOL_CALL_ID_CONSTRAINT,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

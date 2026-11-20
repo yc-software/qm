@@ -7,7 +7,7 @@ import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
-const MIGRATION = "sessions/store/0065-backfill-null-call-ids";
+const MIGRATIONS = ["sessions/store/0065-backfill-null-call-ids", "sessions/store/0066-tool-call-id-constraint"];
 
 test("the backfill pairs legacy NULL call ids in order and forbids new NULL tool call ids", async () => {
   const url = testDatabaseUrl();
@@ -26,8 +26,8 @@ test("the backfill pairs legacy NULL call ids in order and forbids new NULL tool
     await raw.query("ALTER TABLE items DISABLE TRIGGER items_append_only");
     await raw.query("UPDATE items SET call_id = NULL WHERE session_id = $1", [session.id]);
     await raw.query("ALTER TABLE items ENABLE TRIGGER items_append_only");
-    await raw.query("DELETE FROM qm_schema_migrations WHERE id = $1", [MIGRATION]);
-    await applyPgMigrations(raw, SESSION_MIGRATIONS.filter((m) => m.id === MIGRATION).map(definePgMigration));
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [MIGRATIONS]);
+    await applyPgMigrations(raw, SESSION_MIGRATIONS.filter((m) => MIGRATIONS.includes(m.id)).map(definePgMigration));
     const { rows } = await raw.query(
       "SELECT kind, call_id FROM items WHERE session_id = $1 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq",
       [session.id],
