@@ -144,7 +144,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   const keys = triageKeys(
     candidates,
     (item) => loopsById.get(item.loopId),
-    (item) => item.createdAt,
+    (item) => item.sourceAt ?? item.createdAt,
   );
   let feed = candidates
     .filter((item) => !filter || item.loopId === filter)
