@@ -631,7 +631,8 @@ export class OnboardingWelcome extends LitElement {
         <a href="?connectionDemo=1">Back to QM</a>
       </section>`;
     }
-    if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
+    if (this.about)
+      return html`<qm-welcome-about .me=${this.me} .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
     const name = this.me?.displayName?.trim().split(/\s+/)[0];
     const cohort = this.me?.welcomeCohort;
     const seeds = this.seeded;
