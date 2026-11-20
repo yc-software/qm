@@ -603,7 +603,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
              SELECT l.alias_id, l.user_id, l.evidence, l.linked_by FROM user_links l JOIN users u ON u.id = l.user_id
               WHERE l.alias_id = ANY($1::text[]) AND u.primary_alias <> l.alias_id
            ), created AS (
-             INSERT INTO users(primary_alias, kind) SELECT alias_id, 'app' FROM moving RETURNING id, primary_alias
+             INSERT INTO users(primary_alias) SELECT alias_id FROM moving RETURNING id, primary_alias
            ), moved AS (
              UPDATE user_links l SET user_id = c.id, evidence = 'primary', linked_by = NULL
                FROM moving m JOIN created c ON c.primary_alias = m.alias_id

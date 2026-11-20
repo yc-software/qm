@@ -34,7 +34,16 @@ test("a person joins the roster once, folded to one row, and keeps their first a
 test("a user is a person until QM records it as an app by its own sign-in; then what its sign-ins made is bot work, and a person's is not", async () => {
   const [roster, pg] = [store(), createPgPool(url)];
   const [bot, synced, pat, absent] = [unique("bot"), unique("synced"), unique("pat"), unique("absent")];
+  const [split, kim] = [unique("split"), unique("kim")];
   for (const id of [bot, synced, pat]) await roster.record({ id, source: "turn", at: 1 });
+  await createPostgresDirectoryStore(url).replace([
+    { principalId: kim, displayName: "Kim", type: "internal", isBot: false },
+  ]);
+  for (const [alias, person] of [
+    [split, pat],
+    [kim, synced],
+  ] as const)
+    await roster.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "", createdAt: 1 });
   const creators = { crons: "createdBy", monitors: "createdBy", keychain_asks: "requesterId", loops: "createdBy" };
   const put = (table: string, id: string, json: object) =>
     pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, { id, ownerScopeId: "channel:C1", ...json }]);
@@ -44,6 +53,9 @@ test("a user is a person until QM records it as an app by its own sign-in; then 
   for (const who of [bot, synced, pat]) await put("loop_ship_grants", who, { loopId: pat, actorId: who });
   await put("loops", "marked", { createdBy: bot, botActor: true, shipActions });
   await put("loops", "pats-bot-loop", { createdBy: pat, botActor: true, shipActions });
+  await put("loops", split, { createdBy: split, shipActions });
+  await put("loop_ship_grants", split, { loopId: pat, actorId: split });
+  await put("loops", "kims-bot-loop", { createdBy: kim, botActor: true, shipActions });
   const rowsSql = `SELECT concat_ws(' ', t, id, json ->> 'botActor', json #>> '{shipActions,0,gate}', json ->> 'revokedBy') AS r
     FROM (${[...Object.keys(creators), "loop_ship_grants"].map((t) => `SELECT '${t}' t, * FROM ${t}`).join(" UNION ")}) x`;
   const rows = async () => (await pg.q(rowsSql)).map((r) => r.r as string).sort();
@@ -52,25 +64,30 @@ test("a user is a person until QM records it as an app by its own sign-in; then 
     ...Object.keys(creators).flatMap((t) => [bots(t), `${t} ${pat} auto`]),
     "loops marked true hold",
     "loops pats-bot-loop true auto",
+    "loops kims-bot-loop true auto",
   ];
+  const splitRows = (marked: boolean) =>
+    marked
+      ? [`loops ${split} true hold`, `loop_ship_grants ${split} system`]
+      : [`loops ${split} auto`, `loop_ship_grants ${split}`];
   const grants = (...apps: string[]) =>
     [bot, synced, pat].map((who) => `loop_ship_grants ${who}${apps.includes(who) ? " system" : ""}`);
   assert.equal((await roster.get(bot))?.kind, "person");
   await recordUser(roster, bot, true);
   assert.equal((await roster.get(bot))?.kind, "app");
-  assert.deepEqual(await rows(), [...made, ...grants(bot)].sort());
+  assert.deepEqual(await rows(), [...made, ...splitRows(false), ...grants(bot)].sort());
   await roster.applyDirectoryBots(
-    [synced, bot, absent].map(
+    [synced, bot, absent, split].map(
       (principalId) => ({ principalId, displayName: principalId, type: "internal", isBot: true }) as const,
     ),
   );
-  assert.deepEqual(await rows(), [...made, ...grants(bot, synced)].sort());
+  assert.deepEqual(await rows(), [...made, ...splitRows(true), ...grants(bot, synced)].sort());
   assert.equal(await roster.get(absent), null, "marking never creates a row");
   await roster.link({ principalId: absent, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() });
   assert.deepEqual([await roster.markApps([absent]), (await roster.get(pat))?.kind], [0, "person"]);
   const audit = `SELECT string_agg(action || ' ' || resource, ', ' ORDER BY action, resource) AS r FROM audit_log
     WHERE principal_id = 'system'`;
-  const logged = `loop_update ${bot}, loop_update marked, ship_grant_revoke ${bot}, ship_grant_revoke ${synced}`;
+  const logged = `loop_update ${bot}, loop_update marked, loop_update ${split}, ship_grant_revoke ${bot}, ship_grant_revoke ${split}, ship_grant_revoke ${synced}`;
   assert.equal((await pg.q(audit))[0]!.r, logged);
   await pg.close();
 });

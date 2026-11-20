@@ -288,7 +288,7 @@ export const holdBotLoopShips = (by: string, users?: string): string => `DO $$
            users
              ? `
            AND EXISTS (SELECT 1 FROM user_links k WHERE k.tenant_id = l.tenant_id AND k.user_id = ANY(${users})
-                          AND k.alias_id = ${fold("l.json ->> 'createdBy'")})`
+                          AND k.alias_id = ${fold("l.json ->> 'createdBy'")}${unlessSlackListsAPerson("k")})`
              : ""
          }
            FOR UPDATE
