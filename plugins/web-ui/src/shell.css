@@ -279,13 +279,6 @@ body.resizing-sidebar {
   background: transparent;
 }
 .layout.sidebar-closed .history-nav {
-  margin-right: 0;
-  gap: 0;
-}
-.layout.sidebar-closed .history-btn {
-  width: 24px;
-}
-html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   display: none;
 }
 .brand-lockup {
