@@ -186,13 +186,25 @@ export function createPostgresSurfaceCache(
       ],
     },
     {
-      id: "surface-cache/store/0013-surface-primary-keys",
+      id: "surface-cache/store/0013-channel-messages-primary-key",
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_messages DROP CONSTRAINT channel_messages_pkey,
             ADD CONSTRAINT channel_messages_pkey PRIMARY KEY USING INDEX channel_messages_surface_key`,
+      ],
+    },
+    {
+      id: "surface-cache/store/0014-channel-state-primary-key",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_state DROP CONSTRAINT channel_state_pkey,
             ADD CONSTRAINT channel_state_pkey PRIMARY KEY USING INDEX channel_state_surface_key`,
+      ],
+    },
+    {
+      id: "surface-cache/store/0015-channel-files-primary-key",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE channel_files DROP CONSTRAINT channel_files_pkey,
             ADD CONSTRAINT channel_files_pkey PRIMARY KEY USING INDEX channel_files_surface_key`,
       ],

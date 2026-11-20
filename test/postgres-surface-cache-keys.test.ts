@@ -34,10 +34,12 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
       await pool.query(`ALTER TABLE ${table} DROP COLUMN tenant_id CASCADE, DROP COLUMN surface, DROP COLUMN account`);
       await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key})`);
     }
-    await pool.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ($1, $2, $3) OR id LIKE 'surface-cache/store/0010-tenants/%'",
-      ["surface-cache/store/0008", "surface-cache/store/0009", "surface-cache/store/0013-surface-primary-keys"],
-    );
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE $3 OR id LIKE $4", [
+      "surface-cache/store/0008",
+      "surface-cache/store/0009",
+      "surface-cache/store/0010-tenants/%",
+      "surface-cache/store/%-primary-key",
+    ]);
   } finally {
     await pool.end();
   }
