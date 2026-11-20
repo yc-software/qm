@@ -28,6 +28,7 @@ import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";
 import "./welcome-about";
+import { firstName } from "./welcome-about-scenes";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -631,8 +632,9 @@ export class OnboardingWelcome extends LitElement {
         <a href="?connectionDemo=1">Back to QM</a>
       </section>`;
     }
-    if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
-    const name = this.me?.displayName?.trim().split(/\s+/)[0];
+    if (this.about)
+      return html`<qm-welcome-about .me=${this.me} .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
+    const name = firstName(this.me?.displayName);
     const cohort = this.me?.welcomeCohort;
     const seeds = this.seeded;
     const paced = Boolean(cohort) && !seeds;

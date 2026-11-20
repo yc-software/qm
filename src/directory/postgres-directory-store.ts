@@ -213,7 +213,8 @@ function groupMembershipOf(row: Record<string, unknown>): boolean | undefined {
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
-  const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+  const pg = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+  const { q, pool } = pg;
 
   async function tenantFrom(lookup: "qm_tenant_for_app_handle" | "qm_tenant_for_app_host", key: string) {
     const rows = await q(`SELECT ${lookup}($1)::text AS id`, [key]);
@@ -531,6 +532,20 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async list() {
       const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1`, [orgId]);
       return rows.map(memberRow);
+    },
+
+    async teammateName(tenant, principalId) {
+      const ids = rosterIds(principalId);
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT btrim(display_name) AS name FROM directory_members
+         WHERE tenant_id = $1 AND org_id = $2 AND type = 'internal' AND is_bot IS NOT TRUE
+           AND btrim(display_name) <> ''
+           AND NOT (principal_id = ANY($3::text[]) OR lower(principal_id) = ANY($3::text[])
+             OR coalesce(slack_id, '') = ANY($3::text[]))
+         ORDER BY display_name_lc LIMIT 1`,
+        [tenant.id, orgId, ids],
+      );
+      return (rows[0]?.name as string | undefined) ?? null;
     },
 
     async listChannels() {
