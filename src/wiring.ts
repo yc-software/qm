@@ -318,13 +318,15 @@ import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-fl
 import {
   createCustomProviderStore,
   createModelCredentialStore,
+  type CustomProviderKeyStatus,
   type CustomProviderStore,
   type ModelCredentialStore,
 } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
-import { setCustomProviders } from "./model/custom-providers.ts";
+import { createBasetenCatalog } from "./model/baseten.ts";
+import { createCustomProviderSet } from "./model/custom-provider-set.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
@@ -522,6 +524,7 @@ export interface BuiltApp {
   refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
+  customProviderStatuses: () => Promise<CustomProviderKeyStatus[]>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   memoryRegistry: MemoryRegistryStore;
@@ -1421,9 +1424,12 @@ export function buildApp(
     fetchImpl: overrides.modelCredentialFetch,
   });
   const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
-  const refreshCustomProviders = async () => {
-    setCustomProviders(await customProviders.enabled());
-  };
+  const customProviderSet = createCustomProviderSet(
+    customProviders,
+    config.basetenApiKey ? createBasetenCatalog(config.basetenApiKey, overrides.modelCredentialFetch) : undefined,
+  );
+  const refreshCustomProviders = customProviderSet.refresh;
+  const customProviderStatuses = customProviderSet.statuses;
   const reported =
     (context: string) =>
     (e: unknown): never => {
@@ -1454,26 +1460,12 @@ export function buildApp(
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
-    const [anthropic, openai, openrouter, enabledCustom] = await Promise.all([
+    const [anthropic, openai, openrouter, customKeys] = await Promise.all([
       modelCredentials.resolve("anthropic"),
       modelCredentials.resolve("openai"),
       modelCredentials.resolve("openrouter"),
-      customProviders.enabled(),
+      customProviderSet.keys(),
     ]);
-    const customKeys = Object.fromEntries(
-      (
-        await Promise.all(
-          enabledCustom.map(async (p) => {
-            try {
-              return [p.id, await customProviders.resolveKey(p.id)] as const;
-            } catch (e) {
-              console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
-              return [p.id, null] as const;
-            }
-          }),
-        )
-      ).filter(([, key]) => key),
-    );
     return {
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
@@ -2457,6 +2449,7 @@ export function buildApp(
     refreshModels,
     customProviders,
     refreshCustomProviders,
+    customProviderStatuses,
     mcpServers,
     mcpToolService,
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
@@ -3262,6 +3255,7 @@ export function buildApp(
     refreshModels,
     customProviders,
     refreshCustomProviders,
+    customProviderStatuses,
     mcpServers,
     mcpToolService,
     memoryRegistry,
@@ -3374,6 +3368,7 @@ export function serverDeps(
     refreshModels: built.refreshModels,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,
+    customProviderStatuses: built.customProviderStatuses,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
     memoryRegistry: built.memoryRegistry,

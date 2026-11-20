@@ -365,7 +365,11 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
   const second = createCustomProviderStore({ backing, keyMaterial: secret });
   const enabled = await second.enabled();
   assert.equal(enabled[0]?.id, "survivor", "spec survives the restart");
-  assert.equal(await second.resolveKey("survivor"), "sk-live-key", "key decrypts after restart with the same secret");
+  assert.equal(
+    (await second.enabledWithKeys()).keys.survivor,
+    "sk-live-key",
+    "key decrypts after restart with the same secret",
+  );
   setCustomProviders(enabled);
   assert.ok(resolveModel("custom/survivor/survivor-model"), "hydrated model resolves");
   setCustomProviders([]);
@@ -386,7 +390,7 @@ test("QA: a corrupt stored key degrades that provider only — admin surface sta
     "admin-alice@default-org",
   );
   const reader = createCustomProviderStore({ backing, keyMaterial: "other-secret-other-secret-other-secret-2" });
-  await assert.rejects(reader.resolveKey("corrupted"), "decryption fails with the wrong secret");
+  assert.equal((await reader.enabledWithKeys()).keys.corrupted, undefined, "decryption fails with the wrong secret");
   const statuses = await reader.statuses();
   assert.equal(statuses[0]?.id, "corrupted");
   assert.equal(statuses[0]?.hasKey, true, "admin surface (no secrets) unaffected");
@@ -505,7 +509,7 @@ test("QA: a custom provider saved without a key check cannot reach a loopback ad
           }),
         });
         assert.equal(saved.status, 200);
-        const key = await built.customProviders.resolveKey(id);
+        const key = (await built.customProviders.enabledWithKeys()).keys[id];
         assert.equal(key, "sk-saved-unchecked");
         const runtime = await buildModelRuntime({ [id]: key! });
         const reply = await runtime

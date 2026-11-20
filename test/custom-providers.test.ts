@@ -127,19 +127,19 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.ok(raw?.apiKeyEnc);
   assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
 
-  assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
+  assert.equal((await store.enabledWithKeys()).keys["acme-gateway"], "sk-secret-123");
   assert.deepEqual(await store.enabled(), [GATEWAY]);
 
   await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
-  assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
+  assert.equal((await store.enabledWithKeys()).keys["acme-gateway"], "sk-secret-123");
 
   assert.equal(await store.delete("acme-gateway", "admin@example.com"), true);
-  assert.equal(await store.resolveKey("acme-gateway"), null);
+  assert.equal((await store.enabledWithKeys()).keys["acme-gateway"], undefined);
   assert.deepEqual(await store.enabled(), []);
   assert.equal((await store.statuses())[0]!.disabled, true);
   assert.equal((await store.statuses())[0]!.hasKey, false);
   await store.upsert(GATEWAY, undefined, "admin@example.com");
-  assert.equal(await store.resolveKey("acme-gateway"), null);
+  assert.equal((await store.enabledWithKeys()).keys["acme-gateway"], undefined);
   assert.equal(await store.delete("never-existed", "admin@example.com"), false);
 });
 

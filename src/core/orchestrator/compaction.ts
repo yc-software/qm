@@ -25,8 +25,8 @@ import type { Item } from "../../sessions/items.ts";
 import { countTokens } from "../../util/tokens.ts";
 import type { SessionRoute } from "../../agent/agent.ts";
 import type { Tenant } from "../../tenants/context.ts";
+import { MAX_CONTEXT_TOKENS } from "../../model/pi-models.ts";
 
-const MAX_CONTEXT_TOKENS = 120_000;
 const DOCUMENT_TOKEN_FRACTION = 0.5;
 const RECENT_NOTICE =
   "[Context reduced without a new summary. Earlier entries are excluded, not deleted. Use history to reopen missing requests and tool calls; history does not return tool results. Check actual state before repeating actions whose outcomes are missing.]";

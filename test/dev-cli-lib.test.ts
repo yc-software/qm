@@ -35,7 +35,7 @@ import {
   writeHeartbeat,
   writeMeta,
 } from "../scripts/dev/lib/lease.ts";
-import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
+import { assembleEnv, completeDevSecuritySecrets, liveTurnsKey } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
@@ -324,6 +324,7 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   assert.equal(fromCaller.env.BOTH, "caller");
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
+  assert.equal(liveTurnsKey(fromCaller), "anthropic key from your shell export");
 
   const fromLiveEnv = await assembleEnv({
     worktree,
@@ -360,9 +361,17 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   assert.equal(fromDotenv.anthropicKeySource, "the worktree .env");
 
   writeFileSync(join(worktree, ".env"), "");
+  const basetenOnly = await assembleEnv({
+    worktree,
+    callerEnv: { BASETEN_API_KEY: "bt" },
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(basetenOnly.env.BASETEN_API_KEY, "bt", "a Baseten key alone runs live turns");
+  assert.equal(liveTurnsKey(basetenOnly), "baseten key from your shell export");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY or OPENAI_API_KEY is required/,
+    /ANTHROPIC_API_KEY, OPENAI_API_KEY or BASETEN_API_KEY is required/,
   );
   const openaiOnly = await assembleEnv({
     worktree,

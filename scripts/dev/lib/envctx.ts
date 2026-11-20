@@ -10,6 +10,7 @@ export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
+  basetenKeySource: string;
   liveEnvFile: string;
   warnings: string[];
 }
@@ -116,20 +117,22 @@ export async function assembleEnv(opts: {
     env.ANTHROPIC_API_KEY = wtEnv.ANTHROPIC_API_KEY;
     anthropicKeySource = "the worktree .env";
   }
-  let openaiKeySource = "";
-  if (opts.callerEnv.OPENAI_API_KEY) openaiKeySource = "your shell export";
-  else if (env.OPENAI_API_KEY) openaiKeySource = liveEnvFile;
-  if (!env.OPENAI_API_KEY && wtEnv.OPENAI_API_KEY) {
-    env.OPENAI_API_KEY = wtEnv.OPENAI_API_KEY;
-    openaiKeySource = "the worktree .env";
-  }
+  const keySource = (name: string): string => {
+    if (opts.callerEnv[name]) return "your shell export";
+    if (env[name]) return liveEnvFile;
+    if (!wtEnv[name]) return "";
+    env[name] = wtEnv[name];
+    return "the worktree .env";
+  };
+  const openaiKeySource = keySource("OPENAI_API_KEY");
+  const basetenKeySource = keySource("BASETEN_API_KEY");
 
-  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY) {
+  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || env.BASETEN_API_KEY) {
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY or OPENAI_API_KEY is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
+      `ANTHROPIC_API_KEY, OPENAI_API_KEY or BASETEN_API_KEY is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
     );
   }
 
@@ -140,7 +143,13 @@ export async function assembleEnv(opts: {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
-  return { env, anthropicKeySource, openaiKeySource, liveEnvFile, warnings };
+  return { env, anthropicKeySource, openaiKeySource, basetenKeySource, liveEnvFile, warnings };
+}
+
+export function liveTurnsKey(assembled: AssembledEnv): string {
+  if (assembled.anthropicKeySource) return `anthropic key from ${assembled.anthropicKeySource}`;
+  if (assembled.openaiKeySource) return `openai key from ${assembled.openaiKeySource}`;
+  return `baseten key from ${assembled.basetenKeySource}`;
 }
 
 export function envFileGet(path: string, key: string): string {

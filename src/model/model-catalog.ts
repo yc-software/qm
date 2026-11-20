@@ -8,6 +8,8 @@ import {
 } from "./pi-models.ts";
 import { customModelCatalog } from "./custom-providers.ts";
 import { readBoundedText } from "../util/bytes.ts";
+import { swallow, withRequestId } from "../util/errors.ts";
+import { LRUCache } from "lru-cache";
 
 export interface ModelCatalogEntry {
   id: string;
@@ -22,13 +24,39 @@ const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const CACHE_TTL_MS = 5 * 60_000;
 const FAILURE_TTL_MS = 30_000;
 
-interface CacheEntry {
-  dynamic?: ModelCatalogEntry[];
-  expiresAt: number;
-  inFlight?: Promise<ModelCatalogEntry[]>;
+export function createCatalogCache<T>(label: string, load: () => Promise<T>) {
+  let refreshing = false;
+  const cache = new LRUCache<"catalog", { value?: T }>({
+    max: 1,
+    ttl: CACHE_TTL_MS,
+    ttlResolution: 0,
+    allowStale: true,
+    perf: { now: () => Date.now() },
+    fetchMethod: async (_key, stale, { options }) => {
+      refreshing = true;
+      try {
+        return { value: await load() };
+      } catch (error) {
+        swallow(label, error);
+        options.ttl = FAILURE_TTL_MS;
+        return { ...stale };
+      } finally {
+        refreshing = false;
+      }
+    },
+  });
+  return {
+    cached() {
+      void cache.fetch("catalog");
+      return { value: cache.peek("catalog")?.value, refreshing };
+    },
+    async get(): Promise<T | undefined> {
+      return (await cache.fetch("catalog"))?.value;
+    },
+  };
 }
 
-const cache = new WeakMap<typeof fetch, CacheEntry>();
+const openRouterCatalogs = new WeakMap<typeof fetch, ReturnType<typeof createCatalogCache<ModelCatalogEntry[]>>>();
 
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = selectableBaseModels().flatMap((model) => {
@@ -53,23 +81,57 @@ function finiteNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+export function positiveInteger(value: unknown): number | undefined {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function perMillion(value: unknown): number | undefined {
+  const parsed = finiteNumber(value);
+  return parsed !== undefined && Number.isFinite(parsed * 1_000_000) ? parsed * 1_000_000 : undefined;
+}
+
+export async function fetchCatalogData(
+  fetcher: typeof fetch,
+  url: string,
+  label: string,
+  headers?: Record<string, string>,
+): Promise<unknown[]> {
+  const response = await fetcher(url, {
+    ...(headers ? { headers } : {}),
+    signal: AbortSignal.timeout(5_000),
+    redirect: "error",
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(withRequestId(`${label} returned HTTP ${response.status} ${detail}`.trim(), response.headers));
+  }
+  const body = JSON.parse(
+    await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error(`${label} is too large`)),
+  ) as {
+    data?: unknown;
+  } | null;
+  if (!Array.isArray(body?.data)) throw new Error(`${label} is invalid`);
+  return body.data;
+}
+
 function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined {
   if (!candidate || typeof candidate !== "object") return undefined;
   const raw = candidate as Record<string, unknown>;
   const id = raw.id;
   const name = raw.name;
   const supportedParameters = raw.supported_parameters;
-  const contextWindow = finiteNumber(raw.context_length);
+  const contextWindow = positiveInteger(raw.context_length);
   const topProvider = raw.top_provider;
   const maxTokens =
     topProvider && typeof topProvider === "object"
-      ? finiteNumber((topProvider as Record<string, unknown>).max_completion_tokens)
+      ? positiveInteger((topProvider as Record<string, unknown>).max_completion_tokens)
       : undefined;
   const pricing = raw.pricing;
-  const promptPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).prompt) : undefined;
-  const completionPrice =
-    pricing && typeof pricing === "object" ? finiteNumber((pricing as Record<string, unknown>).completion) : undefined;
+  const inputPrice =
+    pricing && typeof pricing === "object" ? perMillion((pricing as Record<string, unknown>).prompt) : undefined;
+  const outputPrice =
+    pricing && typeof pricing === "object" ? perMillion((pricing as Record<string, unknown>).completion) : undefined;
   const architecture = raw.architecture;
   const inputModalities =
     architecture && typeof architecture === "object"
@@ -85,20 +147,12 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
   )
     return undefined;
   const knownOpenRouter = resolveModel(id)?.provider === "openrouter";
-  const inputPrice = promptPrice === undefined ? undefined : promptPrice * 1_000_000;
-  const outputPrice = completionPrice === undefined ? undefined : completionPrice * 1_000_000;
   if (
     contextWindow === undefined ||
-    !Number.isSafeInteger(contextWindow) ||
-    contextWindow <= 0 ||
     maxTokens === undefined ||
-    !Number.isSafeInteger(maxTokens) ||
-    maxTokens <= 0 ||
     maxTokens > contextWindow ||
     inputPrice === undefined ||
-    !Number.isFinite(inputPrice) ||
     outputPrice === undefined ||
-    !Number.isFinite(outputPrice) ||
     !Array.isArray(inputModalities) ||
     !inputModalities.includes("text")
   )
@@ -119,13 +173,8 @@ function parseOpenRouterModel(candidate: unknown): ModelCatalogEntry | undefined
 }
 
 async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const response = await fetcher(OPENROUTER_MODELS_URL, { signal: AbortSignal.timeout(5_000) });
-  if (!response.ok) throw new Error(`OpenRouter catalog returned ${response.status}`);
-  const body = JSON.parse(
-    await readBoundedText(response, MAX_CATALOG_BYTES, () => new Error("OpenRouter catalog is too large")),
-  ) as { data?: unknown };
-  if (!Array.isArray(body.data)) throw new Error("OpenRouter catalog is invalid");
-  return body.data.flatMap((candidate) => {
+  const data = await fetchCatalogData(fetcher, OPENROUTER_MODELS_URL, "OpenRouter catalog");
+  return data.flatMap((candidate) => {
     const model = parseOpenRouterModel(candidate);
     return model ? [model] : [];
   });
@@ -137,28 +186,17 @@ function withBuiltIns(dynamic: readonly ModelCatalogEntry[]): ModelCatalogEntry[
   return [...models, ...dynamic.filter((model) => !known.has(model.id))];
 }
 
-function openRouterModels(fetcher: typeof fetch): Promise<ModelCatalogEntry[]> {
-  const entry = cache.get(fetcher) ?? { expiresAt: 0 };
-  cache.set(fetcher, entry);
-  if (entry.expiresAt > Date.now()) return Promise.resolve(entry.dynamic ?? []);
-  entry.inFlight ??= fetchOpenRouterModels(fetcher)
-    .then((dynamic) => {
-      entry.dynamic = dynamic;
-      entry.expiresAt = Date.now() + CACHE_TTL_MS;
-      return dynamic;
-    })
-    .catch(() => {
-      entry.expiresAt = Date.now() + FAILURE_TTL_MS;
-      return entry.dynamic ?? [];
-    })
-    .finally(() => {
-      delete entry.inFlight;
-    });
-  return entry.inFlight;
+function openRouterCatalog(fetcher: typeof fetch) {
+  let catalog = openRouterCatalogs.get(fetcher);
+  if (!catalog) {
+    catalog = createCatalogCache("[model] OpenRouter catalog refresh", () => fetchOpenRouterModels(fetcher));
+    openRouterCatalogs.set(fetcher, catalog);
+  }
+  return catalog;
 }
 
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
-  return withBuiltIns(await openRouterModels(fetcher));
+  return withBuiltIns((await openRouterCatalog(fetcher).get()) ?? []);
 }
 
 export function selectableCatalog(catalog: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
@@ -169,7 +207,6 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   models: ModelCatalogEntry[];
   refreshing: boolean;
 } {
-  void openRouterModels(fetcher);
-  const entry = cache.get(fetcher);
-  return { models: withBuiltIns(entry?.dynamic ?? []), refreshing: !!entry?.inFlight };
+  const { value, refreshing } = openRouterCatalog(fetcher).cached();
+  return { models: withBuiltIns(value ?? []), refreshing };
 }

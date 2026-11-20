@@ -43,7 +43,11 @@ import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-b
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
-import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
+import type {
+  CustomProviderKeyStatus,
+  CustomProviderStore,
+  ModelCredentialStore,
+} from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
@@ -783,6 +787,7 @@ export interface AppDeps {
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;
+  customProviderStatuses?: () => Promise<CustomProviderKeyStatus[]>;
   acl: AclStore;
   admin?: AdminService;
   skills: SkillStore;
