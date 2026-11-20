@@ -9,6 +9,7 @@ import { composioCallbackRoutes } from "../src/api/routes/composio-callback.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
+import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -155,6 +156,65 @@ test("company credentials require an applicable grant and must be enabled", asyn
   f.replies.push({ items: [], next_cursor: null });
   assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
   assert.equal(new Headers(f.calls[0]!.init?.headers).get("x-api-key"), "company-key");
+});
+
+test("the deployment's Composio key serves a granted org that stores none, and an org's own key comes first", async () => {
+  const f = fixture();
+  const org = scopeId("org", orgId());
+  const keychain = f.deps.serviceCreds!;
+  f.deps.serviceCreds = withDeploymentCredentials(keychain, org, [
+    {
+      slug: "composio",
+      name: "Composio",
+      secret: "deployment-key",
+      host: "",
+      delivery: "env",
+      envKey: "COMPOSIO_API_KEY",
+    },
+  ]);
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403, "the default still needs a grant");
+  await f.deps.acl!.grant(tenant, {
+    ownerScopeId: org,
+    ref: "service-cred:composio",
+    granteeScopeId: org,
+    permission: "read",
+    grantedBy: "admin",
+  });
+  f.replies.push({ items: [], next_cursor: null });
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
+  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "deployment-key");
+
+  await keychain.setServiceCredential(org, {
+    slug: "own-composio",
+    name: "Our Composio",
+    delivery: "env",
+    envKey: "COMPOSIO_API_KEY",
+    secret: "own-key",
+    host: "",
+  });
+  await f.deps.acl!.grant(tenant, {
+    ownerScopeId: org,
+    ref: "service-cred:own-composio",
+    granteeScopeId: org,
+    permission: "read",
+    grantedBy: "admin",
+  });
+  f.replies.push({ items: [], next_cursor: null });
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200, "no ambiguity with the deployment default");
+  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "own-key");
+
+  await keychain.deleteServiceCredential(org, "own-composio");
+  await keychain.setServiceCredential(org, {
+    slug: "composio",
+    name: "Composio",
+    delivery: "env",
+    envKey: "COMPOSIO_API_KEY",
+    secret: "migrated-key",
+    host: "",
+  });
+  f.replies.push({ items: [], next_cursor: null });
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
+  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "migrated-key");
 });
 
 test("catalog preserves provider usage order, pagination, and strips raw fields", async () => {

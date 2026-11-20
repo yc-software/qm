@@ -473,7 +473,9 @@ export async function loadServiceCredentialGrants(turn: {
     );
   const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
     const granted = await aclGrantedServiceCredSlugs();
-    if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
+    if (orgWideAudience)
+      for (const record of records)
+        if (record.source === "deployment" && !isBackendCredential(record)) granted.add(record.slug);
     return granted;
   };
   const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) => serviceAllowed(record.slug));

@@ -122,12 +122,81 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
   );
 });
 
-function memoryStore(): ServiceCredentialStore & { writes: string[] } {
+const composioEntry = {
+  slug: "composio",
+  displayName: "Composio",
+  secretEnv: "COMPOSIO_KEY",
+  delivery: "env",
+  envKey: "COMPOSIO_API_KEY",
+};
+const COMPOSIO_KEY = "deployment-composio-key";
+
+test("BROKER_CREDENTIALS can supply the Composio key as an env-delivered default, and nothing else", () => {
+  assert.deepEqual(deploymentBrokerCredentialsFromEnv(envWith([composioEntry], { COMPOSIO_KEY })), [
+    { slug: "composio", name: "Composio", secret: COMPOSIO_KEY, host: "", delivery: "env", envKey: "COMPOSIO_API_KEY" },
+  ]);
+  const cases: Array<[unknown, RegExp]> = [
+    [[{ ...composioEntry, envKey: "OPENAI_API_KEY" }], /only for the Composio key/],
+    [[{ ...composioEntry, envKey: undefined }], /only for the Composio key/],
+    [[{ ...composioEntry, delivery: "broker" }], /delivery must be "env"/],
+    [[{ ...composioEntry, delivery: undefined }], /delivery must be "env"/],
+    [[{ ...composioEntry, host: "backend.composio.dev" }], /host only applies to broker delivery/],
+    [[{ ...composioEntry, maxRequestsPerDay: 5 }], /maxRequestsPerDay only applies to broker delivery/],
+    [[composioEntry, { ...composioEntry, slug: "composio-2" }], /more than one env-delivered Composio key/],
+    [[{ ...composioEntry, secretEnv: "MISSING_KEY" }], /MISSING_KEY is unset or empty/],
+  ];
+  for (const [list, pattern] of cases) {
+    assert.throws(
+      () => deploymentBrokerCredentialsFromEnv(envWith(list, { COMPOSIO_KEY })),
+      (error: Error) => pattern.test(error.message) && !error.message.includes(COMPOSIO_KEY),
+      String(pattern),
+    );
+  }
+});
+
+test("the deployment Composio key fills in only where the org stores none with its slug, and reserves nothing", async () => {
+  const defaults = deploymentBrokerCredentialsFromEnv(envWith([composioEntry], { COMPOSIO_KEY }));
+  const bare = withDeploymentCredentials(memoryStore(), ORG, defaults);
+  const listed = await bare.listServiceCredentials(ORG);
+  assert.deepEqual(
+    listed.map((c) => [c.slug, c.source, c.delivery, c.envKey]),
+    [
+      ["composio", "deployment", "env", "COMPOSIO_API_KEY"],
+      ["search", undefined, "broker", undefined],
+      ["stored", undefined, "broker", undefined],
+    ],
+  );
+  assert.doesNotMatch(JSON.stringify(listed), new RegExp(COMPOSIO_KEY));
+  const supplied = await bare.getServiceCredentialSecret(ORG, "composio");
+  assert.equal(supplied?.secret, COMPOSIO_KEY);
+  assert.equal(supplied?.delivery, "env");
+  assert.equal(supplied?.envKey, "COMPOSIO_API_KEY");
+  assert.equal(supplied?.source, "deployment");
+  assert.equal(await bare.getServiceCredentialSecret("org:other", "composio"), null);
+
+  const ownProject = memoryStore(["composio", "stored"]);
+  const shadowed = withDeploymentCredentials(ownProject, ORG, defaults);
+  assert.deepEqual(
+    (await shadowed.listServiceCredentials(ORG)).map((c) => [c.slug, c.source]),
+    [
+      ["composio", undefined],
+      ["stored", undefined],
+    ],
+  );
+  assert.equal((await shadowed.getServiceCredentialSecret(ORG, "composio"))?.secret, "db-secret");
+  const input = { slug: "composio", name: "x", host: "", secret: "s" };
+  await shadowed.setServiceCredential(ORG, input);
+  await shadowed.setServiceCredentialIfCurrent(ORG, input, 1);
+  await shadowed.deleteServiceCredentialIfCurrent(ORG, "composio", 2);
+  assert.deepEqual(ownProject.writes, ["set:composio", "current:composio", "deleteIf:composio"]);
+});
+
+function memoryStore(slugs = ["search", "stored"]): ServiceCredentialStore & { writes: string[] } {
   const writes: string[] = [];
   return {
     writes,
     getServiceCredentialSecret: async (_scope, slug) =>
-      slug === "search" || slug === "stored"
+      slugs.includes(slug)
         ? {
             slug,
             name: "Stored",
@@ -139,7 +208,7 @@ function memoryStore(): ServiceCredentialStore & { writes: string[] } {
           }
         : null,
     listServiceCredentials: async () =>
-      ["search", "stored"].map((slug) => ({
+      slugs.map((slug) => ({
         slug,
         name: "Stored",
         delivery: "broker" as const,
