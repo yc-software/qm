@@ -35,6 +35,7 @@ export interface InboxPassSummary {
   verdicts: number;
   failures: string[];
   scanned: boolean;
+  rateLimited?: string;
   firstError?: unknown;
 }
 
@@ -154,10 +155,15 @@ export function createInboxPass(deps: InboxPassDeps): InboxPass {
       await Promise.all(
         items.slice(index, index + CONCURRENCY).map(async (item) => {
           try {
-            summary.checked++;
             if (await one(loop, item, ownerName, options.voiceProfile)) summary.verdicts++;
+            summary.checked++;
           } catch (error) {
-            if (error instanceof SourceRateLimited) stopped = true;
+            if (error instanceof SourceRateLimited) {
+              stopped = true;
+              summary.rateLimited ??= error.message;
+              return;
+            }
+            summary.checked++;
             fail("verdict_failed", `Inbox verdict for item ${item.id}: ${errMessage(error)}`, error);
           }
         }),

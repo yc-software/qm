@@ -52,6 +52,7 @@ interface SlackWorld {
   pageSize?: number;
   calls?: string[];
   gone?: string;
+  limited?: number;
 }
 
 function slackApi(world: SlackWorld) {
@@ -71,6 +72,8 @@ function slackApi(world: SlackWorld) {
         const user = users[String(params.user)];
         return { ok: true, user: { real_name: user?.name, profile: { image_72: user?.avatar } } };
       }
+      if (world.limited !== undefined && method.startsWith("conversations."))
+        throw Object.assign(new Error("rate limited"), { code: ErrorCode.RateLimitedError, retryAfter: world.limited });
       if (world.gone && method.startsWith("conversations."))
         throw Object.assign(new Error(`An API error occurred: ${world.gone}`), {
           code: ErrorCode.PlatformError,
@@ -836,4 +839,23 @@ test("Gmail reads the item's own mailbox and treats a missing thread as gone", a
   });
   assert.deepEqual(requested, ["company"]);
   assert.ok(seen.every((header) => header === "Bearer company-token"));
+});
+
+test("a Slack rate limit stops the pass quietly and later passes skip Slack", async () => {
+  const { items } = await slackFixture();
+  const world: SlackWorld = { history: [], limited: 120, calls: [] };
+  const errors: unknown[] = [];
+  const pass = createInboxPass({
+    items,
+    model: scriptedModel([]).model,
+    errors: { record: (_t, event) => void errors.push(event) },
+    fetch: createConversationFetcher(clientsFor(world)),
+    discover: async () => [],
+  });
+  const first = await pass(loop, { discover: false });
+  const calls = world.calls!.length;
+  const second = await pass(loop, { discover: false });
+  assert.deepEqual([first.checked, first.failures, errors, world.calls!.length], [0, [], [], calls]);
+  assert.equal(first.rateLimited, "Slack rate limited (retry after 120s); the next sync will retry");
+  assert.match(second.rateLimited!, /retry after 1[12]\ds/);
 });
