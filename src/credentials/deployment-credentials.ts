@@ -4,6 +4,7 @@ import {
   COMPOSIO_ENV_KEY,
   isBackendCredential,
   isComposioHost,
+  isUsableComposioKey,
   isValidBrokerHost,
   isValidBrokerMethod,
   isValidBrokerPathPrefix,
@@ -148,8 +149,7 @@ export function nonDeploymentCredential<T extends { source?: "deployment" }>(rec
   return record && record.source !== "deployment" ? record : null;
 }
 
-const ownsComposio = (stored: readonly PublicServiceCredential[]) =>
-  stored.some((c) => isBackendCredential(c) && c.enabled && c.hasSecret);
+const ownsComposio = (stored: readonly PublicServiceCredential[]) => stored.some(isUsableComposioKey);
 
 function reservedSlugError(slug: string): Error {
   return new Error(`credential "${slug}" is supplied by this deployment and cannot be changed here`);

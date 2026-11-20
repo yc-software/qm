@@ -24,6 +24,10 @@ export function isBackendCredential(c: { envKey?: string; fields?: ReadonlyArray
   return c.envKey === COMPOSIO_ENV_KEY || c.fields?.some((f) => f.envKey === COMPOSIO_ENV_KEY) === true;
 }
 
+export function isUsableComposioKey(c: PublicServiceCredential): boolean {
+  return c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === COMPOSIO_ENV_KEY;
+}
+
 export function isComposioHost(host: string): boolean {
   const normalized = host.toLowerCase().replace(/\.$/, "");
   return normalized === "composio.dev" || normalized.endsWith(".composio.dev");
