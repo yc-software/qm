@@ -164,7 +164,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   const appStatusTool = b.appStatusTool;
   if (
     appStatusTool !== undefined &&
-    (typeof appStatusTool !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]{0,63}$/.test(appStatusTool) || !apps.length)
+    (typeof appStatusTool !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(appStatusTool) || !apps.length)
   ) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",

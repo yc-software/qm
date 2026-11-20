@@ -10,7 +10,6 @@ export interface McpServerApp {
   toolkit: string;
   name: string;
   connectUrl: string;
-  /** Query parameter on connectUrl that QM fills with the page to come back to after connecting. */
   returnParam?: string;
 }
 
@@ -40,7 +39,6 @@ export interface McpServer {
   attestActor?: boolean;
   attestAudience?: AttestAudience;
   apps?: McpServerApp[];
-  /** Tool QM calls as the person for their apps' status; it answers { services: [{ id, connected }] }. */
   appStatusTool?: string;
   readOnly: boolean;
   enabled: boolean;
