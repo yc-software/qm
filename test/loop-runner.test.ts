@@ -6,6 +6,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { fireNeedsAttention, runLoopFire, type LoopRunnerEffects, type LoopStores } from "../src/loops/runner.ts";
+import { TransientTurnFailure } from "../src/core/turn-error.ts";
 import { scopeId } from "../src/types.ts";
 import type { Loop } from "../src/loops/types.ts";
 import { testMap } from "./support/test-database.ts";
@@ -158,7 +159,7 @@ test("an auto-ship that throws parks for human review without superseding or req
         ],
         ship: async (input) => {
           ships += 1;
-          if (ships === failAt) throw new Error("provider unavailable");
+          if (ships === failAt) throw new TransientTurnFailure("provider unavailable");
           return doShip(input);
         },
       }),
@@ -176,6 +177,7 @@ test("an auto-ship that throws parks for human review without superseding or req
     );
     assert.deepEqual(summary.parked, [item.id]);
     assert.deepEqual(summary.continued, []);
+    assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
     const next = await runLoopFire(loop, s, effects(s));
     assert.equal(next.worked, 0);
   }
@@ -255,15 +257,35 @@ test("a failing item is retried until its attempt cap, then parked", async () =>
   const loop = await loopIn(s, { caps: { maxItemAttempts: 2 } });
   const boom = effects(s, {
     work: async () => {
-      throw new Error("sandbox died");
+      throw new TransientTurnFailure("sandbox died");
     },
   });
   const first = await runLoopFire(loop, s, boom);
   assert.equal(first.continued.length, 1);
   assert.deepEqual(first.failures, ["SENTRY-1: sandbox died"]);
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
   const second = await runLoopFire(loop, s, boom);
   assert.equal(second.parked.length, 1);
+  assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 1);
   assert.equal((await s.items.get(second.parked[0]!))?.parkedReason, "sandbox died");
+});
+
+test("a failing item's cause goes to the log, and its failure line and park reason stay short", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxItemAttempts: 1 } });
+  const oom = effects(s, {
+    work: async () => {
+      throw new Error("sandbox died", { cause: new Error("out of memory") });
+    },
+  });
+  const summary = await runLoopFire(loop, s, oom);
+  assert.deepEqual(summary.failures, ["SENTRY-1: sandbox died"]);
+  assert.equal((await s.items.get(summary.parked[0]!))?.parkedReason, "sandbox died");
+  assert.ok(
+    logged.some((line) => line.includes(`[loops] ${loop.id} SENTRY-1 failed: sandbox died <- Error: out of memory`)),
+  );
 });
 
 test("a failing item without an explicit cap parks at the default attempt limit", async () => {

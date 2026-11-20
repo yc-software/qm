@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
-import { swallow } from "../util/errors.ts";
+import { errText, swallow } from "../util/errors.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -77,10 +77,6 @@ const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
 
 function wholeSeconds(ms: number): number {
   return Math.max(1000, Math.ceil(ms / 1000) * 1000);
-}
-
-function errText(err: unknown): string {
-  return String((err as Error)?.message ?? err);
 }
 
 type ModalSdk = typeof import("modal");

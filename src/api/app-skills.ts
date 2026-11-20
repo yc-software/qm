@@ -1,5 +1,4 @@
 import type { ScopeId } from "../types.ts";
-import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
@@ -16,6 +15,7 @@ import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -154,11 +154,12 @@ async function reconcilePack(
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
+    console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
     await packs.recordImport(id, {
       at: Date.now(),
       commit: pack.ref,
       status: "error",
-      error: errMessage(e),
+      error: errText(e),
     });
     throw e;
   }
@@ -220,11 +221,12 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
+      console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
       await packs.recordImport(id, {
         at: Date.now(),
         commit: pack.ref,
         status: "error",
-        error: errMessage(e),
+        error: errText(e),
       });
       throw e;
     }
@@ -342,11 +344,12 @@ export function createSkillMethods(
         const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
         return await packs.update(pack.id, { available: plan.counts.eligible });
       } catch (e) {
+        console.error("%s", `[skills] pack ${pack.id} import failed:`, errMessage(e));
         await packs.recordImport(pack.id, {
           at: Date.now(),
           commit: pack.ref,
           status: "error",
-          error: errMessage(e),
+          error: errText(e),
         });
         return (await packs.get(pack.id)) ?? pack;
       }

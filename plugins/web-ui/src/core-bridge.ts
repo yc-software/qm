@@ -19,7 +19,7 @@ import type {
   TextContent,
 } from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import { errMessage, swallow } from "../../chassis/src/errors.ts";
+import { errChain, errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
@@ -1454,7 +1454,7 @@ async function drive(
       fail(stream, partial, errorMessage, true);
       return;
     }
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
+    fail(stream, partial, errChain(e));
   } finally {
     dropStopForGeneration(slot, gen);
   }
@@ -1503,7 +1503,7 @@ async function resumeDrive(
     work.status = "failed";
     work.finishedAt = Date.now();
     notify();
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
+    fail(stream, partial, errChain(e));
   } finally {
     dropStopForGeneration(slot, gen);
   }

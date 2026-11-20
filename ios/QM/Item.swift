@@ -49,7 +49,6 @@ struct Item: Decodable, Identifiable {
     step = try c.decodeIfPresent(Int.self, forKey: .step)
     errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode)
     body = try c.decodeIfPresent(ItemBody.self, forKey: .body)
-    if kind == "ToolCall" || kind == "ToolResult" { _ = try c.decode(String.self, forKey: .callId) }
     if kind == "Elicitation" || kind == "ElicitationResponse" {
       _ = try c.decode(String.self, forKey: .elicitId)
     }
