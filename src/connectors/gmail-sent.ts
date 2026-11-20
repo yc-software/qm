@@ -1,4 +1,4 @@
-import { GmailApiError, gmailApi } from "./gmail-api.ts";
+import { GoogleApiError, gmailApi } from "./google-api.ts";
 
 export interface SentEmail {
   id: string;
@@ -48,7 +48,7 @@ export async function listSentEmails(
             `messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=To&metadataHeaders=Subject`,
           );
         } catch (error) {
-          if (error instanceof GmailApiError && error.status === 404) return null;
+          if (error instanceof GoogleApiError && error.status === 404) return null;
           throw error;
         }
         const header = (name: string): string =>
@@ -82,7 +82,7 @@ export async function getSentEmail(
 > {
   const path = `messages/${encodeURIComponent(id)}?format=full`;
   const message = await gmailApi(token, fetchImpl)<GmailMessage>(path, { timeoutMs: 15_000 });
-  if (!message.labelIds?.includes("SENT")) throw new GmailApiError(path, 404, 0, "");
+  if (!message.labelIds?.includes("SENT")) throw new GoogleApiError(path, 404, 0, "");
   const header = (name: string): string =>
     message.payload?.headers?.find((h) => h.name.toLowerCase() === name)?.value ?? "";
   const parts: GmailPart[] = [];

@@ -117,7 +117,11 @@ test("Gmail upstream failures map to reconnect, not found, or retry responses wi
         deps: { connectorTokens: { connectorDerivedAuth: async () => ({ accessToken: "token" }) } },
       } as unknown as ApiCtx);
       assert.equal(code, status);
-      assert.deepEqual(JSON.parse(body), { error: "gmail_unavailable", message });
+      assert.deepEqual(JSON.parse(body), {
+        error: "gmail_unavailable",
+        ...(status === 409 ? { reconnect: true } : {}),
+        message,
+      });
     }
   } finally {
     globalThis.fetch = originalFetch;

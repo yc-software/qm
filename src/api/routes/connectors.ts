@@ -1,5 +1,15 @@
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
-import { GmailApiError } from "../../connectors/gmail-api.ts";
+import { GoogleApiError } from "../../connectors/google-api.ts";
+import {
+  CalendarInputError,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  listCalendarEvents,
+  parseEventPatch,
+  updateCalendarEvent,
+  type EventInput,
+  type EventPatch,
+} from "../../connectors/google-calendar.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -20,11 +30,11 @@ import {
   oauthCallbackUrl,
 } from "../../connectors/oauth.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
-import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
+import type { ConnectorTokenStore, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit, isObj, livePersonTurn } from "./shared.ts";
@@ -582,50 +592,117 @@ export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   },
 ];
 
-export async function gmailSent(ctx: ApiCtx): Promise<void> {
+async function personGoogleAuth(
+  ctx: ApiCtx,
+  host: string,
+  notConnectedMessage: string,
+): Promise<{ accountType: AccountType; accessToken: string } | null> {
   const principal = ctx.actor?.p;
   ctx.res.setHeader("Cache-Control", "no-store");
-  if (!principal) return sendJson(ctx.res, 403, { error: "forbidden", message: "Sign in to read sent mail." });
+  if (!principal) {
+    sendJson(ctx.res, 403, { error: "forbidden", message: "Sign in to use your Google account." });
+    return null;
+  }
   const requestedAccountType = ctx.url.searchParams.get("accountType");
-  if (requestedAccountType !== null && !isAccountType(requestedAccountType))
-    return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (requestedAccountType !== null && !isAccountType(requestedAccountType)) {
+    sendJson(ctx.res, 400, { error: "bad_request" });
+    return null;
+  }
+  let authError: unknown;
+  for (const candidate of requestedAccountType ? [requestedAccountType] : ACCOUNT_TYPES) {
+    try {
+      const auth = await ctx.deps.connectorTokens?.connectorDerivedAuth(host, principal, candidate);
+      if (auth) return { accountType: candidate, accessToken: auth.accessToken };
+    } catch (error) {
+      authError ??= error;
+    }
+  }
+  if (authError) throw authError;
+  sendJson(ctx.res, 409, { error: "not_connected", message: notConnectedMessage });
+  return null;
+}
+
+function sendGoogleFailure(
+  ctx: ApiCtx,
+  error: unknown,
+  code: string,
+  messages: { reconnect: string; retry: string },
+): void {
+  const upstream = error instanceof GoogleApiError ? error.status : 0;
+  const reconnect = upstream === 401 || upstream === 403;
+  let status = upstream === 404 ? 404 : 502;
+  if (reconnect) status = 409;
+  const detail = error instanceof GoogleApiError ? `${error.status} ${error.detail}` : undefined;
+  if (reconnect) console.warn(`[google] ${code}: ${errMessage(error)} ${detail}`);
+  else reportFailure(`connectors: ${code}`, error, detail);
+  sendJson(ctx.res, status, {
+    error: code,
+    ...(reconnect ? { reconnect: true } : {}),
+    message: reconnect ? messages.reconnect : messages.retry,
+  });
+}
+
+export async function gmailSent(ctx: ApiCtx): Promise<void> {
   const pageToken = ctx.url.searchParams.get("pageToken") ?? undefined;
   if (pageToken && pageToken.length > 2048) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    let accountType: AccountType | undefined;
-    let auth: DerivedOAuthAuth | null | undefined;
-    let authError: unknown;
-    for (const candidate of requestedAccountType ? [requestedAccountType] : ACCOUNT_TYPES) {
-      try {
-        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
-        if (auth) {
-          accountType = candidate;
-          break;
-        }
-      } catch (error) {
-        authError ??= error;
-      }
-    }
-    if (!auth && authError) throw authError;
-    if (!auth || !accountType)
-      return sendJson(ctx.res, 409, {
-        error: "not_connected",
-        message: "Connect this Google account in Settings to see sent mail.",
-      });
+    const google = await personGoogleAuth(
+      ctx,
+      "gmail.googleapis.com",
+      "Connect this Google account in Settings to see sent mail.",
+    );
+    if (!google) return;
     return sendJson(ctx.res, 200, {
       ...(ctx.params.messageId
-        ? await getSentEmail(auth.accessToken, ctx.params.messageId)
-        : await listSentEmails(auth.accessToken, pageToken)),
-      accountType,
+        ? await getSentEmail(google.accessToken, ctx.params.messageId)
+        : await listSentEmails(google.accessToken, pageToken)),
+      accountType: google.accountType,
     });
   } catch (error) {
-    const upstream = error instanceof GmailApiError ? error.status : 0;
-    const reconnect = upstream === 401 || upstream === 403;
-    let status = upstream === 404 ? 404 : 502;
-    if (reconnect) status = 409;
-    return sendJson(ctx.res, status, {
-      error: "gmail_unavailable",
-      message: reconnect ? "Reconnect Google to read sent mail." : "Couldn't load sent mail from Gmail. Try again.",
+    return sendGoogleFailure(ctx, error, "gmail_unavailable", {
+      reconnect: "Reconnect Google to read sent mail.",
+      retry: "Couldn't load sent mail from Gmail. Try again.",
+    });
+  }
+}
+
+export async function googleCalendarEvents(ctx: ApiCtx): Promise<void> {
+  const method = ctx.req.method;
+  const timeMin = ctx.url.searchParams.get("timeMin") ?? "";
+  const timeMax = ctx.url.searchParams.get("timeMax") ?? "";
+  if (method === "GET" && (Number.isNaN(Date.parse(timeMin)) || Number.isNaN(Date.parse(timeMax))))
+    return sendJson(ctx.res, 400, { error: "bad_request" });
+  let input: EventPatch | undefined;
+  try {
+    if (method === "POST" || method === "PATCH") input = parseEventPatch(ctx.body, method === "PATCH");
+  } catch (error) {
+    if (error instanceof CalendarInputError) return sendJson(ctx.res, 400, { error: "bad_request" });
+    throw error;
+  }
+  try {
+    const google = await personGoogleAuth(
+      ctx,
+      "www.googleapis.com",
+      "Connect your Google account in Settings to see your calendar.",
+    );
+    if (!google) return;
+    const { calendarId = "", eventId = "" } = ctx.params;
+    if (method === "GET")
+      return sendJson(ctx.res, 200, {
+        accountType: google.accountType,
+        ...(await listCalendarEvents(google.accessToken, timeMin, timeMax)),
+      });
+    if (method === "POST")
+      return sendJson(ctx.res, 200, await createCalendarEvent(google.accessToken, input as EventInput));
+    if (method === "PATCH")
+      return sendJson(ctx.res, 200, await updateCalendarEvent(google.accessToken, calendarId, eventId, input ?? {}));
+    await deleteCalendarEvent(google.accessToken, calendarId, eventId);
+    ctx.res.writeHead(204);
+    ctx.res.end();
+  } catch (error) {
+    return sendGoogleFailure(ctx, error, "calendar_unavailable", {
+      reconnect: "Reconnect Google to use your calendar.",
+      retry: "Couldn't reach Google Calendar.",
     });
   }
 }
@@ -634,6 +711,20 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
+    ...(["GET", "POST"] as const).map((method) => ({
+      method,
+      path: "/v1/connectors/google-calendar/events",
+      actor: "person" as const,
+      auth: "source" as const,
+      handle: googleCalendarEvents,
+    })),
+    ...(["PATCH", "DELETE"] as const).map((method) => ({
+      method,
+      path: "/v1/connectors/google-calendar/events/:calendarId/:eventId",
+      actor: "person" as const,
+      auth: "source" as const,
+      handle: googleCalendarEvents,
+    })),
   ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   {

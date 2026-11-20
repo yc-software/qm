@@ -1,7 +1,7 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
-import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
+import { GoogleApiError, gmailApi } from "../../connectors/google-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -124,7 +124,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
       },
     });
   } catch (error) {
-    if (!(error instanceof GmailApiError)) throw error;
+    if (!(error instanceof GoogleApiError)) throw error;
     return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
   }
   return { ok: true, result: draft.body };
