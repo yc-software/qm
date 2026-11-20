@@ -108,14 +108,14 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       ),
     );
     const rawDelta = unclaimed.filter((m) => won.has(m.ts));
-    const delta = asPolicy(rawDelta.filter((m) => !m.handled));
+    const delta = pending.filter((m) => won.has(m.ts));
     if (deps.ambientCursors && rawDelta.length)
       await deps.ambientCursors
         .put(cursorKey, {
           lastJudgedTs: rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? ""),
           lastJudgedAt: Date.now(),
         })
-        .catch(() => undefined);
+        .catch(swallowAs("ambient: cursor write", undefined));
     if (!delta.length && !scheduled) return { act: false };
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
