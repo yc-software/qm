@@ -341,7 +341,7 @@ export function createTurnMethods(
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
-        ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
+        ...(req.clientTools !== undefined ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.clientSurface ? { clientSurface: req.clientSurface } : {}),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),

@@ -1,39 +1,36 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { desktopComputerTool } from "../plugins/chassis/src/desktop-computer.ts";
-import { scopeId } from "../src/types.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 
-test("desktop-created sessions retain the original tool schema when resumed elsewhere", async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
-  const first = await store.getOrCreateByThread(
-    "web:alice:desktop",
+test("turn tools replace stored page tools, with explicit empty and absent declarations distinct", async () => {
+  const agent = createMockAgent();
+  const run = agent.runTurn;
+  const seen: unknown[] = [];
+  agent.runTurn = async (turn) => {
+    seen.push(turn.clientTools);
+    return run(turn);
+  };
+  const built = buildApp(testConfig(), { agent });
+  const request = {
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "web:U1:tools" },
+    text: "hello",
+  };
+  const tools = (name: string) => [{ name, description: "Read the open page", inputSchema: { type: "object" } }];
+  const session = await built.sessions.getOrCreateByThread(
+    request.conversation.threadRef,
     "dm",
-    scopeId("personal", "alice"),
+    "personal:U1",
     undefined,
     "web",
-    [desktopComputerTool],
+    tools("ui__first"),
   );
-  const browser = await store.getOrCreateByThread(first.threadRef, "dm", first.scopeId, undefined, "web");
-  assert.deepEqual(browser.clientTools, [desktopComputerTool]);
-  const changed = await store.getOrCreateByThread(first.threadRef, "dm", first.scopeId, undefined, "web", [
-    { ...desktopComputerTool, description: "changed" },
-  ]);
-  assert.deepEqual(changed.clientTools, [desktopComputerTool]);
-});
-
-test("opening an existing browser session in desktop does not change its tools", async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
-  const first = await store.getOrCreateByThread(
-    "web:alice:browser",
-    "dm",
-    scopeId("personal", "alice"),
-    undefined,
-    "web",
-  );
-  const desktop = await store.getOrCreateByThread(first.threadRef, "dm", first.scopeId, undefined, "web", [
-    desktopComputerTool,
-  ]);
-  assert.equal(desktop.clientTools, undefined);
+  await built.sessions.addParticipant(session.id, "U1");
+  for (const clientTools of [tools("ui__first"), tools("ui__second"), [], undefined]) {
+    assert.equal((await built.app.turn({ ...request, ...(clientTools ? { clientTools } : {}) })).status, "ok");
+    assert.deepEqual(seen.at(-1), clientTools?.length === 0 ? undefined : (clientTools ?? tools("ui__first")));
+  }
 });

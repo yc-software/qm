@@ -2426,8 +2426,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
             delegateWork,
-            ...((session.clientTools ?? input.clientTools)?.length
-              ? { clientTools: session.clientTools ?? input.clientTools }
+            ...((input.clientTools ?? session.clientTools)?.length
+              ? { clientTools: input.clientTools ?? session.clientTools }
               : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(replyOptional ? { replyOptional: true } : {}),
