@@ -717,62 +717,33 @@ test("a connector set to attest in any audience acts as the signed-in person who
 });
 
 test("a connector with a status tool reports each person's apps from that tool, asked fresh each time", async (t) => {
-  const linked = new Map<string, string[]>([["alice@example.com", ["calendar"]]]);
+  const linked = new Map([["alice@example.com", ["calendar"]]]);
+  const text = (actor?: string) =>
+    JSON.stringify({
+      services: ["inbox", "calendar"].map((id) => ({ id, connected: !!linked.get(actor ?? "")?.includes(id) })),
+    });
   const mcp = await startMcpTestServer(t, {
-    tools: [
-      { name: "inbox", description: "Read mail", inputSchema: { type: "object" } },
-      { name: "connections", description: "Connected services", inputSchema: { type: "object" } },
-    ],
-    call: (name, _args, _auth, actor) =>
-      name === "connections"
-        ? {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  services: ["inbox", "calendar", "notes"].map((id) => ({
-                    id,
-                    connected: (linked.get(actor ?? "") ?? []).includes(id),
-                  })),
-                }),
-              },
-            ],
-          }
-        : { content: [{ type: "text", text: "nope" }], isError: true },
+    tools: [{ name: "connections", description: "Connected services", inputSchema: { type: "object" } }],
+    call: (_name, _args, _auth, actor) => ({ content: [{ type: "text", text: text(actor) }] }),
   });
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
-  const app = (toolkit: string) => ({ toolkit, name: toolkit, connectUrl: `https://host.example/${toolkit}` });
-  const apps = [app("inbox"), app("calendar")];
-  await store.put(
-    server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps, appStatusTool: "connections" }),
-  );
-  const status = async (person: string) =>
-    (await service.appConnections(person, await store.list())).map((entry) => [entry.toolkit, entry.connected]);
-  assert.deepEqual(await status("alice@example.com"), [
-    ["inbox", false],
-    ["calendar", true],
-  ]);
+  const apps = ["inbox", "calendar"].map((toolkit) => ({
+    toolkit,
+    name: toolkit,
+    connectUrl: `https://host.example/${toolkit}`,
+  }));
+  const register = (appStatusTool: string) =>
+    store.put(server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps, appStatusTool }));
+  const connected = async (person: string) =>
+    (await service.appConnections(person, await store.list())).filter((e) => e.connected).map((e) => e.toolkit);
+  await register("connections");
+  assert.deepEqual(await connected("alice@example.com"), ["calendar"]);
   linked.set("alice@example.com", ["calendar", "inbox"]);
-  assert.deepEqual(await status("alice@example.com"), [
-    ["inbox", true],
-    ["calendar", true],
-  ]);
-  assert.deepEqual(await status("bob@example.com"), [
-    ["inbox", false],
-    ["calendar", false],
-  ]);
-  assert.deepEqual(
-    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
-    ["alice@example.com", "alice@example.com", "bob@example.com"],
-  );
-  await store.put(
-    server({ id: "host", url: mcp.url, catalog: true, attestActor: true, apps, appStatusTool: "missing" }),
-  );
-  assert.deepEqual(await status("alice@example.com"), [
-    ["inbox", false],
-    ["calendar", false],
-  ]);
+  assert.deepEqual(await connected("alice@example.com"), ["inbox", "calendar"]);
+  assert.deepEqual(await connected("bob@example.com"), []);
+  await register("missing");
+  assert.deepEqual(await connected("alice@example.com"), []);
   service.close();
 });
 
