@@ -201,7 +201,11 @@ async function verifyCapability(
     return null;
   }
   return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
-    ? { ...capability, triggered: true }
+    ? {
+        ...capability,
+        triggered: true,
+        ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined } } : {}),
+      }
     : capability;
 }
 

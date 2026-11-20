@@ -184,6 +184,7 @@ import {
 } from "./ui";
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
+import { htmlPreviewCard } from "./html-preview";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
@@ -2447,6 +2448,37 @@ export function createChatSurface(
     return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
 
+  function assistantText(
+    text: string,
+    returnKey: string | null,
+    body: (text: string) => TemplateResult,
+  ): TemplateResult[] {
+    const parts: TemplateResult[] = [];
+    for (const [partIndex, part] of setupContent(text).entries()) {
+      if (part.type !== "text") {
+        if (returnKey !== null)
+          parts.push(
+            html`<qm-onboarding-welcome
+              .me=${appState.me}
+              .base=${withBase("")}
+              .widget=${part.type === "setup" ? "apps" : part.type}
+              .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
+              .onConnected=${continueAfterConnection}
+              .returnKey=${`${returnKey}:${partIndex}`}
+              .setupOnly=${true}
+              .animateWelcome=${false}
+            ></qm-onboarding-welcome>`,
+          );
+        continue;
+      }
+      const links = part.text.trim() ? connectorLinksIn(part.text, location.origin) : [];
+      const shown = links.length ? stripConnectorLinks(part.text, links) : part.text;
+      if (shown.trim()) parts.push(body(shown));
+      for (const link of links) parts.push(connectorWidget(link));
+    }
+    return parts;
+  }
+
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
@@ -2462,34 +2494,17 @@ export function createChatSurface(
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
         const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
-        for (const [partIndex, part] of setupContent(assistantDisplayText(workActive ? "" : text)).entries()) {
-          if (part.type !== "text") {
-            if (!(message as AssistantWork).persisted) continue;
-            parts.push(
-              html`<qm-onboarding-welcome
-                .me=${appState.me}
-                .base=${withBase("")}
-                .widget=${part.type === "setup" ? "apps" : part.type}
-                .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
-                .onConnected=${continueAfterConnection}
-                .returnKey=${`reply:${message.timestamp}:${chunkIndex}:${partIndex}`}
-                .setupOnly=${true}
-                .animateWelcome=${false}
-              ></qm-onboarding-welcome>`,
-            );
-            continue;
-          }
-          const shown = part.text;
-          const links = shown.trim() ? connectorLinksIn(shown, location.origin) : [];
-          const body = links.length ? stripConnectorLinks(shown, links) : shown;
-          if (body.trim())
-            parts.push(
+        const baseline = (message as AssistantWork).streamingBaseline ?? "";
+        parts.push(
+          ...assistantText(
+            assistantDisplayText(workActive ? "" : text),
+            (message as AssistantWork).persisted ? `reply:${message.timestamp}:${chunkIndex}` : null,
+            (body) =>
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
+                ${markdown(body, animating, isStreaming && work ? streamedAnswer(baseline, work) : baseline)}
               </div>`,
-            );
-          for (const link of links) parts.push(connectorWidget(link));
-        }
+          ),
+        );
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
         const live = animating && chunkIndex === message.content.length - 1;
@@ -3226,11 +3241,12 @@ export function createChatSurface(
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
       if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
-      const replies: string[] = [];
+      const replies: TemplateResult[] = [];
       const timeline = segment.filter((item) => {
-        const speech = item.kind === "tool" ? postSpeechText(item.row) : null;
+        if (item.kind !== "tool") return true;
+        const speech = postSpeechText(item.row);
         if (speech === null) return true;
-        replies.push(speech);
+        replies.push(spokenText(speech, `reply:${item.row.result?.createdAt}:0`, "streaming-text"));
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
@@ -3257,7 +3273,7 @@ export function createChatSurface(
         !oneStep &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
-        return html`${renderTimelineItem(timeline[0]!, work, liveItem)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+        return html`${renderTimelineItem(timeline[0]!, work, liveItem)}${replies}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
@@ -3267,7 +3283,7 @@ export function createChatSurface(
                 if (live) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
               }}
             >
-              <summary class=${ending ? "stopped-head" : "work-head"}>
+              <summary class=${ending ? "stopped-head" : "work-head"} @click=${animateDetailsToggle}>
                 ${liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
               ${ending ? nothing : html`<div class="work-divider"></div>`}
@@ -3301,7 +3317,7 @@ export function createChatSurface(
                           class="activity-group work-fold"
                           ?open=${(active && last) || summary.attention}
                         >
-                          <summary class="work-head">
+                          <summary class="work-head" @click=${animateDetailsToggle}>
                             ${icon(groupIcon, 15)}<span>${summary.label}</span
                             ><span class="activity-chevron">${icon(ChevronRight, 14)}</span>
                           </summary>
@@ -3317,11 +3333,16 @@ export function createChatSurface(
           : nothing;
       if (ending && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
       const said = tail.trim()
-        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-            ${markdown(tail, animating, streamedAnswer(baseline, work))}
-          </div>`
+        ? assistantText(
+            tail,
+            null,
+            (body) =>
+              html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+                ${markdown(body, animating, streamedAnswer(baseline, work))}
+              </div>`,
+          )
         : nothing;
-      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      return html`${fold}${said}${replies}`;
     })}`;
   }
 
@@ -3431,8 +3452,15 @@ export function createChatSurface(
   }
 
   function interimReply(item: Item): TemplateResult {
-    const text = item.text ?? "";
-    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
+    return spokenText(item.text ?? "", `said:text:${item.seq}`, "work-said streaming-text");
+  }
+
+  function spokenText(text: string, returnKey: string, className: string): TemplateResult {
+    return html`${assistantText(
+      text,
+      returnKey,
+      (body) => html`<div class=${className} dir="auto">${markdown(body)}</div>`,
+    )}`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
@@ -3678,7 +3706,9 @@ export function createChatSurface(
       class="${classes} tool-expandable"
       @toggle=${(event: Event) => renderDisclosure(event.currentTarget as HTMLDetailsElement)}
     >
-      <summary class="tool-summary">${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span></summary>
+      <summary class="tool-summary" @click=${(event: MouseEvent) => animateDetailsToggle(event, renderDisclosure)}>
+        ${head}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+      </summary>
       <div
         class="tool-disclosure-host"
         ${ref((element) => {
@@ -3713,30 +3743,6 @@ export function createChatSurface(
   function inlineHtmlName(name?: string, mimeType?: string): boolean {
     if (mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "text/html") return true;
     return /\.html?$/i.test(name ?? "");
-  }
-
-  const dismissedHtmlPreviews = new Set<string>();
-
-  function inlineHtmlFrame(name: string, src: string, size?: number, href?: string): TemplateResult {
-    const key = `${chatState.sessionId ?? "new"}:${href ?? src}:${name}`;
-    const chip = fileChip(name, size, href);
-    if (dismissedHtmlPreviews.has(key)) return chip;
-    return html`<span class="file-html-unfurl"
-      ><span class="file-html-header"
-        ><span dir="auto">${name}</span
-        ><button
-          type="button"
-          aria-label="Dismiss ${name} preview"
-          title="Dismiss preview"
-          @click=${() => {
-            dismissedHtmlPreviews.add(key);
-            redrawTranscript();
-          }}
-        >
-          ${icon(X, 14)}
-        </button></span
-      ><iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy"></iframe>${chip}</span
-    >`;
   }
 
   function imageChip(name: string, size?: number, href?: string): TemplateResult {
@@ -3841,7 +3847,7 @@ export function createChatSurface(
       if (!src && a.content) {
         src = a.content.startsWith("data:") ? a.content : `data:text/html;base64,${a.content}`;
       }
-      if (src) return inlineHtmlFrame(a.fileName, src, a.size, artifactHref);
+      if (src) return htmlPreviewCard(a.fileName, src, a.size, artifactHref);
     }
     return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
   }
@@ -3855,7 +3861,7 @@ export function createChatSurface(
         ><img src=${href} alt=${file.name} loading="lazy"
       /></a>`;
     }
-    if (inlineHtmlName(file.name, file.mimetype)) return inlineHtmlFrame(file.name, href, file.sizeBytes, href);
+    if (inlineHtmlName(file.name, file.mimetype)) return htmlPreviewCard(file.name, href, file.sizeBytes, href);
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
 

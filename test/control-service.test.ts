@@ -1025,33 +1025,6 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
   );
 });
 
-test("a cron created and retargeted through capabilities preserves webhook routing when fired", async () => {
-  const { built, control } = setup();
-  const candidate = {
-    key: "webhook",
-    label: "this conversation",
-    type: "webhook",
-    target: "web:U1:conversation",
-    audienceScopeId: scopeId("personal", "U1"),
-    webhook: { binding: "00000000-0000-4000-8000-000000000001", url: "https://receiver.example/qm" },
-  };
-  const capability = claims("U1", scopeId("personal", "U1"), {
-    destinations: [candidate],
-    defaultDestinationKey: candidate.key,
-  });
-  const created = await control.createCron({ schedule: { everyMs: 300_000 }, text: "five-minute update" }, capability);
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.deepEqual(created.cron.destination?.webhook, candidate.webhook);
-  const retargeted = await control.retargetCron(created.cron.id, candidate.key, capability);
-  assert.ok(retargeted.ok, JSON.stringify(retargeted));
-  await runNowSettled(built.scheduler, created.cron.id);
-  const delivery = (await built.deliveries.pending("webhook"))[0]!;
-  assert.ok(delivery);
-  assert.equal(delivery.text, "five-minute update");
-  assert.deepEqual(delivery.destination.webhook, candidate.webhook);
-  assert.equal(delivery.destination.target, candidate.target);
-});
-
 test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, through a write grant or channel membership", async () => {
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string, extra: Partial<CapabilityClaims> = {}) =>
@@ -1136,4 +1109,35 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   );
   assert.ok(own.ok, JSON.stringify(own));
   assert.ok((await control.disableWebhook(hook.webhook.id, chanClaims("U2"))).ok);
+});
+
+test("a persona's owner gives it a cron from any conversation; it runs as the persona and others are refused", async () => {
+  const { built, control } = setup();
+  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+  const created = await built.app.personas!.create("U1", { name: "Ada" });
+  const personaId = (created as { value: { id: string } }).value.id;
+  const cron = { schedule: { everyMs: 60_000 }, action: "digest" };
+
+  const made = await control.createCron({ ...cron, persona: "ada" }, claims("U1"));
+  assert.ok(made.ok, JSON.stringify(made));
+  assert.equal(made.cron.ownerScopeId, `persona:${personaId}`);
+  assert.deepEqual(await built.app.cronOrigin(made.cron), { personaId });
+  const edited = await control.patchCron(made.cron.id, { title: "t" }, claims("U1", scopeId("channel", "C9")));
+  assert.ok(edited.ok, JSON.stringify(edited));
+
+  const note = await control.createCron({ schedule: cron.schedule, text: "hi", persona: personaId }, claims("U1"));
+  assert.ok(note.ok, JSON.stringify(note));
+  assert.equal((await built.app.cronOrigin(note.cron)).persona?.name, "Ada");
+
+  const theirs = await control.createCron({ ...cron, persona: personaId }, claims("U2"));
+  assert.equal(theirs.ok ? "created" : theirs.code, "forbidden");
+
+  const writer = [
+    { scopeId: "personal:U1", role: "owner" },
+    { scopeId: "personal:U2", role: "write" },
+  ];
+  await built.app.personas!.setAccess("U1", personaId, writer);
+  const granted = await control.createCron({ ...cron, persona: "Ada" }, claims("U2"));
+  assert.ok(granted.ok, JSON.stringify(granted));
+  assert.ok((await built.app.listCronsForViewer("U1")).visible.some((c) => c.id === granted.cron.id));
 });

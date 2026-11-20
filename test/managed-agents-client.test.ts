@@ -68,6 +68,12 @@ test("the manifest omits the template so Managed Agents lands a bare session on 
   assert.doesNotMatch(yaml, /^template:/m);
 });
 
+test("the manifest restricts egress to the listed hosts only when given", () => {
+  assert.doesNotMatch(managedAgentsManifest({ name: "n", template: "base" }), /egress:/);
+  const yaml = managedAgentsManifest({ name: "n", template: "base", egressAllow: ["proxy.example.com"] });
+  assert.match(yaml, /^egress:\n {2}- "proxy\.example\.com"\npermissions:/m);
+});
+
 test("the manifest carries size and idle timeout only when configured", () => {
   const bare = managedAgentsManifest({ name: "n", template: "base" });
   assert.doesNotMatch(bare, /size:|idle_timeout:/);

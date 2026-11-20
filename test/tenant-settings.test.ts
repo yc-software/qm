@@ -55,9 +55,11 @@ describe("tenant settings schema", () => {
 });
 
 describe("app host labels", () => {
-  it("split on the first hyphen, so handles with digits and app names with hyphens both survive", () => {
+  it("strip the resolved company's own handle, so hyphens in handles and app names both survive", () => {
     assert.equal(appHostLabel("nitroduck7", "sales-board-v2"), "nitroduck7-sales-board-v2");
     assert.equal(appNameFromLabel("nitroduck7-sales-board-v2", "nitroduck7"), "sales-board-v2");
+    assert.equal(appNameFromLabel("acme-labs-crm", "acme-labs"), "crm");
+    assert.equal(appNameFromLabel("acme-labs-crm", "acme"), "labs-crm");
     assert.equal(appNameFromLabel("nitroduck7-", "nitroduck7"), "nitroduck7-");
     assert.equal(appNameFromLabel("other-sales", "nitroduck7"), "other-sales");
     assert.equal(appNameFromLabel("sales-board", undefined), "sales-board");
@@ -105,6 +107,11 @@ describe("tenant settings and operator commands", () => {
       });
     assert.deepEqual(await read(a), { name: "Acme", key: "sk-a" });
     assert.deepEqual(await read(b), { name: "Beta", key: "sk-deployment" });
+    lines.length = 0;
+    await run("create");
+    const keyless = lines[0]!;
+    await run("settings", "set", keyless, "deploymentModelKey", "false");
+    await assert.rejects(read(keyless), /this workspace has no model gateway key of its own/);
   });
 
   it("checks allowed emails per tenant and leaves tenants without a list to the deployment", async () => {
@@ -198,7 +205,7 @@ describe("company app links", () => {
     }
   });
 
-  it("links a company's apps as <handle>-<app> on the apps domain, with the handle defaulting from its org slug", async () => {
+  it("links a company's apps as <handle>-<app> on the apps domain, with the handle defaulting to its org slug, hyphens kept", async () => {
     const [a, b] = db.tenants;
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     await db.owner.q(`UPDATE tenants SET settings = '{"handle":"beta7","orgSlug":"beta-co"}' WHERE id = $1`, [b]);
@@ -213,8 +220,8 @@ describe("company app links", () => {
           ];
         });
       assert.deepEqual(await link(a, "QM.example.test"), [
-        "nitroduck",
-        "https://nitroduck-sales-dashboard.qm.example.test/",
+        "nitro-duck",
+        "https://nitro-duck-sales-dashboard.qm.example.test/",
       ]);
       assert.deepEqual(await link(b, "qm.example.test"), ["beta7", "https://beta7-sales-dashboard.qm.example.test/"]);
       assert.deepEqual(await link(b), ["beta7", "https://mt.example.test/d/sales-dashboard/"]);
@@ -226,41 +233,50 @@ describe("company app links", () => {
 
   it("refuses a handle that is malformed, reserved or already another company's, including its derived default", async () => {
     const [a, b] = db.tenants;
-    for (const bad of ["a", "has-hyphen", "UPPER", "x".repeat(62), "admin", "mt", "www"])
+    for (const bad of ["a", "-lead", "trail-", "UPPER", "x".repeat(62), "admin", "mt", "www"])
       assert.equal(tenantSettingsSchema.safeParse({ handle: bad }).success, false, bad);
-    for (const good of ["nitroduck2", "x".repeat(61)])
+    for (const good of ["nitroduck2", "acme-labs", "x".repeat(61)])
       assert.equal(tenantSettingsSchema.safeParse({ handle: good }).success, true, good);
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     try {
       await assert.rejects(
-        db.owner.q(`UPDATE tenants SET settings = '{"handle":"nitroduck"}' WHERE id = $1`, [b]),
+        db.owner.q(`UPDATE tenants SET settings = '{"handle":"nitro-duck"}' WHERE id = $1`, [b]),
         /tenants_app_handle/,
       );
       await assert.rejects(
-        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('nitroduck')`)),
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('nitro-duck')`)),
         /tenants_app_handle/,
       );
       await assert.rejects(
         withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('auth')`)),
         /invalid app handle/,
       );
-      await withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('beta7')`));
+      await assert.rejects(
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('-beta')`)),
+        /invalid app handle/,
+      );
+      await withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('beta-7')`));
       const rows = await db.owner.q(`SELECT settings->>'handle' AS handle FROM tenants WHERE id = $1`, [b]);
-      assert.equal(rows[0]?.handle, "beta7");
-      const found = await db.app.q(`SELECT qm_tenant_for_app_host('beta7-sales-dash')::text AS id`);
+      assert.equal(rows[0]?.handle, "beta-7");
+      await db.owner.q(
+        `INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'dash', '{"name":"sales-dash"}'), ($2, 'x', '{"name":"x"}')`,
+        [b, a],
+      );
+      const found = await db.app.q(`SELECT qm_tenant_for_app_host('beta-7-sales-dash')::text AS id`);
       assert.equal(found[0]?.id, b);
-      const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitroduck-x')::text AS id`);
+      const unpublished = await db.app.q(`SELECT qm_tenant_for_app_host('beta-7-other')::text AS id`);
+      assert.equal(unpublished[0]?.id, null);
+      const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitro-duck-x')::text AS id`);
       assert.equal(derived[0]?.id, a);
       const longSlug = `nitro-${"duck".repeat(10)}`;
       await db.owner.q(`UPDATE tenants SET settings = jsonb_build_object('orgSlug', $2::text) WHERE id = $1`, [
         a,
         longSlug,
       ]);
-      const longDerived = await db.app.q(`SELECT qm_tenant_for_app_host($1)::text AS id`, [
-        `${longSlug.replace(/-/g, "")}-x`,
-      ]);
+      const longDerived = await db.app.q(`SELECT qm_tenant_for_app_host($1)::text AS id`, [`${longSlug}-x`]);
       assert.equal(longDerived[0]?.id, a);
     } finally {
+      await db.owner.q(`DELETE FROM deployments WHERE tenant_id = ANY($1)`, [[a, b]]);
       await db.owner.q(`UPDATE tenants SET settings = '{}' WHERE id = ANY($1)`, [[a, b]]);
     }
   });

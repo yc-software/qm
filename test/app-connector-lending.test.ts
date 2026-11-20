@@ -46,9 +46,10 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     tail: async () => [],
   };
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const deployStore = createDeployStore(testDeployBackings());
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(testDeployBackings()),
+    deployStore,
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 1 }),
@@ -130,7 +131,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     );
   const lend = (actorId: string, connectors: unknown, liveActor = true, run: object = {}) =>
     control(`/v1/apps/${d.id}/connectors`, { connectors }, { ...run, liveActor }, actorId);
-  return { d, app, deploy, audits, upstream, broker, lend, control };
+  return { d, app, deploy, deployStore, audits, upstream, broker, lend, control };
 }
 
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
@@ -198,7 +199,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
   assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
   assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
   for (const [path, body, claims] of [
-    [`/v1/apps/${h.d.id}/share`, { scope: "org" }, { triggered: true }],
+    [`/v1/shares/deploy/${h.d.id}`, { scope: "org" }, { triggered: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
   ] as const) {
@@ -243,6 +244,8 @@ test("moving the app out of its publisher's library withdraws the loan", async (
   await h.deploy.transferAppOwner(h.d.id, personalScope(CO_MANAGER), { callerId: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.detail?.includes("moved out of")));
+  assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /outside its publisher's own library/);
+  assert.equal((await h.lend(PUBLISHER, [])).status, 200, "withdrawing still works");
 });
 
 test("while the app borrows connectors, only the publisher can share it", async (t) => {
@@ -266,7 +269,7 @@ test("while the app borrows connectors, only the publisher can share it", async 
       },
       { notify: false },
     );
-  await lend(["slack.com"]);
+  await h.deployStore.setConnectors(d.id, ["slack.com"]);
   await assert.rejects(share(CO_MANAGER), /only the person who published/);
   await share(PUBLISHER);
   await lend([]);

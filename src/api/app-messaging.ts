@@ -20,13 +20,13 @@ import {
   type ReachResolution,
 } from "../reach/reach.ts";
 import { isVisible } from "../directory/visibility.ts";
-import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
-import { externalMemberActive } from "../identity/external-members.ts";
+import { signInMembers } from "../directory/sign-in-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
+import { linkedChanges, withSharing } from "./app-cron-share.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 import { editableIn, SLACK } from "../surfaces/registry.ts";
 import { trialBeforeSave } from "../cron/script.ts";
@@ -35,7 +35,6 @@ import type { App, AppDeps, CronEditor, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { personLabel } from "../identity/person-names.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
@@ -47,6 +46,8 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
     }
   }
   for (const project of await h.projectsForViewer(principalId)) scopeNames.set(project.scopeId, project.name);
+  const personas = await deps.personas?.list(principalId);
+  if (personas?.status === "ok") for (const p of personas.value) scopeNames.set(scopeId("persona", p.id), p.name);
   const allowed = (ownerScopeId: ScopeId): boolean => {
     const { kind, ref } = parseScopeId(ownerScopeId);
     return kind !== "group" || deps.projects?.recognizes(ref) !== true || scopeNames.has(ownerScopeId);
@@ -138,32 +139,13 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests;
   const contextRequestListeners = tenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
-  const identityMembers = async (): Promise<DirectoryMember[]> => {
-    const [externals, participants] = await Promise.all([
-      deps.identity.listExternalMembers(),
-      deps.sessions?.distinctParticipants() ?? [],
-    ]);
-    const users = await deps.users?.resolve(participants).catch(() => undefined);
-    const candidates: DirectoryMember[] = [
-      ...(deps.emailAuthMembers ?? []),
-      ...externals
-        .filter((member) => externalMemberActive(member))
-        .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),
-      ...participants
-        .filter((principalId) => deps.identity.classify(principalId).type === "internal")
-        .map((principalId) => ({
-          principalId,
-          displayName: personLabel(principalId, { user: users?.get(principalId) }),
-          type: "internal" as const,
-        })),
-    ];
-    const byKey = new Map<string, DirectoryMember>();
-    for (const member of candidates) {
-      const key = personKey(member.principalId);
-      if (key && !byKey.has(key)) byKey.set(key, member);
-    }
-    return [...byKey.values()];
-  };
+  const identityMembers = () =>
+    signInMembers({
+      identity: deps.identity,
+      sessions: deps.sessions,
+      ...(deps.users ? { users: deps.users } : {}),
+      ...(deps.emailAuthMembers ? { emailAuthMembers: deps.emailAuthMembers } : {}),
+    });
   const mergedDirectoryMembers = async () => {
     const [stored, viaEmail] = await Promise.all([deps.directory.list(), identityMembers()]);
     const seen = new Set(stored.map((member) => personKey(member.principalId)));
@@ -218,13 +200,14 @@ export function createMessagingMethods(
     async listCronsForViewer(principalId) {
       const all = await deps.crons.list();
       const { viewersOwn, scopeNames, canSee } = await cronVisibility(deps, h, principalId);
-      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c));
+      const sharing = withSharing(all);
+      const owned = all.filter((c) => viewersOwn(c.owner) && canSee(c)).map(sharing);
       const visible = all
         .filter((c) => !viewersOwn(c.owner))
         .filter(canSee)
         .map((c) => {
           const name = scopeNames.get(c.ownerScopeId);
-          return name ? { ...c, scopeName: name } : c;
+          return sharing(name ? { ...c, scopeName: name } : c);
         });
       return { owned, visible };
     },
@@ -234,7 +217,13 @@ export function createMessagingMethods(
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
-      const updated = await deps.crons.update(id, patch);
+      const linked = linkedChanges(before, patch);
+      const edited = Object.keys(linked).length > 0;
+      const forks = edited && before.sharedFrom !== undefined && before.forkedAt === undefined;
+      const own = forks ? { ...patch, forkedAt: Date.now() } : patch;
+      const updated = edited
+        ? ((await deps.crons.updateLinked(id, own, linked))[0] ?? null)
+        : await deps.crons.update(id, own);
       auditCron("cron_update", before, by);
       return updated;
     },
@@ -411,8 +400,8 @@ export function createMessagingMethods(
       );
       return merged != null;
     },
-    async ackDelivery(id, slackApiMs) {
-      await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    async ackDelivery(id, slackApiMs, messageTs) {
+      await deps.deliveries.ack(id, Date.now(), slackApiMs, messageTs);
     },
     async failDelivery(id, reason) {
       const approvalId = (await deps.deliveries.get(id))?.destination.commandApprovalId;
@@ -496,18 +485,8 @@ export function createMessagingMethods(
         ...(isPrivate !== undefined ? { isPrivate } : {}),
       });
     },
-    async resolveRecipient(query) {
-      const stored = await deps.directory.resolve(query);
-      if (stored.kind !== "none") return stored;
-      const match = pickMatch(
-        await identityMembers(),
-        query,
-        (member) => member.principalId,
-        (member) => member.displayName,
-      );
-      if (match.kind === "one") return { kind: "one", member: match.item };
-      if (match.kind === "ambiguous") return { kind: "ambiguous", candidates: match.items };
-      return { kind: "none" };
+    resolveRecipient(query) {
+      return deps.directory.resolve(query);
     },
     resolveChannel(query) {
       return deps.directory.resolveChannel(query);
@@ -624,8 +603,9 @@ export function createMessagingMethods(
         baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
-      const persona = input.currentDestination?.persona;
-      if (persona && !input.react && !input.delete) baseDestination = { ...baseDestination, persona };
+      const { persona, project } = input.currentDestination ?? {};
+      if (!input.react && !input.delete)
+        baseDestination = { ...baseDestination, ...(persona ? { persona } : {}), ...(project ? { project } : {}) };
       const delivery = await reachEnqueue({
         deliveries: deps.deliveries,
         destination: withEdit(

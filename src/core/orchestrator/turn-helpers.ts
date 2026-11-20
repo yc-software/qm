@@ -8,7 +8,6 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { boundWebhook } from "../turn-origin.ts";
 import { isAgentReply, isHidden, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -188,7 +187,6 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),
     actor: principalAssertion(input.actor),
     conversation: {
@@ -289,14 +287,10 @@ export function replaceThreadSegment(target: string, threadTs: string): string {
 }
 
 export function deliveryCandidatesFor(
-  request: Pick<
-    Partial<TurnRequest>,
-    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin" | "approval"
-  >,
+  request: Pick<Partial<TurnRequest>, "surface" | "deliveryTarget" | "deliveryCandidates">,
   sessionScopeId: ScopeId,
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
   const { surface, deliveryTarget, deliveryCandidates: surfaceCandidates } = request;
-  const deliveryWebhook = boundWebhook(request)?.webhook;
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
   if (surfaceCandidates && surfaceCandidates.length > 0) raw = surfaceCandidates;
@@ -308,12 +302,11 @@ export function deliveryCandidatesFor(
     if (seen.has(key)) continue;
     seen.add(key);
     candidates.push({
-      type: deliveryWebhook ? "webhook" : surface,
+      type: surface,
       target: c.target,
       audienceScopeId: sessionScopeId,
       key,
       label: c.label,
-      ...(deliveryWebhook ? { webhook: deliveryWebhook } : {}),
     });
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
@@ -335,7 +328,6 @@ export function resolveTurnDelivery(turn: {
   let defaultDestination: Destination | undefined;
   if (defaultCandidate) {
     defaultDestination = {
-      ...(defaultCandidate.webhook ? { webhook: defaultCandidate.webhook } : {}),
       type: defaultCandidate.type,
       target: defaultCandidate.target,
       ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),

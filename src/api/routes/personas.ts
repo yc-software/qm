@@ -4,10 +4,10 @@ import { audit, isObj, livePersonTurn } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
-import { scopeId } from "../../types.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
+import { scopeId } from "../../types.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -64,18 +64,24 @@ async function getPersona(ctx: ApiCtx): Promise<void> {
     .filter((skill) => skill.scopeId === home)
     .map((skill) => ({ id: skill.id, name: skill.manifest.name, description: skill.manifest.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const crons = await personaCrons(ctx, principalId, result.value.id);
+  const pinned = new Set(result.value.access.filter((grant) => grant.pinned).map((grant) => grant.scopeId));
+  const crons = await personaCrons(ctx, principalId, result.value.id, pinned);
   respond(ctx, { status: "ok", value: { ...result.value, access, skills, crons } }, "persona");
 }
 
-async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string) {
+async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string, pinned: Set<string>) {
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
   const personaThreads =
     (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
-    .filter((c) => refsOf(c).some((ref) => personaThreads.has(ref)))
+    .filter(
+      (c) =>
+        c.ownerScopeId === scopeId("persona", personaId) ||
+        pinned.has(c.ownerScopeId) ||
+        refsOf(c).some((ref) => personaThreads.has(ref)),
+    )
     .map(({ id, title, action, message, schedule, enabled }) => ({ id, title, action, message, schedule, enabled }));
 }
 

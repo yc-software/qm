@@ -120,6 +120,7 @@ export function createSessionMethods(
   | "forkSession"
   | "grant"
   | "revokeGrant"
+  | "grantees"
   | "promoteSkill"
   | "belongsToScope"
   | "canManageArtifactHome"
@@ -1248,6 +1249,12 @@ export function createSessionMethods(
       });
       if (publishedApp && opts?.notify !== false)
         await notifyAppShared(deps, publishedApp, g.granteeScopeId, g.permission, g.grantedBy);
+    },
+    async grantees(tenant, ownerScopeId, ref) {
+      return (await deps.acl.grantsFor(tenant, ownerScopeId, ref)).map((g) => ({
+        scope: g.granteeScopeId,
+        permission: g.permission,
+      }));
     },
     async revokeGrant(tenant, ownerScopeId, ref, granteeScopeId, revokedBy) {
       await deps.acl.revoke(

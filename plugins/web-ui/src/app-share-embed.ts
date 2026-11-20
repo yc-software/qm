@@ -18,11 +18,14 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
     throw new Error(`app-share: /me answered ${r.status} ${body}`);
   }
   appState.me = (await r.json()) as Me;
-  const { openAppPermissions } = await import("./app-permissions");
-  const opened = openAppPermissions(slug, params.get("name") || slug, `personal:${appState.me.user}`, {
-    onChange: () => tellEmbedder({ type: "qm:app-check" }),
-    onClose: closeEmbed,
-  });
+  const { openShare } = await import("./share-dialog");
+  const opened = openShare(
+    { type: "deploy", id: slug, title: params.get("name") || slug, owner: `personal:${appState.me.user}` },
+    {
+      onChange: () => tellEmbedder({ type: "qm:app-check" }),
+      onClose: closeEmbed,
+    },
+  );
   tellEmbedder({ type: "qm:app-share-ready" });
   await opened;
 }

@@ -52,7 +52,7 @@ export interface DeliveryStore {
   claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
   undeliveredTenants(type: string): Promise<ClaimedRow[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
-  ack(id: string, at: number, slackApiMs?: number): Promise<void>;
+  ack(id: string, at: number, slackApiMs?: number, messageTs?: string): Promise<void>;
   claimHead(
     tenant: Tenant,
     type: string,
@@ -178,7 +178,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, slackApiMs, messageTs) {
       const d = deliveries.get(id);
       if (d && d.deliveredAt === null) {
         d.deliveredAt = at;
@@ -186,6 +186,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         delete d.failedReason;
         d.deliverLatencyMs = Math.max(0, at - d.createdAt);
         if (slackApiMs !== undefined) d.slackApiMs = slackApiMs;
+        if (messageTs !== undefined) d.messageTs = messageTs;
       }
     },
     async claimHead(_tenant, type, target, ttlMs) {

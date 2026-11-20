@@ -1,4 +1,4 @@
-import { personaPrompt, personaRoutedNote } from "../personas/persona-service.ts";
+import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -56,8 +56,8 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
-import { resolveTurnFastMode } from "./turn-options.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
@@ -133,10 +133,12 @@ import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
   recordedMessageTimestamps,
+  seedPriorTurns,
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { turnStartOnce } from "../decisions/hooks.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -177,7 +179,6 @@ import {
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
-  webSurfaceLabel,
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
@@ -789,28 +790,55 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
-      const personaTurn =
+      const surfaceName =
+        automationDestination === undefined
+          ? (input.surface ?? "slack")
+          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
+      const turnDecisions = deps.decide
+        ? turnStartOnce(
+            (...args) => tracePhase("turn.decision", () => deps.decide!(...args)),
+            async () => ({
+              input: input.text,
+              surfaceName,
+              runtimePurpose: turnRuntimePurpose(
+                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
+              ),
+              ...(input.model ? { runtime: { modelId: input.model } } : {}),
+              runtimePinned:
+                !external &&
+                humanInput &&
+                !!deps.userModelCredentials &&
+                (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company") !== "company",
+              continueTurn: (input.attempt ?? 1) > 1,
+              scopeLabel: scopeId,
+              conversation: conversation.kind,
+              context: [input.conversationHeader?.trim(), ...seedPriorTurns(input.priorTurns ?? []).map((m) => m.text)]
+                .filter(Boolean)
+                .join("\n\n"),
+            }),
+            {
+              tenant,
+              actorId: actor.id,
+              scopeLabel: scopeId,
+              ...(storedSession ? { sessionId: storedSession.id } : {}),
+              ...(input.runId ? { runId: input.runId } : {}),
+            },
+          )
+        : undefined;
+      const routed =
+        external || ambientTurn || !deps.personas || !turnDecisions
+          ? undefined
+          : (await turnDecisions()).find((r) => r.persona);
+      const { turn: personaTurn, note: personaNote } =
         external || !deps.personas
-          ? null
-          : await deps.personas.forTurn(
+          ? { turn: null }
+          : await routedPersonaTurn(
+              deps.personas,
+              routed,
               storedSession?.personaId ?? input.personaId,
               actor.id,
               scopeId,
-              personConversationTurn && deps.routePersona
-                ? () =>
-                    tracePhase("turn.decision", () =>
-                      deps.routePersona!({
-                        tenant,
-                        actorId: actor.id,
-                        scopeLabel: scopeId,
-                        ...(storedSession ? { sessionId: storedSession.id } : {}),
-                        ...(input.runId ? { runId: input.runId } : {}),
-                        input: input.text,
-                        surfaceName: input.surface ?? "slack",
-                        conversation: conversation.kind,
-                      }).catch(swallowAs("orchestrator: persona routing", undefined)),
-                    )
-                : undefined,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona) resolution.readOnlyScopeIds.push(persona.scope);
@@ -861,10 +889,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
-      const surfaceName =
-        automationDestination === undefined
-          ? (input.surface ?? "slack")
-          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -878,7 +902,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? webSurfaceLabel(botName, Boolean(boundWebhook(input))) : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -922,7 +946,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
-      if (persona?.routedBy) turnEvents.push(personaRoutedNote(persona.persona.name, persona.routedBy));
+      if (personaNote) turnEvents.push(personaNote);
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
@@ -1031,7 +1055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
       else if (conversation.kind === "group") type = "group";
-      const session = await deps.sessions.getOrCreateByThread(
+      const threadSession = await deps.sessions.getOrCreateByThread(
         conversation.threadRef,
         type,
         scopeId,
@@ -1045,8 +1069,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
         },
       );
+      const session =
+        persona && deps.personas
+          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+              threadSession,
+              persona.persona.id,
+            )
+          : threadSession;
       screenSession.id = session.id;
-      if (persona?.routedBy) await deps.sessions.setPersona(session.id, persona.persona.id);
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
@@ -2341,6 +2371,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
+            ...(turnDecisions ? { turnStart: turnDecisions } : {}),
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
               turnRuntime = runtime;
