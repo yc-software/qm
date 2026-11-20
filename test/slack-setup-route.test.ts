@@ -55,7 +55,8 @@ async function fixture(t: test.TestContext) {
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += String(chunk);
-    const ctx = { req, res, deps, tenant, body: raw ? JSON.parse(raw) : {} } as unknown as ApiCtx;
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const ctx = { req, res, deps, tenant, url, body: raw ? JSON.parse(raw) : {} } as unknown as ApiCtx;
     await (req.method === "GET" ? getSlackInstallation : startSlackInstallation)(ctx);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
