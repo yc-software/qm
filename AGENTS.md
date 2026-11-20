@@ -142,6 +142,9 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
+  The live QA tools: `scripts/dev-instance.sh` (`up`, `status --json`, `down`; see the
+  `/dev-instance` skill), the live Slack scenario catalog run by hand against that
+  instance (`test/live-slack/README.md`), and the per-surface runbooks in `docs/qa/`.
   Leave review instances running until the PR merges, unless the user asks to stop
   earlier. After merge, tear down that worktree's instance and verify its processes
   and lease are gone before removing the worktree. Preserve shared Postgres and
