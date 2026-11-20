@@ -1,5 +1,38 @@
 import SwiftUI
 
+/// The icon picked for a project on web: a standard emoji or a workspace custom emoji.
+struct ProjectIcon: Decodable, Hashable {
+  let kind: String
+  let value: String?
+  let name: String?
+
+  var drawable: Bool {
+    kind == "emoji" ? value?.isEmpty == false : kind == "custom" && name?.isEmpty == false
+  }
+}
+
+struct NativeProjectIcon: View {
+  let icon: ProjectIcon
+  var size: CGFloat = 17
+  @Environment(\.qmCustomEmoji) private var customEmoji
+
+  var body: some View {
+    Group {
+      if icon.kind == "custom" {
+        AsyncImage(url: icon.name.flatMap { customEmoji[$0] }) { image in
+          image.resizable().scaledToFit()
+        } placeholder: {
+          Color.clear
+        }
+      } else {
+        Text(icon.value ?? "").font(.system(size: size * 0.9))
+      }
+    }
+    .frame(width: size, height: size)
+    .accessibilityHidden(true)
+  }
+}
+
 struct WorkspaceProject: Decodable, Identifiable, Hashable {
   struct Member: Decodable, Identifiable, Hashable {
     let principalId: String
@@ -18,6 +51,7 @@ struct WorkspaceProject: Decodable, Identifiable, Hashable {
   let scopeId: String
   let members: [Member]
   let slackChannel: SlackChannel?
+  var icon: ProjectIcon? = nil
 }
 
 struct WorkspaceContext: Decodable, Identifiable, Hashable {
@@ -37,6 +71,7 @@ struct WorkspaceContext: Decodable, Identifiable, Hashable {
   var id: String { scopeId }
   private var scopeKind: ScopeKind? { ScopeKind(scopeId: scopeId) }
   var isPersonal: Bool { scopeKind == .personal }
+  var projectIcon: ProjectIcon? { project?.icon.flatMap { $0.drawable ? $0 : nil } }
   var icon: String {
     if isPersonal { return "person" }
     if project != nil { return "folder" }
@@ -185,8 +220,12 @@ struct ProjectsView: View {
                 ProjectDetailView(model: model, original: context, identity: identity)
               } label: {
                 HStack(spacing: 14) {
-                  Image(systemName: context.icon)
-                    .foregroundStyle(QMTheme.ink)
+                  if let icon = context.projectIcon {
+                    NativeProjectIcon(icon: icon, size: 20)
+                  } else {
+                    Image(systemName: context.icon)
+                      .foregroundStyle(QMTheme.ink)
+                  }
                   VStack(alignment: .leading, spacing: 6) {
                     Text(context.title).font(.headline)
                     Text(
