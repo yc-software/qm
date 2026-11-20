@@ -1,3 +1,5 @@
+import type { McpRemoteTool } from "../mcp/mcp-client.ts";
+import { ownPrivateConversation } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
@@ -72,8 +74,14 @@ export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
   return by?.context !== "conversation" || !by.actorId.trim();
 }
 
-export function changesBrainAsPerson(by: MemoryAuthority | undefined): boolean {
-  return !changesNotebookOnly(by) && by!.personTurn === true;
+export function brainActsAsPerson(
+  by: MemoryAuthority | undefined,
+  scopeId: ScopeId,
+  audienceScopeId: ScopeId | undefined,
+): boolean {
+  return (
+    !changesNotebookOnly(by) && by!.personTurn === true && ownPrivateConversation(by!.actorId, scopeId, audienceScopeId)
+  );
 }
 
 export function turnAuthority(
@@ -88,8 +96,28 @@ export function turnAuthority(
   };
 }
 
+interface MemoryReader {
+  actorId: string;
+  audienceScopeId?: ScopeId;
+}
+
+export interface BoundBrain {
+  id: string;
+  label: string;
+  tools: McpRemoteTool[];
+}
+
 export interface MemoryService {
   attestActor?: boolean;
+  lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
+  brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
+  lookup?(
+    scopeId: ScopeId,
+    tool: string,
+    args: Record<string, unknown>,
+    by: MemoryAuthority | undefined,
+    context?: { audienceScopeId?: ScopeId },
+  ): Promise<string>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
