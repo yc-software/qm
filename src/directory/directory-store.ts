@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { PrincipalType } from "../types.ts";
 
 export interface DirectoryMember {
@@ -69,7 +70,7 @@ export interface DirectoryStore {
     partial?: boolean,
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
-  teammateName(principalId: string): Promise<string | null>;
+  teammateName(tenant: Tenant, principalId: string): Promise<string | null>;
   listChannels(): Promise<DirectoryChannel[]>;
   getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;

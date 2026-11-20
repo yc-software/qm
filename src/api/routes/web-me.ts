@@ -57,7 +57,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
-    deps.directory?.teammateName(user).catch(swallowAs("web: /me teammate", null)),
+    deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
