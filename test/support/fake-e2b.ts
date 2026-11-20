@@ -274,6 +274,10 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       r.state = "running";
       return session(r);
     },
+    async restart(sandboxId): Promise<void> {
+      killOwned(`${root}/${sandboxId}`);
+      await fake.client.connect(sandboxId);
+    },
     async list(metadata): Promise<Array<{ sandboxId: string; state: string; metadata?: Record<string, string> }>> {
       return [...records.values()]
         .filter((r) => !r.expired && Object.entries(metadata).every(([k, v]) => r.metadata[k] === v))
