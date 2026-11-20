@@ -600,7 +600,13 @@ export function renderSidebarFooter(): void {
       </div>
       ${
         can("admin")
-          ? html`<a class="icon-btn subtle" href=${ADMIN_HOME_URL} aria-label="Admin" ${tip("Admin")}>
+          ? html`<a
+              class="icon-btn subtle"
+              href=${ADMIN_HOME_URL}
+              aria-label="Admin"
+              ${tip("Admin")}
+              @click=${openAdminHome}
+            >
               ${icon(ShieldUser, 17)}
             </a>`
           : nothing
@@ -614,6 +620,7 @@ export function renderSidebarFooter(): void {
 }
 
 export function renderSidebarTop(): void {
+  fitSidebarToView(appState.currentView);
   syncDocumentTitle();
   if (!appState.topEl) return;
   const highlighted = (v: View) => v !== "chats" && appState.currentView === v;
@@ -705,6 +712,28 @@ export function switchView(v: View, historyMode: "push" | "replace" = "push"): v
     showView(v);
   } finally {
     if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
+  }
+}
+
+function openAdminHome(e: MouseEvent): void {
+  if (!isPlainLeftClick(e)) return;
+  e.preventDefault();
+  if (location.pathname !== ADMIN_HOME_URL) history.pushState(null, "", ADMIN_HOME_URL);
+  switchView("settings");
+}
+
+let sidebarFoldedForSettings = false;
+let sidebarFitView: View | null = null;
+function fitSidebarToView(v: View): void {
+  const prev = sidebarFitView;
+  sidebarFitView = v;
+  if (prev === v || isPhone()) return;
+  if (v === "settings" && sidebarOpen) {
+    sidebarFoldedForSettings = true;
+    setSidebarOpen(false, false);
+  } else if (prev === "settings" && sidebarFoldedForSettings) {
+    sidebarFoldedForSettings = false;
+    if (!sidebarOpen) setSidebarOpen(true, false);
   }
 }
 
@@ -893,6 +922,7 @@ function showConversationError(unavailable: boolean): void {
 }
 
 function toggleSidebar(): void {
+  sidebarFoldedForSettings = false;
   setSidebarOpen(!sidebarOpen);
 }
 
