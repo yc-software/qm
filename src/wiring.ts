@@ -146,6 +146,7 @@ import {
   BACKFILL_BOT_MARKER_MIGRATION,
   DROP_RECIPIENT_CONSENT_MIGRATION,
   MARK_BOT_EDITED_CRONS_MIGRATION,
+  RERUN_BOT_MARKER_BACKFILL_MIGRATION,
 } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore, HOLD_BOT_LOOP_SHIPS_MIGRATION } from "./loops/loop-store.ts";
@@ -2052,10 +2053,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
-  pgArtifactMap.pool.registerMigration({
-    ...BACKFILL_BOT_MARKER_MIGRATION,
-    id: "users/v2/0010-rerun-bot-marker-backfill",
-  });
+  pgArtifactMap.pool.registerMigration(RERUN_BOT_MARKER_BACKFILL_MIGRATION);
   pgArtifactMap.pool.registerMigration(HOLD_BOT_LOOP_SHIPS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);

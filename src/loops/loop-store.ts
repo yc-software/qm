@@ -15,6 +15,7 @@ import {
   buildTriggerBase,
   contentPart,
   type CreateTriggerInput,
+  unlessSlackListsAPerson,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { msOf } from "../sessions/items.ts";
@@ -281,7 +282,7 @@ export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
           JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
          WHERE NOT g.json ? 'revokedAt'
            AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
-                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")})
+                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")}${unlessSlackListsAPerson("k")})
       ), locked AS (
         SELECT l.tenant_id, l.id, l.json FROM loops l
          WHERE l.json @> '{"botActor": true}' AND l.json -> 'shipActions' @> '[{"gate": "auto"}]'
