@@ -37,7 +37,7 @@ test("disabled and impersonated reporting never requires a browser SDK", async (
   stopBrowserErrors();
 });
 
-test("browser errors keep HTTP failures and their context while dropping network failures and aborts", async () => {
+test("browser errors keep HTTP failures, their context and uncaught page errors while dropping network failures, aborts and ResizeObserver loop notices", async () => {
   const realFetch = globalThis.fetch;
   const realWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const sent: string[] = [];
@@ -64,8 +64,23 @@ test("browser errors keep HTTP failures and their context while dropping network
       "web:approvals_fetch",
       Object.assign(new ApiError("approvals 500", 500, body), { cause: new Error("db down") }),
     );
+    const onerror = globalThis.onerror as (
+      message: string,
+      url: string,
+      line: number,
+      column: number,
+      error: Error | null,
+    ) => void;
+    for (const message of [
+      "ResizeObserver loop completed with undelivered notifications.",
+      "ResizeObserver loop limit exceeded",
+    ])
+      onerror(message, `${origin}/app.js`, 0, 0, null);
+    onerror("Script error.", `${origin}/app.js`, 0, 0, null);
     await sdk.flush(1000);
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 2);
+    const pageError = JSON.parse(sent[1]!.split("\n")[2]!);
+    assert.equal(pageError.exception.values[0].value, "Script error.");
     const event = JSON.parse(sent[0]!.split("\n")[2]!);
     const values = event.exception.values.map((value: { value: string }) => value.value);
     assert.ok(values.includes("approvals 500"));
@@ -78,7 +93,7 @@ test("browser errors keep HTTP failures and their context while dropping network
     stopBrowserErrors();
     sdk.captureException(new Error("after stop"));
     await sdk.flush(1000);
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 2);
   } finally {
     stopBrowserErrors();
     globalThis.fetch = realFetch;
