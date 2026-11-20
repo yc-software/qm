@@ -94,6 +94,7 @@ export interface AgentToolsOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
+  templateBackends?: string[];
   readOnly?: boolean;
   botActor?: boolean;
   memoryNotebookOnly?: boolean;

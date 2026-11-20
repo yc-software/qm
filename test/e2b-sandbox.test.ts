@@ -228,6 +228,22 @@ test("a sandbox that dies mid-turn is revived transparently for the next command
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
+test("a templated computer boots from its template, also when revived mid-turn", async () => {
+  const templates: Array<string | undefined> = [];
+  const create = fake.client.create.bind(fake.client);
+  sandbox = make({
+    client: {
+      ...fake.client,
+      create: async (o: Parameters<typeof create>[0]) => (templates.push(o.template), create(o)),
+    },
+  });
+  const h = await sandbox.provision(scope, { template: "dev" });
+  fake.pause(h.id);
+  fake.expirePaused();
+  assert.equal((await sandbox.run(h, "true")).code, 0);
+  assert.deepEqual(templates, ["dev", "dev"]);
+});
+
 test("teardown snapshots are throttled by snapshotIntervalMs", async () => {
   const counting = instrumentedSnapshotStore();
   const s = make({ snapshots: counting.store, snapshotIntervalMs: 60 * 60_000 });

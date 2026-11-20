@@ -71,6 +71,7 @@ export interface AgentComputerProfile {
   egressEnforcement?: EgressEnforcement;
   spec?: AgentComputerSpec;
   sizesMemory?: boolean;
+  takesTemplate?: boolean;
 }
 
 export function effectiveEgressEnforcement(
@@ -103,6 +104,7 @@ export interface ProvisionOptions {
   scratch?: { key: string };
   onStatus?: (text: string) => void;
   memoryGb?: number;
+  template?: string;
 }
 
 export interface ExecResult {

@@ -2688,6 +2688,7 @@ test("sandbox offers memory_gib only when a configured provider sizes memory, an
   assert.equal(schema().properties.memory_gib, undefined);
   assert.equal(schema([]).properties.memory_gib, undefined);
   assert.match(schema(["porter", "modal"]).properties.memory_gib?.description ?? "", /porter, modal only/);
+  assert.equal(schema().properties.template, undefined);
 });
 
 test("sandbox memory_gib reaches create and restart only", async () => {
@@ -2705,14 +2706,14 @@ test("sandbox memory_gib reaches create and restart only", async () => {
   };
   const tools = createAgentTools(
     { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
-    { sandboxResources: true, memorySizedBackends: ["porter"] },
+    { sandboxResources: true, memorySizedBackends: ["porter"], templateBackends: ["porter"] },
   );
   const sandbox = tools.find((t) => t.name === "sandbox")!;
-  await call(sandbox, { action: "create", backend: "porter", name: "big", memory_gib: 6, purpose: "p" });
+  await call(sandbox, { action: "create", backend: "porter", name: "big", memory_gib: 6, template: "t", purpose: "p" });
   await call(sandbox, { action: "restart", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
   await call(sandbox, { action: "retire", sandbox_id: "box-a", memory_gib: 8, purpose: "p" });
   assert.deepEqual(operations, [
-    { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6 } },
+    { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6, template: "t" } },
   ]);
   assert.deepEqual(restarts, [["box-a", 8]]);
 });

@@ -184,7 +184,11 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         return { ...handle, backend, scopeId: scope };
       }
       if (!resource) throw new NoDefaultSandboxError();
-      const sized = resource.memoryGb ? { ...provOpts, memoryGb: resource.memoryGb } : provOpts;
+      const sized = {
+        ...provOpts,
+        ...(resource.memoryGb ? { memoryGb: resource.memoryGb } : {}),
+        ...(resource.template ? { template: resource.template } : {}),
+      };
       const handle = await resources.use(resource.id, () => provision(resource.backingScopeId, sized));
       return { ...handle, backend: resource.backend, scopeId: resource.ownerScopeId, resourceId: resource.id };
     },

@@ -68,6 +68,7 @@ export interface StoredE2bSandbox extends SnapshotBookkeeping {
   recoverySnapshotId?: string;
   recoveryError?: string;
   createdAtMs: number;
+  template?: string;
 }
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
@@ -150,6 +151,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     scope: string,
     name: string,
     onStatus?: (text: string) => void,
+    requestedTemplate?: string,
   ): Promise<{ session: E2bSession; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
       const adopt = async (session: E2bSession, patch: Partial<StoredE2bSandbox>) => {
@@ -207,13 +209,15 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
         return adopt(session, { sandboxId: session.sandboxId, createdAtMs: Date.now(), recoveryError: undefined });
       }
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ metadata: { name }, autoPause: true });
+      const template = requestedTemplate ?? stored?.template;
+      const session = await client.create({ metadata: { name }, autoPause: true, ...(template ? { template } : {}) });
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,
         createdAtMs: Date.now(),
         nativePause: false,
         preservationState: "running",
+        ...(template ? { template } : {}),
       });
       let hydrated: boolean;
       try {
@@ -282,6 +286,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
+    takesTemplate: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
@@ -401,7 +406,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       } else {
         name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);
-        ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
+        ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus, provOpts?.template));
       }
 
       const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;

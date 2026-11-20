@@ -222,7 +222,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ExecResult & { scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
-    input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
+    input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number; template?: string },
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string, memoryGb?: number): Promise<void>;
@@ -769,7 +769,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       ? {
           async sandboxResources(
             action: "list" | "create" | "default" | "retire",
-            input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
+            input?: {
+              backend?: string;
+              name?: string;
+              sandboxId?: string | null;
+              memoryGb?: number;
+              template?: string;
+            },
           ): Promise<unknown> {
             const resources = deps.sandboxResources!;
             if (action === "list") {
@@ -810,7 +816,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               input.name,
               undefined,
               undefined,
-              input.memoryGb,
+              { memoryGb: input.memoryGb, template: input.template },
               undefined,
               !deps.botActor,
             );
