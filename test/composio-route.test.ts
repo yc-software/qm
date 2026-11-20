@@ -158,63 +158,36 @@ test("company credentials require an applicable grant and must be enabled", asyn
   assert.equal(new Headers(f.calls[0]!.init?.headers).get("x-api-key"), "company-key");
 });
 
-test("the deployment's Composio key serves a granted org that stores none, and an org's own key comes first", async () => {
+test("the deployment Composio key serves a granted org with no key, and the org's own key comes first", async () => {
   const f = fixture();
   const org = scopeId("org", orgId());
-  const keychain = f.deps.serviceCreds!;
-  f.deps.serviceCreds = withDeploymentCredentials(keychain, org, [
-    {
-      slug: "composio",
-      name: "Composio",
-      secret: "deployment-key",
-      host: "",
-      delivery: "env",
-      envKey: "COMPOSIO_API_KEY",
-    },
+  const stored = f.deps.serviceCreds!;
+  const own = { name: "Own", delivery: "env" as const, envKey: "COMPOSIO_API_KEY", host: "" };
+  f.deps.serviceCreds = withDeploymentCredentials(stored, org, [
+    { ...own, slug: "composio", secret: "deployment-key" },
   ]);
-  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403, "the default still needs a grant");
-  await f.deps.acl!.grant(tenant, {
-    ownerScopeId: org,
-    ref: "service-cred:composio",
-    granteeScopeId: org,
-    permission: "read",
-    grantedBy: "admin",
-  });
-  f.replies.push({ items: [], next_cursor: null });
-  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
-  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "deployment-key");
-
-  await keychain.setServiceCredential(org, {
-    slug: "own-composio",
-    name: "Our Composio",
-    delivery: "env",
-    envKey: "COMPOSIO_API_KEY",
-    secret: "own-key",
-    host: "",
-  });
-  await f.deps.acl!.grant(tenant, {
-    ownerScopeId: org,
-    ref: "service-cred:own-composio",
-    granteeScopeId: org,
-    permission: "read",
-    grantedBy: "admin",
-  });
-  f.replies.push({ items: [], next_cursor: null });
-  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200, "no ambiguity with the deployment default");
-  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "own-key");
-
-  await keychain.deleteServiceCredential(org, "own-composio");
-  await keychain.setServiceCredential(org, {
-    slug: "composio",
-    name: "Composio",
-    delivery: "env",
-    envKey: "COMPOSIO_API_KEY",
-    secret: "migrated-key",
-    host: "",
-  });
-  f.replies.push({ items: [], next_cursor: null });
-  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
-  assert.equal(new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key"), "migrated-key");
+  const grant = (slug: string) =>
+    f.deps.acl!.grant(tenant, {
+      ownerScopeId: org,
+      ref: `service-cred:${slug}`,
+      granteeScopeId: org,
+      permission: "read",
+      grantedBy: "admin",
+    });
+  const keyUsed = async () => {
+    f.replies.push({ items: [], next_cursor: null });
+    assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
+    return new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key");
+  };
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403);
+  await grant("composio");
+  assert.equal(await keyUsed(), "deployment-key");
+  await stored.setServiceCredential(org, { ...own, slug: "other", secret: "own-key" });
+  await grant("other");
+  assert.equal(await keyUsed(), "own-key");
+  await stored.deleteServiceCredential(org, "other");
+  await stored.setServiceCredential(org, { ...own, slug: "composio", secret: "migrated-key" });
+  assert.equal(await keyUsed(), "migrated-key");
 });
 
 test("catalog preserves provider usage order, pagination, and strips raw fields", async () => {
