@@ -11,6 +11,12 @@ to the keychain with the script shipped with this skill. Never log in against th
 keychain handle is. Use the same explicit `sandbox_id` for the skill read, login,
 and save-login commands so the temporary home and save script stay on one computer.
 
+Check the saved login first with a harmless command that names its handle in `credentials`
+(for AWS, `aws sts get-caller-identity`), and sign in only if that fails. A device-code
+login run any other way, such as a bare `aws sso login` in an `execute` command, can be lost
+when that command ends even after the person approves the code, and the next command asks
+them for another.
+
 1. In the person's own turn, make a fresh directory and start the sign-in with the script
    shipped with this skill, under the absolute directory the skill read reported. It gets a
    one-time ticket that lets step 3 replace this service's existing login even after the turn
