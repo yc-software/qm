@@ -16,6 +16,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
+import { sleep } from "../src/util/async.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -986,6 +987,14 @@ test("failed native checkpoints wait for the interval across cleanup and mainten
   await store.merge(scope, { lastSnapshotAttemptMs: 1 });
   await s.teardown(h);
   assert.equal(attempts, 3);
+});
+
+test("a live sandbox that lost its hydration marker reports the refused checkpoint once", async () => {
+  const codes: string[] = [];
+  const s = make({ snapshotIntervalMs: 1, onError: (e: { code: string }) => codes.push(e.code) });
+  await s.run(await s.provision(scope), "rm -f ~/.qm-hydrated");
+  for (const wait of [5, 5, 5]) await sleep(wait).then(() => s.reapDeepIdle!(72 * 3600_000));
+  assert.deepEqual(codes, ["periodic_snapshot_failed"]);
 });
 
 test("a write landing during a deep-idle checkpoint keeps the sandbox running", { timeout: 10000 }, async () => {

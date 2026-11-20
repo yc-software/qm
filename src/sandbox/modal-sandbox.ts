@@ -593,15 +593,15 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   function refreshCheckpoint(scope: string, rec: StoredModalSandbox, session: ModalSession): Promise<void> {
     return provisionQueue(scope, async () => {
-      try {
-        const current = await store.get(scope);
-        if (!current || current.sandboxId !== rec.sandboxId || !snapshotDue(current, undefined, snapshotIntervalMs))
-          return;
-        await snapshotHome(scope, session);
-      } catch (error) {
-        if (!(error instanceof ModalSandboxGoneError))
-          reportError("sandbox_snapshot", "periodic_snapshot_failed", errMessage(error), scope);
-      }
+      const current = await store.get(scope).catch(swallowAs("modal-sandbox: read checkpoint record", null));
+      if (!current || current.sandboxId !== rec.sandboxId || !snapshotDue(current, undefined, snapshotIntervalMs))
+        return;
+      await attemptSnapshot(
+        current,
+        (patch) => store.merge(scope, patch),
+        () => snapshotHome(scope, session).catch(swallowGone),
+        (message) => reportError("sandbox_snapshot", "periodic_snapshot_failed", message, scope),
+      );
     });
   }
 
