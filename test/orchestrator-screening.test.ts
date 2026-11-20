@@ -813,9 +813,7 @@ test("allowing held input lets in only the attachments the hold's screen classif
   const partial = said("1700000000.000200", "y".repeat(40_000));
   const partly = await hold(channel("summarize", { ...(await file("partly.txt")), overheard: partial }));
   assert.doesNotMatch(await partly(), /shared partly\.txt \(Files ID/);
-  mock.method(built.blobTransfer, "open").mock.mockImplementationOnce(async () => {
-    throw new Error("blob store unavailable");
-  });
+  mock.method(built.blobTransfer, "open").mock.mockImplementationOnce(() => Promise.reject(new Error("blob gone")));
   const unopened = await hold(dm("summarize", await file("SCREENING_FIXTURE_BLOCK.txt")));
   assert.doesNotMatch(await unopened(), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
   for (const scope of ["once", "session", "always"] as const) {
@@ -823,6 +821,20 @@ test("allowing held input lets in only the attachments the hold's screen classif
     const classified = await hold(dm("summarize", { conversation, ...(await file(scope + ".txt")) }), scope);
     assert.match(await classified(), new RegExp("shared " + scope + "\\.txt \\(Files ID"));
   }
+});
+
+test("a tool approval inside an allowed held turn keeps the attachments the hold classified", async () => {
+  const built = freshApp({ securityPosture: "strict" }, fixtureScreen());
+  const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
+  const request = dm("!read notes", { attachments: [{ name: "tool.txt", mimetype: "text/plain", ...blob }] });
+  const turn = async (requestId: string, scope?: "session") =>
+    built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+  const held = await built.app.turn(request);
+  const tool = (await turn(held.pendingApprovals![0]!.requestId, "session")).pendingApprovals![0]!;
+  assert.equal("classifiedAttachments" in ((await built.app.getApproval(tool.requestId)) ?? {}), false);
+  await turn(tool.requestId);
+  const last = (await built.sessions.listLlmRequests(held.sessionId!)).findLast((r) => r.model === "mock");
+  assert.match(JSON.stringify(last), /shared tool\.txt \(Files ID/);
 });
 
 for (const failure of ["error", "timeout"] as const) {

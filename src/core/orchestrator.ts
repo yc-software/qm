@@ -631,6 +631,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(Object.fromEntries(
             Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
           ) as typeof rest),
+          ...(rest.kind === "approval" && releasedAttachments?.length
+            ? { classifiedAttachments: releasedAttachments }
+            : {}),
           createdAt: Date.now(),
           request: replayableRequest(input),
           ...grantModesWithin(resolution.approvalGrantModes, grantModes),
@@ -676,11 +679,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !!approvalRecord?.request &&
         canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
           canonicalJson(screenedFields(input, homeChannel?.channelName));
-      const replaysHeldInput =
-        !!approvalSession &&
-        approvalRecord?.sessionId === approvalSession.id &&
-        approvalRecord.kind === "input" &&
-        approvalReplaysFlaggedRequest;
+      const approvalReplaysOwnRequest =
+        !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
+      const replaysHeldInput = approvalReplaysOwnRequest && approvalRecord?.kind === "input";
+      const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
       const screenSession: { id?: string } = {};
@@ -1847,7 +1849,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           classifyAs,
           turnAbort,
           audit,
-          released: new Set(replaysHeldInput ? approvalRecord?.classifiedAttachments : undefined),
+          released: new Set(releasedAttachments),
         };
         const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
