@@ -139,7 +139,8 @@ async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise
     );
     for (const skill of page.skills) {
       const file = Array.isArray(skill.resources) ? skill.resources.find((r) => r.uri === skill.uri) : undefined;
-      if (!file) throw new Error(`mcp skills/list gave ${skill.uri} no digest for its SKILL.md, so it cannot be verified`);
+      if (!file)
+        throw new Error(`mcp skills/list gave ${skill.uri} no digest for its SKILL.md, so it cannot be verified`);
       entries.push({ uri: skill.uri, name: skill.frontmatter.name, digest: file.digest, size: file.size });
     }
     if (entries.length > limits.maxFiles) throw new Error(`mcp skills/list lists more than ${limits.maxFiles} skills`);

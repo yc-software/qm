@@ -48,12 +48,22 @@ test("the MCP client lists skills and reads each SKILL.md over the skills extens
     if (message.id === undefined) return void res.writeHead(202).end();
     const page = message.params?.cursor ? listed.slice(1) : listed.slice(0, 1);
     const results: Record<string, unknown> = {
-      initialize: { protocolVersion: "2025-06-18", capabilities: { resources: {} }, serverInfo: { name: "t", version: "1" } },
+      initialize: {
+        protocolVersion: "2025-06-18",
+        capabilities: { resources: {} },
+        serverInfo: { name: "t", version: "1" },
+      },
       "skills/list": {
-        skills: page.map((s) => ({ uri: s.uri, frontmatter: { name: s.name }, resources: [{ uri: s.uri, digest: s.digest, size: s.size }] })),
+        skills: page.map((s) => ({
+          uri: s.uri,
+          frontmatter: { name: s.name },
+          resources: [{ uri: s.uri, digest: s.digest, size: s.size }],
+        })),
         ...(message.params?.cursor ? {} : { nextCursor: "2" }),
       },
-      "resources/read": { contents: [{ uri: message.params?.uri, text: listed.find((s) => s.uri === message.params?.uri)?.text }] },
+      "resources/read": {
+        contents: [{ uri: message.params?.uri, text: listed.find((s) => s.uri === message.params?.uri)?.text }],
+      },
     };
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: results[message.method] }));
@@ -62,7 +72,11 @@ test("the MCP client lists skills and reads each SKILL.md over the skills extens
   await once(http, "listening");
   try {
     const { port } = http.address() as AddressInfo;
-    const client = createMcpClient({ url: `http://127.0.0.1:${port}/mcp`, auth: { mode: "none" }, fetch: (url, init) => fetch(url, init) });
+    const client = createMcpClient({
+      url: `http://127.0.0.1:${port}/mcp`,
+      auth: { mode: "none" },
+      fetch: (url, init) => fetch(url, init),
+    });
     assert.deepEqual(await client.readSkills({ maxFiles: 5000, maxTotalBytes: 1 << 20 }), listed);
     await assert.rejects(client.listSkills({ maxFiles: 1, maxTotalBytes: 1 << 20 }), (e: Error) =>
       String((e.cause as Error).message).includes("more than 1 skills"),
