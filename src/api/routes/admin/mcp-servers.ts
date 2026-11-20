@@ -162,13 +162,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     });
   }
   const appStatusTool = b.appStatusTool;
-  if (
-    appStatusTool !== undefined &&
-    (typeof appStatusTool !== "string" || !/^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$/.test(appStatusTool) || !apps.length)
-  ) {
+  if (apps.length ? typeof appStatusTool !== "string" || !appStatusTool : appStatusTool !== undefined) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
-      message: "appStatusTool must be a tool name, on a connector with apps",
+      message:
+        "a connector with apps needs appStatusTool, the tool that reports their status; other connectors take none",
     });
   }
   const credentialHost = b.credentialHost ?? (oauthUser ? parsed.hostname : undefined);

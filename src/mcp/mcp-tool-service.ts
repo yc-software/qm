@@ -579,8 +579,12 @@ export function createMcpToolService(opts: {
           if (!apps.length) return [];
           let listed = new Set<string>();
           try {
-            if (server.appStatusTool)
-              listed = connectedServices(await appStatus(server, server.appStatusTool, principalId));
+            if (server.appStatusTool) {
+              const status = connectedServices(await appStatus(server, server.appStatusTool, principalId));
+              listed = status.connected;
+              if (status.unavailable.length)
+                record("list", server.id, `app status unavailable: ${status.unavailable.join(", ")}`, principalId);
+            }
           } catch (e) {
             record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }

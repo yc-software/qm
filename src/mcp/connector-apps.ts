@@ -1,14 +1,13 @@
 import type { McpServer, McpServerApp } from "./mcp-server-store.ts";
 
 const TOOLKIT_ID = /^[a-z0-9_-]{1,100}$/;
-const RETURN_PARAM = /^[a-z][a-z0-9_]*$/;
 
 export function isToolkitId(value: unknown): value is string {
   return typeof value === "string" && TOOLKIT_ID.test(value);
 }
 
 export function isReturnParam(value: unknown): value is string {
-  return typeof value === "string" && RETURN_PARAM.test(value);
+  return typeof value === "string" && value.length > 0;
 }
 
 export function connectLink(app: McpServerApp, returnUrl: string | undefined): string {
@@ -18,16 +17,13 @@ export function connectLink(app: McpServerApp, returnUrl: string | undefined): s
   return url.href;
 }
 
-export function connectedServices(text: string): Set<string> {
+export function connectedServices(text: string): { connected: Set<string>; unavailable: string[] } {
   const parsed: unknown = JSON.parse(text);
   const services = (parsed as { services?: unknown } | null)?.services;
   if (!Array.isArray(services)) throw new Error("status tool answered without services");
-  return new Set(
-    services.flatMap((service: unknown) => {
-      const { id, connected } = (service ?? {}) as { id?: unknown; connected?: unknown };
-      return isToolkitId(id) && connected === true ? [id] : [];
-    }),
-  );
+  const entries = services.map((service: unknown) => (service ?? {}) as Record<string, unknown>);
+  const ids = (key: string) => entries.filter((s) => isToolkitId(s.id) && s[key] === true).map((s) => s.id as string);
+  return { connected: new Set(ids("connected")), unavailable: ids("unavailable") };
 }
 
 export interface ConnectorApp extends McpServerApp {
