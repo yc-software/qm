@@ -71,6 +71,8 @@ env, dev.env, and `.env`, diffs against what the children are running, and does 
 restart + re-verification when anything changed (`--force` to restart regardless,
 `--rotate` to move to a different Slack app).
 
+Browser QA scripts for the running instance (`npm run qa:web`, `npm run qa:portal`, `npm run qa:event`) are described in `docs/qa/browser/README.md`.
+
 Open the portal URL printed by the CLI. Direct web/admin URLs are also printed for
 debugging, but the portal URL is the prod-like path.
 
