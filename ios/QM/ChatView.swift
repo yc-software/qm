@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var showsConversations = false
   var onShowConversations: (() -> Void)?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
@@ -33,10 +32,8 @@ struct ChatView: View {
   @FocusState private var composerFocused: Bool
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, showsConversations: Bool = false,
-    onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
   ) {
-    self.showsConversations = showsConversations
     self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
@@ -117,10 +114,19 @@ struct ChatView: View {
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
-        transcriptScroll(width: geometry.size.width, proxy: proxy)
-          .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar(proxy)
-          }
+        ZStack {
+          // A fresh scroll view for arriving history takes its bottom anchor as its initial
+          // offset, instead of scrolling down after laying out from the top.
+          transcriptScroll(width: geometry.size.width, proxy: proxy)
+            .transition(
+              .asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity)
+            )
+            .id(model.hasLoadedTranscript)
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          bottomBar(proxy)
+        }
       }
     }
     .background(QMTheme.paper)
@@ -176,8 +182,8 @@ struct ChatView: View {
         composerFocused = true
       }
     }
-    .onChange(of: showsConversations) { _, showing in
-      if showing {
+    .background {
+      DrawerOpenWatcher {
         composerFocused = false
         showingAgents = false
         dictation.stop()
@@ -915,5 +921,17 @@ private struct TranscriptGeometry: Equatable {
 
   func sizeChanged(since previous: Self) -> Bool {
     contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+  }
+}
+
+// Reads the drawer state on its own, so opening the drawer doesn't re-render the transcript.
+private struct DrawerOpenWatcher: View {
+  @Environment(\.conversationDrawerOpen) private var open
+  let onOpen: () -> Void
+
+  var body: some View {
+    Color.clear.onChange(of: open) { _, open in
+      if open { onOpen() }
+    }
   }
 }

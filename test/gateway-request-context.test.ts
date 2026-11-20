@@ -315,7 +315,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   await built.app.ingestSurfaceEvents([
     { container: "C2", ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
   ]);
-  await built.app.judgeAmbientContainer("slack", "C2");
+  await settle(async () => Boolean(sent("ambient_judge")));
   assert.deepEqual(sent("ambient_judge"), { "x-qm-scope": "channel:C2", "x-qm-purpose": "ambient_judge" });
 
   const cron = await built.sessions.getOrCreateByThread("agent:main:cron:nightly", "dm", session.scopeId);

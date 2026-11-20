@@ -3037,6 +3037,23 @@ qm-markdown .tok-in {
 .tool-expandable[open] > summary > .activity-chevron {
   transform: rotate(90deg);
 }
+.work-fold > summary > .activity-chevron,
+.stopped-work > summary > .activity-chevron,
+.tool-expandable > summary > .activity-chevron {
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.work-fold[data-closing] > summary > .activity-chevron,
+.stopped-work[data-closing] > summary > .activity-chevron,
+.tool-expandable[data-closing] > summary > .activity-chevron {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-fold > summary > .activity-chevron,
+  .stopped-work > summary > .activity-chevron,
+  .tool-expandable > summary > .activity-chevron {
+    transition: none;
+  }
+}
 .work-divider {
   height: 1px;
   background: var(--border);

@@ -3,6 +3,9 @@
 The `superserve` backend runs each QM scope in a sandbox with a persistent workspace,
 file transfers, and background process sessions. Paused sandboxes resume on use.
 
+Superserve also has its own guide to running QM:
+[docs.superserve.ai/integrations/agent-platforms/qm](https://docs.superserve.ai/integrations/agent-platforms/qm).
+
 ## Configure
 
 Build and verify an [agent template](../superserve/templates/README.md), then set:

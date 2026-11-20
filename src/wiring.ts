@@ -94,7 +94,7 @@ import {
   type IdentityService,
 } from "./identity/identity-service.ts";
 import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
-import { createPostgresUserStore, type UserStore } from "./identity/user-store.ts";
+import { createPostgresUserStore, SPLIT_LINKED_BOTS_MIGRATION, type UserStore } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
@@ -106,7 +106,13 @@ import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import {
+  createGitFetcher,
+  PACK_LIMITS,
+  packFetcherByKind,
+  resolvePackAuth,
+  type SkillPackFetcher,
+} from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
@@ -166,7 +172,6 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
-import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { signInMembers, withSignInMembers } from "./directory/sign-in-members.ts";
@@ -223,7 +228,9 @@ import {
 } from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpToolService, mcpServerAuth, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpClient } from "./mcp/mcp-client.ts";
+import { createMcpPackFetcher } from "./skills/mcp-pack-fetcher.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -2051,6 +2058,7 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
+  pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
@@ -2346,7 +2354,7 @@ export function buildApp(
     genericChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
-  const skillFetcher = createGitFetcher(
+  const gitSkillFetcher = createGitFetcher(
     keychain
       ? {
           allowLocalRepos: !config.production,
@@ -2367,6 +2375,14 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
+  const skillFetcher = packFetcherByKind({
+    git: gitSkillFetcher,
+    mcp: createMcpPackFetcher({
+      servers: mcpServers,
+      clientFor: (server) =>
+        createMcpClient({ url: server.url, auth: mcpServerAuth(server), maxResponseBytes: PACK_LIMITS.maxTotalBytes }),
+    }),
+  });
   const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
@@ -2659,11 +2675,6 @@ export function buildApp(
           held: genericChatTurns.held,
         })
       : null;
-  const webhookDelivery = createDeliveryRelay(deliveries, {
-    type: "webhook",
-    send: webhookSender(config.signingSecret),
-    claimMs: WEBHOOK_CLAIM_MS,
-  });
   const webTranscriptSweeper = createSweeper(() => deliveries.transcribeUndelivered("web"), 5_000, {
     label: "web transcripts",
   });
@@ -3114,7 +3125,6 @@ export function buildApp(
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
       genericChatDelivery?.start();
-      webhookDelivery.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -3128,7 +3138,6 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
-      webhookDelivery.stop(),
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),

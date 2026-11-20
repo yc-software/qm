@@ -68,8 +68,15 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
   const subset = asSubset(b.subset);
   if (subset === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "subset must be 'all' or string[]" });
+  if (b.kind !== undefined && b.kind !== "git" && b.kind !== "mcp")
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "kind must be 'git' or 'mcp'" });
+  if (b.kind === "mcp" && (b.ref !== undefined || b.authCredentialSlug !== undefined))
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "an mcp pack takes its credentials from its MCP server and has no ref",
+    });
   const input: NewSkillPack = {
-    kind: "git",
+    kind: b.kind === "mcp" ? "mcp" : "git",
     url: b.url.trim(),
     ref: typeof b.ref === "string" ? b.ref.trim() : "",
 
@@ -147,7 +154,11 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   const patch: Partial<Omit<SkillPack, "id" | "createdAt">> = {};
-  if (typeof b.ref === "string" && b.ref.trim()) patch.ref = b.ref.trim();
+  if (typeof b.ref === "string" && b.ref.trim()) {
+    if ((await ctx.app.getSkillPack(ctx.params.id!))?.kind === "mcp")
+      return sendJson(ctx.res, 400, { error: "bad_request", message: "an mcp pack has no ref" });
+    patch.ref = b.ref.trim();
+  }
   if (typeof b.url === "string" && b.url.trim()) patch.url = b.url.trim();
   if (b.trustTier === "internal" || b.trustTier === "third-party") patch.trustTier = b.trustTier;
   if (b.syncMode === "pinned" || b.syncMode === "tracked") patch.syncMode = b.syncMode;
