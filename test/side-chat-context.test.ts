@@ -7,11 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { sideChatContext } from "../src/core/side-chat-context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+
+const url = testDatabaseUrl();
+await createPostgresRunStore(url).runs.inFlightForThread("");
 
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];
@@ -19,7 +23,7 @@ function discussions(text: string) {
 }
 
 test("side-chat context excludes copied history, tools, footers, private memory, and promoted sessions", async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
+  const store = createPostgresSessionStore(url);
   const parent = await store.getOrCreateByThread("parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
   await store.addParticipant(parent.id, "bob");
@@ -117,7 +121,7 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
 });
 
 test("side-chat context pages messages and reports exchanges omitted by the model budget", async () => {
-  const store = createPostgresSessionStore(testDatabaseUrl());
+  const store = createPostgresSessionStore(url);
   const parent = await store.getOrCreateByThread("budget-parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
   const parentWriter = { sessionId: parent.id };
