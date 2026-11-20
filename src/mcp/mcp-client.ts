@@ -124,7 +124,7 @@ export interface McpSkill extends McpSkillEntry {
   text: string;
 }
 
-export interface McpSkillLimits {
+interface McpSkillLimits {
   maxFiles: number;
   maxTotalBytes: number;
 }
