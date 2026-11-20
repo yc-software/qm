@@ -162,7 +162,7 @@ const names = (index: string) => [...index.matchAll(/^- ([^ \n]+)/gm)].map((m) =
 test("skills index lists every skill alphabetically, independent of the message and of use", () => {
   const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
   for (const r of skills) r.skill!.manifest.description = "General task";
-  skills[19]!.skill!.manifest.description = "Prepare telescope observations";
+  skills[19]!.skill!.manifest.description = "Prepare telescope\n  observations";
   skills[18]!.skill!.lastUsedAt = Number.MAX_SAFE_INTEGER;
   const duplicate = structuredClone(skills[0]!);
   duplicate.skill!.manifest.description = "shadowed description";
