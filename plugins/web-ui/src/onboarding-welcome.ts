@@ -478,7 +478,11 @@ export class OnboardingWelcome extends LitElement {
   private async authorize(service: ConnectionService, replaces?: string): Promise<void> {
     if (this.authorizing) return;
     if (service.connectUrl) {
-      if (!(await openDesktopBrowser(service.connectUrl))) window.open(service.connectUrl, "_blank", "noopener");
+      const url = new URL(service.connectUrl);
+      if (service.returnParam) url.searchParams.set(service.returnParam, location.href);
+      if (await openDesktopBrowser(url.href)) return;
+      if (service.returnParam) window.location.assign(url.href);
+      else window.open(url.href, "_blank", "noopener");
       return;
     }
     if (this.preview) {

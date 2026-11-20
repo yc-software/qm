@@ -7,7 +7,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
-import { connectorApps, type ConnectorApp } from "./connector-apps.ts";
+import { connectedServices, connectorApps, type ConnectorApp } from "./connector-apps.ts";
 import {
   attestsInAudience,
   attestedPerson,
@@ -21,6 +21,7 @@ import type { ScopeId } from "../types.ts";
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
+const APP_STATUS_TIMEOUT_MS = 10_000;
 const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
@@ -319,6 +320,14 @@ export function createMcpToolService(opts: {
     return listing;
   }
 
+  // Asked fresh each time: the person may have just come back from connecting an app.
+  async function appStatus(server: McpServer, tool: string, principalId: string): Promise<string> {
+    const client = await callerClient(server, principalId);
+    return resultText(
+      await client.callTool(tool, {}, headersFor(server, principalId), AbortSignal.timeout(APP_STATUS_TIMEOUT_MS)),
+    );
+  }
+
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
     if (typeof name !== "string" || !name) throw new Error("tool is required");
     const entry = (await catalogTools(server, principalId)).find((t) => t.name === name);
@@ -574,7 +583,9 @@ export function createMcpToolService(opts: {
           if (!apps.length) return [];
           let listed = new Set<string>();
           try {
-            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+            listed = server.appStatusTool
+              ? connectedServices(await appStatus(server, server.appStatusTool, principalId))
+              : new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
           } catch (e) {
             record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }
