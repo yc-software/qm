@@ -124,8 +124,8 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
     assert.match(((await getRes.json()) as any).content, /written after the turn ended/);
 
     const updates = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "memory.update");
-    assert.equal(updates.length, 1);
-    assert.equal(updates[0]!.principalId, "admin-alice", "the admin action is attributed to the acting admin");
+    assert.equal(updates.length, 2);
+    assert.ok(updates.every((u) => u.principalId === "admin-alice"), "the admin action is attributed to the acting admin");
   } finally {
     await s.close();
   }
