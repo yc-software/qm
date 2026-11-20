@@ -105,6 +105,10 @@ test("toSlackMrkdwn: GFM tables → aligned monospace block (Slack has no table 
     toSlackMrkdwn("| Name | Score |\n|------|-------|\n| Alice | 91 |\n| Bo | 7 |"),
     "```\nName  | Score\n------+------\nAlice | 91\nBo    | 7\n```",
   );
+  assert.equal(
+    toSlackMrkdwn("| Step | Run |\n|---|---|\n| build | `npm run build` |"),
+    "```\nStep  | Run\n------+----------------\nbuild | `npm run build`\n```",
+  );
   assert.equal(toSlackMrkdwn("use a | b here"), "use a | b here");
   assert.equal(toSlackMrkdwn("```\n| x | y |\n```"), "```\n| x | y |\n```");
 });
