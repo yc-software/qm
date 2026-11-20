@@ -6,15 +6,14 @@ import XCTest
 
 final class NativeBrandAssetTests: XCTestCase {
   @MainActor
-  func testTwinSailsRendersTheMarkAndBothBoatsAtCompactWidths() throws {
-    XCTAssertNotNil(UIImage(named: "QMWordmark"))
-    for width in [180, 302] {
+  func testSketchBoatFramesAreBundledDistinctAndVisible() throws {
+    var frames: [[UInt8]] = []
+    for tick in 0..<NativeSketchBoatLoading.frameCount {
+      XCTAssertNotNil(UIImage(named: "SketchBoat-\(tick)"))
       let renderer = ImageRenderer(
-        content: NativeTwinSailsLoading(label: "Loading your workspace")
-          .frame(width: CGFloat(width)))
+        content: NativeSketchBoatLoading.frame(tick).frame(width: 120, height: 86))
       renderer.scale = 1
       let image = try XCTUnwrap(renderer.cgImage)
-      XCTAssertEqual(image.width, width)
       var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
       try pixels.withUnsafeMutableBytes { bytes in
         let context = try XCTUnwrap(
@@ -25,15 +24,10 @@ final class NativeBrandAssetTests: XCTestCase {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
       }
-      for third in 0..<3 {
-        var visible = 0
-        for y in 0..<image.height / 2 {
-          for x in (third * width / 3)..<((third + 1) * width / 3) {
-            if pixels[(y * width + x) * 4 + 3] > 128 { visible += 1 }
-          }
-        }
-        XCTAssertGreaterThan(visible, 12, "The logo and each boat must remain visible")
-      }
+      let alpha = stride(from: 3, to: pixels.count, by: 4).map { pixels[$0] }
+      XCTAssertGreaterThan(alpha.filter { $0 > 128 }.count, 300, "Frame \(tick) must draw the boat")
+      XCTAssertFalse(frames.contains(alpha), "Frame \(tick) must differ from earlier frames")
+      frames.append(alpha)
     }
   }
 

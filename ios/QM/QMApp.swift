@@ -252,7 +252,7 @@ struct RootView: View {
       }
       .accessibilityIdentifier("workspaceConnectionError")
     } else {
-      NativeTwinSailsLoading(label: "Loading your workspace")
+      NativeSketchBoatLoading(label: "Weighing anchor")
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(QMTheme.paper.ignoresSafeArea())
