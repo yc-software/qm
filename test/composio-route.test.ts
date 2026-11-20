@@ -9,6 +9,7 @@ import { composioCallbackRoutes } from "../src/api/routes/composio-callback.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
+import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
@@ -155,6 +156,35 @@ test("company credentials require an applicable grant and must be enabled", asyn
   f.replies.push({ items: [], next_cursor: null });
   assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
   assert.equal(new Headers(f.calls[0]!.init?.headers).get("x-api-key"), "company-key");
+});
+
+test("the deployment Composio key serves a granted org with no key, and the org's own key comes first", async () => {
+  const f = fixture();
+  const org = scopeId("org", orgId());
+  const stored = f.deps.serviceCreds!;
+  const supplied = { slug: "composio", name: "C", host: "", secret: "deployment-key", composio: true as const };
+  f.deps.serviceCreds = withDeploymentCredentials(stored, org, [supplied]);
+  for (const ref of ["service-cred:composio", "service-cred:other"])
+    await f.deps.acl!.grant(tenant, {
+      ownerScopeId: org,
+      ref,
+      granteeScopeId: org,
+      permission: "read",
+      grantedBy: "a",
+    });
+  const keyUsed = async () => {
+    f.replies.push({ items: [], next_cursor: null });
+    assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
+    return new Headers(f.calls.at(-1)!.init?.headers).get("x-api-key");
+  };
+  assert.equal(await keyUsed(), "deployment-key");
+  const own = { slug: "other", name: "Own", delivery: "env" as const, envKey: "COMPOSIO_API_KEY", host: "" };
+  await stored.setServiceCredential(org, { ...own, secret: "own-key" });
+  assert.equal(await keyUsed(), "own-key");
+  await stored.setServiceCredential(org, { ...own, secret: "own-key", enabled: false });
+  assert.equal(await keyUsed(), "deployment-key");
+  await stored.setServiceCredential(org, { ...own, slug: "composio", secret: "off", enabled: false });
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403);
 });
 
 test("catalog preserves provider usage order, pagination, and strips raw fields", async () => {
