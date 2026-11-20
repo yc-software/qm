@@ -4,6 +4,7 @@ import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 
 const FAILURE_HEADER_LINES = 5;
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
+import { webApprovableThread } from "../../core/approval-requester.ts";
 import type { TurnRequest } from "../../types.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
@@ -250,8 +251,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   if (!record) return sendJson(res, 404, { error: "not_found" });
   const request = record.request;
   const threadRef = typeof request?.conversation?.threadRef === "string" ? request.conversation.threadRef : "";
-  const delegated = threadRef.startsWith("swarm:") || isSubagentThreadRef(threadRef);
-  if (!request || (!threadRef.startsWith("web:") && !delegated) || request.actor?.externalId !== user)
+  if (!request || !webApprovableThread(threadRef) || request.actor?.externalId !== user)
     return sendJson(res, 404, { error: "not_found" });
   if (/^web:.+:inbox$/.test(threadRef)) {
     const resolved = await resolveWebConversation(ctx, user, threadRef);
