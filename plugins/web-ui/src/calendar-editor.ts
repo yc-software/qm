@@ -1,3 +1,4 @@
+import { addDays, differenceInCalendarDays, format, parseISO } from "date-fns";
 import { html, nothing, render } from "lit";
 import { live } from "lit/directives/live.js";
 import { Video, X } from "lucide";
@@ -24,23 +25,13 @@ export type EventEditorOptions = {
   onDeleted?: (event: CalendarEvent) => void;
 };
 
-const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
-const pad = (n: number): string => String(n).padStart(2, "0");
-const dateKey = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const timeKey = (d: Date): string => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-const parseDay = (key: string): Date => {
-  const [y = 0, m = 1, d = 1] = key.split("-").map(Number);
-  return new Date(y, m - 1, d);
-};
-const shiftDay = (key: string, days: number): string => {
-  const d = parseDay(key);
-  d.setDate(d.getDate() + days);
-  return dateKey(d);
-};
-const dayGap = (from: string, to: string): number =>
-  Math.round((parseDay(to).getTime() - parseDay(from).getTime()) / DAY_MS);
+const dateKey = (d: Date): string => format(d, "yyyy-MM-dd");
+const timeKey = (d: Date): string => format(d, "HH:mm");
+const parseDay = (key: string): Date => parseISO(key);
+const shiftDay = (key: string, days: number): string => dateKey(addDays(parseDay(key), days));
+const dayGap = (from: string, to: string): number => differenceInCalendarDays(parseDay(to), parseDay(from));
 const at = (date: string, time: string): Date => new Date(`${date}T${time}`);
 
 const plainText = (markup: string): string => {
@@ -244,7 +235,7 @@ export function openEventEditor(opts: EventEditorOptions): void {
               draw();
             }}
           >
-            Keep
+            Cancel
           </button>
           <button class="btn danger" type="button" ?disabled=${busy} @click=${() => void remove()}>
             ${busy ? "Deleting…" : "Delete"}

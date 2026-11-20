@@ -34,7 +34,7 @@ import type { ConnectorTokenStore, OAuthTokenStatus } from "../../credentials/ke
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit, isObj, livePersonTurn } from "./shared.ts";
@@ -632,6 +632,9 @@ function sendGoogleFailure(
   const reconnect = upstream === 401 || upstream === 403;
   let status = upstream === 404 ? 404 : 502;
   if (reconnect) status = 409;
+  const detail = error instanceof GoogleApiError ? `${error.status} ${error.detail}` : undefined;
+  if (reconnect) console.warn(`[google] ${code}: ${errMessage(error)} ${detail}`);
+  else reportFailure(`connectors: ${code}`, error, detail);
   sendJson(ctx.res, status, {
     error: code,
     ...(reconnect ? { reconnect: true } : {}),
