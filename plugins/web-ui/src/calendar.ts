@@ -334,6 +334,14 @@ async function removeEvent(): Promise<void> {
   }
 }
 
+function titleTpl(): TemplateResult {
+  const shown = days();
+  const first = cal.view === "week" ? shown[0]! : cal.anchor;
+  const last = cal.view === "week" ? shown.at(-1)! : cal.anchor;
+  if (cal.view === "day" || !isSameMonth(first, last)) return html`${rangeLabel()}`;
+  return html`<strong>${formatter({ month: "long" }).format(first)}</strong> ${first.getFullYear()}`;
+}
+
 function rangeLabel(): string {
   const shown = days();
   if (cal.view === "day") return LONG_DATE.format(cal.anchor);
@@ -390,14 +398,6 @@ function pageTpl(): TemplateResult {
     return html`<div class="pane-head"><h1 class="pane-title">Calendar</h1></div>
       ${connectTpl(problem)}`;
   return html`
-    <div class="pane-head">
-      <h1 class="pane-title">Calendar</h1>
-      <div class="pane-head-actions">
-        <button class="btn primary" type="button" title="Create (C)" @click=${createNow}>
-          ${icon(Plus, 14)}<span>Create</span>
-        </button>
-      </div>
-    </div>
     <section class="cal-main" aria-busy=${cal.loading ? "true" : "false"}>
       ${toolbarTpl()}
       ${
@@ -431,6 +431,24 @@ function toolbarTpl(): TemplateResult {
   const data = currentData();
   const quiet = data && !cal.loading && !visibleSpans().length;
   return html`<div class="cal-toolbar">
+    <h1 class="cal-range" aria-live="polite">${titleTpl()}</h1>
+    ${cal.loading ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
+    ${quiet ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing} ${calendarsTpl()}
+    <div class="cron-segments cal-views" role="radiogroup" aria-label="Calendar view">
+      ${CALENDAR_VIEWS.map(
+        (view) =>
+          html`<button
+            type="button"
+            role="radio"
+            aria-checked=${cal.view === view}
+            class=${cal.view === view ? "active" : ""}
+            title=${`${VIEW_LABELS[view]} (${view[0]!.toUpperCase()})`}
+            @click=${() => go({ view })}
+          >
+            ${VIEW_LABELS[view]}
+          </button>`,
+      )}
+    </div>
     <button class="btn" type="button" @click=${() => go({ anchor: new Date() })} title="Today (T)">Today</button>
     <span class="cal-steppers">
       <button
@@ -452,24 +470,9 @@ function toolbarTpl(): TemplateResult {
         ${icon(ChevronRight, 16)}
       </button>
     </span>
-    <h2 class="cal-range" aria-live="polite">${rangeLabel()}</h2>
-    ${cal.loading ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
-    ${quiet ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing} ${calendarsTpl()}
-    <div class="cron-segments cal-views" role="radiogroup" aria-label="Calendar view">
-      ${CALENDAR_VIEWS.map(
-        (view) =>
-          html`<button
-            type="button"
-            role="radio"
-            aria-checked=${cal.view === view}
-            class=${cal.view === view ? "active" : ""}
-            title=${`${VIEW_LABELS[view]} (${view[0]!.toUpperCase()})`}
-            @click=${() => go({ view })}
-          >
-            ${VIEW_LABELS[view]}
-          </button>`,
-      )}
-    </div>
+    <button class="icon-btn cal-create" type="button" aria-label="Create event" title="Create (C)" @click=${createNow}>
+      ${icon(Plus, 16)}
+    </button>
   </div>`;
 }
 
@@ -583,10 +586,15 @@ function blockTpl(block: Block): TemplateResult {
   const { event } = block;
   const height = ((block.bottom - block.top) / 60) * HOUR_PX;
   const compact = height < 38;
+  const left = block.col / block.cols;
+  const width =
+    block.col + block.width < block.cols
+      ? Math.min((block.width / block.cols) * 1.7, 1 - left)
+      : block.width / block.cols;
   return html`<button
     type="button"
     class="${eventClass(event, block.end)} cal-block ${compact ? "is-compact" : ""}"
-    style=${`--ev:${event.color};top:${(block.top / 60) * HOUR_PX}px;height:${Math.max(height - 2, 16)}px;left:calc(${(block.col / block.cols) * 100}% + 1px);width:calc(${(block.width / block.cols) * 100}% - ${block.col + block.width < block.cols ? 4 : 6}px)`}
+    style=${`--ev:${event.color};top:${(block.top / 60) * HOUR_PX}px;height:${Math.max(height - 2, 16)}px;left:calc(${left * 100}% + 1px);width:calc(${width * 100}% - 6px);z-index:${block.col + 1}`}
     aria-label=${eventLabel(block)}
     @click=${onEventClick(event)}
     @pointerdown=${(e: PointerEvent) => e.stopPropagation()}
@@ -642,14 +650,22 @@ function timeGridTpl(): TemplateResult {
   const now = new Date();
   const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_PX;
   const hours = Array.from({ length: 24 }, (_, hour) => hour);
+  const showNow = shown.some((day) => isToday(day));
   return html`<div class="cal-grid cal-${cal.view}" style=${`--days:${shown.length};--hour:${HOUR_PX}px`}>
     ${cal.loading ? html`<div class="cal-progress" aria-hidden="true"></div>` : nothing}
     <div class="cal-fixed">${headerTpl(shown)} ${allDayTpl(shown, bars)}</div>
     <div class="cal-scroll">
       <div class="cal-body">
         <div class="cal-gutter cal-hours" aria-hidden="true">
-          ${hours.map((hour) => html`<span style=${`top:${hour * HOUR_PX}px`}>${hour ? HOUR_ONLY.format(new Date(2000, 0, 1, hour)) : ""}</span>`)}
+          ${hours.map(
+            (hour) =>
+              html`<span style=${`top:${hour * HOUR_PX}px`}
+                >${hour && !(showNow && Math.abs(hour * HOUR_PX - nowTop) < HOUR_PX / 3) ? HOUR_ONLY.format(new Date(2000, 0, 1, hour)) : ""}</span
+              >`,
+          )}
+          ${showNow ? html`<span class="cal-now-label" style=${`top:${nowTop}px`}>${timeLabel(now)}</span>` : nothing}
         </div>
+        ${showNow ? html`<div class="cal-now-line" style=${`top:${nowTop - 0.5}px`} aria-hidden="true"></div>` : nothing}
         ${shown.map((day) => {
           const selection = cal.selection && isSameDay(cal.selection.day, day) ? cal.selection : null;
           return html`<div
@@ -704,6 +720,7 @@ function weekRowTpl(week: Date[], spans: Span[]): TemplateResult {
   const chips = week.flatMap((day, col) =>
     spans
       .filter((span) => !spansDays(span) && isSameDay(span.start, day))
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
       .map((span) => {
         let row = 0;
         while (taken[col]!.has(row)) row++;

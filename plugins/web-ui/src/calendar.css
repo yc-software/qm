@@ -41,9 +41,10 @@
   cursor: default;
 }
 .cal-range {
-  margin: 0 2px;
-  font-size: var(--font-18);
-  font-weight: 600;
+  margin: 0 auto 0 0;
+  font-size: var(--font-26);
+  font-weight: 400;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -59,8 +60,11 @@
 .cal-views {
   flex: none;
 }
-.cal-toolbar:not(:has(.cal-calendars)) .cal-views {
-  margin-left: auto;
+.cal-range strong {
+  font-weight: 650;
+}
+.cal-create {
+  color: var(--muted-foreground);
 }
 .cal-views button {
   min-width: 64px;
@@ -79,7 +83,6 @@
 
 .cal-calendars {
   position: relative;
-  margin-left: auto;
 }
 .cal-calendars > .btn {
   gap: 4px;
@@ -116,11 +119,9 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: var(--background);
   overflow: hidden;
-  --gutter: 58px;
+  --gutter: 66px;
   --line: color-mix(in srgb, var(--border) 75%, transparent);
 }
 .cal-progress {
@@ -179,10 +180,11 @@
 }
 .cal-day-head {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 8px 0 6px;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 0;
+  font-size: var(--font-13);
   border: 0;
   background: transparent;
   color: var(--foreground);
@@ -195,20 +197,16 @@
 }
 .cal-dow {
   color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 .cal-date {
   display: inline-grid;
   place-items: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 4px;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
   box-sizing: border-box;
-  border-radius: 999px;
-  font-size: var(--font-20);
+  border-radius: 6px;
+  color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
   transition: background 0.12s ease;
 }
@@ -219,15 +217,13 @@
   color: var(--muted-foreground);
 }
 .cal-day-head.is-today .cal-dow {
-  color: var(--cta);
-}
-.dark .cal-day-head.is-today .cal-dow {
-  color: var(--markdown-link);
+  color: var(--foreground);
+  font-weight: 600;
 }
 .cal-day-head.is-today .cal-date,
 .cal-day-head.is-today:hover .cal-date {
-  background: var(--cta);
-  color: var(--cta-foreground);
+  background: var(--destructive);
+  color: #fff;
   font-weight: 600;
 }
 .cal-allday {
@@ -281,15 +277,12 @@
   user-select: none;
   cursor: default;
 }
-.cal-col.is-today {
-  background: color-mix(in srgb, var(--cta) 3%, transparent);
-}
 .cal-now {
   position: absolute;
   left: -1px;
   right: 0;
   z-index: 3;
-  height: 2px;
+  height: 1.5px;
   margin-top: -1px;
   background: var(--destructive);
   pointer-events: none;
@@ -297,24 +290,25 @@
 .cal-now::before {
   content: "";
   position: absolute;
-  left: -5px;
-  top: -4px;
-  width: 10px;
-  height: 10px;
+  left: -1px;
+  top: -5px;
+  width: 2px;
+  height: 11px;
   border-radius: 999px;
   background: var(--destructive);
 }
 
 .cal-event {
-  --ev-fill: color-mix(in srgb, var(--ev) 20%, var(--background));
+  --ev-fill: color-mix(in srgb, var(--ev) 13%, var(--background));
+  --ev-ink: color-mix(in srgb, var(--ev) 40%, var(--foreground));
   display: flex;
   min-width: 0;
   box-sizing: border-box;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--ev-fill);
-  color: var(--foreground);
+  color: var(--ev-ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -324,7 +318,8 @@
     box-shadow 0.12s ease;
 }
 .dark .cal-event {
-  --ev-fill: color-mix(in srgb, var(--ev) 32%, var(--background));
+  --ev-fill: color-mix(in srgb, var(--ev) 30%, var(--background));
+  --ev-ink: color-mix(in srgb, var(--ev) 12%, var(--foreground));
 }
 .cal-event:hover {
   filter: brightness(0.97);
@@ -341,38 +336,65 @@
 }
 .cal-event.is-pending {
   background: var(--background);
-  box-shadow: inset 0 0 0 1px var(--ev);
+  outline: 1px dashed var(--ev);
+  outline-offset: -1px;
 }
 .cal-event.is-tentative {
   background: repeating-linear-gradient(
     -45deg,
     var(--ev-fill) 0 6px,
-    color-mix(in srgb, var(--ev-fill) 55%, var(--background)) 6px 12px
+    color-mix(in srgb, var(--ev-fill) 70%, var(--background)) 6px 12px
   );
 }
 .cal-event.is-declined {
   background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ev) 40%, transparent);
-  color: var(--muted-foreground);
+  outline: 1px dashed color-mix(in srgb, var(--ev) 45%, transparent);
+  outline-offset: -1px;
 }
 .cal-event.is-declined .cal-event-title {
   text-decoration: line-through;
 }
 .cal-event.is-past {
-  opacity: 0.62;
+  opacity: 0.8;
 }
 .cal-event-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+  font-weight: 500;
 }
 .cal-event-time,
 .cal-event-where {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--foreground) 72%, transparent);
+  opacity: 0.85;
+}
+.cal-views.cron-segments button.active {
+  background: var(--secondary);
+  color: var(--foreground);
+  box-shadow: none;
+}
+.cal-now-label {
+  position: absolute;
+  right: 6px;
+  z-index: 3;
+  padding: 0 2px;
+  transform: translateY(-50%);
+  background: var(--background);
+  color: var(--destructive);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cal-now-line {
+  position: absolute;
+  left: var(--gutter);
+  right: 0;
+  z-index: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--destructive) 22%, transparent);
+  pointer-events: none;
 }
 
 .cal-block {
@@ -380,14 +402,17 @@
   position: absolute;
   z-index: 1;
   flex-direction: column;
-  padding: 3px 7px;
+  padding: 3px 6px;
   border-left: 3px solid var(--ev);
   font-size: 11.5px;
   line-height: 1.3;
 }
+.cal-block + .cal-block {
+  box-shadow: 0 0 0 1px var(--background);
+}
 .cal-block:hover,
 .cal-block.is-open {
-  z-index: 2;
+  z-index: 9 !important;
 }
 .cal-block.is-pending {
   border-left-width: 3px;
@@ -425,7 +450,8 @@
   gap: 5px;
   height: 22px;
   margin: 0 3px 0 2px;
-  padding: 0 8px;
+  padding: 0 6px;
+  border-left: 3px solid var(--ev);
   font-size: 11.5px;
   position: relative;
   z-index: 1;
@@ -458,13 +484,9 @@
   border-bottom: 1px solid var(--border);
 }
 .cal-month-head span {
-  padding: 8px 0 6px;
-  text-align: center;
+  padding: 8px 10px;
   color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--font-13);
 }
 .cal-month-body {
   flex: 1;
@@ -490,24 +512,22 @@
   grid-row: 1 / -1;
   min-height: 100%;
   display: flex;
-  justify-content: center;
-  padding-top: 4px;
+  justify-content: flex-start;
+  padding: 4px 0 0 4px;
   border-left: 1px solid var(--line);
   cursor: pointer;
 }
 .cal-month-cell:first-child {
   border-left: 0;
 }
-.cal-month-cell.is-outside {
-  background: color-mix(in srgb, var(--secondary) 45%, transparent);
-}
+
 .cal-month-date {
   align-self: flex-start;
   min-width: 24px;
   height: 24px;
   padding: 0 6px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   color: var(--foreground);
   font: inherit;
@@ -523,8 +543,8 @@
   color: var(--muted-foreground);
 }
 .cal-month-cell.is-today .cal-month-date {
-  background: var(--cta);
-  color: var(--cta-foreground);
+  background: var(--destructive);
+  color: #fff;
   font-weight: 600;
 }
 .cal-chip {
@@ -569,6 +589,9 @@
   .cal-chip .cal-event-time {
     display: none;
   }
+}
+.cal-chip {
+  color: var(--foreground);
 }
 .cal-chip .cal-event-title {
   font-weight: 500;
