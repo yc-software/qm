@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
 import { swallowAs } from "../../util/errors.ts";
-import { isObj, livePersonTurn } from "./shared.ts";
+import { audit, isObj, livePersonTurn } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
@@ -112,11 +112,20 @@ async function updatePersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.update(principalId, ctx.params.id!, ctx.body), "persona");
 }
 
+function auditPersona(ctx: ApiCtx, principalId: string, personaId: string, action: string, resource: string): void {
+  audit(ctx, { principalId, action, resource, scopeLabel: scopeId("persona", personaId) });
+}
+
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
   if (!personas || !principalId || !livePersonTurn(ctx)) return;
-  respond(ctx, await personas.remove(principalId, ctx.params.id!), "deleted");
+  const id = ctx.params.id!;
+  const result = await personas.remove(principalId, id, (grantId) =>
+    auditPersona(ctx, principalId, id, "keychain.revoke", grantId),
+  );
+  if (result.status === "ok") auditPersona(ctx, principalId, id, "persona.delete", id);
+  respond(ctx, result, "deleted");
 }
 
 const VERSION_PAGE = 20;
@@ -179,16 +188,32 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
   const principalId = personas && principalOf(ctx, "body");
   if (!personas || !principalId || !livePersonTurn(ctx)) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
-  await keychainResult(ctx, () => personas.attachCredential(principalId, ctx.params.id!, credentialId), "credential");
+  const id = ctx.params.id!;
+  await keychainResult(
+    ctx,
+    async () => {
+      const result = await personas.attachCredential(principalId, id, credentialId);
+      if (result.status === "ok") auditPersona(ctx, principalId, id, "persona.credential.attach", result.value.grantId);
+      return result;
+    },
+    "credential",
+  );
 }
 
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
   if (!personas || !principalId || !livePersonTurn(ctx)) return;
+  const [id, grantId] = [ctx.params.id!, ctx.params.grantId!];
   await keychainResult(
     ctx,
-    () => personas.detachCredential(principalId, ctx.params.id!, ctx.params.grantId!),
+    async () => {
+      const result = await personas.detachCredential(principalId, id, grantId, (revoked) =>
+        auditPersona(ctx, principalId, id, "keychain.revoke", revoked),
+      );
+      if (result.status === "ok") auditPersona(ctx, principalId, id, "persona.credential.detach", grantId);
+      return result;
+    },
     "detached",
   );
 }

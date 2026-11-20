@@ -751,6 +751,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         throw new DeployAccessError("unknown_connector", `not a connected-app host: ${unknown.join(", ")}`);
       if (hosts.length && d.public)
         throw new DeployAccessError("forbidden", "a public app cannot borrow connectors; make it restricted first");
+      if (hosts.length && d.ownerScopeId !== scopeId("personal", d.createdBy))
+        throw new DeployAccessError(
+          "forbidden",
+          "an app outside its publisher's own library cannot borrow connectors; move it back there first",
+        );
       await deps.deployStore.setConnectors(d.id, hosts.length ? hosts : undefined);
       recordAudit({
         at: Date.now(),

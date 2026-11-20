@@ -15,6 +15,7 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import { connectionActions, connectionCard, type ConnectionOutcome } from "./connection-card";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
+import { errMessage } from "../../chassis/src/errors.ts";
 
 interface ConnectedAccount {
   id: string;
@@ -27,6 +28,7 @@ import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";
 import "./welcome-about";
+import { firstName } from "./welcome-about-scenes";
 import {
   connectionPreviewEnabled,
   previewParameters,
@@ -297,7 +299,7 @@ export class OnboardingWelcome extends LitElement {
       this.connections = this.connections.filter((candidate) => candidate.id !== account.id);
       return true;
     } catch (error) {
-      this.connectionError = error instanceof Error ? error.message : `Could not disconnect ${name}.`;
+      this.connectionError = errMessage(error, `Could not disconnect ${name}.`);
       return false;
     } finally {
       this.disconnecting = "";
@@ -420,7 +422,7 @@ export class OnboardingWelcome extends LitElement {
       this.connections = [];
       this.connectionsChecked = false;
       this.connectionOutcome = "";
-      this.connectionError = error instanceof Error ? error.message : "Could not check connected apps.";
+      this.connectionError = errMessage(error, "Could not check connected apps.");
       await this.updateComplete;
       this.drawPicker();
     }
@@ -458,7 +460,7 @@ export class OnboardingWelcome extends LitElement {
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
-      this.error = error instanceof Error ? error.message : "Could not load apps. Please try again.";
+      this.error = errMessage(error, "Could not load apps. Please try again.");
     }
     if (!this.isConnected || controller.signal.aborted) return;
     this.loading = false;
@@ -515,8 +517,7 @@ export class OnboardingWelcome extends LitElement {
       saveConnectionAttempt({ ...attempt, accountId: result.accountId });
       window.location.assign(result.url);
     } catch (error) {
-      this.authorizationError =
-        error instanceof Error ? error.message : "Could not open authorization. Please try again.";
+      this.authorizationError = errMessage(error, "Could not open authorization. Please try again.");
     } finally {
       this.authorizing = "";
     }
@@ -631,8 +632,9 @@ export class OnboardingWelcome extends LitElement {
         <a href="?connectionDemo=1">Back to QM</a>
       </section>`;
     }
-    if (this.about) return html`<qm-welcome-about .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
-    const name = this.me?.displayName?.trim().split(/\s+/)[0];
+    if (this.about)
+      return html`<qm-welcome-about .me=${this.me} .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
+    const name = firstName(this.me?.displayName);
     const cohort = this.me?.welcomeCohort;
     const seeds = this.seeded;
     const paced = Boolean(cohort) && !seeds;

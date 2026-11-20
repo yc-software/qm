@@ -97,7 +97,7 @@ test("readers chat, writers edit, only owners share, and the last owner cannot b
     "edited by a writer",
   );
   assert.equal((await personas.setAccess(BOB, ada.id, [])).status, "forbidden");
-  assert.equal((await personas.remove(BOB, ada.id)).status, "forbidden");
+  assert.equal((await personas.remove(BOB, ada.id, () => {})).status, "forbidden");
 
   const lastOwner = await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", BOB), role: "write" }]);
   assert.equal(lastOwner.status, "invalid");
@@ -105,7 +105,7 @@ test("readers chat, writers edit, only owners share, and the last owner cannot b
 
   assert.equal(await built.app.managesScope(BOB, scopeId("persona", ada.id)), true);
   assert.equal(await built.app.managesScope(CAROL, scopeId("persona", ada.id)), false);
-  ok(await personas.remove(ALICE, ada.id));
+  ok(await personas.remove(ALICE, ada.id, () => {}));
   assert.deepEqual(ok(await personas.list(ALICE)), []);
 });
 
@@ -288,7 +288,7 @@ test("credentials attached by an owner reach every turn that uses the persona, a
   ok(await personas.assign(BOB, (await built.sessions.get(opened.sessionId))!, ada.id));
   assert.ok((await sysprompt(BOB, dm)).reply.includes(handle));
 
-  ok(await personas.remove(ALICE, ada.id));
+  ok(await personas.remove(ALICE, ada.id, () => {}));
   assert.ok(!(await sysprompt(BOB, dm)).reply.includes(handle));
 });
 
@@ -660,7 +660,13 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
     actor: { externalId: ALICE },
     conversation: { kind: "dm", threadRef: "dm:U_ALICE:plain" },
     text: "hi",
+    conversationHeader: "You are replying in a thread you started.",
+    priorTurns: [{ role: "assistant", text: "Nightly report from Ada" }],
   });
+  assert.match(
+    states[1]!,
+    /Conversation so far:\nYou are replying in a thread you started\.\n\n.*Nightly report from Ada/,
+  );
   assert.equal(plain.runtime?.modelId, "gpt-5.5");
   assert.equal((await built.sessions.get(plain.sessionId!))?.personaId, undefined);
   assert.equal(states.length, 2);

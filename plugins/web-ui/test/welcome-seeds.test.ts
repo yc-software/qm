@@ -16,7 +16,13 @@ test("a new person sees their company's seeded activities, only apps they connec
       slack: [idea("s1", "💬", "Summarize the channels I missed")],
     },
   };
-  const me = { displayName: "Maya Lin", welcome, suggestedActivitiesGeneration: true };
+  const me = {
+    displayName: "Maya Lin",
+    companyName: "Harbor Line",
+    teammate: "Omar Haddad",
+    welcome,
+    suggestedActivitiesGeneration: true,
+  };
   const h = await harness({
     path: "/",
     listSessions: [],
@@ -64,6 +70,10 @@ test("a new person sees their company's seeded activities, only apps they connec
     const about = document.querySelector("qm-welcome-about")!.textContent!.replace(/\s+/g, " ");
     for (const shown of ["What is this?", "@qm make me a CRM", "A virtual employee in Slack", "Agent swarms"])
       assert.ok(about.includes(shown), shown);
+    const scenes = () => document.querySelector("qm-welcome-about .W-figs")!.textContent!.replace(/\s+/g, " ");
+    for (const shown of ["Maya", "Omar", "Harbor Line /", "claims.harborline.apps"])
+      assert.ok(scenes().includes(shown), shown);
+    assert.doesNotMatch(scenes(), /Tidewater|tidewater|\bDev\b/);
     assert.equal(rows().length, 0);
     link("Back to welcome").click();
     await new Promise((resolve) => setTimeout(resolve, 30));

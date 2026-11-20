@@ -20,8 +20,13 @@ export const appHandleResource: AdminResource = {
       const problem = appLabelLimitError(parsed.data, d.name ?? d.id);
       if (problem) return { error: problem };
     }
-    if ((await setAppHandle(parsed.data)) === "taken")
-      return { error: "another workspace already uses that handle", status: 409 };
+    const outcome = await setAppHandle(parsed.data);
+    if (outcome === "taken") return { error: "another workspace already uses that handle", status: 409 };
+    if (outcome === "app_taken")
+      return {
+        error: "with that handle, one of this workspace's apps would get the same address as another workspace's app",
+        status: 409,
+      };
     noteTenantAppHandle(parsed.data);
     return { ok: true };
   },

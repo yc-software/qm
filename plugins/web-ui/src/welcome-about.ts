@@ -1,6 +1,7 @@
 import { LitElement, html, nothing, render, type TemplateResult } from "lit";
 import { animateSwarm, aboutTiles } from "./welcome-about-tiles";
-import { SCENES, emptySlack, slackScene, webFrame } from "./welcome-about-scenes";
+import { SCENES, castAs, emptySlack, slackScene, webFrame } from "./welcome-about-scenes";
+import type { Me } from "./shell-state";
 import "./welcome-about.css";
 
 const SPEED = 0.55;
@@ -11,8 +12,9 @@ function show(box: Element, scene: TemplateResult): void {
 }
 
 export class WelcomeAbout extends LitElement {
-  static properties = { onBack: { attribute: false } };
+  static properties = { onBack: { attribute: false }, me: { attribute: false } };
   declare onBack: (() => void) | undefined;
+  declare me: Me | null | undefined;
   private next?: ReturnType<typeof setTimeout>;
 
   protected createRenderRoot(): HTMLElement {
@@ -21,6 +23,7 @@ export class WelcomeAbout extends LitElement {
   protected firstUpdated(): void {
     const root = this.querySelector<HTMLElement>(".welcome-about")!;
     const box = { slack: root.querySelector(".dwin.slack")!, web: root.querySelector(".dwin.web")! };
+    castAs({ company: this.me?.companyName, you: this.me?.displayName, teammate: this.me?.teammate });
     if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== false) {
       show(box.slack, slackScene(1));
       show(box.web, SCENES.at(-1)!.render());

@@ -10,6 +10,7 @@ import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { freePort } from "./dev/lib/proc.ts";
+import { errMessage } from "../src/util/errors.ts";
 
 type Json = Record<string, unknown>;
 
@@ -45,7 +46,7 @@ async function waitFor(url: string, timeoutMs: number): Promise<void> {
       if (res.ok) return;
       last = `HTTP ${res.status}`;
     } catch (e) {
-      last = e instanceof Error ? e.message : String(e);
+      last = errMessage(e);
     }
     await new Promise((r) => setTimeout(r, 150));
   }

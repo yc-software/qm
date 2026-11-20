@@ -1,4 +1,5 @@
 import { SettingState } from "./setting-state.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 export type Rule = { id: number; pattern: string; decision: string; reason: string };
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
@@ -136,7 +137,7 @@ export class GovernanceState extends SettingState {
         this.collect();
         return [];
       } catch (error) {
-        return [(error as Error).message];
+        return [errChain(error)];
       }
     }
     const warnings: string[] = [];
@@ -157,7 +158,7 @@ export function patternError(pattern: string): string {
     new RegExp(pattern);
     return "";
   } catch (error) {
-    return (error as Error).message;
+    return errChain(error);
   }
 }
 export const states = new Map(Object.keys(fieldNames).map((key) => [key, new GovernanceState(key)]));

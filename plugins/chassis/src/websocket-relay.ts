@@ -4,6 +4,7 @@ import { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { reportBackendError } from "./error-reporting.ts";
 import { json, relayStream } from "./http.ts";
+import { errChain } from "./errors.ts";
 
 export interface UpgradeTarget {
   socket: Duplex;
@@ -37,7 +38,7 @@ export function responseOnSocket(req: IncomingMessage, socket: Duplex): ServerRe
 
 export function failUpgrade(socket: Duplex, label: string, error: unknown): void {
   reportBackendError(error, label);
-  console.error("[%s] %s", label, error instanceof Error ? error.message : String(error));
+  console.error("[%s] %s", label, errChain(error));
   socket.destroy();
 }
 

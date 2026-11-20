@@ -6,7 +6,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 import { APP_TABLES, NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
-import { appHostLabel } from "../tenants/app-handle.ts";
+import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/app-handle.ts";
 import { msOf } from "../sessions/items.ts";
 import {
   createDeployGitStore,
@@ -265,9 +265,9 @@ export function deployTouchDebounceMs(reapTtlMs?: number): number {
   return Math.min(TOUCH_DEBOUNCE_MS, Math.floor(reapTtlMs / 4));
 }
 
-function isNameConflict(e: unknown): boolean {
+function conflictOn(e: unknown): string | undefined {
   const err = e as { code?: string; constraint?: string } | null;
-  return err?.code === "23505" && err?.constraint === NAME_INDEX;
+  return err?.code === "23505" ? err.constraint : undefined;
 }
 
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {
@@ -285,7 +285,10 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     try {
       await write();
     } catch (e) {
-      if (isNameConflict(e)) throw new Error(`app name taken: ${name}`, { cause: e });
+      const constraint = conflictOn(e);
+      if (constraint === NAME_INDEX) throw new Error(`app name taken: ${name}`, { cause: e });
+      if (constraint === APP_HOSTS_KEY)
+        throw new Error(appAddressTakenError(appHostLabel(tenantAppHandle() ?? "", name ?? "")), { cause: e });
       throw e;
     }
   }
@@ -344,7 +347,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         endpoint: null,
         versions: [v],
       };
-      await writeNamed(d.name, () => backingMap.put(d.id, d));
+      await writeNamed(d.name ?? d.id, () => backingMap.put(d.id, d));
       await updateVersionRef(d.id, v);
       return d;
     },

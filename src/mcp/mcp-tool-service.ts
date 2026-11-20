@@ -232,7 +232,7 @@ function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): s
   return lines.join("\n");
 }
 
-function authOf(server: McpServer): McpAuth {
+export function mcpServerAuth(server: McpServer): McpAuth {
   if (server.auth === "bearer") return { mode: "bearer", token: server.bearerToken ?? "" };
   if (server.auth === "client-credentials")
     return { mode: "client-credentials", clientId: server.clientId ?? "", clientSecret: server.clientSecret ?? "" };
@@ -305,7 +305,7 @@ export function createMcpToolService(opts: {
     const { clients } = tenantState();
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch });
+    const client = createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch });
     clients.set(server.id, { client, server });
     return client;
   }
@@ -575,7 +575,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      return createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch }).listTools({
+      return createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });

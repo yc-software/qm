@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { errMessage } from "../src/util/errors.ts";
 
 const RUN_ALL = {
   exact: [
@@ -46,7 +47,7 @@ function runtimeCode(path: string, source: string) {
   try {
     return stripTypeScriptTypes(source);
   } catch (error) {
-    console.log(`${path}: ${error instanceof Error ? error.message : String(error)}; reading its type imports too.`);
+    console.log(`${path}: ${errMessage(error)}; reading its type imports too.`);
     return source;
   }
 }
@@ -133,7 +134,7 @@ function main() {
       readFileSync(path, "utf8"),
     );
   } catch (error) {
-    console.log(error instanceof Error ? error.message : String(error));
+    console.log(errMessage(error));
   }
   const timings = JSON.parse(readFileSync(new URL("root-test-timings.json", import.meta.url), "utf8"));
   const { share, shards } = plan(selection, timings);

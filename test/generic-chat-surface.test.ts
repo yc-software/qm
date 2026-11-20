@@ -446,6 +446,7 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
   try {
     const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
     assert.ok(surface.promptHints.linkSyntax.includes(NON_WEB_PATHS));
+    assert.match(surface.promptHints.linkSyntax, /tables break/);
     await surface.post(
       { surface: "partner-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
       { text: "scheduled hello", provenance: PROVENANCE },

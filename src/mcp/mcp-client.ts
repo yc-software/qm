@@ -5,6 +5,7 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontex
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { LRUCache } from "lru-cache";
+import { z } from "zod";
 import { boundedResponse } from "../util/bytes.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
@@ -123,6 +124,72 @@ export function toolListings(): ToolListings {
   });
 }
 
+const skillsPageSchema = z.object({
+  skills: z.array(
+    z.object({
+      uri: z.string(),
+      frontmatter: z.object({ name: z.string() }),
+      resources: z.union([
+        z.literal("dynamic"),
+        z.array(z.object({ uri: z.string(), digest: z.string(), size: z.number() })),
+      ]),
+    }),
+  ),
+  nextCursor: z.string().optional(),
+});
+
+export interface McpSkillEntry {
+  uri: string;
+  name: string;
+  digest: string;
+  size: number;
+}
+
+export interface McpSkill extends McpSkillEntry {
+  text: string;
+}
+
+interface McpSkillLimits {
+  maxFiles: number;
+  maxTotalBytes: number;
+}
+
+async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise<McpSkillEntry[]> {
+  const entries: McpSkillEntry[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await client.request(
+      { method: "skills/list", params: cursor === undefined ? {} : { cursor } },
+      skillsPageSchema,
+    );
+    for (const skill of page.skills) {
+      const file = Array.isArray(skill.resources) ? skill.resources.find((r) => r.uri === skill.uri) : undefined;
+      if (!file)
+        throw new Error(`mcp skills/list gave ${skill.uri} no digest for its SKILL.md, so it cannot be verified`);
+      entries.push({ uri: skill.uri, name: skill.frontmatter.name, digest: file.digest, size: file.size });
+    }
+    if (entries.length > limits.maxFiles) throw new Error(`mcp skills/list lists more than ${limits.maxFiles} skills`);
+    cursor = page.nextCursor;
+  } while (cursor);
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
+  if (totalBytes > limits.maxTotalBytes)
+    throw new Error(`mcp skills/list lists ${totalBytes} bytes of skills, over ${limits.maxTotalBytes}`);
+  return entries;
+}
+
+async function readSkillEntries(client: Client, entries: McpSkillEntry[]): Promise<McpSkill[]> {
+  const skills: McpSkill[] = [];
+  for (const entry of entries) {
+    const { contents } = await client.readResource({ uri: entry.uri });
+    const file = contents.find((content) => content.uri === entry.uri && "text" in content);
+    if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
+    if (Buffer.byteLength(file.text, "utf8") !== entry.size)
+      throw new Error(`mcp resources/read returned ${entry.uri} at a size other than its listed ${entry.size} bytes`);
+    skills.push({ ...entry, text: file.text });
+  }
+  return skills;
+}
+
 export type McpAuth =
   | { mode: "none" }
   | { mode: "bearer"; token: string }
@@ -138,12 +205,17 @@ export interface McpClient {
   ): Promise<CallToolResult>;
 }
 
+export interface McpSkillClient {
+  listSkills(limits: McpSkillLimits): Promise<McpSkillEntry[]>;
+  readSkills(limits: McpSkillLimits): Promise<McpSkill[]>;
+}
+
 export function createMcpClient(opts: {
   url: string;
   auth: McpAuth;
   fetch?: AddressFetch;
   maxResponseBytes?: number;
-}): McpClient {
+}): McpClient & McpSkillClient {
   const trimmed = trimTrailingSlashes(opts.url);
   const endpoint = new URL(new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed);
   const { auth, maxResponseBytes } = opts;
@@ -256,6 +328,9 @@ export function createMcpClient(opts: {
         opts?.headers,
         opts?.signal,
       ),
+    listSkills: (limits) => session("skills/list", (client) => listSkillEntries(client, limits)),
+    readSkills: (limits) =>
+      session("skills/list", async (client) => readSkillEntries(client, await listSkillEntries(client, limits))),
     async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",
