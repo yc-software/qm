@@ -205,7 +205,7 @@ describe("company app links", () => {
     }
   });
 
-  it("links a company's apps as <handle>-<app> on the apps domain, with the handle defaulting from its org slug", async () => {
+  it("links a company's apps as <handle>-<app> on the apps domain, with the handle defaulting to its org slug, hyphens kept", async () => {
     const [a, b] = db.tenants;
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     await db.owner.q(`UPDATE tenants SET settings = '{"handle":"beta7","orgSlug":"beta-co"}' WHERE id = $1`, [b]);
@@ -220,8 +220,8 @@ describe("company app links", () => {
           ];
         });
       assert.deepEqual(await link(a, "QM.example.test"), [
-        "nitroduck",
-        "https://nitroduck-sales-dashboard.qm.example.test/",
+        "nitro-duck",
+        "https://nitro-duck-sales-dashboard.qm.example.test/",
       ]);
       assert.deepEqual(await link(b, "qm.example.test"), ["beta7", "https://beta7-sales-dashboard.qm.example.test/"]);
       assert.deepEqual(await link(b), ["beta7", "https://mt.example.test/d/sales-dashboard/"]);
@@ -240,11 +240,11 @@ describe("company app links", () => {
     await db.owner.q(`UPDATE tenants SET settings = '{"orgSlug":"nitro-duck"}' WHERE id = $1`, [a]);
     try {
       await assert.rejects(
-        db.owner.q(`UPDATE tenants SET settings = '{"handle":"nitroduck"}' WHERE id = $1`, [b]),
+        db.owner.q(`UPDATE tenants SET settings = '{"handle":"nitro-duck"}' WHERE id = $1`, [b]),
         /tenants_app_handle/,
       );
       await assert.rejects(
-        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('nitroduck')`)),
+        withTenant(b, () => db.app.q(`SELECT qm_set_tenant_handle('nitro-duck')`)),
         /tenants_app_handle/,
       );
       await assert.rejects(
@@ -266,16 +266,14 @@ describe("company app links", () => {
       assert.equal(found[0]?.id, b);
       const unpublished = await db.app.q(`SELECT qm_tenant_for_app_host('beta-7-other')::text AS id`);
       assert.equal(unpublished[0]?.id, null);
-      const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitroduck-x')::text AS id`);
+      const derived = await db.app.q(`SELECT qm_tenant_for_app_host('nitro-duck-x')::text AS id`);
       assert.equal(derived[0]?.id, a);
       const longSlug = `nitro-${"duck".repeat(10)}`;
       await db.owner.q(`UPDATE tenants SET settings = jsonb_build_object('orgSlug', $2::text) WHERE id = $1`, [
         a,
         longSlug,
       ]);
-      const longDerived = await db.app.q(`SELECT qm_tenant_for_app_host($1)::text AS id`, [
-        `${longSlug.replace(/-/g, "")}-x`,
-      ]);
+      const longDerived = await db.app.q(`SELECT qm_tenant_for_app_host($1)::text AS id`, [`${longSlug}-x`]);
       assert.equal(longDerived[0]?.id, a);
     } finally {
       await db.owner.q(`DELETE FROM deployments WHERE tenant_id = ANY($1)`, [[a, b]]);

@@ -85,14 +85,14 @@ $f$$sql$, current_schema()); END $app_hosts$`,
 };
 
 export const TENANT_APP_HANDLE_HYPHENS: PgMigrationDefinition = {
-  id: "0000-tenancy/tenant-app-handle-hyphens",
+  id: "0000-tenancy/tenant-app-handles-hyphens",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE OR REPLACE FUNCTION qm_tenant_handle(settings jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE
       AS $qm_tenant_handle$
       SELECT CASE WHEN h ~ '^[a-z0-9][a-z0-9-]{${APP_HANDLE_MIN - 2},${APP_HANDLE_MAX - 2}}[a-z0-9]$' AND h <> ALL (ARRAY[${reserved}]) THEN h END
         FROM (SELECT coalesce(settings->>'handle',
-          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9]', '', 'g')) AS h) picked
+          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9-]', '', 'g')) AS h) picked
     $qm_tenant_handle$`,
     `REINDEX INDEX tenants_app_handle`,
   ],

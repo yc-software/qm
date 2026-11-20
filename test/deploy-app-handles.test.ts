@@ -218,7 +218,10 @@ test("app hosts resolve by their full label, so a hyphenated company handle work
     const own = await get(port, `${mine}-board.apps.example.com`, "/", portalSession({ t: TEST_TENANT }));
     assert.equal(own.status, 200);
     assert.equal(own.body, "UPSTREAM OK");
-    assert.equal((await get(port, `${theirs}-crm.apps.example.com`, "/", portalSession({ t: TEST_TENANT }))).status, 404);
+    assert.equal(
+      (await get(port, `${theirs}-crm.apps.example.com`, "/", portalSession({ t: TEST_TENANT }))).status,
+      404,
+    );
 
     await deployStore.setName(board.id, `${suffix}-crm`);
     assert.equal(await directory.setAppHandle!(theirs), "taken");
