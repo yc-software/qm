@@ -36,12 +36,13 @@ is the ordinary per-turn one: same image, the turn's environment and capability 
 Files and skills, but none of the shared workspace's files. Only that
 turn's commands run there. The result tells the model the command moved. Brokered org
 service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
-computer. Personal conversations stage credentials on their own computer. The owner's other
-runs, scheduled and unattended ones included, use that same computer, so any of the owner's
-runs can change the programs and staging files a live credential command uses.
+computer. In the acting person's own personal conversation, only a command that names a
+saved file login moves to the turn's scratch computer, because a file login is the one kind
+of credential that saves back. Token and environment credentials stay on the person's own
+computer with its workspace.
 
-A background job in a shared conversation that names such a credential starts on its own
-job computer: a sandbox record marked job-only, created on the conversation's provider. It
+A background job in a shared conversation that names such a credential, or in any
+conversation one that names a saved file login, starts on its own job computer: a sandbox record marked job-only, created on the conversation's provider. It
 is not listed in the sandbox inventory, cannot be targeted with `sandbox_id` by execute,
 files, apps or skills, cannot be made a default, and refuses `send_input`. Only the job's
 own controls reach it: poll, stop, watch, the reaper and the web output pane, including
