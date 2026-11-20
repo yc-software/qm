@@ -61,7 +61,6 @@ so orgs get app connections without storing a key:
 - Core uses it only to call Composio. Like a stored Composio key, it never reaches a sandbox or the broker.
 - It is a default, not a reservation: an org that stores a Composio key of its own, under any slug, uses that
   one, and admins can create, edit or delete it.
-- An org uses it only with a `service-cred` read grant on its slug, as for a stored key.
 
 ## Operating
 

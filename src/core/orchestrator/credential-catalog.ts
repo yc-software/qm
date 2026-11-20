@@ -14,7 +14,6 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
-import { isDeploymentDefault } from "../../credentials/deployment-credentials.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
 import { entitledScopes, principalEntitledToScope } from "../../resolution/context-filter.ts";
@@ -474,9 +473,7 @@ export async function loadServiceCredentialGrants(turn: {
     );
   const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
     const granted = await aclGrantedServiceCredSlugs();
-    if (orgWideAudience)
-      for (const record of records)
-        if (record.source === "deployment" && !isDeploymentDefault(record)) granted.add(record.slug);
+    if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
     return granted;
   };
   const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) => serviceAllowed(record.slug));

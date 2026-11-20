@@ -118,8 +118,8 @@ export function deploymentBrokerCredentialsFromEnv(env: NodeJS.ProcessEnv): Depl
   return credentials;
 }
 
-export function isDeploymentDefault(c: { source?: "deployment"; delivery: "broker" | "env" }): boolean {
-  return c.source === "deployment" && c.delivery === "env";
+export function isDeploymentDefault(c: { source?: "deployment"; envKey?: string }): boolean {
+  return c.source === "deployment" && isBackendCredential(c);
 }
 
 function decrypted(c: DeploymentBrokerCredential): DecryptedServiceCredential {
@@ -171,7 +171,9 @@ export function withDeploymentCredentials(
       const own = scope === orgScopeId ? bySlug.get(slug) : undefined;
       if (!own) return store.getServiceCredentialSecret(scope, slug);
       if (!own.composio) return decrypted(own);
-      return (await store.getServiceCredentialSecret(scope, slug)) ?? decrypted(own);
+      const stored = await store.getServiceCredentialSecret(scope, slug);
+      if (stored) return stored;
+      return (await store.listServiceCredentials(scope)).some(isBackendCredential) ? null : decrypted(own);
     },
     async listServiceCredentials(scope) {
       const stored = await store.listServiceCredentials(scope);
