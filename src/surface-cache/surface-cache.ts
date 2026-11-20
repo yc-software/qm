@@ -46,7 +46,7 @@ function keyOf(key: SurfaceKey | undefined): [string, string] {
 }
 
 const MESSAGE_COLUMNS =
-  "container, ts, sub, subtype, broadcast, bot_id, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, deleted_at, handled, created_at, surface, account";
+  "container, ts, sub, subtype, broadcast, bot_id, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, deleted_at, handled, ambient_claimed, created_at, surface, account";
 
 export function createPostgresSurfaceCache(
   connectionString: string,
@@ -178,6 +178,13 @@ export function createPostgresSurfaceCache(
       id: "surface-cache/store/0011-source",
       statements: [`ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source JSONB`],
     },
+    {
+      id: "surface-cache/store/0012-ambient-claimed",
+      statements: [
+        `SET LOCAL lock_timeout = '3s'`,
+        `ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS ambient_claimed BOOLEAN NOT NULL DEFAULT TRUE`,
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -204,6 +211,7 @@ export function createPostgresSurfaceCache(
       ...(r.deleted ? { deleted: true } : {}),
       ...(r.deleted_at != null ? { deletedAt: Number(r.deleted_at) } : {}),
       ...(r.handled ? { handled: true } : {}),
+      ...(r.ambient_claimed ? { ambientClaimed: true } : {}),
       ...(Array.isArray(r.files) && r.files.length ? { files: r.files as CachedMessage["files"] } : {}),
       createdAt: Number(r.created_at),
     };
@@ -220,8 +228,8 @@ export function createPostgresSurfaceCache(
           if (!e.container || !e.ts) continue;
           const [surface, account] = keyOf(e);
           const res = await client.query(
-            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, raw, surface, account)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21::jsonb,$22,$23)
+            `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, raw, surface, account, ambient_claimed)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21::jsonb,$22,$23,FALSE)
              ON CONFLICT (tenant_id, org_id, surface, account, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
                subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
@@ -335,6 +343,18 @@ export function createPostgresSurfaceCache(
          ON CONFLICT (tenant_id, org_id, surface, account, container, ts) DO UPDATE SET handled = TRUE`,
         [orgId, container, ts, Date.now(), ...keyOf(key)],
       );
+    },
+
+    async claimForAmbient(container, timestamps, key) {
+      if (!timestamps.length) return [];
+      const rows = await q(
+        `UPDATE channel_messages SET ambient_claimed = TRUE
+          WHERE org_id = $1 AND container = $2 AND surface = $3 AND account = $4
+            AND ts = ANY($5::text[]) AND NOT ambient_claimed
+          RETURNING ts`,
+        [orgId, container, ...keyOf(key), timestamps],
+      );
+      return rows.map((r) => r.ts as string);
     },
 
     async readMessages(container, opts = {}) {
