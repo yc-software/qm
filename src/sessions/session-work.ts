@@ -1,7 +1,7 @@
 import { leaseLapsed, type Run, type RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
-import type { MonitorStore } from "../monitors/monitor-store.ts";
+import { armedWatches, type MonitorStore } from "../monitors/monitor-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 
 export interface SessionWorkStep {
@@ -52,11 +52,8 @@ export function createSessionWork(deps: SessionWorkDeps, now = Date.now) {
             (job) => job.kind === "background" && !!job.sessionRef && threads.has(job.sessionRef),
           )
         : [];
-      const watches = session
-        ? ((await deps.monitors?.ownedBy(session.scopeId)) ?? []).filter(
-            (monitor) => monitor.enabled && threads.has(monitor.threadRef) && monitor.expiresAt > now(),
-          )
-        : [];
+      const watches =
+        session && deps.monitors ? await armedWatches(deps.monitors, session.scopeId, threads, now()) : [];
       const childRuns = lineage.length ? await deps.runs.activeForThreads(lineage) : new Map<string, Run>();
       const returning = lineage.length > 0 && (await deps.runs.pendingReturns(1, "", lineage)).length > 0;
       const steps =
