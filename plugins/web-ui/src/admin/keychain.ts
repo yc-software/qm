@@ -4,11 +4,13 @@ import type { AdminPage } from "./sections.ts";
 import { pageHeader, card, table, stacked, subline, matches } from "./shared.ts";
 import { userHref } from "./user-detail.ts";
 
+export const userTabs = (page: AdminPage) => [
+  { label: "Users", href: page.href("users"), active: page.view === "users" },
+  { label: "Keychain", href: page.href("keychain"), active: page.view === "keychain" },
+];
+
 export function keychain(page: AdminPage, d: any) {
-  const tabs = [
-    { label: "Users", href: page.href("users") },
-    { label: "Keychain", href: page.href("keychain"), active: true },
-  ];
+  const tabs = userTabs(page);
   if (d.enabled === false)
     return render(
       html`${pageHeader({ tabs })}${card(
