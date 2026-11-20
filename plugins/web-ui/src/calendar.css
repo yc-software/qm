@@ -415,11 +415,6 @@
 .cal-event.is-declined::before {
   display: none;
 }
-.cal-block:not(.is-pending, .is-declined),
-.cal-bar:not(.is-pending, .is-declined, .clip-start) {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
 .cal-event.is-tentative::before {
   background: repeating-linear-gradient(-45deg, var(--ev) 0 2px, transparent 2px 4px);
 }
