@@ -51,12 +51,13 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, slack, auth, branding, starters] = await Promise.all([
+  const [permissions, slack, auth, branding, starters, teammate] = await Promise.all([
     permissionsOf(ctx, user),
     app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
+    deps.directory?.teammateName(user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
@@ -76,6 +77,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     ),
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
+    ...(teammate ? { teammate } : {}),
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(starters.welcome ? { welcome: starters.welcome } : {}),
@@ -84,14 +86,6 @@ async function me(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function teammate(ctx: ApiCtx): Promise<void> {
-  const { res, deps, actor } = ctx;
-  if (!actor || !deps.web?.me) return sendJson(res, 404, { error: "not_found" });
-  const name = await deps.directory?.teammateName(actor.p).catch(swallowAs("web: teammate directory", null));
-  return sendJson(res, 200, { name: name ?? null });
-}
-
 export const webMeRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/web/me", browser: true, actor: "person", auth: "source", handle: me },
-  { method: "GET", path: "/v1/web/teammate", browser: true, actor: "person", auth: "source", handle: teammate },
 ];

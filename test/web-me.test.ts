@@ -153,20 +153,19 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, false, "test");
 });
 
-test("/api/teammate names another person in the directory, skipping the asker, bots and guests", async () => {
+test("/me names another person in the directory as the teammate, skipping the asker, bots and guests", async () => {
   const cookie = browserSessionCookie("bob@example.com", { name: "Bob" });
-  const teammate = async () => (await (await fetch(`${base}/api/teammate`, { headers: { cookie } })).json()) as unknown;
   await built.directory.replace([
     { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
     { principalId: "BOT", displayName: "Abe Bot", type: "internal", isBot: true },
     { principalId: "guest@example.com", displayName: "Ada Guest", type: "guest" },
   ]);
-  assert.deepEqual(await teammate(), { name: null });
+  assert.equal((await me(cookie)).teammate, undefined);
   await built.directory.replace([
     { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
     { principalId: "zoe@example.com", displayName: "Zoe Park", type: "internal" },
     { principalId: "cy@example.com", displayName: " Cy Lin ", type: "internal" },
   ]);
-  assert.deepEqual(await teammate(), { name: "Cy Lin" });
-  assert.equal((await fetch(`${base}/api/teammate`)).status, 401);
+  assert.equal((await me(cookie)).teammate, "Cy Lin");
+  await built.directory.replace([]);
 });

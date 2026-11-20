@@ -16,14 +16,19 @@ test("a new person sees their company's seeded activities, only apps they connec
       slack: [idea("s1", "💬", "Summarize the channels I missed")],
     },
   };
-  const me = { displayName: "Maya Lin", companyName: "Harbor Line", welcome, suggestedActivitiesGeneration: true };
+  const me = {
+    displayName: "Maya Lin",
+    companyName: "Harbor Line",
+    teammate: "Omar Haddad",
+    welcome,
+    suggestedActivitiesGeneration: true,
+  };
   const h = await harness({
     path: "/",
     listSessions: [],
     connectionReturn: true,
     api: (path) => {
       if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], ...me });
-      if (path === "/api/teammate") return Response.json({ name: "Omar Haddad" });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },
   });
@@ -66,7 +71,6 @@ test("a new person sees their company's seeded activities, only apps they connec
     for (const shown of ["What is this?", "@qm make me a CRM", "A virtual employee in Slack", "Agent swarms"])
       assert.ok(about.includes(shown), shown);
     const scenes = () => document.querySelector("qm-welcome-about .W-figs")!.textContent!.replace(/\s+/g, " ");
-    for (let i = 0; i < 100 && !scenes().includes("Omar"); i++) await new Promise((resolve) => setTimeout(resolve, 10));
     for (const shown of ["Maya", "Omar", "Harbor Line /", "claims.harborline.apps"])
       assert.ok(scenes().includes(shown), shown);
     assert.doesNotMatch(scenes(), /Tidewater|tidewater|\bDev\b/);

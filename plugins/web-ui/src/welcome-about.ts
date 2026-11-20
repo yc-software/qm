@@ -1,8 +1,6 @@
 import { LitElement, html, nothing, render, type TemplateResult } from "lit";
 import { animateSwarm, aboutTiles } from "./welcome-about-tiles";
 import { SCENES, castAs, emptySlack, slackScene, webFrame } from "./welcome-about-scenes";
-import { api } from "./core-bridge";
-import { swallowAs } from "../../chassis/src/errors.ts";
 import type { Me } from "./shell-state";
 import "./welcome-about.css";
 
@@ -25,21 +23,10 @@ export class WelcomeAbout extends LitElement {
   protected firstUpdated(): void {
     const root = this.querySelector<HTMLElement>(".welcome-about")!;
     const box = { slack: root.querySelector(".dwin.slack")!, web: root.querySelector(".dwin.web")! };
-    const names = { company: this.me?.companyName, you: this.me?.displayName };
-    castAs(names);
-    const still = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== false;
-    const drawStill = () => {
+    castAs({ company: this.me?.companyName, you: this.me?.displayName, teammate: this.me?.teammate });
+    if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== false) {
       show(box.slack, slackScene(1));
       show(box.web, SCENES.at(-1)!.render());
-    };
-    void api<{ name?: string | null }>("/api/teammate")
-      .then(({ name }) => {
-        castAs({ ...names, teammate: name });
-        if (still && this.isConnected) drawStill();
-      })
-      .catch(swallowAs("web-ui: welcome teammate name", undefined));
-    if (still) {
-      drawStill();
       root.dataset.focus = "both";
       return;
     }
