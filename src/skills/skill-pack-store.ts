@@ -4,7 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PackConfig } from "./normalize.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
-type PackKind = "git";
+export type PackKind = "git" | "mcp";
 type SyncMode = "pinned" | "tracked";
 type TrustTier = "internal" | "third-party";
 

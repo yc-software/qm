@@ -73,6 +73,30 @@ commit.
 The skills are governed store records, visible and auditable on the admin Skills page, rather than
 ungoverned files on each box.
 
+## Packs from an MCP server
+
+A pack can also come from a registered MCP server that implements the MCP skills extension
+(`skills/list`, with each `SKILL.md` served through `resources/read`). Register it with
+`"kind": "mcp"` and the server's exact URL; everything after fetching (catalog, import,
+screening, sync, removal) is the same as for a git pack.
+
+```json
+{ "kind": "mcp", "url": "https://skills.example.com/mcp", "trustTier": "internal" }
+```
+
+- The pack's version is a hash of the listing's skill URIs and digests, so tracked sync
+  re-imports when any listed skill changes. Each `SKILL.md` is checked against its listed
+  digest and size, and a mismatch fails the import, as does a skill listed without a `SKILL.md`
+  digest (`"resources": "dynamic"`), whose content cannot be verified.
+- The server must be enabled and use shared credentials: `credentialScope: "shared"` with auth
+  `none`, `bearer` or `client-credentials`. A `per-user` server or an `oauth-user` one signs in as each
+  person, so it cannot supply an org-wide pack. Exactly one enabled server may have the pack's URL. QM calls it as itself, without attesting a
+  person, so a server that answers per person should answer that call with what everyone
+  in the org may see.
+- An MCP server becomes a skill source only when an admin registers a pack for it. The
+  pack reads every listed skill when it is fetched, which the extension otherwise asks
+  hosts not to do. Sync works as for git packs.
+
 ## Loading published skills
 
 The skill index lists each visible skill. The agent's `skills` tool resolves the currently
