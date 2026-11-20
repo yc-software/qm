@@ -9,6 +9,7 @@
   "workspaces": {
     ".": {
       "entry": [
+        "scripts/build-baseten-sandbox-image.ts",
         "deploy/render-runner/start.mjs",
         "src/migrate-main.ts",
         "src/render/start.ts",

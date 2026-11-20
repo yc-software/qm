@@ -5,22 +5,6 @@ export const RENDER_COMPUTER_LIFETIME_SEC = 2592000;
 export const RENDER_IDLE_STOP_MS = 3600_000;
 export const RENDER_SNAPSHOT_RETENTION_MS = 10 * 365 * 86400_000;
 
-export const RENDER_BASE_TOOLS: ReadonlyArray<readonly [label: string, command: string]> = [
-  ["git", "git"],
-  ["curl", "curl"],
-  ["wget", "wget"],
-  ["jq", "jq"],
-  ["unzip", "unzip"],
-  ["gnupg", "gpg"],
-  ["python3", "python3"],
-  ["gh", "gh"],
-  ["aws (CLI v2)", "aws"],
-  ["gcloud", "gcloud"],
-  ["kubectl", "kubectl"],
-  ["flyctl", "flyctl"],
-  ["glab", "glab"],
-];
-
 export interface RenderBaseImage {
   ref: string;
   source: string;

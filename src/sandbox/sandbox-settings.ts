@@ -14,6 +14,7 @@ export interface SandboxSettings {
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
   agent37Sandbox: Agent37SandboxEnv;
+  basetenSandbox: BasetenSandboxEnv;
   superserveSandbox: SuperserveSandboxEnv;
   e2bSandbox: E2bSandboxEnv;
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
@@ -379,6 +380,24 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
   };
 }
 
+interface BasetenSandboxEnv {
+  apiKey?: string;
+  image?: string;
+  namePrefix?: string;
+  defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
+}
+
+function basetenSandboxEnv(env: NodeJS.ProcessEnv): BasetenSandboxEnv {
+  return {
+    ...(env.BASETEN_API_KEY?.trim() ? { apiKey: env.BASETEN_API_KEY.trim() } : {}),
+    ...(env.BASETEN_SANDBOX_IMAGE?.trim() ? { image: env.BASETEN_SANDBOX_IMAGE.trim() } : {}),
+    ...(env.BASETEN_SANDBOX_NAME_PREFIX?.trim() ? { namePrefix: env.BASETEN_SANDBOX_NAME_PREFIX.trim() } : {}),
+    ...optNum(env, "SANDBOX_TIMEOUT_SEC", "defaultTimeoutSec"),
+    ...egressProxyFor(env, "baseten"),
+  };
+}
+
 interface SuperserveSandboxEnv {
   apiKey?: string;
   baseUrl?: string;
@@ -446,6 +465,7 @@ export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendN
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
     agent37: Boolean(config.agent37Sandbox?.apiKey),
+    baseten: Boolean(config.basetenSandbox?.apiKey && config.basetenSandbox?.image),
     superserve: Boolean(config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
@@ -472,6 +492,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
     backend === "e2b" ||
     backend === "modal" ||
     backend === "agent37" ||
+    backend === "baseten" ||
     backend === "superserve" ||
     backend === "do-managed-agents" ||
     backend === "porter" ||
@@ -479,7 +500,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, baseten, superserve, do-managed-agents, or render, or unset it.`,
   );
 }
 
@@ -531,7 +552,7 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, render, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, baseten, superserve, do-managed-agents, render, aws, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
@@ -560,6 +581,11 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
       legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
     }
   }
+  if (sandboxBackend === "baseten" && !env.BASETEN_SANDBOX_IMAGE?.trim()) {
+    throw new Error(
+      "SANDBOX_BACKEND=baseten requires BASETEN_SANDBOX_IMAGE, the sandbox image built from the QM sandbox base image (scripts/build-baseten-sandbox-image.ts).",
+    );
+  }
   if (sandboxBackend === "superserve" && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
       "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
@@ -573,6 +599,7 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
     agent37Sandbox: agent37SandboxEnv(env),
+    basetenSandbox: basetenSandboxEnv(env),
     superserveSandbox: superserveSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
     renderSandbox: renderSandboxEnv(env),

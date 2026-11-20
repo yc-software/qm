@@ -9,6 +9,7 @@ type SecretGate =
   | "modal"
   | "porter"
   | "agent37"
+  | "baseten"
   | "superserve"
   | "render"
   | "do-managed-agents"
@@ -51,6 +52,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
+  { name: "BASETEN_API_KEY", requiredWhen: "baseten" },
   { name: "RENDER_API_KEY", requiredWhen: "render" },
   { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: ["e2b", "e2b-deploy"] },
@@ -79,6 +81,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   modal: (env) => sandboxBackendSelected(env, "modal"),
   porter: (env) => sandboxBackendSelected(env, "porter"),
   agent37: (env) => sandboxBackendSelected(env, "agent37"),
+  baseten: (env) => sandboxBackendSelected(env, "baseten"),
   superserve: (env) => sandboxBackendSelected(env, "superserve"),
   render: (env) => sandboxBackendSelected(env, "render") || env.DEPLOY_PROVIDER === "render",
   "do-managed-agents": (env) => sandboxBackendSelected(env, "do-managed-agents"),

@@ -240,6 +240,7 @@ import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox, type StoredSprite } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
 import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
+import { createBasetenSandbox } from "./sandbox/baseten-sandbox.ts";
 import {
   createConfigEpochResolver,
   createSuperserveSandbox,
@@ -1103,6 +1104,19 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
+  const buildBaseten = (): Sandbox =>
+    createBasetenSandbox({
+      ...config.basetenSandbox,
+      advisoryLock,
+      blobTransfer,
+      extraTools: deploymentLayer.advertisedTools,
+      credentialPaths: deploymentLayer.credentialPaths,
+      layerToolFiles: () => deploymentLayer.installFiles,
+      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      onError: sandboxOnError,
+    });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
   const superserveEpochs = processMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
@@ -1207,6 +1221,7 @@ export function buildApp(
     aws: buildAws,
     porter: buildPorter,
     agent37: buildAgent37,
+    baseten: buildBaseten,
     render: buildRender,
     superserve: buildSuperserve,
     "do-managed-agents": buildManagedAgents,
