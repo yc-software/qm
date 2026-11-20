@@ -3091,7 +3091,7 @@ qm-markdown .tok-in {
   color: inherit;
 }
 .tool-label {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3172,6 +3172,7 @@ qm-markdown .tok-in {
 }
 .session-message {
   flex: 1 1 0;
+  max-width: max-content;
 }
 .tool-row.tool-approval {
   color: var(--foreground);
