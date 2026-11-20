@@ -534,7 +534,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   );
 });
 
-test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
+test("standing obligations: this scope's pending triggers render, an overdue unfired one-shot included; other scopes' don't", async () => {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
@@ -549,7 +549,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
     title: "Legal follow-up",
     action: "follow up with legal",
   });
-  await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, message: "hi alice" });
+  await crons.create({ ...base, schedule: { firstFireAt: Date.now() - 1000 }, title: "Overdue", message: "hi alice" });
   await crons.create({
     ...base,
     ownerScopeId: scopeId("channel", "C9"),
@@ -567,7 +567,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   assert.match(prompt, /Vendor status — every 5 min$/m);
   assert.match(prompt, /Legal follow-up — once at/);
   assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
-  assert.doesNotMatch(prompt, /hi alice/);
+  assert.match(prompt, /^- Overdue — once at/m);
   assert.doesNotMatch(prompt, /channel-only digest/);
 });
 
