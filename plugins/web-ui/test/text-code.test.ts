@@ -23,7 +23,7 @@ test("plain-text fence normalization follows Markdown fence grammar", () => {
 });
 
 test("code-block expansion is local and preserves rendered code nodes", () => {
-  const dom = new JSDOM(`<main>
+  const dom = new JSDOM(`<main class="assistant-body">
     <code-block language="text"><div><div><span>text</span><copy-button></copy-button></div><div><pre><code>same<!--lit-marker--></code></pre></div></div></code-block>
     <code-block language="text"><div><div><span>text</span><copy-button></copy-button></div><div><pre><code>same<!--lit-marker--></code></pre></div></div></code-block>
   </main>`);

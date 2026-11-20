@@ -4169,7 +4169,8 @@ qm-draft .draft-card-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-code-block {
+.assistant-body code-block,
+.user-bubble code-block {
   margin: 12px 0;
 }
 :is(.assistant-body, .user-bubble) code-block > div {
@@ -4196,7 +4197,7 @@ code-block {
 }
 :is(.assistant-body, .user-bubble) code-block .code-block-toolbar > span {
   font-family: inherit;
-  font-size: 11px;
+  font-size: max(min(11px, var(--chat-font-size)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
 }
 :is(.assistant-body, .user-bubble) code-block[language="text"] .code-block-toolbar > span {
   display: none;
@@ -4206,9 +4207,9 @@ code-block {
   opacity: 1;
 }
 :is(.assistant-body, .user-bubble) code-block copy-button button {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
+  width: var(--meta-lane);
+  min-width: var(--meta-lane);
+  height: var(--meta-lane);
   padding: 0;
   border-radius: 7px;
 }
@@ -4229,7 +4230,7 @@ code-block {
   background: transparent;
   color: var(--muted-foreground);
   font: inherit;
-  font-size: 12px;
+  font-size: max(min(12px, var(--chat-font-size)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
   line-height: 1.4;
   cursor: pointer;
 }

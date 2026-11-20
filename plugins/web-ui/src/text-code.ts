@@ -31,7 +31,7 @@ export function normalizePlainTextFences(text: string): string {
 
 export function decorateCodeBlocks(root: ParentNode | null): void {
   if (!root) return;
-  for (const block of root.querySelectorAll<HTMLElement>("code-block")) {
+  for (const block of root.querySelectorAll<HTMLElement>(":is(.assistant-body, .user-bubble) code-block")) {
     const frame = block.querySelector<HTMLElement>(":scope > div");
     const toolbar = frame?.querySelector<HTMLElement>(":scope > div:first-child");
     const body = frame?.querySelector<HTMLElement>(":scope > div:nth-child(2)");
