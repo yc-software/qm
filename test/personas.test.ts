@@ -97,7 +97,7 @@ test("readers chat, writers edit, only owners share, and the last owner cannot b
     "edited by a writer",
   );
   assert.equal((await personas.setAccess(BOB, ada.id, [])).status, "forbidden");
-  assert.equal((await personas.remove(BOB, ada.id)).status, "forbidden");
+  assert.equal((await personas.remove(BOB, ada.id, () => {})).status, "forbidden");
 
   const lastOwner = await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", BOB), role: "write" }]);
   assert.equal(lastOwner.status, "invalid");
@@ -105,7 +105,7 @@ test("readers chat, writers edit, only owners share, and the last owner cannot b
 
   assert.equal(await built.app.managesScope(BOB, scopeId("persona", ada.id)), true);
   assert.equal(await built.app.managesScope(CAROL, scopeId("persona", ada.id)), false);
-  ok(await personas.remove(ALICE, ada.id));
+  ok(await personas.remove(ALICE, ada.id, () => {}));
   assert.deepEqual(ok(await personas.list(ALICE)), []);
 });
 
@@ -288,7 +288,7 @@ test("credentials attached by an owner reach every turn that uses the persona, a
   ok(await personas.assign(BOB, (await built.sessions.get(opened.sessionId))!, ada.id));
   assert.ok((await sysprompt(BOB, dm)).reply.includes(handle));
 
-  ok(await personas.remove(ALICE, ada.id));
+  ok(await personas.remove(ALICE, ada.id, () => {}));
   assert.ok(!(await sysprompt(BOB, dm)).reply.includes(handle));
 });
 

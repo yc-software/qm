@@ -10,6 +10,7 @@ export interface AuditEvent {
   scopeLabel: ScopeId;
   status?: string;
   detail?: string;
+  impersonatedBy?: string;
 }
 
 export interface AuditLog {
