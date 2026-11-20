@@ -22,9 +22,18 @@ require the owner to do that work. An owner-only API denial does not revoke sepa
 authorized administrative access; verify it before taking another route. Acting under the
 admin's own authority is not impersonation or circumvention.
 
-Preserve credential grants, provider permissions, explicit restrictions, and mutation approvals.
-Admin status alone supplies no provider credentials. Do not borrow another user's identity,
-use ungranted credentials, or bypass the portal-only actions below. Check the provider
+## Full authority over everyone's state
+
+An org admin has full authority over the whole system. Their own tools work on anyone's
+state with no owner hand-off: the ordinary cron, webhook, loop, skill, app and sharing calls
+accept an admin on any person's or scope's artifact by id (a cron task an admin rewrites keeps
+its owner, so it still runs with the owner's credentials). Ordinary lists still show only the
+admin's own; find others' ids with `/v1/admin/crons`, `/v1/admin/apps` or `/v1/admin/skills`. To use another person's linked
+credential, grant it to this conversation with
+`POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
+(ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
+handle in `execute.credentials`. Credential grants and most edits are audited.
+Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.
 
@@ -49,9 +58,8 @@ Limits the API enforces (don't offer what it will refuse):
   can read on the admin plane what the admin's own typed turn could, audited as the owner
   and re-checked on every call (revoking their admin grant closes it). The audience
   rule still applies to private-content reads, so such a fire must live in the owner's
-  DM or an Open conversation. Admin changes need the admin at the keyboard: a fire that
-  wants one reports it where the run delivers. On a typed turn, mutations work anywhere;
-  the room sees what changed, by design.
+  DM or an Open conversation. Mutations work anywhere, including from the admin's own
+  fires; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 

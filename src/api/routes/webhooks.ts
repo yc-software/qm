@@ -3,7 +3,7 @@ import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
+import { administersWebhook, canAdministerWebhook, editWebhookTask } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
@@ -173,7 +173,7 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const webhook = await app.getWebhook(params.id!);
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }))) {
+  if (!viewer || !webhook || !(await administersWebhook(app, webhook, capability ?? { actorId: viewer }))) {
     return sendJson(res, 404, { error: "not_found" });
   }
   return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
@@ -186,7 +186,7 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   if (!webhook) return sendJson(res, 404, { error: "not_found" });
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 404, { error: "not_found" });
-  if (!(await canAdministerWebhook(app, webhook, capability ?? { actorId: principalId }))) {
+  if (!(await administersWebhook(app, webhook, capability ?? { actorId: principalId }))) {
     return sendJson(res, capability ? 403 : 404, {
       error: capability ? "forbidden" : "not_found",
       ...(capability ? { message: "not your webhook" } : {}),
@@ -203,7 +203,7 @@ async function updateWebhook(ctx: ApiCtx): Promise<void> {
   if (!capability && !principalId) return sendJson(res, 404, { error: "not_found" });
   const r = capability
     ? await deps.control.updateWebhook(params.id!, { action }, capability)
-    : await editWebhookTask(app, params.id!, action, principalId!);
+    : await editWebhookTask(app, params.id!, action, { actorId: principalId! });
   if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
 }

@@ -783,6 +783,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/admin/keychain",
         summary: "person-owned keychain metadata, grants, and asks (DM or effective Open sharing)",
       },
+      {
+        method: "POST",
+        path: "/v1/admin/keychain/grants",
+        summary:
+          "grant any person's keychain credential to a scope so admin work can use it — {credentialId, purpose, scope? (default: this conversation)}; audited",
+      },
     ],
   },
 ];

@@ -27,6 +27,7 @@ import {
   inviteExternalUser,
   inviteTeammate,
   listKeychainStatus,
+  createAdminKeychainGrant,
   listUsers,
   resetUserToBrandNew,
   revokeAdminGrant,
@@ -382,6 +383,7 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: listKeychainStatus,
     },
+    { method: "POST", path: "/v1/admin/keychain/grants", auth: "either", handle: createAdminKeychainGrant },
     {
       method: "GET",
       path: "/v1/admin/users/:principalId",

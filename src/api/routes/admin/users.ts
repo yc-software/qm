@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
-import { scopeId as makeScopeId } from "../../../types.ts";
+import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
+import { KeychainError } from "../../../credentials/keychain.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { foldPrincipalId, personKey, samePerson } from "../../../directory/person.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
@@ -555,5 +556,40 @@ export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     if (e instanceof AdminError) return sendJson(res, e.status, { error: "revoke_failed", message: e.message });
     throw e;
+  }
+}
+
+export async function createAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body, capability } = ctx;
+  const scope = orgScope(deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found", message: "keychain is not enabled" });
+  if (!isObj(body) || typeof body.credentialId !== "string" || !body.credentialId.trim())
+    return sendJson(res, 400, { error: "bad_request", message: "credentialId required" });
+  const audience = typeof body.scope === "string" && body.scope.trim() ? body.scope.trim() : capability?.scopeId;
+  if (!audience || !parseScopeId(audience as ScopeId).kind)
+    return sendJson(res, 400, { error: "bad_request", message: "scope required (no conversation to default to)" });
+  const reason = typeof body.purpose === "string" ? body.purpose.trim() : "";
+  const credential = await deps.keychain.getCredential(body.credentialId);
+  if (!credential) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
+  try {
+    const grant = await deps.keychain.createGrant({
+      credentialId: credential.id,
+      ownerId: credential.ownerId,
+      audienceScopeId: audience as ScopeId,
+      mode: "standing",
+      purpose: `org admin ${actor.id}${reason ? `: ${reason}` : ""}`,
+    });
+    audit(ctx, {
+      principalId: actor.id,
+      action: "keychain.admin_grant",
+      resource: credential.id,
+      scopeLabel: audience,
+    });
+    return sendJson(res, 200, { grant });
+  } catch (e) {
+    const status = e instanceof KeychainError ? e.status : 400;
+    return sendJson(res, status, { error: "grant_failed", message: errMessage(e) });
   }
 }

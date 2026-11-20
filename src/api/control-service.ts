@@ -5,7 +5,7 @@ import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import { personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
+import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
   describeRunNowRefusal,
@@ -214,8 +214,27 @@ async function mayShare(
 ): Promise<boolean> {
   if (!(await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)))
     return false;
-  if (cron) return ownsCron(app, cron, capability.actorId);
-  return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
+  if (cron) return (await ownsCron(app, cron, capability.actorId)) || asOrgAdmin(app, capability);
+  return (
+    (await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId)) ||
+    asOrgAdmin(app, capability)
+  );
+}
+
+export async function administersCron(
+  app: Parameters<typeof canAdministerCron>[0] & Pick<App, "isOrgAdmin">,
+  cron: Cron,
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (await canAdministerCron(app, cron, actor)) || asOrgAdmin(app, actor);
+}
+
+export async function administersWebhook(
+  app: Parameters<typeof canAdministerWebhook>[0] & Pick<App, "isOrgAdmin">,
+  webhook: Webhook,
+  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+): Promise<boolean> {
+  return (await canAdministerWebhook(app, webhook, actor)) || asOrgAdmin(app, actor);
 }
 
 async function ownsCron(
@@ -247,13 +266,17 @@ export async function canAdministerCron(
 }
 
 export async function cronTaskRewrite(
-  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
+  app: Pick<
+    App,
+    "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope" | "isOrgAdmin"
+  >,
   cron: Cron,
   editorId: string,
   atKeyboard: boolean,
 ): Promise<Pick<CronPatch, "owner" | "script" | "taskAuthor">> {
   const authored = reauthored(atKeyboard, cron);
   if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return authored;
+  if (await asOrgAdmin(app, { actorId: editorId })) return authored;
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
@@ -264,14 +287,15 @@ export async function editWebhookTask(
   app: App,
   id: string,
   action: string,
-  principalId: string,
+  editor: Pick<CapabilityClaims, "actorId" | "botActor" | "liveActor" | "liveAuthor" | "scopeId"> | { actorId: string },
 ): Promise<ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request">> {
+  const principalId = editor.actorId;
   if (!action.trim()) return { ok: false, code: "bad_request", message: "task cannot be empty" };
   const webhook = await app.getWebhook(id);
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-  if (!(await canAdministerWebhook(app, webhook, { actorId: principalId })))
+  if (!(await administersWebhook(app, webhook, editor)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (!(await app.samePerson(webhook.owner, principalId)))
+  if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, editor)))
     return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, { action });
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
@@ -575,7 +599,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron: await app.cronSharing(cron) };
+      if (await administersCron(app, cron, capability)) return { ok: true, cron: await app.cronSharing(cron) };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
@@ -584,7 +608,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async getCronRuns(id, req, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.limit !== undefined && (!Number.isSafeInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
@@ -596,16 +620,18 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async patchCron(id, req, capability, trial) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, before, capability)))
+      if (!(await administersCron(app, before, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       const patch = patchFromCronPatchRequest(before, req, capability);
       if ("ok" in patch) return patch;
-      if (req.script !== undefined && !(await ownsCron(app, before, capability.actorId)))
+      const owner = await ownsCron(app, before, capability.actorId);
+      const adminOverOwner = !owner && (await asOrgAdmin(app, capability));
+      if (req.script !== undefined && !owner && !adminOverOwner)
         return { ok: false, code: "forbidden", message: "only the cron's owner can change its script" };
       if (req.script) {
         const script = cronScriptFrom(req.script, before, req);
         if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
-        if (before.ownerScopeId !== capability.scopeId)
+        if (before.ownerScopeId !== capability.scopeId && !adminOverOwner)
           return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
@@ -658,7 +684,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.archived) {
         return {
@@ -693,7 +719,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async deleteCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       await app.deleteCron(id, capability);
       await notifyEdit(cron, capability, ["deleted"]);
@@ -703,7 +729,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async setCronEnabled(id, enabled, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.enabled === enabled) return { ok: true, cron };
       await app.setCronEnabled(id, enabled);
@@ -715,7 +741,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async runCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (!scheduler)
         return {
@@ -740,7 +766,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async retargetCron(id, destinationKey, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability)))
+      if (!(await administersCron(app, cron, capability)))
         return { ok: false, code: "forbidden", message: "not your cron" };
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
@@ -807,7 +833,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async disableWebhook(id, capability) {
       const webhook = await app.getWebhook(id);
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
-      if (!(await canAdministerWebhook(app, webhook, capability)))
+      if (!(await administersWebhook(app, webhook, capability)))
         return { ok: false, code: "forbidden", message: "not your webhook" };
       await app.setWebhookEnabled(id, false);
       return { ok: true };
@@ -816,7 +842,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async updateWebhook(id, patch, capability) {
       if (!personAtKeyboard(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
-      return editWebhookTask(app, id, patch.action, capability.actorId);
+      return editWebhookTask(app, id, patch.action, capability);
     },
 
     readSoul(capability) {

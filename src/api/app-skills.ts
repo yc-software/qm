@@ -8,6 +8,8 @@ import { planIngest, importPack, collectSharedBundle, type ImportResult } from "
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
 import { authorPublishesSkill, triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { asOrgAdmin } from "../auth/capability-token.ts";
+import type { Skill } from "../skills/skill-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -259,6 +261,18 @@ export function createSkillMethods(
   | "deleteOwnedSkill"
 > {
   const { canManageSkill, manageableSkills, republishIfShared } = h;
+  const managesSkillById = async (
+    skill: Skill,
+    principalId: string,
+    opts?: { botActor?: boolean; liveActor?: boolean },
+  ) =>
+    (await canManageSkill(skill, principalId, opts?.botActor === true)) ||
+    asOrgAdmin(deps, {
+      actorId: principalId,
+      botActor: opts?.botActor,
+      liveActor: opts?.liveActor,
+      scopeId: skill.scopeId,
+    });
   return {
     listSkills() {
       return deps.skills.list();
@@ -285,7 +299,7 @@ export function createSkillMethods(
     manageableSkills,
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
+      if (!skill || !(await managesSkillById(skill, principalId, opts))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -309,8 +323,7 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
-        return null;
+      if (!skill || skill.status !== "archived" || !(await managesSkillById(skill, principalId, opts))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -455,7 +468,7 @@ export function createSkillMethods(
     async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
+      if (!(await managesSkillById(skill, principalId, { botActor, liveActor }))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
       h.recordAudit({

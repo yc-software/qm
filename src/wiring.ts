@@ -1922,6 +1922,8 @@ export function buildApp(
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
+  const isOrgAdmin = async (principalId: string): Promise<boolean> =>
+    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).isAdmin;
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
     { managedGroups: projects, directory, identity, teams, personas },
@@ -1933,8 +1935,7 @@ export function buildApp(
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
     identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(ambientTenant(), identity.classify(actorId))).isAdmin ||
-      (await canWriteScope(actorId, scopeId)));
+    ((await isOrgAdmin(actorId)) || (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
@@ -1966,6 +1967,7 @@ export function buildApp(
       (await vouchedInternalEmail(email)) ||
       (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
+    isOrgAdmin,
     ...(deployGitSecret && deployGitBase
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
@@ -2478,6 +2480,7 @@ export function buildApp(
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
     acl,
     admin,
+    isOrgAdmin,
     skills,
     skillPacks,
     skillFetcher,

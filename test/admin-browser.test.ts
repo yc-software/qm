@@ -34,6 +34,7 @@ const ADMIN_PAGES = [
   "POST /v1/admin/grants",
   "DELETE /v1/admin/grants/:principalId",
   "GET /v1/admin/keychain",
+  "POST /v1/admin/keychain/grants",
   "GET /v1/admin/mcp-servers",
   "PUT /v1/admin/mcp-servers/:id",
   "DELETE /v1/admin/mcp-servers/:id",

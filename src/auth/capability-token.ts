@@ -219,3 +219,12 @@ export async function verifyBlobTransferCapability(
   if (expected.dir === "read" ? grant.id !== expected.id : grant.id !== undefined) return null;
   return claims as BlobTransferClaims;
 }
+
+export async function asOrgAdmin(
+  admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
+  actor: { actorId: string; botActor?: boolean; liveActor?: boolean; liveAuthor?: boolean; scopeId?: string },
+): Promise<boolean> {
+  if (actor.botActor === true) return false;
+  if (actor.scopeId !== undefined && actor.liveActor !== true && actor.liveAuthor !== true) return false;
+  return (await admins.isOrgAdmin?.(actor.actorId)) === true;
+}
