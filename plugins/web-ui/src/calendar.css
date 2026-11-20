@@ -41,10 +41,8 @@
   cursor: default;
 }
 .cal-range {
-  margin: 0 auto 0 0;
-  font-size: var(--font-26);
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  min-width: 0;
+  margin-right: auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -60,8 +58,8 @@
 .cal-views {
   flex: none;
 }
-.cal-range strong {
-  font-weight: 650;
+.cal-year {
+  font-weight: 400;
 }
 .cal-create {
   color: var(--muted-foreground);
@@ -369,11 +367,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.85;
-}
-.cal-views.cron-segments button.active {
-  background: var(--secondary);
-  color: var(--foreground);
-  box-shadow: none;
 }
 .cal-now-label {
   position: absolute;

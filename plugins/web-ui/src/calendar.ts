@@ -339,7 +339,7 @@ function titleTpl(): TemplateResult {
   const first = cal.view === "week" ? shown[0]! : cal.anchor;
   const last = cal.view === "week" ? shown.at(-1)! : cal.anchor;
   if (cal.view === "day" || !isSameMonth(first, last)) return html`${rangeLabel()}`;
-  return html`<strong>${formatter({ month: "long" }).format(first)}</strong> ${first.getFullYear()}`;
+  return html`${formatter({ month: "long" }).format(first)} <span class="cal-year">${first.getFullYear()}</span>`;
 }
 
 function rangeLabel(): string {
@@ -398,8 +398,8 @@ function pageTpl(): TemplateResult {
     return html`<div class="pane-head"><h1 class="pane-title">Calendar</h1></div>
       ${connectTpl(problem)}`;
   return html`
+    ${toolbarTpl()}
     <section class="cal-main" aria-busy=${cal.loading ? "true" : "false"}>
-      ${toolbarTpl()}
       ${
         problem
           ? html`<div class="inbox-notice cal-notice" role="alert">
@@ -430,49 +430,57 @@ function pageTpl(): TemplateResult {
 function toolbarTpl(): TemplateResult {
   const data = currentData();
   const quiet = data && !cal.loading && !visibleSpans().length;
-  return html`<div class="cal-toolbar">
-    <h1 class="cal-range" aria-live="polite">${titleTpl()}</h1>
-    ${cal.loading ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
-    ${quiet ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing} ${calendarsTpl()}
-    <div class="cron-segments cal-views" role="radiogroup" aria-label="Calendar view">
-      ${CALENDAR_VIEWS.map(
-        (view) =>
-          html`<button
-            type="button"
-            role="radio"
-            aria-checked=${cal.view === view}
-            class=${cal.view === view ? "active" : ""}
-            title=${`${VIEW_LABELS[view]} (${view[0]!.toUpperCase()})`}
-            @click=${() => go({ view })}
-          >
-            ${VIEW_LABELS[view]}
-          </button>`,
-      )}
+  return html`<div class="pane-head cal-toolbar">
+    <h1 class="pane-title cal-range" aria-live="polite">${titleTpl()}</h1>
+    <div class="pane-head-actions">
+      ${cal.loading ? waveLoader({ width: 13, height: 16, label: "Loading events", cls: "cal-loader" }) : nothing}
+      ${quiet ? html`<span class="cal-quiet">${emptyNote()}</span>` : nothing} ${calendarsTpl()}
+      <div class="cron-segments cal-views" role="radiogroup" aria-label="Calendar view">
+        ${CALENDAR_VIEWS.map(
+          (view) =>
+            html`<button
+              type="button"
+              role="radio"
+              aria-checked=${cal.view === view}
+              class=${cal.view === view ? "active" : ""}
+              title=${`${VIEW_LABELS[view]} (${view[0]!.toUpperCase()})`}
+              @click=${() => go({ view })}
+            >
+              ${VIEW_LABELS[view]}
+            </button>`,
+        )}
+      </div>
+      <button class="btn" type="button" @click=${() => go({ anchor: new Date() })} title="Today (T)">Today</button>
+      <span class="cal-steppers">
+        <button
+          class="icon-btn compact"
+          type="button"
+          aria-label=${`Previous ${cal.view}`}
+          title="Previous (K)"
+          @click=${() => step(-1)}
+        >
+          ${icon(ChevronLeft, 16)}
+        </button>
+        <button
+          class="icon-btn compact"
+          type="button"
+          aria-label=${`Next ${cal.view}`}
+          title="Next (J)"
+          @click=${() => step(1)}
+        >
+          ${icon(ChevronRight, 16)}
+        </button>
+      </span>
+      <button
+        class="icon-btn cal-create"
+        type="button"
+        aria-label="Create event"
+        title="Create (C)"
+        @click=${createNow}
+      >
+        ${icon(Plus, 16)}
+      </button>
     </div>
-    <button class="btn" type="button" @click=${() => go({ anchor: new Date() })} title="Today (T)">Today</button>
-    <span class="cal-steppers">
-      <button
-        class="icon-btn compact"
-        type="button"
-        aria-label=${`Previous ${cal.view}`}
-        title="Previous (K)"
-        @click=${() => step(-1)}
-      >
-        ${icon(ChevronLeft, 16)}
-      </button>
-      <button
-        class="icon-btn compact"
-        type="button"
-        aria-label=${`Next ${cal.view}`}
-        title="Next (J)"
-        @click=${() => step(1)}
-      >
-        ${icon(ChevronRight, 16)}
-      </button>
-    </span>
-    <button class="icon-btn cal-create" type="button" aria-label="Create event" title="Create (C)" @click=${createNow}>
-      ${icon(Plus, 16)}
-    </button>
   </div>`;
 }
 
