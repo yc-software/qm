@@ -148,7 +148,7 @@ test("an inbound file reaches the agent from Files even when the default compute
     }),
   );
   assert.equal(result.status, "ok", result.reason);
-  assert.match(result.reply ?? "", /shared report\.txt \(Files ID [^:]+: send it with/);
+  assert.match(result.reply ?? "", /shared report\.txt \(Files ID [0-9a-f]+\)/);
   const session = await app.getSession(result.sessionId!);
   const user = session!.items.find((e) => e.kind === "UserMessage" && e.text === "read this");
   assert.equal((user?.body.attachments as Array<{ name: string }> | undefined)?.[0]?.name, "report.txt");

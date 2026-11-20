@@ -105,13 +105,10 @@ test("inboundManifest gives each file one line with its sharer and how to fetch 
     { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in", artifactId: "f1" },
     { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in", author: "eve", artifactId: "f2" },
   ]);
-  const [first, second] = m.split("\n");
-  assert.match(
-    first!,
-    /^The user shared a\.txt \(Files ID f1: send it with \{file_id: "f1"\}, .*\/v1\/files\/f1\/content/,
-  );
-  assert.match(second!, /^eve shared b\.csv \(Files ID f2:/);
-  assert.doesNotMatch(m, /inbox/);
+  const [first, second, recipe] = m.split("\n");
+  assert.equal(first, "The user shared a.txt (Files ID f1).");
+  assert.equal(second, "eve shared b.csv (Files ID f2).");
+  assert.match(recipe!, /^Send a shared file with \{file_id: "<Files ID>"\}, .*\/v1\/files\/<Files ID>\/content/);
   assert.match(inboundManifest([m0()], "ada"), /^ada shared a\.txt/);
   assert.equal(inboundManifest([]), "");
 });
@@ -182,10 +179,10 @@ test("reading shared/ lists the files shared with you without touching a compute
 });
 
 test("environmentNote wraps turn-scoped notes in an <environment> block ('' for empty input)", () => {
-  const wrapped = environmentNote("The user shared 1 file, available in ./inbox/:\n- inbox/a.txt");
+  const wrapped = environmentNote("The user shared a.txt (Files ID f1).");
   assert.match(wrapped, /^<environment>\n/);
   assert.match(wrapped, /\n<\/environment>$/);
-  assert.match(wrapped, /inbox\/a\.txt/);
+  assert.match(wrapped, /a\.txt \(Files ID f1\)/);
   assert.equal(environmentNote(""), "");
   assert.equal(environmentNote("   \n  "), "");
 });

@@ -174,15 +174,16 @@ export function inboundManifest(
   sharer?: string,
   shortened?: ReadonlyMap<string, number>,
 ): string {
-  return metas
-    .map((m) => {
-      const cut = shortened?.get(m.name);
-      const note = cut
-        ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
-        : "";
-      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (Files ID ${m.artifactId}: send it with {file_id: "${m.artifactId}"}, or download it onto a computer with ${fileContentRequest(m.artifactId!)})${note}.`;
-    })
-    .join("\n");
+  if (!metas.length) return "";
+  const lines = metas.map((m) => {
+    const cut = shortened?.get(m.name);
+    const note = cut
+      ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
+      : "";
+    return `${m.author ?? sharer ?? "The user"} shared ${m.name} (Files ID ${m.artifactId})${note}.`;
+  });
+  const recipe = `Send a shared file with {file_id: "<Files ID>"}, or download it onto a computer with ${fileContentRequest("<Files ID>")}.`;
+  return [...lines, recipe].join("\n");
 }
 
 export function inboundIssuesNote(issues: readonly string[]): string {
