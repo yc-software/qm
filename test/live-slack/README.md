@@ -174,17 +174,30 @@ dropped and its scenarios skip, so you never get a mysterious empty-directory mi
 
 The gallery reconstructs message content faithfully and links to the real thread; for
 actual Slack-rendered pixels run the **decoupled** screenshot sweep after a run. It drives
-a _dedicated_ Chrome profile (never your main Chrome), so it's non-disruptive, and gates
-each capture on the conversation's text appearing in the DOM — a flaky capture is skipped,
-never fatal.
+Playwright Firefox with a saved Slack login (a storage-state file, never your own browser
+profile), captures threads four at a time, and gates each capture on the conversation's text
+appearing in the DOM — a flaky capture is skipped, never fatal.
 
 ```sh
-npm run gallery:shots:login   # one-time: sign into example in the window that opens
+npm i --no-save playwright && npx playwright install firefox
+npm run gallery:shots:login   # one-time: sign into the QA workspace in the window that opens
 npm run gallery:shots         # headless sweep → out/shots/*.png, folds them into gallery.html
 ```
 
-`LIVE_E2E_SHOTS_PROFILE` overrides the profile dir (default `~/.cache/live-slack-shots-chrome`),
-`LIVE_E2E_SHOTS_PORT` the debug port (default 9333).
+`LIVE_E2E_BROWSER_STATE` overrides the login file (default `~/.cache/live-slack-browser-state.json`).
+A `playwright` installed elsewhere is found through `NODE_PATH`.
+
+## Slack-surface scenarios (`@slack-surface`)
+
+Real-Slack checks the twin can't stand in for: a group DM (`group-dm-*`), the react tool (`react-tool-on-request`), a
+one-shot cron delivering into the DM (`cron-fires-into-dm`), and an approval card approved by
+a real click in Slack's web client (`keychain-approval-real-click`).
+
+- Group DMs need `LIVE_E2E_GROUP_DM_MEMBER`: the user id of a third member, ideally another
+  bot so no person is messaged. Without it the `group-dm` scenarios skip.
+- The real click reuses the screenshot login (`LIVE_E2E_BROWSER_STATE`) for the QA human and
+  skips when that file is missing. It saves `out/shots/<marker>-before-click.png` and
+  `-after-click.png`.
 
 ## Reading a run
 

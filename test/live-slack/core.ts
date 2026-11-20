@@ -1,6 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
 import type { Item } from "../../src/sessions/items.ts";
 
@@ -140,20 +139,12 @@ export class CoreClient {
     return this.request("GET", `/v1/admin/directory?q=${encodeURIComponent(q)}`);
   }
 
-  async deleteCron(cron: { id: string; ownerScopeId: string; owner?: string; createdBy?: string }): Promise<void> {
-    const token = await mintCapabilityToken(
-      {
-        actorId: cron.owner ?? cron.createdBy ?? "live-e2e-driver",
-        scopeId: cron.ownerScopeId as never,
-        exp: Date.now() + 10 * 60_000,
-      },
-      this.signingSecret,
+  async deleteCron(cron: { id: string; owner?: string; createdBy?: string }): Promise<void> {
+    const principalId = cron.owner ?? cron.createdBy ?? ADMIN_PRINCIPAL;
+    await this.request(
+      "DELETE",
+      `/v1/crons/${encodeURIComponent(cron.id)}?principalId=${encodeURIComponent(principalId)}`,
     );
-    const res = await fetch(`${this.baseUrl}/v1/crons/${encodeURIComponent(cron.id)}`, {
-      method: "DELETE",
-      headers: { "x-agent-capability": token },
-    });
-    if (!res.ok) throw new Error(`core DELETE /v1/crons/${cron.id}: ${res.status}`);
   }
 
   async findSessionTreeByThread(channel: string, rootTs: string): Promise<{ id: string; items: Item[] } | null> {

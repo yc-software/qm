@@ -50,8 +50,8 @@ export class SlackClient {
     await this.web.conversations.archive({ channel }).catch(() => {});
   }
 
-  async openDm(userId: string): Promise<string> {
-    const r = await this.web.conversations.open({ users: userId });
+  async openDm(...userIds: string[]): Promise<string> {
+    const r = await this.web.conversations.open({ users: userIds.join(",") });
     return r.channel?.id as string;
   }
 
