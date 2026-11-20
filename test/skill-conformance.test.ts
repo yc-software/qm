@@ -7,7 +7,6 @@ import { parseSeedSkill } from "../src/skills/seed.ts";
 const SEED_DIR = join(process.cwd(), "skills-seed");
 
 function seedSkillFiles(): string[] {
-  if (!existsSync(SEED_DIR)) return [];
   return readdirSync(SEED_DIR)
     .map((entry) => join(SEED_DIR, entry, "SKILL.md"))
     .filter((p) => existsSync(p) && statSync(p).isFile());
@@ -26,7 +25,8 @@ test("admin and cloud skills distinguish system administration from resource own
   for (const name of ["admin", "cloud-cli"]) {
     const { body } = parseSeedSkill(readFileSync(join(SEED_DIR, name, "SKILL.md"), "utf8"));
     assert.match(body, /including resources owned by other users/);
-    assert.match(body, /credential grants, provider permissions, explicit restrictions, and mutation approvals/);
     assert.match(body, /not impersonation or circumvention/);
+    if (name === "admin") assert.match(body, /grant it to this conversation/);
+    else assert.match(body, /credential grants, provider permissions, explicit restrictions, and mutation approvals/);
   }
 });
