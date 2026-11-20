@@ -54,9 +54,11 @@ function ensureLoading(): void {
 const facade: Hljs = {
   registerLanguage(): void {},
   getLanguage(name: string): unknown {
+    if (name === "text") return {};
     return real ? real.getLanguage(name) : undefined;
   },
   highlight(code: string, opts: { language: string }): HighlightResult {
+    if (opts.language === "text") return { value: escapeHtml(code) };
     if (real) return real.highlight(code, opts);
     ensureLoading();
     return { value: escapeHtml(code) };

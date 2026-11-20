@@ -29,27 +29,28 @@ export function normalizePlainTextFences(text: string): string {
   return normalized.join(newline);
 }
 
-export function decorateTextCodeBlocks(root: ParentNode | null): void {
+export function decorateCodeBlocks(root: ParentNode | null): void {
   if (!root) return;
-  for (const block of root.querySelectorAll<HTMLElement>('code-block[language="text"]')) {
-    const body = block.querySelector<HTMLElement>(":scope > div > div:last-child");
-    const footer = block.querySelector<HTMLElement>(":scope > div > div:first-child");
+  for (const block of root.querySelectorAll<HTMLElement>("code-block")) {
+    const frame = block.querySelector<HTMLElement>(":scope > div");
+    const toolbar = frame?.querySelector<HTMLElement>(":scope > div:first-child");
+    const body = frame?.querySelector<HTMLElement>(":scope > div:nth-child(2)");
     const pre = body?.querySelector("pre");
-    if (!body || !footer || !pre) continue;
-    body.classList.add("text-code-body");
-    footer.classList.add("text-code-footer");
-    if (footer.querySelector(".text-code-toggle") || pre.scrollHeight <= 76) continue;
+    if (!frame || !toolbar || !body || !pre) continue;
+    toolbar.classList.add("code-block-toolbar");
+    body.classList.add("code-block-body");
+    if (frame.querySelector(".code-block-toggle") || pre.scrollHeight <= 120) continue;
     const button = block.ownerDocument.createElement("button");
     button.type = "button";
-    button.className = "text-code-toggle";
+    button.className = "code-block-toggle";
     const update = (expanded: boolean) => {
       block.dataset.expanded = String(expanded);
       button.textContent = expanded ? "Show less" : "Show more";
       button.setAttribute("aria-expanded", String(expanded));
     };
     button.addEventListener("click", () => update(block.dataset.expanded !== "true"));
-    footer.insertBefore(button, footer.lastElementChild);
-    block.classList.add("text-code-collapsible");
+    frame.append(button);
+    block.classList.add("code-block-collapsible");
     update(block.dataset.expanded === "true");
   }
 }
