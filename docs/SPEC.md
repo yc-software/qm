@@ -79,7 +79,7 @@ Giving the same behavior or fact multiple independent implementations or sources
 - **[qm#993](https://github.com/yc-software/qm/pull/993)** (2026-09-08): Chat search queried both the dedicated search index and legacy entry history for every visible conversation, causing timeouts. _Status:_ wound back in [qm#993](https://github.com/yc-software/qm/pull/993).
 - **[qm#488](https://github.com/yc-software/qm/pull/488)** (2026-08-13): Web-UI /api router had ~50 hand-copied body-parse/relay/path-decode fragments that drifted (some returned 400 instead of 413). _Status:_ wound back in [qm#488](https://github.com/yc-software/qm/pull/488).
 
-### Hand-rolling (always reviewed, 5 examples)
+### Hand-rolling (always reviewed, reviewed on Sonnet, 5 examples)
 
 Reimplementing a capability that an existing SDK, library, or supported API already provides. Custom protocols and plumbing make us own edge cases that the maintained integration already handles; use that integration when it meets the requirements.
 
@@ -89,7 +89,7 @@ Reimplementing a capability that an existing SDK, library, or supported API alre
 - **[qm#1419](https://github.com/yc-software/qm/pull/1419)** (2026-09-22): Sprites backend used raw REST fetches; moved to Sprites SDK 0.2.3 (WebSocket exec, filesystem APIs, checkpoints); sibling PRs #1420-#1422 aligned Modal/E2B/Smolmachines with provider docs. _Status:_ wound back in [qm#1419](https://github.com/yc-software/qm/pull/1419).
 - **[qm#1407](https://github.com/yc-software/qm/pull/1407)** (2026-09-22): Internal Fly transports piped data through `fly ssh console` (broke on Windows PTY); replaced with Machines exec API stdin. _Status:_ wound back in [qm#1407](https://github.com/yc-software/qm/pull/1407).
 
-### Non-durability (always reviewed, 5 examples)
+### Non-durability (always reviewed, reviewed on Sonnet, 5 examples)
 
 This is a distributed system that needs work to endure through deploys and crashes without hiccups. A common agent mistake has been to store data in process memory. Postgres is effectively the core's filesystem -- think of core memory as a cache at best.
 
@@ -147,7 +147,7 @@ QM is for organizations in general. YC's usage guides development but architectu
 - **[qm#1008](https://github.com/yc-software/qm/pull/1008)** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in [qm#1026](https://github.com/yc-software/qm/pull/1026).
 - **[qm#530](https://github.com/yc-software/qm/pull/530)** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in [qm#530](https://github.com/yc-software/qm/pull/530).
 
-### Regex (3 examples)
+### Regex (reviewed on Sonnet, 3 examples)
 
 Some people, when confronted with a _**problem**_, think “I know, I'll use _**regular expressions**_.” Now they have _**two problems**_.
 
@@ -164,7 +164,7 @@ Publishing organization-specific information in the public repository through co
 - **[qm#1315](https://github.com/yc-software/qm/pull/1315)** (2026-09-16): The generic web UI onboarding says 'the agent harness we use to run YC' and 'your YC partner in a box', and the welcome ideas cite 'YC Deal' and 'the YC investor database'.
 - **[qm#1504](https://github.com/yc-software/qm/pull/1504)** (2026-09-22): Public docs/test fixtures had org-specific rollout guidance and identity examples plus 92 tracked screenshots (8.1 MB); scrubbed and AGENTS.md now bans committed screenshots. _Status:_ wound back in [qm#1504](https://github.com/yc-software/qm/pull/1504) (partially; YC welcome copy remains).
 
-### Discarded error evidence (3 examples)
+### Discarded error evidence (reviewed on Sonnet, 3 examples)
 
 Replacing or swallowing a failure so the evidence needed to diagnose it disappears.
 

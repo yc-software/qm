@@ -264,14 +264,14 @@ operations. A Slack bot's turn cannot direct a person's swarm: `inspect`, `spawn
 the swarm. Once anyone other than that bot has posted a swarm message, or a person's turn has worked on one of the swarm's computers, the bot's root
 turn and every worker it started lose that access too. Only the bot's own turns
 can add workers to a swarm a bot started: a person's turn that tries is refused, so
-every worker in a bot-started swarm is the bot's work and runs as the bot. The same rule covers the board and worker computers a
+every worker in a bot-started swarm is the bot's work and runs as the bot. A swarm counts as bot-started when the turn that starts it does a bot's work, and forks of its workers are bot work too. The same rule covers the board and worker computers a
 swarm creates: a bot's turn that may not direct the swarm cannot list them, reach them with
 `sandbox_id`, make one the conversation's default, use one a person made the default, or
 run on its own worker computer. The check runs each time the turn uses a computer, so a
 turn that is already running loses that access as soon as someone else posts or a person's turn works on one of those computers. Background
 jobs on those computers are covered too: the bot's `background` list leaves them out, it
 cannot watch them, and a watch it armed while it could stops reading the job's output.
-When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and the process reaper sweeps right away: it stops the background jobs those turns started on the swarm's board and worker computers and marks them reaped. The reaper is the only thing that stops them, and one sweep runs at a time across instances. If a sweep was already running, a job it missed waits for the next periodic sweep (`PROCESS_REAPER_INTERVAL_MS`, 30 seconds by default). A stop that fails, or that a restart interrupts, is retried on the next sweep too.
+When the bot loses that access, its turns still running in the swarm's threads or on the swarm's computers are told to stop, and the process reaper sweeps right away: it stops the bot's background jobs on the swarm's board and worker computers and marks them reaped, by the rule in [Sandbox resources](sandbox-resources.md) that stops a bot's jobs on any computer it may no longer use. The reaper is the only thing that stops them, and one sweep runs at a time across instances, so a job a running sweep missed waits for the next periodic sweep.
 A computer supplied as `forumSandboxId` stays an ordinary computer of its scope, which is
 why a swarm a bot starts never takes one, from the bot or from a person: every computer in
 a swarm a bot starts belongs to the swarm. A person's own swarm can still take one, and

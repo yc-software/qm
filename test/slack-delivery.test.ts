@@ -74,6 +74,10 @@ test("a post from a persona turn goes out under the persona's name and icon", ()
     username: "Ada",
     icon_emoji: ":ada-face:",
   });
+  assert.deepEqual(botIdentityArgs({ ...ada, icon: { kind: "image", url: "https://example.com/ada.png" } }), {
+    username: "Ada",
+    icon_url: "https://example.com/ada.png",
+  });
   assert.deepEqual(botIdentityArgs(ada), { username: "Ada" }, "no icon keeps the app's own");
   assert.deepEqual(slackReplyArgs("C1", "hi", "1.2", { persona: ada }), {
     channel: "C1",
@@ -507,27 +511,14 @@ test("postWithVerify: platform error rethrows without retry", async () => {
   assert.equal(h.historyCalled, false);
 });
 
-test("postWithVerify: rate limit waits, verifies (the claim may have lapsed), then re-posts", async () => {
-  const h = verifyHarness({
-    postResults: [
-      { err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } },
-      { ok: { ts: "2.2", channel: "C1" } },
-    ],
-  });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.equal(res.ts, "2.2");
-  assert.equal(h.postCalls, 2);
-  assert.equal(h.historyCalled, true, "the 429 wait may outlive our delivery claim — check for a sibling's post");
-});
-
-test("postWithVerify: rate limit wait finds a sibling relay's post and reuses it", async () => {
-  const h = verifyHarness({
-    postResults: [{ err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } }],
-    historyMessages: [foundMsg],
-  });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.deepEqual(res, { ts: "9.9", channel: "C1", reused: true });
-  assert.equal(h.postCalls, 1, "never re-posts over a sibling's landed message");
+test("postWithVerify: a rate limit rethrows so the caller can defer the row", async () => {
+  const err = { code: "slack_webapi_rate_limited_error", retryAfter: 3 };
+  const h = verifyHarness({ postResults: [{ err }] });
+  await assert.rejects(
+    () => postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY),
+    (e: any) => e === err,
+  );
+  assert.equal(h.postCalls, 1);
 });
 
 test("postWithVerify: ambiguous error + message found on verify returns existing ts, no re-post", async () => {

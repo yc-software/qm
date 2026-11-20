@@ -23,6 +23,7 @@ export function createTurnBrokers(turn: {
   session: Session;
   scopeId: ScopeId;
   memoryScopeId: ScopeId;
+  livePersonTurn: boolean;
   defaultDestination: Destination | undefined;
   provision: TurnSandboxes["provision"];
   provisionJobSandbox: TurnSandboxes["provisionJobSandbox"];
@@ -37,6 +38,7 @@ export function createTurnBrokers(turn: {
     session,
     scopeId,
     memoryScopeId,
+    livePersonTurn,
     defaultDestination,
     provision,
     provisionJobSandbox,
@@ -51,6 +53,7 @@ export function createTurnBrokers(turn: {
           provisionSandbox: provisionJobSandbox,
           onExit: finishProcess,
           scopeId: memoryScopeId,
+          livePersonTurn,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
           ttlMs: deps.backgroundJobTtlMs,
@@ -169,25 +172,27 @@ export function createArtifactAccess(turn: {
   resolution: TurnResolution;
   provision: TurnSandboxes["provision"];
   provisionResource: TurnSandboxes["provisionResource"];
+  ownScopeBotWork: boolean;
 }) {
-  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource } = turn;
+  const { tenant, deps, conversation, scopeId, resolution, provision, provisionResource, ownScopeBotWork } = turn;
   let readableHandles: Awaited<ReturnType<typeof deps.acl.handlesForAudience>> | undefined;
-  const mayReadArtifact = async (artifact: FileArtifact, fresh = false): Promise<boolean> => {
+  const mayReadArtifact = async (artifact: FileArtifact, storedById = false): Promise<boolean> => {
+    const libraryReach = storedById && ownScopeBotWork;
     if (
       conversation.audience.every((principal) =>
-        principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId),
+        principalEntitledToScope(principal, artifact.ownerScopeId, scopeId, resolution.orgScopeId, libraryReach),
       )
     )
       return true;
-    let handles = fresh ? undefined : readableHandles;
+    let handles = storedById ? undefined : readableHandles;
     handles ??= await deps.acl.handlesForAudience(
       tenant,
       conversation.audience,
       scopeId,
       resolution.orgScopeId,
-      entitledScopes,
+      entitledScopes(libraryReach),
     );
-    if (!fresh) readableHandles = handles;
+    if (!storedById) readableHandles = handles;
     return handles.some((handle) => handle.ownerScopeId === artifact.ownerScopeId && handle.fileId === artifact.id);
   };
   const provisionOutbound = (sandboxId?: string) =>

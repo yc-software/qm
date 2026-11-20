@@ -13,6 +13,10 @@ export const FEATURES = {
     hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
   },
   inbox_loops: { label: "Inbox Loops" },
+  company_welcome: {
+    label: "Company welcome",
+    hint: "Shows the selected people their organization's activity seeds: the seeded welcome screen and the company's starting suggestions. Seeds can be stored while this is off.",
+  },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows a live activity card in Slack threads: the current step, background work, monitors and subagents, with a link to the web conversation. The card disappears once the reply has landed. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off removes open cards.",

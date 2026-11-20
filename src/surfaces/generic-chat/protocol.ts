@@ -2,6 +2,7 @@ import { z } from "zod";
 import { hmacHex } from "../../webhooks/verifiers.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
 import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
+import type { SurfaceAction, SurfaceUser } from "../contract.ts";
 
 export const GENERIC_CHAT = "partner-chat";
 
@@ -16,6 +17,7 @@ const user = z.object({
   email: z.string().optional(),
   name: z.string().optional(),
   bot: z.boolean().optional(),
+  member: z.boolean().optional(),
 });
 const file = z.object({
   id: genericChatMessageIdSchema,
@@ -58,6 +60,24 @@ export type GenericChatEvent = z.infer<typeof eventSchema>;
 export type GenericChatFile = z.infer<typeof file>;
 export type GenericChatReactionEvent = z.infer<typeof reactionEventSchema>;
 export type GenericChatActionEvent = z.infer<typeof actionEventSchema>;
+
+interface GenericChatAction {
+  id: string;
+  label: string;
+  style: SurfaceAction["style"];
+  user_ids?: readonly string[];
+}
+
+export function genericChatAction({ userIds, ...action }: SurfaceAction): GenericChatAction {
+  return { ...action, ...(userIds ? { user_ids: userIds } : {}) };
+}
+
+export function genericChatUserIds(
+  author: Pick<SurfaceUser, "surface" | "account" | "id"> | undefined,
+  account: string,
+): string[] | undefined {
+  return author?.surface === GENERIC_CHAT && author.account === account && author.id ? [author.id] : undefined;
+}
 
 export interface GenericChatRef {
   account: string;

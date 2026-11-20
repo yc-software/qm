@@ -1,3 +1,4 @@
+import { atLeast } from "../../personas/persona-schema.ts";
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
@@ -8,6 +9,7 @@ import {
   type MemoryService,
 } from "../../memory/memory-service.ts";
 import {
+  forgetFacts,
   MAX_FACTS_PER_WRITE,
   problemLine,
   withProviders,
@@ -18,6 +20,7 @@ import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
+import { SHARE_ERROR_STATUS } from "./sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
@@ -37,7 +40,9 @@ import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } fr
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
+import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -50,6 +55,7 @@ import { selfSpend } from "./admin/spend.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
+  authorPublishesSkill,
   isArtifactType,
   personAtKeyboard,
   splitToScope,
@@ -380,6 +386,7 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
       ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
+    isOwnScopeBotWork(capability),
   );
   return sendJson(res, 200, page);
 }
@@ -804,7 +811,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
         error: "forbidden",
         message:
           requestedScope === "org"
-            ? "org memory writes require an org admin"
+            ? "org memory writes need an org admin's own turn while it is still running"
             : "memory capture is not enabled for this conversation",
       });
     }
@@ -858,10 +865,22 @@ const editFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capabi
   return sendJson(res, 200, { ok: true, scopeId: write });
 });
 
-const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capability, write) => {
+const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
+  const { res, deps, tenant, body } = ctx;
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  await memory.delete?.(write, ids, turnAuthority(capability.actorId, capability.memory));
+  const { forgotten, outcomes, problems } = await forgetFacts(
+    memory,
+    write,
+    ids,
+    turnAuthority(
+      capability.actorId,
+      capability.memory,
+      personAtKeyboard(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+    ),
+    capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
+    capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
+  );
   audit(
     { deps, tenant },
     {
@@ -871,7 +890,9 @@ const deleteFacts = writeMemory(async ({ res, deps, tenant, body }, memory, capa
       scopeLabel: write,
     },
   );
-  return sendJson(res, 200, { ok: true, scopeId: write });
+  const result = { forgotten, scopeId: write, ...(outcomes.length ? { outcomes } : {}) };
+  if (problems.length) return sendProviderProblem(res, problems, result);
+  return sendJson(res, 200, { ok: true, ...result });
 });
 
 async function listSkills(ctx: ApiCtx): Promise<void> {
@@ -879,19 +900,21 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archivedChecks = await Promise.all(
-    (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
-  );
-  const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
+  const archivedAll = (await app.listSkills()).filter((skill) => skill.status === "archived");
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
   ]);
+  const manageable = await app.manageableSkills(
+    tenantOf(ctx),
+    [...archivedAll, ...visible.map((r) => r.skill)],
+    principalId,
+    false,
+  );
+  const archived = archivedAll.filter((skill) => manageable.has(skill.id)).map((skill) => ({ skill, shadowed: [] }));
   const skills = await Promise.all(
     [...visible, ...archived].map(async (r) => ({
       id: r.skill.id,
@@ -906,7 +929,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId),
+      editable: manageable.has(r.skill.id),
     })),
   );
   return sendJson(res, 200, { skills });
@@ -919,11 +942,14 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const ownScopeBotWork = isOwnScopeBotWork(capability);
   const skill = await app.getSkill(ctx.params.id!);
   if (
     !skill ||
-    (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
+    (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+        .flatMap((row) => row.shadowed.concat(row.skill ?? []))
+        .some((visible) => visible.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
@@ -944,7 +970,7 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
       grantedCapabilities: skill.grantedCapabilities,
       createdAt: skill.createdAt,
       updatedAt: skill.updatedAt,
-      editable: await app.canManageSkill(skill, principalId),
+      editable: await app.canManageSkill(skill, principalId, capability?.botActor === true),
     },
   });
 }
@@ -958,7 +984,10 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, { liveActor });
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
+    liveActor,
+    botActor: ctx.capability?.botActor === true,
+  });
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
@@ -999,7 +1028,10 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, { liveActor });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, {
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1030,7 +1062,12 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     principalId = b.principalId;
   }
   const liveActor = capability ? personAtKeyboard(capability) : true;
-  const outcome = await app.deleteOwnedSkill({ principalId, id, liveActor });
+  const outcome = await app.deleteOwnedSkill({
+    principalId,
+    id,
+    liveActor,
+    botActor: capability?.botActor === true,
+  });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1075,10 +1112,16 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
       homeScope = b.scopeId as ScopeId;
     }
   }
-  if (homeScope && (parseScopeId(homeScope).kind === "org" || parseScopeId(homeScope).kind === "team")) {
+  if (homeScope && !authorPublishesSkill(homeScope)) {
     return sendJson(res, 403, {
       error: "forbidden",
       message: "a skill cannot be created in an org or team scope — promote a published skill instead",
+    });
+  }
+  if (homeScope && !loadsScopeContext(principalId, homeScope, capability?.botActor === true)) {
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "a Slack bot's work cannot add skills to a person's own library",
     });
   }
   if (typeof b.name !== "string" || !b.name.trim()) {
@@ -1143,15 +1186,6 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const SHARE_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  not_found: 404,
-  forbidden: 403,
-  recipient_not_found: 404,
-  ambiguous_recipient: 409,
-  share_failed: 400,
-};
-
 export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!capability)
@@ -1184,8 +1218,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       message: 'toScope required ("org", a scope id, or a teammate\'s name)',
     });
   }
-  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
-    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
+  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write" && b.permission !== "none") {
+    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read", "write" or "none"' });
   }
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
@@ -1195,7 +1229,9 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       id: b.id,
       ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
       ...(typeof b.email === "string" ? { email: b.email } : {}),
-      ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
+      ...(b.permission === "read" || b.permission === "write" || b.permission === "none"
+        ? { permission: b.permission }
+        : {}),
       ...(b.move === true ? { move: true } : {}),
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
@@ -1282,10 +1318,14 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
   };
   const actorId = ctx.capability?.actorId ?? param("principalId");
   if (!actorId) return null;
-  const scope = ctx.capability?.scopeId ?? (param("scopeId") || makeScopeId("personal", actorId));
+  const scope = param("scopeId") || ctx.capability?.scopeId || makeScopeId("personal", actorId);
   const parsed = parseScopeId(scope);
   if (parsed.kind === "personal" && parsed.ref === actorId) return { actorId, scope: scope as ScopeId };
-  if (ctx.capability && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
+  if (parsed.kind === "persona") {
+    const role = await ctx.app.personas?.role(actorId, parsed.ref!);
+    return atLeast(role, ctx.method === "GET" ? "read" : "write") ? { actorId, scope: scope as ScopeId } : null;
+  }
+  if (ctx.capability?.scopeId === scope && parsed.kind !== "org") return { actorId, scope: scope as ScopeId };
   if (parsed.kind !== "org" && (await ctx.app.belongsToScope(actorId, scope as ScopeId)))
     return { actorId, scope: scope as ScopeId };
   return null;
@@ -1391,14 +1431,19 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  if (capability)
+    return sendJson(
+      res,
+      200,
+      app.getSoul(capability.scopeId, { actorId: capability.actorId, ownScopeBotWork: isOwnScopeBotWork(capability) }),
+    );
   const scopeIdVal = url.searchParams.get("scopeId");
   const principalId = url.searchParams.get("principalId");
   if (!scopeIdVal || !principalId)
     return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
   if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
     return sendJson(res, 403, { error: "forbidden" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId, { actorId: principalId, ownScopeBotWork: false }));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1426,12 +1471,10 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     ? capability.botActor !== true
     : parseScopeId(scopeIdVal).kind !== "personal" && (await app.managesScope(actorId, scopeIdVal as ScopeId));
   try {
-    const version = await app.updateSoul(
-      scopeIdVal,
-      content,
-      actorId,
-      allowSharedScope ? { allowSharedScope: true } : undefined,
-    );
+    const version = await app.updateSoul(scopeIdVal, content, actorId, {
+      ...(allowSharedScope ? { allowSharedScope: true } : {}),
+      botActor: capability?.botActor === true,
+    });
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
     if (e instanceof SoulUpdateDeniedError)

@@ -41,7 +41,7 @@ export function createDirectorySync(deps: {
   q: PgPool["q"];
   pool: PgPool["pool"];
   orgId: string;
-}): Pick<DirectoryStore, "replace" | "replaceChannels" | "setWorkspaceUrl" | "replaceGroups" | "upsertGroup"> {
+}): Pick<DirectoryStore, "replace" | "replaceChannels" | "setWorkspace" | "replaceGroups" | "upsertGroup"> {
   const { q, pool, orgId } = deps;
 
   async function swapIfChanged(
@@ -97,15 +97,17 @@ export function createDirectorySync(deps: {
       const internal = [...byId.values()];
 
       const hash = hashRoster(
-        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
+        internal.map(
+          (m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}|${m.isBot ?? ""}`,
+        ),
       );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
+            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url, is_bot)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::boolean[])`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -114,6 +116,7 @@ export function createDirectorySync(deps: {
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
               internal.map((m) => m.avatarUrl ?? null),
+              internal.map((m) => m.isBot ?? null),
             ],
           );
         }
@@ -226,11 +229,12 @@ export function createDirectorySync(deps: {
       );
     },
 
-    async setWorkspaceUrl(url) {
+    async setWorkspace(meta) {
       await q(
-        `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
-        [orgId, url, Date.now()],
+        `INSERT INTO directory_meta (org_id, workspace_url, app_icon_url, updated_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url,
+           app_icon_url = COALESCE(EXCLUDED.app_icon_url, directory_meta.app_icon_url), updated_at = EXCLUDED.updated_at`,
+        [orgId, meta.workspaceUrl, meta.appIconUrl, Date.now()],
       );
     },
 

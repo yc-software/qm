@@ -1,4 +1,4 @@
-import { isBotAuthored, isOwnStatusCard } from "./message-gating.ts";
+import { isBotAuthored, isOwnSlackMessage, isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot } from "./lib.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
@@ -51,9 +51,7 @@ export function slackMessageToIngestEvent(
     ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
     text: decodeSlackEntities(content.text),
     raw: { ...m } as Record<string, unknown>,
-    ...((ids.botUserId && m.user === ids.botUserId) || (ids.ownBotId && m.bot_id === ids.ownBotId)
-      ? { self: true, handled: true }
-      : {}),
+    ...(isOwnSlackMessage(m, ids.botUserId, ids.ownBotId) ? { self: true, handled: true } : {}),
     files: content.files
       .filter((file) => file.id)
       .map((file) => ({

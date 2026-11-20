@@ -49,7 +49,7 @@ final class NativeConversationDrawerTests: XCTestCase {
       } detail: {
         NavigationStack {
           ChatView(
-            model: model, showsConversations: state.open,
+            model: model,
             onShowConversations: { state.open = true })
         }
         .background(Marker(view: detailMarker))
@@ -247,8 +247,9 @@ final class NativeConversationDrawerTests: XCTestCase {
     try await action(window)
   }
 
+  // The drawer settles on a spring whose tail outlasts its nominal duration.
   private func settle(_ window: UIWindow) async throws {
-    try await Task.sleep(for: .milliseconds(400))
+    try await Task.sleep(for: .milliseconds(800))
     window.layoutIfNeeded()
   }
 

@@ -19,7 +19,8 @@ import {
   type GenericChatMessages,
 } from "../src/surfaces/generic-chat/messages.ts";
 import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
-import { createGenericChatApprovals } from "../src/surfaces/generic-chat/approvals.ts";
+import { NON_WEB_PATHS } from "../src/surfaces/contract.ts";
+import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
 import { signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
@@ -247,6 +248,61 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
   }
 });
 
+test("a protocol 2 group chat with a guest answers its team in a separate external session and turns the guest away", async () => {
+  const { built, genericChat, deliver } = await genericChatApp();
+  try {
+    const guest = { id: "77", email: "eve@elsewhere.test", name: "Eve Guest" };
+    const withGuest = (overrides: Parameters<typeof event>[0]) => {
+      const e = event({ protocol: 2, ...overrides });
+      e.chat.members = [...e.chat.members, guest];
+      return e;
+    };
+    const legacy = event({ body: "!post hi", mentions: true, eventId: "ev-g0", messageId: "1300" });
+    legacy.chat.members = [...legacy.chat.members, guest];
+    assert.equal((await deliver(legacy)).body.ignored, "unvouched_participants");
+
+    assert.deepEqual(
+      await deliver(withGuest({ body: "team question", mentions: true, eventId: "ev-g1", messageId: "1301" })),
+      { status: 200, body: { ok: true } },
+    );
+    const answered = () => genericChat.shown().find((m) => String(m.body).includes("team question"));
+    await settle(async () => answered() !== undefined);
+    assert.equal(answered()?.thread_id, "1301");
+    const session = await built.sessions.getByThread(`guests:${CONTAINER}:1301`);
+    assert.equal(session?.surface, "partner-chat");
+    assert.equal(await built.sessions.getByThread(`${CONTAINER}:1301`), null);
+
+    const asked = withGuest({ body: "!post leak it", mentions: true, eventId: "ev-g2", messageId: "1302" });
+    asked.message.user = guest;
+    assert.deepEqual(await deliver(asked), { status: 200, body: { ok: true, ignored: "guest_author" } });
+    await settle(async () => genericChat.shown().some((m) => m.thread_id === "1302"));
+    assert.deepEqual(
+      genericChat
+        .shown()
+        .filter((m) => m.thread_id === "1302")
+        .map((m) => m.body),
+      ["I only take requests from the team I work for, so I can't help with this one here."],
+    );
+    const mirrored = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true });
+    assert.ok(mirrored.some((m) => m.text === "!post leak it" && m.authorName === "Eve Guest"));
+
+    const reaction = {
+      ...withGuest({ eventId: "ev-g3", messageId: "1301" }),
+      type: "reaction.added",
+      reaction: { name: "eyes", user: { id: "5", email: "ada@example.com", name: "Ada Lovelace" } },
+    };
+    assert.equal((await deliver(reaction)).body.ignored, "guest_chat");
+    const click = {
+      ...withGuest({ bot: true, appPost: true, eventId: "ev-g4", messageId: "1301" }),
+      type: "action.invoked",
+      action: { id: "hilo_deny:x", user: guest },
+    };
+    assert.equal((await deliver(click)).body.ignored, "guest");
+  } finally {
+    await genericChat.close();
+  }
+});
+
 const FOLLOWED =
   "a thread the agent already posted in is followed without a mention, and an aside between people gets no reply";
 onBothProtocols(FOLLOWED, async (version) => {
@@ -389,6 +445,8 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
   const { deliveries, mirrored, settled } = outboundFor(`${genericChat.url}/`);
   try {
     const surface = createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
+    assert.ok(surface.promptHints.linkSyntax.includes(NON_WEB_PATHS));
+    assert.match(surface.promptHints.linkSyntax, /tables break/);
     await surface.post(
       { surface: "partner-chat", account: "7001", kind: "group", container: "88", thread: "1009" },
       { text: "scheduled hello", provenance: PROVENANCE },
@@ -498,7 +556,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
   );
 });
 
-test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {
+test("a chat with any member neither the deployment nor the host vouches for, or that is deactivated by hand, is neither mirrored nor answered, while a Slack sync deactivation does not override the host", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
     const withGuest = event({ body: "!post hi", mentions: true, eventId: "ev-guest", messageId: "1040" });
@@ -518,6 +576,18 @@ test("a chat with any member the deployment does not vouch for is neither mirror
       await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
       [],
     );
+    const vouched = event({ body: "!post hi", mentions: true, eventId: "ev-vouched", messageId: "1042" });
+    const founder = { id: "7", email: "founder@startup.dev", name: "Founder", member: true };
+    vouched.message.user = founder;
+    vouched.chat.members.push(vouched.message.user);
+    assert.equal((await deliver(vouched)).body.ignored, undefined);
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev", "directory-sync"));
+    const synced = { ...vouched, event_id: "ev-vouched-sync", message: { ...vouched.message, id: "1044" } };
+    assert.equal((await deliver(synced)).body.ignored, undefined);
+    await withTenant(TEST_TENANT, () => built.identity.reactivate("founder@startup.dev"));
+    await withTenant(TEST_TENANT, () => built.identity.deactivate("founder@startup.dev"));
+    const again = { ...vouched, event_id: "ev-vouched-2", message: { ...vouched.message, id: "1043" } };
+    assert.equal((await deliver(again)).body.ignored, "unvouched_participants");
   } finally {
     await genericChat.close();
   }
@@ -985,6 +1055,7 @@ interface ShownAction {
   id: string;
   label: string;
   style: string;
+  user_ids?: string[];
 }
 
 test("a pending approval arrives as a card with buttons that only the person who asked can settle", async () => {
@@ -999,12 +1070,12 @@ test("a pending approval arrives as a card with buttons that only the person who
     assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
     assert.equal(posted.thread_id, "1002");
     assert.deepEqual(
-      actions.map((a) => [a.label, a.style]),
+      actions.map((a) => [a.label, a.style, a.user_ids]),
       [
-        ["Allow once", "primary"],
-        ["Allow session", "default"],
-        ["Allow always", "default"],
-        ["Deny", "danger"],
+        ["Allow once", "primary", ["5"]],
+        ["Allow session", "default", ["5"]],
+        ["Allow always", "default", ["5"]],
+        ["Deny", "danger", ["5"]],
       ],
     );
     const click = (eventId: string, user: Record<string, string>) =>
@@ -1038,7 +1109,13 @@ test("a pending approval arrives as a card with buttons that only the person who
 
 test("a credential request is a card its owner decides from the chat, and a decision made elsewhere clears the posted card", async () => {
   const genericChat = await fakeGenericChat();
-  const ask = { id: "ask1", status: "pending", requestedMode: "once", requesterScopeId: "group:g1" };
+  const ask = {
+    id: "ask1",
+    status: "pending",
+    requestedMode: "once",
+    requesterScopeId: "group:g1",
+    ownerSurfaceUser: { surface: "partner-chat", account: "7001", id: "5" },
+  };
   const view = () => ({ ask, service: "github", conversation: "Launch crew" }) as unknown as KeychainApprovalView;
   const decided: unknown[] = [];
   const keychainApprovals = {
@@ -1069,8 +1146,12 @@ test("a credential request is a card its owner decides from the chat, and a deci
     );
     const actions = card!.actions as ShownAction[];
     assert.deepEqual(
-      actions.map((a) => a.label),
-      ["Allow once", "Allow", "Deny"],
+      actions.map((a) => [a.label, a.user_ids]),
+      [
+        ["Allow once", ["5"]],
+        ["Allow", ["5"]],
+        ["Deny", ["5"]],
+      ],
     );
     const actor = { externalId: "ada@example.com" };
     await createGenericChatApprovals({ client, app: app as never, keychainApprovals }).invoke({
@@ -1098,6 +1179,20 @@ test("a credential request is a card its owner decides from the chat, and a deci
   } finally {
     await genericChat.close();
   }
+});
+
+test("a card names no allowed clicker when the owner's chat identity is unknown or from another account", async () => {
+  const card = async (ownerSurfaceUser?: object) => {
+    const ask = { id: "a", status: "pending", requesterScopeId: "group:g1", ownerSurfaceUser };
+    const keychainApprovals = { card: async () => ({ ask, service: "github", conversation: "c" }) as never };
+    const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "a" };
+    return genericChatCard(
+      { app: { getApproval: async () => null }, keychainApprovals },
+      { destination, idempotencyKey: "k" },
+    );
+  };
+  for (const owner of [undefined, { surface: "partner-chat", account: "7002", id: "5" }])
+    assert.ok((await card(owner))!.actions.every((a) => !a.userIds));
 });
 
 test("a status post becomes the final reply in place, and the agent can revise or delete what it posted", async () => {

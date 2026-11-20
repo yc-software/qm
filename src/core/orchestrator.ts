@@ -1,4 +1,4 @@
-import { personaPrompt } from "../personas/persona-service.ts";
+import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
@@ -13,17 +13,20 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
-import { externalTools } from "./orchestrator/external-tools.ts";
+import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
-  delegatedAuthorizationOrigin,
+  delegatedAuthorization,
+  doesBotWork,
   isOwnerFire,
+  forkOfBotWork,
   ownsSessionContext,
   isSubagentThreadRef,
   sessionContextOf,
+  hiddenFromBotWork,
 } from "../sessions/session-syscalls.ts";
 import {
   type DocumentInput,
@@ -53,14 +56,15 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { boundWebhook, desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
-import { resolveTurnFastMode } from "./turn-options.ts";
+import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
 import { deriveTurnOutcome } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
+import { isOwnScopeBotWork } from "../resolution/context-filter.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
@@ -129,10 +133,12 @@ import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
   recordedMessageTimestamps,
+  seedPriorTurns,
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { turnStartOnce } from "../decisions/hooks.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
@@ -143,7 +149,8 @@ import {
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
-import { attestableAudience, personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { ownPrivateConversation, personKey, rosterIds, samePerson } from "../directory/person.ts";
+import { personAtKeyboard } from "../api/artifact-share.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -172,7 +179,6 @@ import {
   renderSandboxProviders,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
-  webSurfaceLabel,
   type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
@@ -337,7 +343,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const orchestrator: Orchestrator = {
     async screenSecuritySteer({ tenant, payload, actor, conversation, sessionId, verifiedSwarm }) {
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor);
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, false, false);
       const { screening } = resolution.securityPolicy;
       if (screening === "off") return "allow";
       const scopeLabel = deps.resolution.scopeFor(conversation, actor);
@@ -503,7 +509,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.swarm || input.surface === "swarm" || input.conversation.threadRef.startsWith("swarm:"))
       )
         throw new NonRetryableTurnError("swarm service unavailable");
-      const swarmBinding = await deps.swarms?.binding(input);
+      const swarmBinding = await deps.swarms?.binding(tenant, input);
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(tenant, input, deps, external);
@@ -513,24 +519,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
-      const personConversationTurn =
-        isPersonAuthored(input.origin.kind) &&
-        !sessionTurn &&
-        !isSubagentThreadRef(conversation.threadRef) &&
-        !input.botActor &&
-        !input.proactiveOpener;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
           (!!conversation.publishMembers?.length && conversation.publishMembers.every((p) => p.type === "internal")));
       const authoredDetection =
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
-      const delegatedOrigin =
+      const delegated =
         !external && deps.runs
-          ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
+          ? await delegatedAuthorization(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
+      const delegatedOrigin = delegated?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
+      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
       const liveAuthorTurn =
@@ -554,8 +555,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const { delegatedSession, refusal: subagentRefusal } = await admitSubagentSession(deps, conversation, actor);
       if (subagentRefusal) return subagentRefusal;
+      const storedSession = delegatedSession ?? (await deps.sessions.getByThread(conversation.threadRef));
       const botRequest = input.botActor;
-      if (delegatedSession?.spawnMeta?.botActor) input = { ...input, botActor: true };
+      if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
+        input = { ...input, botActor: true };
+      if (
+        storedSession &&
+        !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
+        !(ownsSessionContext(conversation.threadRef, input) && input.origin.kind !== "automation") &&
+        (await hiddenFromBotWork(tenant, input, storedSession, deps))
+      ) {
+        console.error(
+          `[orchestrator] turn.silent (bot-flagged turn in a conversation hidden from bot work) thread=${conversation.threadRef}`,
+        );
+        return { status: "silent", sessionId: storedSession.id };
+      }
+      const botLimitsRaised = input.botActor === true && botRequest !== true;
+      if (botLimitsRaised && input.runId) await deps.runs?.markBotLimited(tenant, input.runId);
+      const personConversationTurn =
+        isPersonAuthored(input.origin.kind) &&
+        !sessionTurn &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        !input.botActor &&
+        !input.proactiveOpener;
       const { managedRosterIsCurrent, withManagedRosterVersion } = createManagedRoster(
         deps,
         input,
@@ -586,13 +608,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const admissionRefusal = await admitAudienceAndBudget(tenant, deps, conversation, actor, surface, external);
       if (admissionRefusal) return admissionRefusal;
 
-      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const ownScopeBotWork = isOwnScopeBotWork({ actorId: actor.id, scopeId, botActor: input.botActor });
+      const resolution = await deps.resolution.resolve(tenant, conversation, actor, external, ownScopeBotWork);
       const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
       const audienceScopeId =
         !automationDestination ||
         automationDestination.audienceScopeId === scopeId ||
-        (attestableAudience(actor.id, scopeId) && attestableAudience(actor.id, automationDestination.audienceScopeId))
+        ownPrivateConversation(actor.id, scopeId, automationDestination.audienceScopeId)
           ? scopeId
           : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
@@ -648,7 +671,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
-      const approvalSession = input.approval ? await deps.sessions.getByThread(conversation.threadRef) : null;
+      const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
@@ -760,17 +783,60 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
       const appEdit = appEditTurnPolicy(editingApp !== null);
       const mcpToolsReady =
-        !external && !appEdit && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, actAsActor) : undefined;
+        !external && !appEdit && deps.mcp
+          ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
+          : undefined;
       const livePersonTurn = liveAuthorTurn && input.botActor !== true;
-      const useMemory =
-        !external && input.skipMemory !== true && !(input.botActor && scopeId === personalScope(actor.id));
+      const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
-      const personaTurn =
+      const surfaceName =
+        automationDestination === undefined
+          ? (input.surface ?? "slack")
+          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
+      const turnDecisions = deps.decide
+        ? turnStartOnce(
+            (...args) => tracePhase("turn.decision", () => deps.decide!(...args)),
+            async () => ({
+              input: input.text,
+              surfaceName,
+              runtimePurpose: turnRuntimePurpose(
+                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
+              ),
+              ...(input.model ? { runtime: { modelId: input.model } } : {}),
+              runtimePinned:
+                !external &&
+                humanInput &&
+                !!deps.userModelCredentials &&
+                (input.modelAccount ?? (await deps.config.getModelAccountDurable(actor.id)) ?? "company") !== "company",
+              continueTurn: (input.attempt ?? 1) > 1,
+              scopeLabel: scopeId,
+              conversation: conversation.kind,
+              context: [input.conversationHeader?.trim(), ...seedPriorTurns(input.priorTurns ?? []).map((m) => m.text)]
+                .filter(Boolean)
+                .join("\n\n"),
+            }),
+            {
+              tenant,
+              actorId: actor.id,
+              scopeLabel: scopeId,
+              ...(storedSession ? { sessionId: storedSession.id } : {}),
+              ...(input.runId ? { runId: input.runId } : {}),
+            },
+          )
+        : undefined;
+      const routed =
+        external || ambientTurn || !deps.personas || !turnDecisions
+          ? undefined
+          : (await turnDecisions()).find((r) => r.persona);
+      const { turn: personaTurn, note: personaNote } =
         external || !deps.personas
-          ? null
-          : await deps.personas.forTurn(
-              (await deps.sessions.getByThread(conversation.threadRef))?.personaId ?? input.personaId,
+          ? { turn: null }
+          : await routedPersonaTurn(
+              deps.personas,
+              routed,
+              storedSession?.personaId ?? input.personaId,
               actor.id,
               scopeId,
             );
@@ -809,6 +875,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        botActor: input.botActor === true,
+        ownScopeBotWork,
         notebookOnly,
         memory: deps.memory,
         files: deps.files,
@@ -821,10 +889,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
-      const surfaceName =
-        automationDestination === undefined
-          ? (input.surface ?? "slack")
-          : (deps.surfaces.get(automationDestination.type)?.kind ?? "slack");
       const toolSurface = deps.surfaces.get(surfaceName || "slack");
       const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
       const botName = branding.selfLabel ?? "QM";
@@ -838,7 +902,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botName,
         orgName,
         surfaceTool,
-        surfaceLabel: isWeb ? webSurfaceLabel(botName, Boolean(boundWebhook(input))) : (toolSurface?.label ?? "Slack"),
+        surfaceLabel: isWeb ? `the ${botName} web app` : (toolSurface?.label ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
@@ -850,7 +914,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       } else if (modeName === "mode-conversation") frameVars.userName = "the people here";
-      const sideChat = (await deps.sessions.getByThread(conversation.threadRef))?.sideChat;
+      const sideChat = storedSession?.sideChat;
       const focusedSideChat = Boolean(sideChat && !sideChat.expanded);
       const sessionSyscalls = !external ? deps.sessionSyscalls : undefined;
       const delegateWork = !focusedSideChat && requiresDelegation(input);
@@ -872,13 +936,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const personaBlock = persona ? personaPrompt(persona) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
-      if (external)
+      if (external && surfaceOrigin.guests)
+        systemPrompt +=
+          "\n\nThis group chat includes guests from outside your organization. Answer and run code here only with what is in this chat and your own computer. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable, and nothing private may be shared here. When a request needs them, say briefly that you can't do that with guests present and suggest the requester ask you in a private chat.";
+      else if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: SystemContextBlocks = {};
       if (typeof personaTurn === "string") turnContextBlocks["Personas"] = `## Personas\n${personaTurn}`;
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
+      if (personaNote) turnEvents.push(personaNote);
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
@@ -987,7 +1055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
       else if (conversation.kind === "group") type = "group";
-      const session = await deps.sessions.getOrCreateByThread(
+      const threadSession = await deps.sessions.getOrCreateByThread(
         conversation.threadRef,
         type,
         scopeId,
@@ -996,9 +1064,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         {
           ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
-          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input)
+            ? { context: sessionContextOf({ ...input, botActor: botRequest }) }
+            : {}),
         },
       );
+      const session =
+        persona && deps.personas
+          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+              threadSession,
+              persona.persona.id,
+            )
+          : threadSession;
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
@@ -1511,6 +1588,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId,
           memoryScopeId,
+          livePersonTurn,
           defaultDestination,
           provision,
           provisionJobSandbox,
@@ -1576,6 +1654,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resolution,
           provision,
           provisionResource,
+          ownScopeBotWork,
         });
         const surfaceToolDeps = createSurfaceToolDeps({
           tenant,
@@ -1612,12 +1691,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn: liveTurn && !automatedTurn,
+          liveTurn: liveTurn && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(livePersonTurn ? { liveAuthor: true } : {}),
+          ...(triggeredTurn ? { triggered: true } : {}),
+        };
         const baseTools = createToolContext({
           tenant,
           desktopClientId: desktopClientForTurn(input),
@@ -1692,6 +1777,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
+          ...(personAtKeyboard(runtimeClaims) && !sessionTurn ? { personTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -1729,7 +1815,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         baseTools.withdrawApproval = (card: string) =>
           withdrawCallApprovals(pending, session.id, actor.id, card, audit);
-        const tools = external ? externalTools(baseTools, accessResource) : baseTools;
+        const externalDenial = external && surfaceOrigin.guests ? GUEST_CHAT_DENIAL : undefined;
+        const tools = external ? externalTools(baseTools, accessResource, externalDenial) : baseTools;
         const cronScript =
           input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
             ? await runCronScript(
@@ -2059,12 +2146,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(typeof effectiveFastMode === "boolean" ? { fastMode: effectiveFastMode } : {}),
         };
         const runtimeDefaults = requestedRuntime;
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(triggeredTurn ? { triggered: true } : {}),
-        };
         const restoredRuntime =
           input.runId && isRetry
             ? recoveredRuntime(filterHistory(await deps.sessions.getItems(session.id)), input.runId, actor.id)
@@ -2143,9 +2224,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             rosterMembers,
             rawEntries,
             session,
-            external,
             deps,
-            scopeId,
+            soulScopeId: resolution.soulScopeId,
             conversation,
             turnEnvironmentContents,
             mailbox,
@@ -2167,6 +2247,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const body = { ...entry.body };
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+                if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
@@ -2183,7 +2264,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (!continuation && recallOutcomes.length) body.memoryRecallOutcomes = recallOutcomes;
               }
               Object.assign(body, swarmEntryProvenance);
-              delete body.speakerId;
+              if (!steered) delete body.speakerId;
               if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
               const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
               if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
@@ -2290,6 +2371,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
+            ...(turnDecisions ? { turnStart: turnDecisions } : {}),
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
               turnRuntime = runtime;

@@ -81,5 +81,6 @@ export function injectBranding(html: string, branding: OrgBranding, opts?: { tit
     ...(cssUrlSafe(markUrl) ? [`--brand-mark-image:url("${markUrl}")`] : []),
   ].join(";");
   if (decls) out = out.replace("</head>", () => `<style>:root{${decls}}</style></head>`);
+  if (cssSafe(mark) || cssUrlSafe(markUrl)) out = out.replace("<html", "<html data-brand-mark");
   return out;
 }

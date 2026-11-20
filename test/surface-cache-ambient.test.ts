@@ -1346,7 +1346,7 @@ async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: Wa
     );
     return signals.length > 0 || Boolean(next);
   });
-  return { live, next, signals };
+  return { built, live, next, signals };
 }
 
 test("a Slack bot's ambient wake does not steer into a live ambient worker a person's message started", async () => {
@@ -1372,7 +1372,7 @@ test("an unprompted wake does not steer into a live worker running a person's ow
   assert.ok(next, "the other member's post runs as its own worker");
 });
 
-test("a person's ask that degrades to proactive beside a Slack bot's worker runs as its own worker, unless a bot posted with it", async () => {
+test("a person's ask that degrades to proactive beside a Slack bot's worker runs as its own worker, apart from a bot's post in its batch", async () => {
   const container = "C-ask-after-bot";
   const first = { container, ts: "730.1", authorId: "U-deploybot", bot: true, text: "rollback finished", createdAt: 1 };
   const ask = { container, ts: "730.2", authorId: "U1", text: "make gpu-2 the default computer?", createdAt: 2 };
@@ -1383,7 +1383,32 @@ test("a person's ask that degrades to proactive beside a Slack bot's worker runs
   assert.ok(alone.next && !alone.next.request.botActor, "the person's ask runs as its own unmarked worker");
   const deploy = { container, ts: "730.3", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 3 };
   const mixed = await wakeBesideLiveWorker("!engage-asked", first, [ask, deploy, plusOne]);
-  assert.equal(mixed.signals.map((s) => s.kind).join(), "steer", "a batch holding a bot's post stays bot work");
+  await settle(async () => {
+    mixed.signals.push(...(await mixed.built.signals.takePending(mixed.live.id)));
+    mixed.next ??= await mixed.built.runs.activeForThread(`slack:${container}:ambient:730.4`);
+    return mixed.signals.length > 0 && Boolean(mixed.next);
+  });
+  assert.equal(mixed.signals.map((s) => s.kind).join(), "steer", "the bot's post joins the bot's worker");
+  assert.ok(!mixed.next.request.botActor, "the person's ask runs as its own unmarked worker");
+  assert.ok(!mixed.next.request.text.includes("deploy queued"), "the bot's post doesn't reach the person's worker");
+});
+
+test("a person's degraded ask and a bot's post in one batch start separate workers when no worker is live", async () => {
+  const built = freshApp();
+  const container = "C-ask-with-bot";
+  await built.app.setChannelPolicy(container, "!engage-asked", "U-admin");
+  await built.app.ingestSurfaceEvents([
+    { container, ts: "740.1", authorId: "U1", text: "make gpu-2 the default computer?", createdAt: 1 },
+    { container, ts: "740.2", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 2 },
+    { container, ts: "740.3", authorId: "U2", text: "+1", createdAt: 3 },
+  ]);
+  await built.app.judgeAmbientContainer("slack", container);
+  const bot = await built.runs.activeForThread(`slack:${container}:ambient:740.2`);
+  const person = await built.runs.activeForThread(`slack:${container}:ambient:740.3`);
+  assert.equal(bot?.request.botActor, true, "the bot's post runs as its own bot-marked worker");
+  assert.ok(!bot?.request.text.includes("gpu-2"), "the person's ask stays out of the bot's worker");
+  assert.ok(person && !person.request.botActor, "the person's ask runs as its own unmarked worker");
+  assert.ok(!person.request.text.includes("deploy queued"), "the bot's post stays out of the person's worker");
 });
 
 test("a bot post whose content lives only in attachment blocks reaches the ambient judge through the Slack mirror", async () => {

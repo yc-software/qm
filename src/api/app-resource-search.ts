@@ -24,12 +24,13 @@ export function createResourceSearchMethods(
       query = query.slice(0, 500);
       if (query.trim().length < 2 || !searchTerms(query).length) return { hits: [], failed: [], limited: [] };
       let visibleSkills = new Set<string>();
+      let manageable = new Set<string>();
       let crons: ReturnType<typeof cronVisibility> | undefined;
       let person: ReturnType<App["personMatcher"]> | undefined;
       const canSee = async (kind: Exclude<ResourceKind, "apps">, row: ResourceCandidate): Promise<boolean> => {
         switch (kind) {
           case "skills":
-            if (await helpers.canManageSkill(row, principalId)) return true;
+            if (manageable.has(row.id)) return true;
             if (row.status !== "published") return false;
             return visibleSkills.has(row.id);
           case "crons":
@@ -48,8 +49,9 @@ export function createResourceSearchMethods(
         const rows = candidates.slice(0, 200);
         if (kind === "skills" && rows.length) {
           const { skills, homes } = await store.skillMetadata([...new Set(rows.map((r) => r.title))]);
-          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes);
+          const { ordered, granted } = await skillVisibilityContext(deps, helpers, principalId, homes, false);
           visibleSkills = new Set(visibleSkillRows(skills, ordered, granted).map((r) => r.skill.id));
+          manageable = await helpers.manageableSkills(tenant, rows, principalId, false);
         }
         const appPermissions = kind === "apps" ? await helpers.appPermissions(tenant, rows, principalId) : [];
         for (let i = 0; i < rows.length; i += 20) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { createDirectory } from "../src/slack/directory.ts";
+import type { SlackIdentityMode } from "../src/slack/identity.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -21,7 +22,7 @@ function fixture(t: TestContext) {
     now += ms;
   };
   const store = createPostgresDirectoryStore(testDatabaseUrl());
-  function core(channels = [channel("C_ONE")]) {
+  function core(channels = [channel("C_ONE")], identityMode: SlackIdentityMode = "slack-id") {
     const state = {
       channels,
       memberIds: ["U_ONE"],
@@ -32,7 +33,7 @@ function fixture(t: TestContext) {
       apps: [] as Array<{ id: string; team_id: string; is_bot: true }>,
     };
     const pushes: Parameters<SlackCoreClient["pushDirectory"]>[0][] = [];
-    const user = { id: "U_ONE", team_id: "T_TEST" };
+    const user = { id: "U_ONE", team_id: "T_TEST", profile: { email: "one@example.test" } };
     const client = {
       async *paginate(method: string, args: { types?: string }) {
         if (method === "users.list") yield { members: [user, ...state.apps] };
@@ -46,10 +47,12 @@ function fixture(t: TestContext) {
         }
       },
       users: { info: async () => ({ user }) },
+      bots: { info: async () => ({ bot: { icons: { image_72: "https://avatars.slack-edge.com/app_72.png" } } }) },
     };
     const directory = createDirectory({
       core: {
-        holdDirectorySync: async (fn: (lost: Promise<void>) => Promise<boolean>) => fn(new Promise(() => {})),
+        holdDirectorySync: async (_team: string, fn: (lost: Promise<void>) => Promise<boolean>) =>
+          fn(new Promise(() => {})),
         pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
           if (state.rejectPush) {
             pushes.push(body);
@@ -78,7 +81,7 @@ function fixture(t: TestContext) {
         ownBotId: "B_BOT",
         botHandle: "bot",
         ownWorkspaceUrl: "",
-        identityMode: "slack-id",
+        identityMode,
       },
     });
     async function refresh() {
@@ -106,6 +109,7 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   assert.deepEqual(pushed.channelRosterIds, []);
   assert.deepEqual(pushed.channelMembers, []);
   assert.equal(pushed.groupMembers, undefined);
+  assert.equal(pushed.appIconUrl, "https://avatars.slack-edge.com/app_72.png");
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);
 });
@@ -211,16 +215,25 @@ test("a rejected full crawl is retried instead of throttling unpublished rosters
   assert.equal(a.state.memberCalls, 2);
 });
 
-test("a Slack app in users.list is pushed with the bot flag", async (t) => {
-  const { core } = fixture(t);
-  const a = core();
-  a.state.apps = [{ id: "U_APP", team_id: "T_TEST", is_bot: true }];
-  const push = await a.refresh();
-  assert.deepEqual(
-    push.members?.map((m) => [m.principalId, m.isBot === true]),
-    [
-      ["U_ONE", false],
+test("every member is pushed and stored with Slack's bot flag, in both identity modes", async (t) => {
+  const { core, store } = fixture(t);
+  for (const [mode, person] of [
+    ["slack-id", "U_ONE"],
+    ["email", "one@example.test"],
+  ] as const) {
+    const a = core(undefined, mode);
+    a.state.apps = [{ id: "U_APP", team_id: "T_TEST", is_bot: true }];
+    const expected = [
+      [person, false],
       ["U_APP", true],
-    ],
-  );
+    ];
+    assert.deepEqual(
+      (await a.refresh()).members?.map((m) => [m.principalId, m.isBot]),
+      expected,
+    );
+    assert.deepEqual(
+      [...(await store.getMany([person, "U_APP"])).values()].map((m) => [m.principalId, m.isBot]),
+      expected,
+    );
+  }
 });

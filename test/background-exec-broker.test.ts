@@ -291,13 +291,14 @@ test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (inva
 });
 
 test("reattach by FULL command key: a second start of the same command reattaches to ONE process", async () => {
-  const { broker, registry, starts } = build();
+  const { broker, registry, starts, sandbox } = build();
   const first = await broker.start(handle, "npm test", "Run background tests");
   const second = await broker.start(handle, "npm test", "Run background tests");
-  assert.equal(starts.length, 1, "no second startProcess");
-  assert.equal(second.processId, first.processId);
-  assert.equal(second.reattached, true);
+  assert.deepEqual([second.processId, second.reattached], [first.processId, true]);
   assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
+  const refused = { sandbox, registry, scopeId: SCOPE, assertComputerUsable: () => Promise.reject(new Error("no")) };
+  await assert.rejects(createBackgroundBroker(refused).start(handle, "npm test", "Run background tests"), /no/);
+  assert.equal(starts.length, 1, "no second startProcess");
 });
 
 test("start does NOT reattach to a matching command whose process has already exited", async () => {
@@ -520,4 +521,17 @@ test("every registered background job records the computer it runs on", async ()
     (await registry.listByScope(SCOPE)).map((row) => row.sandboxId),
     ["sandbox-1"],
   );
+});
+
+test("only the owner's live turn can send input to or stop a job that saves their sign-in", async () => {
+  const { broker, registry, sandbox } = build();
+  const source = { credentialId: "c1", ownerId: "U1", service: "aws", live: true, fileHashes: {} };
+  const files = { plan: { directory: "/tmp/qm-credentials", credentials: [] }, sources: [source] };
+  const { processId } = await broker.start(handle, "login", "Sign in", undefined, { env: {}, secrets: [], files });
+  const unattended = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20 });
+  await assert.rejects(unattended.write(handle, processId, "x\n"), /only from a person's live turn/);
+  await assert.rejects(unattended.stop(handle, processId), /only from a person's live turn/);
+  const live = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20, livePersonTurn: true });
+  assert.equal((await live.write(handle, processId, "x\n")).bytes, 2);
+  assert.equal((await live.stop(handle, processId)).stopped, true);
 });

@@ -111,26 +111,6 @@ function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
-  if (body.deliveryWebhook !== undefined) {
-    const parsed = z
-      .object({
-        binding: z.uuid(),
-        url: z
-          .url({ protocol: /^https?$/ })
-          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
-      })
-      .strict()
-      .safeParse(body.deliveryWebhook);
-    if (
-      !parsed.success ||
-      body.surfaceTools ||
-      body.surface !== "web" ||
-      body.conversation.kind !== "dm" ||
-      body.deliveryCandidates?.length ||
-      body.deliveryTarget !== body.conversation.threadRef
-    )
-      return { error: "invalid delivery webhook" };
-  }
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
@@ -235,6 +215,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
   const tree = kind === "abort" && isObj(body) && body.tree === true;
+  const remark = kind === "steer" && isObj(body) && body.remark === true;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
@@ -256,6 +237,7 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
       ...(request ? { request } : {}),
       ...(queuedRunId ? { queuedRunId } : {}),
       ...(tree ? { tree } : {}),
+      ...(remark ? { remark } : {}),
     },
     actor?.p,
   );
@@ -325,8 +307,10 @@ async function ackDelivery(ctx: ApiCtx): Promise<void> {
     isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
       ? body.slackApiMs
       : undefined;
+  const messageTs =
+    isObj(body) && typeof body.messageTs === "string" && body.messageTs.trim() ? body.messageTs : undefined;
   if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
-  await app.ackDelivery(id, slackApiMs);
+  await app.ackDelivery(id, slackApiMs, messageTs);
   return sendJson(res, 200, { ok: true });
 }
 

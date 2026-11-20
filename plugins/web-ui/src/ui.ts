@@ -11,8 +11,8 @@ export function brandName(): string {
   return document.querySelector<HTMLMetaElement>('meta[name="brand-self-label"]')?.content || "QM";
 }
 
-export function brandMark(): TemplateResult {
-  return html`<span class="brand-mark" aria-hidden="true"></span>`;
+export function brandMark(iconUrl?: string): TemplateResult {
+  return html`<span class="brand-mark" aria-hidden="true">${photoTpl(iconUrl)}</span>`;
 }
 
 const SWELL_PATH =
@@ -218,32 +218,33 @@ function avatarHue(key: string): number {
 }
 
 export function avatarTpl(person: { key: string; name: string; avatarUrl?: string }): TemplateResult {
-  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
   return html`<span
     class="inbox-avatar"
     style=${`--avatar-hue:${avatarHue(person.key)}`}
     ${tip(person.name)}
     aria-hidden="true"
   >
-    ${initials(person.name)}
-    ${
-      photo
-        ? keyed(
-            photo,
-            html`<img
-              src=${photo}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerpolicy="no-referrer"
-              @error=${(event: Event) => {
-                (event.currentTarget as HTMLImageElement).hidden = true;
-              }}
-            />`,
-          )
-        : nothing
-    }
+    ${initials(person.name)} ${photoTpl(person.avatarUrl)}
   </span>`;
+}
+
+function photoTpl(url: string | undefined): ReturnType<typeof keyed> | typeof nothing {
+  const photo = url?.startsWith("https://") ? url : undefined;
+  return photo
+    ? keyed(
+        photo,
+        html`<img
+          src=${photo}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerpolicy="no-referrer"
+          @error=${(event: Event) => {
+            (event.currentTarget as HTMLImageElement).hidden = true;
+          }}
+        />`,
+      )
+    : nothing;
 }
 
 export function relTime(ms: number): string {
@@ -383,6 +384,11 @@ export function setFormMenuValue(control: HTMLElement | null, value: string, lab
   if (activeOption) activeOption.append(iconElement(Check, 15));
 }
 
+export function fileLabel(name: string, size?: number): TemplateResult {
+  return html`<span dir="auto">${name}</span
+    >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
+}
+
 export function chipBadge(
   glyph: IconNode,
   name: string,
@@ -391,8 +397,7 @@ export function chipBadge(
   download = false,
   mimetype?: string,
 ): TemplateResult {
-  const inner = html`${icon(glyph, 14)}<span dir="auto">${name}</span
-    >${typeof size === "number" ? html`<small>${formatBytes(size)}</small>` : nothing}`;
+  const inner = html`${icon(glyph, 14)}${fileLabel(name, size)}`;
   if (!href) return html`<span class="file-chip">${inner}</span>`;
   if (download) return html`<a class="file-chip" href=${href} download=${name}>${inner}</a>`;
   return html`<span class="file-chip-group"

@@ -1,17 +1,18 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
-import { AdminError } from "../../admin/admin-service.ts";
+import { AdminError, trustedSubjectPrincipal } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { inTenant } from "../../tenants/claim.ts";
+import { withTenant } from "../../tenants/context.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
-import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
+import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
+import { externalOrgSchema } from "../../tenants/self-serve.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -141,13 +142,13 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
+    ...(multitenant() && trustedAssertionSecret(ctx) && ctx.deps.selfServe ? { selfServe: true } : {}),
   });
 }
 
 async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
   const label = labelOfAppHost(host, ctx.deps.deployAppsDomain);
-  const split = label === undefined ? undefined : splitAppLabel(label);
-  return split && ctx.deps.directory?.tenantForAppHandle?.(split.handle);
+  return label && !label.includes(".") ? ctx.deps.directory?.tenantForAppHost?.(label) : undefined;
 }
 
 async function hostTenant(ctx: ApiCtx): Promise<void> {
@@ -206,35 +207,14 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
 }
 
 async function trustedAdmin(ctx: ApiCtx): Promise<void> {
-  const { deps, res, body, tenant } = ctx;
+  const { deps, res, tenant } = ctx;
   if (!tenant) {
     res.writeHead(204);
     return void res.end();
   }
-  const secret = deps.portalIdentitySecret;
-  if (!secret || secret.length < 32 || secret === ctx.secret || !deps.admin || !deps.replayDedupe)
-    return sendJson(res, 503, { error: "not_configured" });
-  const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
-  const claims = await verifySignedPayload(assertion, secret);
-  const now = Date.now();
-  if (
-    !isObj(claims) ||
-    claims.purpose !== "trusted-entry-admin" ||
-    claims.org !== orgScope() ||
-    typeof claims.issuer !== "string" ||
-    typeof claims.subject !== "string" ||
-    !claims.subject ||
-    claims.subject.length > 255 ||
-    claims.imp !== undefined ||
-    typeof claims.exp !== "number" ||
-    !Number.isFinite(claims.exp) ||
-    claims.exp <= now ||
-    claims.exp > now + 60_000 ||
-    typeof claims.jti !== "string" ||
-    !/^[a-f0-9-]{36}$/.test(claims.jti)
-  )
-    return sendJson(res, 403, { error: "invalid_assertion" });
-  const principalId = `oidc:${createHash("sha256").update(claims.issuer).digest("hex")}:${Buffer.from(claims.subject).toString("base64url")}`;
+  const claims = await trustedAssertion(ctx, "trusted-entry-admin");
+  if (!claims || !deps.admin || !deps.replayDedupe) return;
+  const principalId = trustedSubjectPrincipal(claims.issuer, claims.subject);
   if (!(await activePrincipal(deps, principalId))) return sendJson(res, 403, { error: "inactive_principal" });
   if (!(await deps.replayDedupe.claim(`trusted-admin:${claims.jti}`, claims.exp)))
     return sendJson(res, 409, { error: "assertion_already_used" });
@@ -255,6 +235,86 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   }
 }
 
+interface TrustedAssertion extends Record<string, unknown> {
+  issuer: string;
+  subject: string;
+  exp: number;
+  jti: string;
+}
+
+function trustedAssertionSecret(ctx: ApiCtx): string | undefined {
+  const secret = ctx.deps.portalIdentitySecret;
+  return secret && secret.length >= 32 && secret !== ctx.secret && ctx.deps.admin && ctx.deps.replayDedupe
+    ? secret
+    : undefined;
+}
+
+async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAssertion | null> {
+  const { res, body } = ctx;
+  const secret = trustedAssertionSecret(ctx);
+  if (!secret) {
+    sendJson(res, 503, { error: "not_configured" });
+    return null;
+  }
+  const assertion = isObj(body) && typeof body.assertion === "string" ? body.assertion : "";
+  const claims = await verifySignedPayload(assertion, secret);
+  const now = Date.now();
+  if (
+    !isObj(claims) ||
+    claims.purpose !== purpose ||
+    claims.org !== orgScope() ||
+    typeof claims.issuer !== "string" ||
+    typeof claims.subject !== "string" ||
+    !claims.subject ||
+    claims.subject.length > 255 ||
+    claims.imp !== undefined ||
+    typeof claims.exp !== "number" ||
+    !Number.isFinite(claims.exp) ||
+    claims.exp <= now ||
+    claims.exp > now + 60_000 ||
+    typeof claims.jti !== "string" ||
+    !/^[a-f0-9-]{36}$/.test(claims.jti)
+  ) {
+    sendJson(res, 403, { error: "invalid_assertion" });
+    return null;
+  }
+  return claims as TrustedAssertion;
+}
+
+async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
+  const { deps, res } = ctx;
+  const claims = await trustedAssertion(ctx, "trusted-self-serve");
+  if (!claims || !deps.admin || !deps.replayDedupe) return;
+  if (!deps.selfServe)
+    return sendJson(res, 403, { error: "self_serve_failed", message: "self-serve workspaces are not available" });
+  const org = externalOrgSchema.safeParse(claims.externalOrg);
+  const email = claims.email;
+  if (!org.success || (email !== null && (typeof email !== "string" || !validEmail(email))))
+    return sendJson(res, 403, { error: "invalid_assertion" });
+  if (!(await deps.replayDedupe.claim(`trusted-self-serve:${claims.jti}`, claims.exp)))
+    return sendJson(res, 409, { error: "assertion_already_used" });
+  try {
+    const admin = deps.admin;
+    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
+    await withTenant(tenant, async (bound) => {
+      const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
+      if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
+      const { grant, granted } = await admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
+      const event = { principalId: grant.grantedBy!, scopeLabel: grant.scopeId };
+      if (granted)
+        audit(
+          { deps, tenant: bound },
+          { ...event, action: "grant.create", resource: `${grant.principalId}/org_admin` },
+        );
+    });
+    return sendJson(res, 200, { tenant, created });
+  } catch (error) {
+    if (error instanceof AdminError)
+      return sendJson(res, error.status, { error: "self_serve_failed", message: error.message });
+    throw error;
+  }
+}
+
 async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
   if (!deps.portalIdentitySecret || !deps.replayDedupe || !deps.identity || !deps.portalUrl)
@@ -264,7 +324,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const now = Date.now();
   if (
     !isObj(claims) ||
-    claims.purpose !== "teammate-invite" ||
+    claims.purpose !== "invite" ||
     claims.org !== orgScope(deps) ||
     claims.aud !== trimTrailingSlashes(deps.portalUrl) ||
     typeof claims.email !== "string" ||
@@ -284,14 +344,13 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const member = deps.identity.externalMember(claims.email);
   if (
     !member ||
-    member.kind !== "teammate" ||
     !member.inviteId ||
     member.inviteId !== claims.inviteId ||
     !externalMemberActive(member) ||
     deps.identity.classify(claims.email).type !== "internal"
   )
     return sendJson(res, 403, { error: "invitation_revoked" });
-  if (!(await deps.replayDedupe.claim(`teammate-invite:${claims.jti}`, claims.exp)))
+  if (!(await deps.replayDedupe.claim(`invite:${claims.jti}`, claims.exp)))
     return sendJson(res, 400, { error: "invitation_used" });
   audit(ctx, {
     principalId: claims.email,
@@ -311,6 +370,14 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     tenant: "optional",
     handle: trustedAdmin,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/self-serve",
+    actor: "system",
+    auth: "source",
+    tenant: "none",
+    handle: selfServeWorkspace,
   },
   {
     method: "POST",

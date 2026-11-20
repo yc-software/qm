@@ -14,6 +14,7 @@ import { uiStateId } from "../src/surfaces/ui-state.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { liveRun, liveRunBinding } from "./support/live-run.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
@@ -31,7 +32,7 @@ describe("ui canvas and ui observe", () => {
   let sourceBase: string;
   let sessionId: string;
   const runs = new Map<string, { id: string; status: string; request: { actor: { id: string } } }>([
-    ["run-live", { id: "run-live", status: "running", request: { actor: { id: "U1" } } }],
+    ["run-live", { ...liveRun("U1", THREAD), id: "run-live" }],
     ["run-done", { id: "run-done", status: "done", request: { actor: { id: "U1" } } }],
   ]);
   const events: SessionStateEvent[] = [];
@@ -45,6 +46,7 @@ describe("ui canvas and ui observe", () => {
         exp: Date.now() + CAPABILITY_TTL_MS,
         liveActor: true,
         surface: "web",
+        ...liveRunBinding("U1"),
         runId: "run-live",
         threadRef: THREAD,
         ...extra,
@@ -129,7 +131,7 @@ describe("ui canvas and ui observe", () => {
       assert.equal(r.status, 403, JSON.stringify(extra));
     }
     const ended = await agent("POST", "/v1/ui/canvas", { html: "x" }, { runId: "run-done" });
-    assert.equal(ended.status, 409);
+    assert.equal(ended.status, 403);
   });
 
   it("writes, updates, pins, replaces and signals only the owner", async () => {

@@ -110,6 +110,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
       resource: e.resource,
       ...(resourceLabel ? { resourceLabel } : {}),
       ...(e.status ? { status: e.status } : {}),
+      ...(e.impersonatedBy ? { impersonatedBy: e.impersonatedBy } : {}),
     };
   });
   return sendJson(res, 200, { scopeId: scope, events });

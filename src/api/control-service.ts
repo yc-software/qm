@@ -20,18 +20,26 @@ import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-not
 import { errMessage } from "../util/errors.ts";
 import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
   personAtKeyboard,
   resolveShareTarget,
   SHARED_SKILL_TRIGGER_REFUSAL,
+  shareOffers,
+  type ArtifactHome,
+  type ArtifactType,
+  type ShareAccessResult,
   type ShareArtifactRequest,
   type ShareArtifactResult,
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
-import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { deliversToOwner, withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
+import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
+import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -47,6 +55,7 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   session?: boolean;
   script?: CronScript;
+  persona?: string;
 }
 
 export type CronCreateResult =
@@ -186,6 +195,7 @@ export interface ControlService {
     expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
+  shareAccess(type: ArtifactType, id: string, claims: CapabilityClaims, tenant: Tenant): Promise<ShareAccessResult>;
 }
 
 type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
@@ -194,6 +204,18 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   if (e instanceof SoulUpdateDeniedError) return "soul_update_denied";
   if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
   return "soul_update_failed";
+}
+
+async function mayShare(
+  app: App,
+  home: ArtifactHome,
+  cron: Cron | null,
+  capability: CapabilityClaims,
+): Promise<boolean> {
+  if (!(await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)))
+    return false;
+  if (cron) return ownsCron(app, cron, capability.actorId);
+  return app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId);
 }
 
 async function ownsCron(
@@ -287,6 +309,36 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
     req.session !== undefined ||
     req.script !== undefined
   );
+}
+
+async function personaHome(app: App, actorId: string, ref: string): Promise<ScopeId | ControlErr<"forbidden">> {
+  const listed = await app.personas?.list(actorId);
+  if (listed?.status !== "ok")
+    return {
+      ok: false,
+      code: "forbidden",
+      message:
+        listed?.status === "disabled"
+          ? "personas are not enabled for you, so a persona can't own this cron"
+          : `couldn't look up your personas (${listed?.status ?? "personas unavailable"})`,
+    };
+  const named = listed.value.filter((p) => p.name.trim().toLowerCase() === ref.trim().toLowerCase());
+  const persona = listed.value.find((p) => p.id === ref) ?? (named.length === 1 ? named[0] : undefined);
+  if (!persona)
+    return {
+      ok: false,
+      code: "forbidden",
+      message: named.length
+        ? `more than one of your personas is named "${ref}" — pass one id: ${named.map((p) => p.id).join(", ")}`
+        : `you have no access to a persona "${ref}"`,
+    };
+  const home = scopeId("persona", persona.id);
+  if (await app.managesScope(actorId, home)) return home;
+  return {
+    ok: false,
+    code: "forbidden",
+    message: `only owners and write holders of the persona ${persona.name} can give it a cron — an owner can grant write on its page`,
+  };
 }
 
 function liveSessionRef(
@@ -471,6 +523,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
+      if (req.persona !== undefined) {
+        const home = await personaHome(app, capability.actorId, req.persona);
+        if (typeof home === "object") return home;
+        ownerScopeId = home;
+        destination ??= principalDestination(capability.actorId, capability.actorId);
+      }
       if (script && ownerScopeId !== capability.scopeId)
         return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
 
@@ -509,7 +567,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
-      const administered = all.filter((_, i) => admits[i]);
+      const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
     },
@@ -517,7 +575,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron };
+      if (await canAdministerCron(app, cron, capability)) return { ok: true, cron: await app.cronSharing(cron) };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
@@ -762,7 +820,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     readSoul(capability) {
-      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId);
+      const { effectiveSoul, soul, soulVersion } = app.getSoul(capability.scopeId, {
+        actorId: capability.actorId,
+        ownScopeBotWork: isOwnScopeBotWork(capability),
+      });
       return { effectiveSoul, soul, soulVersion };
     },
 
@@ -770,6 +831,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: capability.botActor !== true,
+          botActor: capability.botActor === true,
           expectedVersion,
           sessionId: capability.sessionId,
         });
@@ -783,8 +845,40 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
+    async shareAccess(type, id, capability, tenant): Promise<ShareAccessResult> {
+      const home = await app.getArtifactHome(type, id);
+      if (!home) return { ok: false, code: "not_found", message: `no ${type} "${id}"` };
+      const cron = type === "cron" ? await app.getCron(home.id) : null;
+      if (!(await mayShare(app, home, cron, capability)))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: `only the ${type}'s owner can see and change who it is shared with`,
+        };
+      return {
+        ok: true,
+        type,
+        id: home.id,
+        owner: home.ownerScopeId,
+        offers: shareOffers(type, home),
+        access: [
+          ...(type === "deploy"
+            ? await app.appGrantees(home.id)
+            : await app.grantees(tenant, home.ownerScopeId, home.grantRef)),
+          ...(cron ? await app.cronCopies(cron.id) : []).map((c) => ({
+            scope: scopeId("personal", c.owner),
+            permission: "read" as const,
+            status: c.status,
+          })),
+        ],
+      };
+    },
+
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (req.type === "deploy" && !personAtKeyboard(capability))
+        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
+      const remove = req.permission === "none";
       const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
@@ -795,6 +889,14 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             req.type === "file"
               ? `no Files record "${req.id}"; put the file in Files first with the helper from GET /v1/files/upload-client, then share its ID`
               : `no ${req.type} "${req.id}"`,
+        };
+      const sourceWithheld =
+        req.type === "skill" ? capability.botActor === true : req.type === "file" && isOwnScopeBotWork(capability);
+      if (!loadsScopeContext(capability.actorId, home.ownerScopeId, sourceWithheld))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move a person's own files or skills",
         };
 
       const target = await resolveArtifactTarget(app, req);
@@ -809,36 +911,41 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           candidates: target.candidates,
         };
       const toScope = target.scope;
+      if (!loadsScopeContext(capability.actorId, toScope, capability.botActor === true))
+        return {
+          ok: false,
+          code: "forbidden",
+          message: "a Slack bot's work cannot share or move anything into a person's own library",
+        };
       const toKind = parseScopeId(toScope).kind;
 
       const isOrg = toKind === "org";
-      const orgSkillCede = isOrg && req.type === "skill";
+      const orgSkillCede = isOrg && req.type === "skill" && !remove;
 
       const cron = req.type === "cron" ? await app.getCron(home.id) : null;
-      if (cron && permission === "write" && cron.ownerScopeId.startsWith("personal:"))
+      const copyTo =
+        cron && deliversToOwner(cron) && toKind === "personal" && permission === "read" && !req.move
+          ? parseScopeId(toScope).ref
+          : undefined;
+      if (!remove && permission === "write" && !shareOffers(req.type, home).manage)
         return {
           ok: false,
           code: "bad_request",
           message: "a personal cron runs with your whole keychain, so it can't be shared for editing",
         };
-      if (
-        !orgSkillCede &&
-        !(
-          (await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)) &&
-          (cron
-            ? await ownsCron(app, cron, capability.actorId)
-            : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
-        )
-      ) {
+      if (!orgSkillCede && !(await mayShare(app, home, cron, capability))) {
+        const who = {
+          cron: "only the cron's owner can share it",
+          deploy: "only the owner can change who can reach this app",
+        }[req.type as string];
         return {
           ok: false,
           code: "forbidden",
-          message: cron
-            ? "only the cron's owner can share it"
-            : `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
+          message: who ?? `only the ${req.type}'s owner (or a member of its shared home) can share or move it`,
         };
       }
       if (
+        !remove &&
         (toKind === "channel" || toKind === "group" || toKind === "team") &&
         !(await app.belongsToScope(capability.actorId, toScope))
       ) {
@@ -849,7 +956,24 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
 
+      const tenant = ambientTenant();
+      const shared = { type: req.type, id: home.id, target: { scope: toScope, label: target.label }, permission };
       try {
+        if (copyTo && remove) await app.unshareCron(home.id, copyTo);
+        if (copyTo && !remove) {
+          if (await app.samePerson(copyTo, capability.actorId))
+            return { ok: false, code: "bad_request", message: "that cron is already yours" };
+          const { copy, existed, note } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
+          return {
+            ok: true,
+            verb: "share",
+            type: req.type,
+            id: home.id,
+            target: { scope: toScope, label: target.label },
+            permission,
+            copy: { id: copy.id, enabled: copy.enabled, existed, ...(note ? { note } : {}) },
+          };
+        }
         if (orgSkillCede) {
           const promoted = await app.promoteSkill(
             home.id,
@@ -895,18 +1019,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
-          return {
-            ok: true,
-            verb: "move",
-            type: req.type,
-            id: home.id,
-            target: { scope: toScope, label: target.label },
-            permission,
-          };
+          return { ok: true, verb: "move", ...shared };
         }
 
+        const verb = remove ? "unshare" : "share";
         const invite =
-          req.type === "deploy" && req.email !== undefined && permission === "read"
+          req.type === "deploy" && req.email !== undefined && permission === "read" && !remove
             ? await app.inviteToApp(
                 home.id,
                 req.email,
@@ -914,9 +1032,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
                 notify,
               )
             : undefined;
-        if (!invite)
+        if (invite) return { ok: true, verb, ...shared, invitation: invite.invitation };
+        if (remove) await app.revokeGrant(tenant, home.ownerScopeId, home.grantRef, toScope, capability.actorId);
+        else
           await app.grant(
-            ambientTenant(),
+            tenant,
             {
               ownerScopeId: home.ownerScopeId,
               ref: home.grantRef,
@@ -926,19 +1046,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             },
             notify,
           );
-        return {
-          ok: true,
-          verb: "share",
-          ...(invite ? { invitation: invite.invitation } : {}),
-          type: req.type,
-          id: home.id,
-          target: { scope: toScope, label: target.label },
-          permission,
-        };
+        return { ok: true, verb, ...shared };
       } catch (e) {
-        if (e instanceof AdminError) {
+        if (e instanceof AdminError || (e instanceof DeployAccessError && e.code === "forbidden")) {
           return { ok: false, code: "forbidden", message: errMessage(e) };
         }
+        if (e instanceof DeployAccessError) return { ok: false, code: e.code, message: errMessage(e) };
         return { ok: false, code: "share_failed", message: errMessage(e) };
       }
     },

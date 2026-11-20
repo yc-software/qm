@@ -51,7 +51,7 @@ export function createRegistryMemoryService(opts: {
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
   registryFetch?: AddressFetch;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
   const onError = opts.onError ?? logMemoryProviderError;
@@ -131,10 +131,10 @@ export function createRegistryMemoryService(opts: {
         if (!service.edit) throw new Error(`memory for ${scopeId} is not directly editable`);
         await service.edit(scopeId, edits, by, context);
       },
-      async delete(scopeId, ids, by) {
+      async delete(scopeId, ids, by, context) {
         const { service } = await serve();
         if (!service.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await service.delete(scopeId, ids, by);
+        await service.delete(scopeId, ids, by, context);
       },
       metadata: async () => (await (await serve()).service.metadata?.()) ?? new Map(),
     };

@@ -22,6 +22,7 @@ import {
 } from "../tenants/lookup.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
+import { APP_HOSTS_KEY } from "../tenants/app-handle.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
 
@@ -109,9 +110,10 @@ function memberRow(r: Record<string, unknown>): DirectoryMember {
     type: r.type as PrincipalType,
     ...(r.slack_id ? { slackId: r.slack_id as string } : {}),
     ...(r.avatar_url ? { avatarUrl: r.avatar_url as string } : {}),
+    ...(typeof r.is_bot === "boolean" ? { isBot: r.is_bot } : {}),
   };
 }
-const MEMBER_COLS = "principal_id, display_name, type, slack_id, avatar_url";
+const MEMBER_COLS = "principal_id, display_name, type, slack_id, avatar_url, is_bot";
 function channelRow(r: Record<string, unknown>): DirectoryChannel {
   return {
     channelId: r.channel_id as string,
@@ -180,6 +182,20 @@ END $tenants_for_email$`,
       "ALTER TABLE directory_groups ALTER COLUMN surface DROP DEFAULT",
     ],
   },
+  {
+    id: "directory/store/0012-member-is-bot",
+    statements: ["ALTER TABLE directory_members ADD COLUMN is_bot BOOLEAN"],
+  },
+  {
+    id: "directory/store/0013-member-slack-id-index",
+    statements: [
+      "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
+    ],
+  },
+  {
+    id: "directory/store/0014-meta-app-icon",
+    statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
+  },
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
@@ -198,6 +214,11 @@ function groupMembershipOf(row: Record<string, unknown>): boolean | undefined {
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+
+  async function tenantFrom(lookup: "qm_tenant_for_app_handle" | "qm_tenant_for_app_host", key: string) {
+    const rows = await q(`SELECT ${lookup}($1)::text AS id`, [key]);
+    return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+  }
 
   async function getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>> {
     if (!principalIds.length) return new Map();
@@ -311,7 +332,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     if (!groupIds.length) return rosters;
     const rows = await q(
       `SELECT group_row.group_id, roster.principal_id AS roster_principal_id,
-              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url
+              member.principal_id, member.display_name, member.type, member.slack_id, member.avatar_url, member.is_bot
        FROM directory_groups group_row
        JOIN directory_group_members roster
          ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
@@ -358,8 +379,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
-      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
-      return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
+      const rows = await q("SELECT workspace_url, app_icon_url FROM directory_meta WHERE org_id = $1", [orgId]);
+      return {
+        workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null,
+        appIconUrl: (rows[0]?.app_icon_url as string | null) ?? null,
+      };
     },
 
     async tenantsForEmail(email) {
@@ -374,17 +398,17 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
-    async tenantForAppHandle(handle) {
-      const rows = await q("SELECT qm_tenant_for_app_handle($1)::text AS id", [handle]);
-      return typeof rows[0]?.id === "string" ? rows[0].id : undefined;
-    },
+    tenantForAppHandle: (handle) => tenantFrom("qm_tenant_for_app_handle", handle),
+
+    tenantForAppHost: (label) => tenantFrom("qm_tenant_for_app_host", label),
 
     async setAppHandle(handle) {
       try {
         await q("SELECT qm_set_tenant_handle($1)", [handle]);
         return "ok";
       } catch (error) {
-        if ((error as { code?: string }).code === "23505") return "taken";
+        const { code, constraint } = error as { code?: string; constraint?: string };
+        if (code === "23505") return constraint === APP_HOSTS_KEY ? "app_taken" : "taken";
         throw error;
       }
     },
@@ -475,7 +499,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (kind === "group") return (await readGroupRosters([id])).get(id);
       const rows = await q(
         `SELECT channel.roster_known, channel.is_external, roster.principal_id AS roster_principal_id,
-                member.principal_id, member.display_name, member.type, member.slack_id
+                member.principal_id, member.display_name, member.type, member.slack_id, member.is_bot
          FROM directory_channels channel
          LEFT JOIN directory_channel_members roster
            ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id

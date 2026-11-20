@@ -116,6 +116,8 @@ const { vite, dom, close } = await browserEnv({
         { session: { id: "s-new", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:new", createdAt: 1 } },
         201,
       );
+    if (path === "/api/sessions/s-new/persona" && method === "PUT")
+      return json({ persona: { id: "p-cy", name: "Cy", sessionModelId: "alpha" } });
     if (path.includes("/persona")) return json({ persona: null });
     if (path.startsWith("/api/sessions/s-new"))
       return json({
@@ -215,7 +217,7 @@ test("when personas are off for the person, Browse has no Personas entry and the
   );
 });
 
-test("Chat starts a conversation and sets its persona before anything is sent", async () => {
+test("Chat starts a conversation, sets its persona before anything is sent, and opens on the model core started it on", async () => {
   const { main } = await mountPage();
   calls = [];
   button(main, "Chat", "Cy").click();
@@ -231,6 +233,9 @@ test("Chat starts a conversation and sets its persona before anything is sent", 
   );
   const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
   assert.equal(sessionsState.list.find((s: { id: string }) => s.id === "s-new")?.personaId, "p-cy");
+  assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("web-ui:model-picks") ?? "[]"), [
+    ["web:tester:new", "alpha"],
+  ]);
 });
 
 test("Fork hands off to QM in a new chat instead of copying on the page", async () => {
@@ -702,32 +707,12 @@ test("Share on a list row and on the page open the same search on the page, with
   assert.equal(document.activeElement, main.querySelector("#persona-grantee-search"));
 });
 
-test("the conversation shows its persona, and clearing it unsets the session's persona", async () => {
+test("the conversation shows its persona", async () => {
   const { personasModule } = await mountPage();
-  const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
   const { render } = await vite.ssrLoadModule("lit");
-  sessionsState.list = [
-    { id: "s-1", type: "dm", scopeId: "personal:tester", threadRef: "web:tester:1", createdAt: 1, personaId: "p-ada" },
-  ];
   const host = document.createElement("div");
-  let redraws = 0;
-  const draw = () =>
-    render(
-      personasModule.sessionPersonaChip(sessionsState.list[0], () => (redraws++, draw())),
-      host,
-    );
-  draw();
+  render(personasModule.sessionPersonaChip({ id: "s-1", personaId: "p-ada" }), host);
   assert.equal(host.textContent?.trim(), "🧮Ada");
-  calls = [];
-  host.querySelector<HTMLButtonElement>('button[aria-label="Stop using Ada"]')!.click();
-  await settle();
-  assert.deepEqual(
-    calls.map((c) => [c.method, c.path, c.body]),
-    [["PUT", "/api/sessions/s-1/persona", { personaId: null }]],
-  );
-  assert.equal(sessionsState.list[0].personaId, undefined);
-  assert.equal(redraws, 1);
-  assert.equal(host.querySelector(".session-persona-badge"), null);
 });
 
 test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {

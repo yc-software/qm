@@ -44,7 +44,7 @@ describe("POST /v1/emoji", async () => {
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.setWorkspaceUrl("https://acme.slack.com/");
+    await directory.setWorkspace({ workspaceUrl: "https://acme.slack.com/", appIconUrl: null });
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -108,5 +108,19 @@ describe("POST /v1/emoji", async () => {
     const got = (await res.json()) as any;
     assert.equal(got.ok, false);
     assert.match(got.error, /session .* has expired/i);
+    assert.match(got.error, /PUT \/v1\/emoji\/session/);
+  });
+
+  it("PUT /v1/emoji/session: 400 without cookies, 422 when they hold no Slack sign-in", async () => {
+    const put = async (body: unknown) =>
+      fetch(`${base}/v1/emoji/session`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-agent-capability": await capFor(ACTOR) },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put({})).status, 400);
+    const res = await put({ cookies: [{ name: "x", value: "y", domain: ".slack.com" }] });
+    assert.equal(res.status, 422);
+    assert.match(((await res.json()) as any).error, /isn't signed in to Slack yet/);
   });
 });

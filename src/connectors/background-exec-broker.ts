@@ -1,5 +1,5 @@
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import type { ProcessRecord, ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess } from "../sandbox/process-poll.ts";
@@ -15,6 +15,7 @@ export interface BackgroundExecBrokerDeps {
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
+  livePersonTurn?: boolean;
   sessionRef?: string;
   runId?: string;
   ttlMs?: number;
@@ -103,6 +104,11 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     await deps.registry.markStatus(processId, status);
     await deps.onExit?.(handle, processId);
   };
+  const assertSteerable = async (rec: ProcessRecord) => {
+    if (deps.livePersonTurn || !rec.credentialsPending) return;
+    if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.live))
+      throw new Error("a background job that saves a live sign-in takes input and stop only from a person's live turn");
+  };
   return {
     async handleFor(processId) {
       const rec = await deps.registry.get(processId);
@@ -134,6 +140,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           : null;
 
       if (processId) {
+        await deps.assertComputerUsable?.(sandboxId);
         const existingProcessId = processId;
         try {
           const read = await deps.sandbox.readProcess(handle, existingProcessId, {
@@ -245,6 +252,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
+      await assertSteerable(rec);
       if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);
@@ -260,6 +268,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
         throw new Error("no such background job");
       }
+      await assertSteerable(rec);
       if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);

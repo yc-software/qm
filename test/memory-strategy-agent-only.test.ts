@@ -39,6 +39,6 @@ test("resolution systemPrompt no longer embeds the memory section — it moved t
     testConfigStore("default-org"),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
-  const res = await resolution.resolve(tenant, conversation, actor);
+  const res = await resolution.resolve(tenant, conversation, actor, false, false);
   assert.ok(!res.systemPrompt.includes(AGENT_ONLY_PROMPT_LINES[0] as string));
 });

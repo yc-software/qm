@@ -19,6 +19,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -71,6 +72,7 @@ function start(
     ? createServer(built.app, {
         ...deps,
         signingSecret: SECRET,
+        runs: liveRunStore(),
       })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
@@ -95,7 +97,7 @@ const capFor = (actorId: string) =>
       actorId,
       scopeId: scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
+      ...liveRunClaims(actorId),
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -139,7 +141,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     assert.equal(d.member.expiresAt, Date.parse(expiresAt));
     assert.equal(d.emailSent, false);
     assert.equal(d.emailProblem, INVITE_EMAIL_NOT_CONFIGURED);
-    assert.equal(d.signInUrl, `${PORTAL}/auth/login`);
+    assert.equal(new URL(d.signInUrl).pathname, "/auth/invite");
 
     const list = await roster(s.base);
     assert.deepEqual(list.inviteEmail, {
@@ -156,6 +158,7 @@ test("inviting an external user stores the record, lists it as active, audits, a
     const updated: any = await again.json();
     assert.equal(updated.created, false);
     assert.equal(updated.member.createdAt, d.member.createdAt);
+    assert.equal(updated.member.inviteId, d.member.inviteId, "an update keeps the emailed link valid");
     assert.equal(updated.emailSent, false);
     assert.equal(updated.emailProblem, undefined, "an update does not retry the invitation email");
 
@@ -269,6 +272,9 @@ test("an address that already belongs to an org member cannot be invited", async
     assert.deepEqual((await roster(s.base)).externalUsers, []);
 
     assert.equal((await invite(s.base, { email: "pat@partner.example", expiresAt })).status, 200);
+    await s.built.directory.replace([{ principalId: "pat@partner.example", displayName: "Pat", type: "internal" }]);
+    const resend = await invite(s.base, { email: "pat@partner.example", expiresAt, resendInvite: true });
+    assert.equal(resend.status, 200, "an invited guest synced into the directory can still be re-invited");
     await s.built.admin.createGrant(tenant, alice, {
       principalId: "pat@partner.example",
       role: "org_admin",
@@ -380,7 +386,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
     assert.equal(ok.sent.length, 1);
     assert.equal(ok.sent[0]!.to, "pat@partner.example");
     assert.match(ok.sent[0]!.subject, /invited to Acme Bot/);
-    assert.ok(ok.sent[0]!.text.includes(`${PORTAL}/auth/login`));
+    assert.ok(ok.sent[0]!.text.includes(`${PORTAL}/auth/invite#token=`));
     assert.match(ok.sent[0]!.text, /admin-alice/);
     assert.match(ok.sent[0]!.html, /Acme Bot/);
     assert.equal((await roster(s.base)).inviteEmail.configured, true);
@@ -414,7 +420,7 @@ test("with a mailer the invitation goes out carrying the sign-in URL and brand; 
     assert.equal(r.ok, true);
     assert.equal(r.emailSent, false);
     assert.match(r.emailProblem, /HTTP 403 domain not verified/);
-    assert.equal(r.signInUrl, `${PORTAL}/auth/login`);
+    assert.equal(new URL(r.signInUrl).pathname, "/auth/invite");
     assert.equal(f.built.identity.externalMember("sam@partner.example")?.role, "member");
   } finally {
     await f.close();
@@ -444,7 +450,9 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 
     const member = await invite(s.base, { email: "pat@partner.example", expiresAt }, cap);
     assert.equal(member.status, 200);
-    assert.equal(((await member.json()) as any).member.invitedBy, "admin-alice");
+    const invited: any = await member.json();
+    assert.equal(invited.member.invitedBy, "admin-alice");
+    assert.equal(invited.signInUrl, `${PORTAL}/auth/login`, "an agent never receives a sign-in link");
 
     const promote = await invite(s.base, { email: "boss@partner.example", role: "org_admin", expiresAt }, cap);
     assert.equal(promote.status, 403);
@@ -714,7 +722,7 @@ test("invitation links work without email delivery and are single use, scoped, a
       body: JSON.stringify({ token }),
     });
   const issue = async () => {
-    const r = await inviteTeammate(s.base, { email: "qa@corp.example" });
+    const r = await invite(s.base, { email: "qa@corp.example", expiresAt: Date.now() + DAY_MS });
     assert.equal(r.status, 200);
     const data: any = await r.json();
     assert.equal(data.emailSent, false);
@@ -764,7 +772,7 @@ test("invitation redemption requires source authentication before consuming a va
     });
     const token = await mintSignedPayload(
       {
-        purpose: "teammate-invite",
+        purpose: "invite",
         org: ORG,
         aud: PORTAL,
         email,

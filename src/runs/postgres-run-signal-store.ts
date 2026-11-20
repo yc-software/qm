@@ -5,7 +5,7 @@ import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 import { spokenByPerson } from "../core/turn-origin.ts";
 import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows } from "../tenants/claim.ts";
+import { claimFunction, claimRows, servingTenant } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -66,6 +66,16 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
           "claim_pruned_signals",
           "before bigint",
           "DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1 RETURNING tenant_id, id::text",
+        ),
+      ],
+    },
+    {
+      id: "runs/signals/0005-serving-claim-signaled",
+      statements: [
+        claimFunction(
+          "claim_signaled_runs",
+          "",
+          `SELECT DISTINCT tenant_id, run_id FROM run_signals WHERE consumed_at IS NULL${servingTenant("tenant_id")} ORDER BY tenant_id, run_id`,
         ),
       ],
     },

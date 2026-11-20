@@ -82,8 +82,8 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async memoryEdit() {
       return true;
     },
-    async memoryDelete() {
-      return true;
+    async memoryDelete(ids) {
+      return { forgotten: ids.length, notebook: ids.length, kept: false, outcomes: [], problems: [] };
     },
     async history(q) {
       return q.includes("budget") ? ["user#3 (2026-06-01T00:00:00.000Z): the budget doc is in shared/q2.md"] : [];
@@ -179,6 +179,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           createdAt: 0,
           schedule: { everyMs: 3_600_000 },
           title: "Gmail digest",
+          botActor: true,
         },
       };
     },
@@ -1190,6 +1191,19 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("surface post/edit results carry the delivered ts and the ref they acted on", async () => {
+  const emitted: Emitted[] = [];
+  const ctx = fakeToolContext();
+  ctx.post = async () => ({ ok: true, deliveryId: "d1", ts: "1795030226.902129", notes: ["<@U999> unverified"] });
+  ctx.edit = async () => ({ ok: true, deliveryId: "e1", ts: "777.888" });
+  const slack = surfaceTool({ current: ctx, emit: sink(emitted), scopeLabel: "channel:C1" });
+  const textOf = async (action: string, params: Record<string, unknown>) =>
+    ((await call(slack, { action, ...params })) as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.equal(await textOf("post", { text: "hello there" }), "[sent ts=1795030226.902129] <@U999> unverified");
+  assert.equal(await textOf("edit", { ref: "777.888", text: "hello again" }), "[edited ref=777.888]");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "post")!.body.ts, "1795030226.902129");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "edit")!.body.ref, "777.888");
+});
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
@@ -1319,8 +1333,8 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     tool: "slack",
     callId: "t",
     isError: false,
-    text: "[edited]",
-    body: { action: "edit", ok: true, deliveryId: "e1" },
+    text: "[edited ref=173.4]",
+    body: { action: "edit", ok: true, ref: "173.4", deliveryId: "e1" },
   });
   assert.deepEqual(columns(result("delete")), {
     tool: "slack",
@@ -2051,7 +2065,8 @@ test("cron note rejects arguments exceeding the advertised cap before dispatch",
 
 test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
-  assert.match(textOut(await call(tool("cron"), { action: "get", id: "cron-1" })), /Gmail digest/);
+  const got = textOut(await call(tool("cron"), { action: "get", id: "cron-1" }));
+  assert.ok(got.includes("Gmail digest") && got.includes("authority: none"), got);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
   assert.match(
     textOut(await call(tool("cron"), { action: "patch", id: "cron-1", title: "renamed" })),
