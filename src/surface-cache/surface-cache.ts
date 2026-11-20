@@ -178,6 +178,17 @@ export function createPostgresSurfaceCache(
       id: "surface-cache/store/0011-source",
       statements: [`ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS source JSONB`],
     },
+    {
+      id: "surface-cache/store/0012-surface-primary-keys",
+      statements: [
+        `SET LOCAL lock_timeout = '5s'`,
+        ...["channel_messages", "channel_state", "channel_files"].map(
+          (table) =>
+            `ALTER TABLE ${table} DROP CONSTRAINT ${table}_pkey,
+               ADD CONSTRAINT ${table}_pkey PRIMARY KEY USING INDEX ${table}_surface_key`,
+        ),
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;

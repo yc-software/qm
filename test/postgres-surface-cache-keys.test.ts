@@ -35,8 +35,8 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
       await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key})`);
     }
     await pool.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE 'surface-cache/store/0010-tenants/%'",
-      ["surface-cache/store/0008", "surface-cache/store/0009"],
+      "DELETE FROM qm_schema_migrations WHERE id IN ($1, $2, $3) OR id LIKE 'surface-cache/store/0010-tenants/%'",
+      ["surface-cache/store/0008", "surface-cache/store/0009", "surface-cache/store/0012-surface-primary-keys"],
     );
   } finally {
     await pool.end();
@@ -116,12 +116,19 @@ test("legacy mirror rows read identically after the surface-key upgrade", async 
         ["channel_state", "tenant_id, org_id, surface, account, container"],
         ["channel_files", "tenant_id, org_id, surface, account, container, ts, file_id"],
       ] as const) {
-        const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_surface_key`]);
-        assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table} has a unique surface and account key`);
+        const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_pkey`]);
+        assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table} is keyed by surface and account`);
       }
     } finally {
       await pool.end();
     }
+    await cache.ingest([{ account: "T2", container: "C1", ts: "10.0", text: "second install", createdAt: 10_000 }]);
+    const other = await cache.readMessages("C1", { account: "T2", noFallback: true });
+    assert.deepEqual(
+      other.map((m) => m.text),
+      ["second install"],
+      "another account mirrors the same timestamp",
+    );
   } finally {
     await cache.close();
   }
