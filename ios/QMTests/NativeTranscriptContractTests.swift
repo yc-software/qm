@@ -70,8 +70,8 @@ final class NativeTranscriptContractTests: XCTestCase {
     XCTAssertEqual(lossy.items.map(\.text), ["Kept"])
     malformed = item("UserMessage", text: "Question", columns: ["hidden": "false"])
     XCTAssertEqual(try decode(Transcript.self, ["items": [malformed]]).items.count, 0)
-    let legacy = try decode(
-      Transcript.self, ["items": [item("ToolCall", body: ["command": "pwd"], columns: ["callId": NSNull()])]])
+    let legacyRow = item("ToolCall", body: ["command": "pwd"], columns: ["callId": NSNull()])
+    let legacy = try decode(Transcript.self, ["items": [legacyRow]])
     XCTAssertEqual(legacy.items.count, 1)
     XCTAssertNil(legacy.items.first?.callId)
   }
