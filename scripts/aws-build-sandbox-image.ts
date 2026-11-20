@@ -14,6 +14,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { createMicrovmApi } from "../src/sandbox/aws-microvm-api.ts";
 import { sleep } from "../src/util/async.ts";
+import { errMessage } from "../src/util/errors.ts";
 
 const execFileAsync = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +96,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  console.error("[build] error:", e instanceof Error ? e.message : e);
+  console.error("[build] error:", errMessage(e));
   process.exit(1);
 });

@@ -7,6 +7,7 @@ import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.
 import type { SuccessVerdict } from "./success-evaluation.ts";
 import { workOrder } from "./triage.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export interface IntakeCandidate {
   sourceKey: string;
@@ -67,7 +68,8 @@ function emptySummary(loop: Loop, ran: boolean): FireSummary {
 }
 
 function recordFailure(summary: FireSummary, label: string, error: unknown, parked = false): void {
-  summary.failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  console.error("%s", `[loops] ${summary.loopId} ${label} failed:`, errMessage(error));
+  summary.failures.push(`${label}: ${errText(error)}`);
   if (parked || !isTransientFailure(error)) summary.persistentFailures += 1;
 }
 
@@ -281,7 +283,7 @@ export async function runLoopFire(
           }
         } catch (error) {
           if (!shipStarted) openedOutputs = 0;
-          const reason = error instanceof Error ? error.message : String(error);
+          const reason = errText(error);
           const exhausted = item.attempts >= effectiveMaxAttempts;
           recordFailure(summary, item.sourceKey, error, shipStarted || exhausted);
           if (shipStarted) {

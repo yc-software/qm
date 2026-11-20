@@ -1,5 +1,5 @@
 import type { SurfaceTransport } from "../surfaces/turn-driver.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import {
   type PostMessageArgs,
   SLACK_POST_SPLIT_LIMIT,
@@ -92,7 +92,7 @@ export function createSlackTurnTransport(at: {
         await uploadAttachments(client, channel, threadTs, attachments, at.blobs);
         return {};
       } catch (err) {
-        console.error("[slack-plugin] file upload failed:", (err as Error).message);
+        console.error("[slack-plugin] file upload failed:", errMessage(err));
         return { failureNote: uploadFailureNote(err) };
       }
     },

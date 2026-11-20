@@ -5,7 +5,7 @@ import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
 import { samePerson } from "../directory/person.ts";
 import { approvalDeliveryRecipient, approvalMessage, type ApprovalRequester } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, errText, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
@@ -135,7 +135,7 @@ export function createSlackDeliverer(deps: {
         deliveryTracker.clear(id);
         console.error(
           `[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry:`,
-          (err as Error).message,
+          errMessage(err),
         );
         void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
         return;
@@ -147,10 +147,7 @@ export function createSlackDeliverer(deps: {
           .reportDeliveryUndeliverable?.(id, code)
           .catch(swallowAs("slack-plugin: undeliverable report", undefined));
       }
-      console.error(
-        `[slack-plugin] delivery ${id} ${stage} failed${gaveUp ? " (giving up)" : ""}:`,
-        (err as Error).message,
-      );
+      console.error(`[slack-plugin] delivery ${id} ${stage} failed${gaveUp ? " (giving up)" : ""}:`, errMessage(err));
     };
 
   function deliveryClient(defaultClient: any, destination: Delivery["destination"]): any {
@@ -218,7 +215,7 @@ export function createSlackDeliverer(deps: {
               const code = slackErrorCode(err);
               if (!code || !SETTLED_PIN_ERRORS.has(code))
                 console.error(
-                  `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? (err as Error).message}`,
+                  `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? errMessage(err)}`,
                 );
             }
             return undefined;
@@ -232,7 +229,7 @@ export function createSlackDeliverer(deps: {
               const code = slackErrorCode(err);
               if (code !== "message_not_found")
                 console.error(
-                  `[slack-plugin] delivery ${d.id} delete failed: ${code ?? (err as Error).message} (own messages only)`,
+                  `[slack-plugin] delivery ${d.id} delete failed: ${code ?? errMessage(err)} (own messages only)`,
                 );
             }
             return undefined;
@@ -262,7 +259,7 @@ export function createSlackDeliverer(deps: {
               })
               .catch((err: unknown) => {
                 if (slackErrorCode(err) !== "message_not_found") throw err;
-                throw Object.assign(new Error(`edit target not found: ${(err as Error).message}`, { cause: err }), {
+                throw Object.assign(new Error(`edit target not found: ${errText(err)}`, { cause: err }), {
                   data: { error: "edit_target_not_found" },
                 });
               });
@@ -288,7 +285,7 @@ export function createSlackDeliverer(deps: {
               await uploadAttachments(client, channel, root, d.attachments, core);
             } catch (err) {
               throwIfRateLimited(err);
-              console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, (err as Error).message);
+              console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, errMessage(err));
               await client.chat
                 .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root, { persona: d.destination.persona }))
                 .catch(swallowAs("slack: post upload-failure note", undefined));

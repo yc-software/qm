@@ -7,7 +7,7 @@ import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entr
 import type { Principal } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";
-import { swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
@@ -155,11 +155,7 @@ export function createSearchMethods(
   const slack = slackBackend(deps, app);
   const options = {
     onBackendError: (backend: string, error: unknown) =>
-      console.error(
-        "%s",
-        `[search] backend ${backend} failed:`,
-        error instanceof Error ? error.message : String(error),
-      ),
+      console.error("%s", `[search] backend ${backend} failed:`, errMessage(error)),
   };
   const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
   const core = createCoreSearch(
