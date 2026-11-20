@@ -112,9 +112,13 @@ expiration and single-use checks.
 
 `AUTH_EMAIL_SIGN_IN=off` turns email-link sign-in off even when delivery is
 configured, so the same sender can still serve core's invitation emails. With
-email-link and password sign-in both off and a trusted provider configured, the
-sign-in page shows only its heading and the trusted provider's button, and the
-same holds when delivery is simply unconfigured.
+email-link and password sign-in both off and a trusted provider configured, there
+is no sign-in page: `/authorize` redirects straight to the trusted provider, and the
+same holds when delivery is simply unconfigured. The portal carries the requested
+destination across. A failed or cancelled trusted sign-in ends on the portal's
+sign-in error page rather than looping back here. The retry link on an expired
+email link opens `/auth/login?provider=primary`, so it stays in email sign-in when
+the browser remembers the trusted provider.
 
 To enable email sign-in, configure the selected transport's credentials and
 `AUTH_EMAIL_FROM`, then restart. The sender must be verified and may be written
