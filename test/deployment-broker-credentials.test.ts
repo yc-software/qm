@@ -248,9 +248,26 @@ test("admin settings show a deployment credential read-only and refuse to edit, 
       assert.equal(json.error, "deployment_credential");
       assert.match(String(json.message), /supplied by this deployment/);
     }
-    const own = { slug: "composio", name: "Own", delivery: "env", envKey: "COMPOSIO_API_KEY", secret: "s" };
-    const put = { method: "PUT", headers: ADMIN, body: JSON.stringify(own) };
-    assert.equal((await fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, put)).status, 200);
+    const own = {
+      slug: "composio",
+      name: "Own",
+      delivery: "env",
+      envKey: "COMPOSIO_API_KEY",
+      secret: "s",
+      grantees: [ORG],
+    };
+    const put = (body: object) =>
+      fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put(own)).status, 200);
+    const { updatedAt } = (await srv.built.serviceCreds.listServiceCredentials(ORG)).find(
+      (c) => c.slug === "composio",
+    )!;
+    assert.equal((await put({ slug: "composio", delete: true, expectedUpdatedAt: updatedAt })).status, 200);
+    assert.equal((await srv.built.acl.grantsFor(tenant, ORG, "service-cred:composio")).length, 1);
   } finally {
     await srv.close();
   }

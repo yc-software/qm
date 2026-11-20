@@ -181,6 +181,10 @@ test("the deployment Composio key serves a granted org with no key, and the org'
   const own = { slug: "other", name: "Own", delivery: "env" as const, envKey: "COMPOSIO_API_KEY", host: "" };
   await stored.setServiceCredential(org, { ...own, secret: "own-key" });
   assert.equal(await keyUsed(), "own-key");
+  await stored.setServiceCredential(org, { ...own, secret: "own-key", enabled: false });
+  assert.equal(await keyUsed(), "deployment-key");
+  await stored.setServiceCredential(org, { ...own, slug: "composio", secret: "off", enabled: false });
+  assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403);
 });
 
 test("catalog preserves provider usage order, pagination, and strips raw fields", async () => {

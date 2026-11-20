@@ -965,9 +965,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         )
           return conflict();
         deletedCredential = true;
-        const replacement: Grant[] = [];
-        grantsWritten = replacement;
         try {
+          const fallsBack = (await deps.serviceCreds.listServiceCredentials(scope)).some(
+            (c) => c.slug === slug && isDeploymentDefault(c),
+          );
+          const replacement: Grant[] = fallsBack ? grantsBefore : [];
+          grantsWritten = replacement;
           if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
             return mutationFailed("delete");
           auditGrantChanges(grantChanges(replacement));

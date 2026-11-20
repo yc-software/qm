@@ -149,7 +149,8 @@ export function nonDeploymentCredential<T extends { source?: "deployment" }>(rec
   return record && record.source !== "deployment" ? record : null;
 }
 
-const ownsComposio = (stored: readonly PublicServiceCredential[]) => stored.some(isUsableComposioKey);
+const defaultApplies = (c: DeploymentBrokerCredential, stored: readonly PublicServiceCredential[]) =>
+  !c.composio || !stored.some((s) => s.slug === c.slug || isUsableComposioKey(s));
 
 function reservedSlugError(slug: string): Error {
   return new Error(`credential "${slug}" is supplied by this deployment and cannot be changed here`);
@@ -176,12 +177,12 @@ export function withDeploymentCredentials(
       if (!own.composio) return decrypted(own);
       const stored = await store.getServiceCredentialSecret(scope, slug);
       if (stored) return stored;
-      return ownsComposio(await store.listServiceCredentials(scope)) ? null : decrypted(own);
+      return defaultApplies(own, await store.listServiceCredentials(scope)) ? decrypted(own) : null;
     },
     async listServiceCredentials(scope) {
       const stored = await store.listServiceCredentials(scope);
       if (scope !== orgScopeId) return stored;
-      const supplied = credentials.filter((c) => !c.composio || !ownsComposio(stored));
+      const supplied = credentials.filter((c) => defaultApplies(c, stored));
       return [...supplied.map(projected), ...stored.filter((c) => !reserved(scope, c.slug))];
     },
     async setServiceCredential(scope, input) {

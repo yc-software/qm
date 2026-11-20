@@ -59,8 +59,9 @@ so orgs get app connections without storing a key:
 `{ "slug": "composio", "displayName": "Composio", "secretEnv": "COMPOSIO_API_KEY", "composio": true }`.
 
 - Core uses it only to call Composio. Like a stored Composio key, it never reaches a sandbox or the broker.
-- It is a default, not a reservation: an org that stores a Composio key of its own, under any slug, uses that
-  one while it is enabled, and admins can create, edit or delete it.
+- It is a default, not a reservation. An org that stores a credential with the same slug uses that one, and
+  disabling it turns Composio off for the org; deleting it brings the default back. An org that stores an
+  enabled Composio key under another slug uses that one. Admins can create, edit or delete the stored one.
 
 ## Operating
 
