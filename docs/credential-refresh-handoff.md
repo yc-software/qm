@@ -52,8 +52,8 @@ A token refresh is recognised only by which fields changed. QM doesn't ask the p
 the new token belongs to the same account, so a run that can write the staged files can put
 another valid token in place of the stored one, keep every other byte, and have it saved as a
 refresh. A cache file that holds nothing but tokens, with no client or account fields beside
-them, has nothing else to compare. This is a known limit: treat any run that can reach the
-owner's computer as able to change these tokens.
+them, has nothing else to compare. This is a known limit: treat any run that can name the
+login in a command as able to change these tokens.
 
 Background jobs accept the same `credentials` handles. The staging plan, credential ids,
 grant ids and baseline fingerprints (no secrets) are stored on the job's `process_sessions`
