@@ -5,6 +5,15 @@ import { PACK_LIMITS, type SkillPackFetcher } from "./pack-fetcher.ts";
 import type { SkillPack } from "./skill-pack-store.ts";
 import { isSafeSkillName } from "./skill-name.ts";
 import { hashId } from "../util/crypto.ts";
+import { errMessage } from "../util/errors.ts";
+
+async function withReason<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (e) {
+    throw new Error(errMessage(e), { cause: e });
+  }
+}
 
 function listingVersion(entries: readonly McpSkillEntry[]): string {
   return hashId(entries.map((entry) => `${entry.uri} ${entry.digest}`).sort(), 40);
@@ -26,10 +35,10 @@ export function createMcpPackFetcher(opts: {
 
   return {
     async resolveRef(pack) {
-      return listingVersion(await (await source(pack)).listSkills(PACK_LIMITS));
+      return listingVersion(await withReason((await source(pack)).listSkills(PACK_LIMITS)));
     },
     async fetch(pack) {
-      const skills = await (await source(pack)).readSkills(PACK_LIMITS);
+      const skills = await withReason((await source(pack)).readSkills(PACK_LIMITS));
       const files = skills.map((skill) => {
         if (!isSafeSkillName(skill.name)) throw new Error(`MCP skill ${skill.uri} has an unusable name`);
         if (`sha256:${createHash("sha256").update(skill.text, "utf8").digest("hex")}` !== skill.digest)

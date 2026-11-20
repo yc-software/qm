@@ -98,6 +98,14 @@ test("an MCP pack's version follows the listed digests, and its files are each v
   });
   await assert.rejects(fetcherOver([server()], [{ ...skill("alpha"), text: "tampered" }]).fetch(pack), /listed digest/);
   await assert.rejects(fetcherOver([server()], [skill("../x")]).fetch(pack), /unusable name/);
+  const failing = createMcpPackFetcher({
+    servers: { list: async () => [server()] },
+    clientFor: () => {
+      const wrapped = new Error("mcp skills/list failed", { cause: new Error("lists more than 5000 skills") });
+      return { listSkills: () => Promise.reject(wrapped), readSkills: () => Promise.reject(wrapped) };
+    },
+  });
+  await assert.rejects(failing.fetch(pack), /lists more than 5000 skills/);
 });
 
 test("an MCP pack needs one enabled server with shared credentials at its URL", async () => {
