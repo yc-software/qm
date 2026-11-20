@@ -158,16 +158,6 @@ async function hostTenant(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, app ? { tenant: app, app: true } : { tenant: null });
 }
 
-async function workspaceTenant(ctx: ApiCtx): Promise<void> {
-  const handle = (ctx.url.searchParams.get("handle") ?? "").trim().toLowerCase();
-  if (!handle || handle.length > 63)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "handle required" });
-  const tenant = await ctx.deps.directory?.tenantForAppHandle?.(handle);
-  if (!tenant) return sendJson(ctx.res, 200, { tenant: null });
-  const client = await ctx.deps.directory?.trustedClientFor?.(tenant);
-  return sendJson(ctx.res, 200, { tenant, ...(client ? { trustedClient: client } : {}) });
-}
-
 async function brokerSession(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   if (!deps.brokerSessions) return sendJson(res, 503, { error: "not_configured" });
@@ -421,5 +411,4 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: principalTenants,
   },
   { method: "GET", path: "/v1/auth/broker/host-tenant", auth: "source", tenant: "none", handle: hostTenant },
-  { method: "GET", path: "/v1/auth/broker/workspace", auth: "source", tenant: "none", handle: workspaceTenant },
 ];

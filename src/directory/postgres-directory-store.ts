@@ -399,8 +399,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return branded(rows);
     },
 
-    tenantForAppHandle: (handle) => tenantFrom("qm_tenant_for_app_handle", handle),
-
     tenantForAppHost: (label) => tenantFrom("qm_tenant_for_app_host", label),
 
     async setAppHandle(handle) {
@@ -412,16 +410,6 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         if (code === "23505") return constraint === APP_HOSTS_KEY ? "app_taken" : "taken";
         throw error;
       }
-    },
-
-    async trustedClientFor(tenant) {
-      const [row] = await withTenant(tenant, () =>
-        q("SELECT settings->'oidcClient' AS client FROM tenants WHERE id = $1", [tenant]),
-      );
-      const client = row?.client as { clientId?: unknown; clientSecret?: unknown } | null | undefined;
-      return typeof client?.clientId === "string" && typeof client.clientSecret === "string"
-        ? { clientId: client.clientId, clientSecret: client.clientSecret }
-        : undefined;
     },
 
     async channelMember(channelId, principalId) {
