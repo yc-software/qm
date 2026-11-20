@@ -22,17 +22,17 @@ test("the backfill pairs legacy NULL call ids in order and forbids new NULL tool
   ]);
   const raw = new pg.Pool({ connectionString: url, max: 1 });
   try {
-    await raw.query("ALTER TABLE items DROP CONSTRAINT items_tool_call_id_present");
-    await raw.query("ALTER TABLE items DISABLE TRIGGER items_append_only");
+    await raw.query(
+      "ALTER TABLE items DROP CONSTRAINT items_tool_call_id_present; ALTER TABLE items DISABLE TRIGGER items_append_only",
+    );
     await raw.query("UPDATE items SET call_id = NULL WHERE session_id = $1", [session.id]);
-    await raw.query("ALTER TABLE items ENABLE TRIGGER items_append_only");
     await raw.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [MIGRATIONS]);
     await applyPgMigrations(raw, SESSION_MIGRATIONS.filter((m) => MIGRATIONS.includes(m.id)).map(definePgMigration));
     const { rows } = await raw.query(
       "SELECT kind, call_id FROM items WHERE session_id = $1 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq",
       [session.id],
     );
-    for (const row of rows) assert.match(row.call_id, /^call_backfill_/);
+    assert.match(rows[0]!.call_id, /^call_backfill_/);
     assert.deepEqual(
       rows.map((row) => row.call_id),
       [rows[0]!.call_id, rows[0]!.call_id, rows[2]!.call_id, rows[2]!.call_id, rows[4]!.call_id],

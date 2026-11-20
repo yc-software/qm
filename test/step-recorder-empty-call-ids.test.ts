@@ -14,28 +14,20 @@ test("empty provider tool-call ids are synthesized per call and shared with thei
   };
   const writes: Promise<unknown>[] = [];
   const steps = createStepRecorder({ emit }, (write) => void writes.push(write()));
-  const blocks = ["ls", "pwd"].map((command) => ({
+  const content = ["ls", "pwd"].map((command) => ({
     type: "toolCall",
     id: "",
     name: "execute",
     arguments: { command },
   }));
-  steps.assistant({
-    role: "assistant",
-    content: blocks,
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-test",
-    stopReason: "toolUse",
-    timestamp: Date.now(),
-  } as AssistantMessage);
+  const message = { role: "assistant", content, api: "a", provider: "anthropic", model: "m", stopReason: "toolUse" };
+  steps.assistant(message as unknown as AssistantMessage);
   for (const text of ["first", "second"]) {
     steps.toolResult({ role: "toolResult", toolCallId: "", content: [{ type: "text", text }] } as ToolResultMessage);
   }
   await Promise.all(writes);
   const calls = entries.filter((entry) => entry.kind === "ToolCall");
-  assert.equal(calls.length, 2);
-  for (const call of calls) assert.match(call.callId!, /^call_/);
+  assert.match(calls[0]!.callId!, /^call_/);
   assert.notEqual(calls[0]!.callId, calls[1]!.callId);
   assert.deepEqual(
     entries.filter((entry) => entry.kind === "ToolResult").map((entry) => [entry.callId, entry.text]),

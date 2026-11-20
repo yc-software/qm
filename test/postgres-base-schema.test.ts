@@ -117,21 +117,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      [
-        "seq",
-        "tenant_id",
-        "session_id",
-        "kind",
-        "variant",
-        "text",
-        "search",
-        "author",
-        "body",
-        "created_at",
-        "hidden",
-        "turn_id",
-        "call_id",
-      ],
+      "seq tenant_id session_id kind variant text search author body created_at hidden turn_id call_id".split(" "),
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
