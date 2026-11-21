@@ -2427,8 +2427,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
         const delivered = out.at(-1) as AssistantWork;
         delivered.via = e.body.via;
-        if (typeof e.body.sourceTitle === "string" && e.body.sourceTitle.trim())
-          delivered.viaTitle = e.body.sourceTitle.trim();
+        if (typeof e.body.sourceTitle === "string") delivered.viaTitle = e.body.sourceTitle;
         if (typeof e.body.cronId === "string" && e.body.cronId) delivered.viaCronId = e.body.cronId;
       } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();

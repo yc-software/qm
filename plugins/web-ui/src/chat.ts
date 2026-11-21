@@ -4,7 +4,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
-import { viaSourceText } from "./via-label.ts";
+import { viaLine } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -2294,18 +2294,6 @@ export function createChatSurface(
       `;
     }
     return nothing;
-  }
-
-  function viaLine(msg: AssistantWork): TemplateResult | typeof nothing {
-    if (!msg.via) return nothing;
-    const label = viaSourceText(msg.via, msg.viaTitle);
-    return html`<div class="via-line">
-      <span class="via-arrow" aria-hidden="true">↳</span>${
-        msg.viaCronId
-          ? html`<a href=${deepLinkPath(UI_BASE, "crons", null, null, msg.viaCronId)}>${label}</a>`
-          : html`<span>${label}</span>`
-      }
-    </div>`;
   }
 
   function copyableText(message: AgentMessage): string {

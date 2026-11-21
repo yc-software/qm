@@ -1958,7 +1958,7 @@ a.chat-row-open {
   gap: 4px;
   min-width: 0;
   margin: 0 0 2px;
-  font-size: var(--font-12-5);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 2px)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
   line-height: 1.4;
   color: var(--muted-foreground);
 }
@@ -13696,7 +13696,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 }
 .project-icon-section {
   padding: 10px 6px 4px;
-  font-size: var(--font-12-5);
+  font-size: var(--font-12, 12px);
   font-weight: 500;
   color: var(--muted-foreground);
 }
