@@ -110,6 +110,7 @@ test("a channel cron runs in the channel scope and delivers its real output to t
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
   assert.equal(pending[0]?.provenance?.sourceTitle, "Daily standup");
+  assert.equal(pending[0]?.provenance?.sourceId, cron.id);
 });
 
 test("a group-DM cron runs in the group scope and delivers its real output to the group", async () => {

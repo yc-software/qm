@@ -325,6 +325,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
+          sourceId: cron.id,
           ownerFire: ownerAuthored(cron),
           redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
