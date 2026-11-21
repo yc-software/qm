@@ -1952,6 +1952,34 @@ a.chat-row-open {
   user-select: none;
 }
 
+.via-line {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  margin: 0 0 2px;
+  font-size: max(min(12px, calc(var(--chat-font-size) - 2px)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+
+.via-line > a,
+.via-line > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.via-line > a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.via-line > a:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
 .named-user-row > .speaker-label,
 .named-assistant-row > .speaker-label {
   margin: 0 0 4px;

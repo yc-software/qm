@@ -576,6 +576,8 @@ export type AssistantWork = AssistantMessage & {
   droppedAttachmentIds?: string[];
   continuing?: string;
   via?: string;
+  viaTitle?: string;
+  viaCronId?: string;
   personaId?: string;
 };
 
@@ -2423,7 +2425,10 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         spillHeldPosts();
         flushWork("", e.createdAt);
         flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
-        (out.at(-1) as AssistantWork).via = e.body.via;
+        const delivered = out.at(-1) as AssistantWork;
+        delivered.via = e.body.via;
+        if (typeof e.body.sourceTitle === "string") delivered.viaTitle = e.body.sourceTitle;
+        if (typeof e.body.cronId === "string" && e.body.cronId) delivered.viaCronId = e.body.cronId;
       } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {

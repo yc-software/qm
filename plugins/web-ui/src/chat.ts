@@ -4,7 +4,7 @@ import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
-import { assistantSpeakerText } from "./via-label.ts";
+import { viaLine } from "./via-label.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -2036,8 +2036,8 @@ export function createChatSurface(
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
     const speakerLabel =
-      message.role === "assistant" && (chatState.labelSpeakers || (message as AssistantWork).via)
-        ? `${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), (message as AssistantWork).via)}\n${slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl) ?? ""}`
+      message.role === "assistant" && chatState.labelSpeakers
+        ? `${chatState.assistantSpeakerLabel || brandName()}\n${slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl) ?? ""}`
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2268,8 +2268,7 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
-      const via = (msg as AssistantWork).via;
-      const labeled = chatState.labelSpeakers || Boolean(via);
+      const labeled = chatState.labelSpeakers;
       return html`
         <article
           class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
@@ -2281,10 +2280,11 @@ export function createChatSurface(
           ${
             labeled
               ? html`<div class="speaker-label">
-                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${assistantSpeakerText(chatState.assistantSpeakerLabel || brandName(), via)}</span>${speakerTime(msg)}
+                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${speakerTime(msg)}
                 </div>`
               : nothing
           }
+          ${viaLine(msg as AssistantWork)}
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
