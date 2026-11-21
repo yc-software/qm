@@ -237,7 +237,7 @@ import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
-import { createTranscriptViewport } from "./transcript-viewport";
+import { createTranscriptViewport, preserveTranscriptScroll } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
 import { reportHandledError } from "./browser-errors.ts";
 import { uiCanvasPanel } from "./ui-canvas";
@@ -497,6 +497,7 @@ export function createChatSurface(
 
   let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
+  let followReadOnlySend = false;
 
   function teardownActiveChat(): void {
     sideChats.dispose();
@@ -1368,7 +1369,9 @@ export function createChatSurface(
     syncLocation();
 
     resetBackgroundPanel();
-    const host = document.createElement("div");
+    const priorHost = sameSession ? container.querySelector<HTMLElement>(":scope > .readonly-chat") : null;
+    const restoreScroll = priorHost ? preserveTranscriptScroll(priorHost) : null;
+    const host = priorHost ?? document.createElement("div");
     host.className = "custom-chat readonly-chat";
     const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
@@ -1378,7 +1381,11 @@ export function createChatSurface(
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
-      if (!priorReply) slackReply.addEventListener("slack-sent", () => onDelivery(s.threadRef));
+      if (!priorReply)
+        slackReply.addEventListener("slack-sent", () => {
+          followReadOnlySend = true;
+          onDelivery(s.threadRef);
+        });
     }
     let approvals: PendingApproval[] = [];
     const draw = () => {
@@ -1500,8 +1507,10 @@ export function createChatSurface(
     readonlyRedraw = draw;
     void refreshApprovals();
     draw();
-    container.replaceChildren(host);
-    if (!sameSession) scrollToBottom();
+    if (!priorHost) container.replaceChildren(host);
+    if (!restoreScroll || followReadOnlySend) scrollToBottom();
+    else restoreScroll();
+    followReadOnlySend = false;
     readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
     ctx.ensureDeliveryStream();
     consumeBackgroundPanelRequest();
