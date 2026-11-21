@@ -80,13 +80,13 @@ export class SlackReply extends LitElement {
       this.observedInput = input;
     }
     if (!input) return;
-    resizeComposerInput(input);
+    resizeComposerInput(input, 30);
     if (!this.inputObserver && typeof ResizeObserver !== "undefined") {
       let width = input.clientWidth;
       this.inputObserver = new ResizeObserver(() => {
         if (width === input.clientWidth) return;
         width = input.clientWidth;
-        resizeComposerInput(input);
+        resizeComposerInput(input, 30);
       });
       this.inputObserver.observe(input);
     }
