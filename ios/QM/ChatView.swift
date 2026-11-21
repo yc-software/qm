@@ -858,6 +858,17 @@ struct ChatView: View {
   }
 
   private var modelSelector: some View {
+    ComposerModelSelector(
+      model: model, scopeID: model.conversation.scopeId, showingRuntime: $showingRuntime)
+  }
+}
+
+struct ComposerModelSelector: View {
+  let model: ChatModel
+  let scopeID: String
+  @Binding var showingRuntime: Bool
+
+  var body: some View {
     Button {
       showingRuntime = true
     } label: {
@@ -871,7 +882,7 @@ struct ChatView: View {
     .popover(isPresented: $showingRuntime, arrowEdge: .bottom) {
       NavigationStack {
         RuntimeControlsView(
-          client: model.client, scopeID: model.conversation.scopeId, showsCancel: true,
+          client: model.client, scopeID: scopeID, showsCancel: true,
           selected: model.runtimeSelection, onSelect: model.selectRuntime)
       }
       .frame(width: 340, height: 390)
