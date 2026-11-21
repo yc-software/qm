@@ -25,6 +25,7 @@ import { createPostgresProcessRegistry } from "../src/processes/process-registry
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
+import { sleep } from "../src/util/async.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -705,7 +706,11 @@ test("retirement waits for background startup to commit its live registry row", 
     destroyed = true;
   };
   const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
-  release.resolve();
+  try {
+    assert.equal(await Promise.race([retiring.then(() => "retired"), sleep(100).then(() => "waiting")]), "waiting");
+  } finally {
+    release.resolve();
+  }
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
   assert.equal((await registry.get("job"))?.sandboxId, record.id);

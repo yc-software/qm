@@ -96,8 +96,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
-    handle.resourceId ? resources.use(handle.resourceId, action) : action();
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>, exclusive = false): Promise<T> =>
+    handle.resourceId ? resources.use(handle.resourceId, action, exclusive) : action();
 
   const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
     sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
@@ -250,27 +250,31 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     ...(some(supportsProcessSessions)
       ? {
           startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
-            useHandle(handle, async () => {
-              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
-              const started = await sandbox.startProcess(handle, command, o);
-              try {
-                await register(started.processId);
-              } catch (error) {
+            useHandle(
+              handle,
+              async () => {
+                const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+                const started = await sandbox.startProcess(handle, command, o);
                 try {
-                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
-                    handle,
-                    started.processId,
-                    "KILL",
-                  );
-                } catch (cleanupError) {
-                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
-                    cause: cleanupError,
-                  });
+                  await register(started.processId);
+                } catch (error) {
+                  try {
+                    await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
+                      handle,
+                      started.processId,
+                      "KILL",
+                    );
+                  } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+                      cause: cleanupError,
+                    });
+                  }
+                  throw error;
                 }
-                throw error;
-              }
-              return started;
-            }),
+                return started;
+              },
+              true,
+            ),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
               requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
