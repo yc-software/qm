@@ -1580,6 +1580,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const { backgroundBroker, monitorBroker } = createTurnBrokers({
+          tenant,
           deps,
           input,
           actor,

@@ -302,8 +302,14 @@ test("reattach by FULL command key: a second start of the same command reattache
   const refused = { ...deps, assertComputerUsable: () => Promise.reject(new Error("no")) };
   await assert.rejects(createBackgroundBroker(refused).start(handle, "npm test", "Run background tests"), /no/);
   assert.equal(starts.length, 1, "no second startProcess");
-  const bot = createBackgroundBroker({ ...deps, ...(await startedBy(url, "release-bot")) });
-  assert.equal((await bot.start(handle, "npm test", "Run background tests")).reattached, false);
+  for (const [id, botActor] of [
+    ["U2", false],
+    ["U1", true],
+    ["release-bot", true],
+  ] as const) {
+    const other = createBackgroundBroker({ ...deps, ...(await startedBy(url, id, botActor)) });
+    assert.equal((await other.start(handle, "npm test", "Run background tests")).reattached, false);
+  }
 });
 
 test("start does NOT reattach to a matching command whose process has already exited", async () => {

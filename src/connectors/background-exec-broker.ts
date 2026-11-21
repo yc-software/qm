@@ -1,5 +1,5 @@
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { ProcessRecord, ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import type { JobStarter, ProcessRecord, ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess } from "../sandbox/process-poll.ts";
@@ -18,7 +18,7 @@ export interface BackgroundExecBrokerDeps {
   livePersonTurn?: boolean;
   sessionRef?: string;
   runId?: string;
-  actorId?: string;
+  starter?: JobStarter;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -130,8 +130,12 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const redacted = redactCommand(normalized, handle.env);
 
       let processId =
-        redacted === normalized && !credentials && deps.actorId
-          ? await deps.registry.runningJobStartedBy(deps.scopeId, sandboxId, redacted, deps.actorId)
+        redacted === normalized && !credentials && deps.starter
+          ? await deps.registry.runningJobStartedBy(deps.starter, {
+              scopeId: deps.scopeId,
+              sandboxId,
+              command: redacted,
+            })
           : null;
 
       if (processId) {

@@ -3,17 +3,18 @@ import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import { testDatabaseUrl } from "./test-database.ts";
+import { testTenant } from "./test-tenant.ts";
 
 export function testRuns(): RunStore {
   return createPostgresRunStore(testDatabaseUrl()).runs;
 }
 
-export async function startedBy(url: string, id: string) {
+export async function startedBy(url: string, id: string, botActor = false) {
   const actor = { id, type: "internal" as const };
   const conversation = { kind: "dm" as const, threadRef: id, audience: [actor] };
-  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "run it" };
+  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "run it", botActor };
   const { run } = await createPostgresRunStore(url).runs.enqueue({ sessionId: id, request });
-  return { actorId: id, runId: run.id };
+  return { starter: { tenant: testTenant, actorId: id, botActor }, runId: run.id };
 }
 
 export async function holdThread(runs: RunStore, threadRef: string): Promise<() => Promise<void>> {
