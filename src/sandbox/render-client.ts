@@ -12,7 +12,6 @@ import { randomUUID } from "node:crypto";
 import { retryOperation, withAbort } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { RENDER_SNAPSHOT_RETENTION_MS } from "./render-limits.ts";
 
 export const RENDER_SCRIPT_DIR = "/dev/.qm-run";
 const RENDER_SANDBOX_PLAN = "2c-4g";
@@ -342,7 +341,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
               sandboxId,
               kind,
               name,
-              expiresAt: new Date(Date.now() + RENDER_SNAPSHOT_RETENTION_MS).toISOString(),
+              ttlSeconds: 0,
             }),
           "refused",
           {
