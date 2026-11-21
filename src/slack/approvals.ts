@@ -7,6 +7,7 @@ import {
   type StoredApproval,
   approvalDecisionMessage,
   approvalMessage,
+  batchPostMessageArgs,
   clip,
   createApprovalRegistry,
   createThreadTracker,
@@ -142,13 +143,15 @@ export function createApprovals(deps: {
     text: string,
     persona?: WornPersona,
   ): Promise<void> {
-    await client.chat.postMessage(
-      slackPersonaReplyArgs(ctx.channel, text, ctx.replyThreadTs, {
-        threadOnly: ctx.threadOnly,
-        persona,
-        webUiPublicUrl: deps.webUiPublicUrl,
-      }),
-    );
+    const args = slackPersonaReplyArgs(ctx.channel, text, ctx.replyThreadTs, {
+      threadOnly: ctx.threadOnly,
+      unfurlLinks: false,
+      persona,
+      webUiPublicUrl: deps.webUiPublicUrl,
+    });
+    for (const batch of batchPostMessageArgs(args)) {
+      await client.chat.postMessage(batch);
+    }
   }
 
   async function handleApprovalAction({ ack, body, action, client }: ActionArgs): Promise<void> {

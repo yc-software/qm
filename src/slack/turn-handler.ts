@@ -118,7 +118,7 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
   core: SlackCoreClient;
   flow: TurnFlow;

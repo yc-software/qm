@@ -28,7 +28,7 @@ export interface SurfaceTransport {
   remove(ref: string): Promise<void>;
   react(ref: string, name: string, on: boolean): Promise<void>;
   applyReactions(reactions: readonly ReplyReaction[]): Promise<void>;
-  typing(on: boolean, run?: { runId: string; emoji(): Promise<string> | undefined }): Promise<void>;
+  typing(on: boolean, run?: { runId: string }): Promise<void>;
   upload(attachments: OutgoingAttachment[]): Promise<{ fileIds?: readonly string[]; failureNote?: string }>;
   render?(markdown: string): string;
   escape?(text: string): string;
@@ -134,7 +134,7 @@ export async function runSurfaceTurn(
                 if (acknowledges) startAck();
                 if (queuedRunId)
                   void transport
-                    .typing(true, { runId: queuedRunId, emoji: () => ack?.emoji() })
+                    .typing(true, { runId: queuedRunId })
                     .catch(swallowAs(`${label}: typing on`, undefined));
               },
             }),

@@ -360,9 +360,9 @@ export async function startSlackPlugin(
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) =>
       continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
-    onEngaged: (runId, channel, threadTs, emoji) => {
+    onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
-        ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
         .catch(swallowAs("slack: session status start", undefined))
         .finally(() => {
           void reconcileStatus();
@@ -461,7 +461,8 @@ export async function startSlackPlugin(
       const account = slackAccountClients().get(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
     },
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
+    continuePrivate: (runId, task) =>
+      continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
     core,
     flow,
     threads,

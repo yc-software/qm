@@ -130,6 +130,7 @@ export {
   deliveryCandidatesFor,
   createDeliveryTracker,
   deliverWithRetry,
+  batchPostMessageArgs,
   postWithVerify,
   findPostedByKey,
   recoveryVerifyOldest,

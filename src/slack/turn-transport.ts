@@ -2,12 +2,11 @@ import type { SurfaceTransport } from "../surfaces/turn-driver.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import {
   type PostMessageArgs,
-  SLACK_POST_SPLIT_LIMIT,
+  batchPostMessageArgs,
   botIdentityArgs,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
-  safeChunks,
   slackPersonaReplyArgs,
   slackReplyArgs,
   toSlackMrkdwn,
@@ -31,7 +30,7 @@ export function createSlackTurnTransport(at: {
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
   webUiPublicUrl?: string;
-  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
 }): SurfaceTransport {
   const { client, channel, threadTs } = at;
@@ -39,26 +38,17 @@ export function createSlackTurnTransport(at: {
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
     const baseOpts = { threadOnly: at.kind === "channel", unfurlLinks: false, persona: opts.persona };
-    const hasBlocks = Boolean(opts.notice || opts.note || opts.persona);
-    const replyArgs = (text: string, withBlocks: boolean): PostMessageArgs => {
-      if (opts.notice) {
-        return {
-          ...slackReplyArgs(channel, text, threadTs, baseOpts),
-          ...(withBlocks ? { blocks: noticeBlocks(text) } : {}),
-        };
-      }
-      if (!withBlocks) return { ...slackReplyArgs(channel, text, threadTs, baseOpts) };
-      return slackPersonaReplyArgs(channel, text, threadTs, {
-        ...baseOpts,
-        webUiPublicUrl: at.webUiPublicUrl,
-        ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
-      });
-    };
-    if (opts.idempotencyKey) return (await postWithVerify(client, replyArgs(msg, true), opts.idempotencyKey)).ts;
-    const parts = hasBlocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
+    const args: PostMessageArgs = opts.notice
+      ? { ...slackReplyArgs(channel, msg, threadTs, baseOpts), blocks: noticeBlocks(msg) }
+      : slackPersonaReplyArgs(channel, msg, threadTs, {
+          ...baseOpts,
+          webUiPublicUrl: at.webUiPublicUrl,
+          ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
+        });
+    if (opts.idempotencyKey) return (await postWithVerify(client, args, opts.idempotencyKey)).ts;
     let firstTs: string | undefined;
-    for (const [i, part] of parts.entries()) {
-      const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
+    for (const [i, batch] of batchPostMessageArgs(args).entries()) {
+      const ts = (await client.chat.postMessage(batch)).ts as string | undefined;
       if (i === 0) firstTs = ts;
     }
     if (opts.notice && firstTs) notices.add(firstTs);
@@ -94,7 +84,7 @@ export function createSlackTurnTransport(at: {
     },
     async typing(on, run) {
       if (!on) at.onSettled?.();
-      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs, run.emoji());
+      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs);
     },
     async upload(attachments) {
       try {

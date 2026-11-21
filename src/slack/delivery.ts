@@ -569,27 +569,42 @@ function splitPostKey(idempotencyKey: string, partIndex: number): string {
   return partIndex === 0 ? idempotencyKey : `${idempotencyKey}#p${partIndex + 1}`;
 }
 
-export async function postWithVerify(
-  client: PostVerifyClient,
-  args: PostMessageArgs,
-  idempotencyKey: string,
-  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
-): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+export function batchPostMessageArgs(args: PostMessageArgs): PostMessageArgs[] {
   const fullText = typeof args.text === "string" ? args.text : "";
-  const batches: PostMessageArgs[] = [];
   if (Array.isArray(args.blocks) && args.blocks.length > 50) {
+    const batches: PostMessageArgs[] = [];
     for (let offset = 0; offset < args.blocks.length; offset += 50) {
       const blocks = args.blocks.slice(offset, offset + 50);
       const text = blocks
         .filter((block) => block.type === "section" && typeof block.text?.text === "string")
         .map((block) => block.text.text)
         .join("\n");
-      batches.push({ ...args, blocks, text });
+      batches.push({
+        ...args,
+        blocks,
+        text: text.length > SLACK_TEXT_LIMIT - 1_000 ? safeClip(text, SLACK_TEXT_LIMIT - 1_000) : text,
+      });
     }
-  } else if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
-    batches.push(...safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text })));
+    return batches;
   }
-  if (batches.length) {
+  if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
+    return safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text }));
+  }
+  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
+    return [{ ...args, text: safeClip(fullText, SLACK_TEXT_LIMIT - 1_000) }];
+  }
+  return [args];
+}
+
+export async function postWithVerify(
+  client: PostVerifyClient,
+  args: PostMessageArgs,
+  idempotencyKey: string,
+  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
+): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+  const batched = batchPostMessageArgs(args);
+  if (batched.length > 1) {
+    const batches = batched;
     const parts: PostedPart[] = [];
     for (const [i, batch] of batches.entries()) {
       const text = batch.text ?? "";
@@ -613,9 +628,7 @@ export async function postWithVerify(
       parts,
     };
   }
-  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
-    args.text = safeClip(fullText, SLACK_TEXT_LIMIT - 1_000);
-  }
+  args = batched[0]!;
   const maxAttempts = opts?.attempts ?? 3;
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);
   args.metadata = deliveryMetadata(idempotencyKey);
