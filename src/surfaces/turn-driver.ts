@@ -1,5 +1,5 @@
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
-import type { OutgoingAttachment, TurnResult } from "../types.ts";
+import type { OutgoingAttachment, TurnResult, WornPersona } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { AWAITING_APPROVAL } from "./approval-cards.ts";
 import type { ReplyReaction } from "./reactions.ts";
@@ -15,7 +15,13 @@ import {
 export interface SurfaceTransport {
   post(
     text: string,
-    opts?: { idempotencyKey?: string; note?: string; notice?: boolean; fileIds?: readonly string[] },
+    opts?: {
+      idempotencyKey?: string;
+      note?: string;
+      notice?: boolean;
+      fileIds?: readonly string[];
+      persona?: WornPersona;
+    },
   ): Promise<string | undefined>;
   postPrivate(text: string, opts?: { transient?: boolean }): Promise<void>;
   edit(ref: string, text: string): Promise<void>;
@@ -78,11 +84,11 @@ export async function runSurfaceTurn(
   const startAck = (): AckPresenter =>
     (ack ??= createAckPresenter({
       taskManaged: !!turn.taskAck,
-      postAck: async (text) => {
-        const ref = await transport.post(
-          transport.render?.(text) ?? text,
-          queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : undefined,
-        );
+      postAck: async (text, persona) => {
+        const ref = await transport.post(transport.render?.(text) ?? text, {
+          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : {}),
+          ...(persona ? { persona } : {}),
+        });
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
         try {
           await deps.reportEditRef(queuedRunId, ref);
@@ -145,7 +151,8 @@ export async function runSurfaceTurn(
         },
         ...(acknowledges
           ? {
-              onFirstBlock: (blockText: string) => startAck().onFirstBlock(transport.readReply(blockText).text),
+              onFirstBlock: (blockText: string, persona?: WornPersona) =>
+                startAck().onFirstBlock(transport.readReply(blockText).text, persona),
               onSurfacePosted: () => startAck().onSurfacePosted(),
             }
           : {}),
@@ -216,13 +223,15 @@ export async function runSurfaceTurn(
       const uploaded = result.attachments?.length ? await transport.upload(result.attachments) : {};
       await ack?.drain();
       const note = replyEditNote(result.retracted);
+      const persona = result.persona;
       if (reply || uploaded.fileIds?.length)
         await transport.post(reply, {
           ...(note ? { note } : {}),
           ...(uploaded.fileIds?.length ? { fileIds: uploaded.fileIds } : {}),
           ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}` } : {}),
+          ...(persona ? { persona } : {}),
         });
-      if (uploaded.failureNote) await transport.post(uploaded.failureNote);
+      if (uploaded.failureNote) await transport.post(uploaded.failureNote, persona ? { persona } : undefined);
       await transport.applyReactions(reactions);
       await settleAck();
       await finishTaskAck();

@@ -2,13 +2,12 @@ import type { SurfaceTransport } from "../surfaces/turn-driver.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import {
   type PostMessageArgs,
-  SLACK_POST_SPLIT_LIMIT,
-  blocksWithContext,
+  batchPostMessageArgs,
   botIdentityArgs,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
-  safeChunks,
+  slackPersonaReplyArgs,
   slackReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
@@ -30,6 +29,7 @@ export function createSlackTurnTransport(at: {
   triggerTs: string;
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
+  webUiPublicUrl?: string;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
 }): SurfaceTransport {
@@ -37,19 +37,18 @@ export function createSlackTurnTransport(at: {
   const notices = new Set<string>();
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
-    let blocks: Array<Record<string, unknown>> | undefined;
-    if (opts.notice) blocks = noticeBlocks(msg);
-    else if (opts.note) blocks = blocksWithContext(msg, [plainContext(opts.note)]);
-    const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
-      ...slackReplyArgs(channel, text, threadTs, { threadOnly: at.kind === "channel", unfurlLinks: false }),
-      ...(withBlocks && blocks ? { blocks } : {}),
-    });
-    if (opts.idempotencyKey)
-      return (await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, opts.idempotencyKey)).ts;
-    const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
+    const baseOpts = { threadOnly: at.kind === "channel", unfurlLinks: false, persona: opts.persona };
+    const args: PostMessageArgs = opts.notice
+      ? { ...slackReplyArgs(channel, msg, threadTs, baseOpts), blocks: noticeBlocks(msg) }
+      : slackPersonaReplyArgs(channel, msg, threadTs, {
+          ...baseOpts,
+          webUiPublicUrl: at.webUiPublicUrl,
+          ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
+        });
+    if (opts.idempotencyKey) return (await postWithVerify(client, args, opts.idempotencyKey)).ts;
     let firstTs: string | undefined;
-    for (const [i, part] of parts.entries()) {
-      const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
+    for (const [i, batch] of batchPostMessageArgs(args).entries()) {
+      const ts = (await client.chat.postMessage(batch)).ts as string | undefined;
       if (i === 0) firstTs = ts;
     }
     if (opts.notice && firstTs) notices.add(firstTs);
