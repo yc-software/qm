@@ -121,7 +121,7 @@ export async function selectTurnResult(turn: {
   approvalSummary: (scopeId: ScopeId, command: string, reason: string, purpose?: string) => Promise<string | undefined>;
   issueApproval: (
     requestId: string,
-    fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
+    fields: Omit<PendingApprovalRecord, "createdAt" | "request" | "homeChannel">,
   ) => Promise<PendingApproval>;
   withManagedRosterVersion: <T>(work: () => Promise<T>) => Promise<T>;
 }): Promise<TurnResult> {

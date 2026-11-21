@@ -823,19 +823,24 @@ test("allowing held input lets in only the attachments the hold's screen classif
   }
 });
 
-test("a tool approval inside an allowed held turn keeps the attachments the hold classified", async () => {
-  const built = freshApp({ securityPosture: "strict" }, fixtureScreen());
-  const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
-  const request = dm("!read notes", { attachments: [{ name: "tool.txt", mimetype: "text/plain", ...blob }] });
-  const turn = async (requestId: string, scope?: "session") =>
-    built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
-  const held = await built.app.turn(request);
-  const tool = (await turn(held.pendingApprovals![0]!.requestId, "session")).pendingApprovals![0]!;
-  assert.equal("classifiedAttachments" in ((await built.app.getApproval(tool.requestId)) ?? {}), false);
-  await turn(tool.requestId);
-  const last = (await built.sessions.listLlmRequests(held.sessionId!)).findLast((r) => r.model === "mock");
-  assert.match(JSON.stringify(last), /shared tool\.txt \(Files ID/);
-});
+for (const [card, securityPosture, text] of [
+  ["tool approval", "strict", "!read notes"],
+  ["quarantine release", "auto", "!screened-run printf SCREENING_FIXTURE_BLOCK"],
+] as const) {
+  test(`a ${card} inside an allowed held turn keeps the attachments the hold classified`, async () => {
+    const built = freshApp({ securityPosture }, fixtureScreen());
+    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
+    const request = dm(text, { attachments: [{ name: "tool.txt", mimetype: "text/plain", ...blob }] });
+    const turn = async (requestId: string, scope?: "session") =>
+      built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+    const held = await built.app.turn(request);
+    const tool = (await turn(held.pendingApprovals![0]!.requestId, "session")).pendingApprovals![0]!;
+    assert.equal("classifiedAttachments" in ((await built.app.getApproval(tool.requestId)) ?? {}), false);
+    await turn(tool.requestId);
+    const last = (await built.sessions.listLlmRequests(held.sessionId!)).findLast((r) => r.model === "mock");
+    assert.match(JSON.stringify(last), /shared tool\.txt \(Files ID/);
+  });
+}
 
 for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {

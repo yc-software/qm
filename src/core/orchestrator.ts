@@ -624,14 +624,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botRequester = input.botActor === true;
       const issueApproval = async (
         requestId: string,
-        fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
+        fields: Omit<PendingApprovalRecord, "createdAt" | "request" | "homeChannel">,
       ): Promise<PendingApproval> => {
         const { grantModes, ...rest } = fields;
         const record: PendingApprovalRecord = {
           ...(Object.fromEntries(
             Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
           ) as typeof rest),
-          ...(rest.kind === "approval" && releasedAttachments?.length
+          ...(homeChannel?.channelName ? { homeChannel: homeChannel.channelName } : {}),
+          ...(rest.kind !== "input" && releasedAttachments?.length
             ? { classifiedAttachments: releasedAttachments }
             : {}),
           createdAt: Date.now(),
@@ -756,7 +757,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
-              homeChannel: homeChannel?.channelName,
               blocksInput: true,
               kind: "input",
               classifiedAttachments: flaggedScreenedInput.classifiedAttachments,
