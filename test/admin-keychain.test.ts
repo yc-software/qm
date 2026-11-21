@@ -10,8 +10,14 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
+import {
+  createCredentialCatalog,
+  registerConnectorCredentials,
+  registerKeychainCredentials,
+} from "../src/core/orchestrator/credential-catalog.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
+import { hashId } from "../src/util/crypto.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
@@ -212,4 +218,95 @@ test("/v1/admin/keychain: a person's sign-ins are one row under their primary si
   } finally {
     await s.close();
   }
+});
+
+test("admin keychain lists OAuth connectors without secrets, grants them for execute.credentials, and revokes/deletes", async (t) => {
+  const s = start();
+  t.after(s.close);
+  const [admin, member, bob] = ["admin-alice@default-org", "user-uma@default-org", "bob@example.com"];
+  const [org, adminScope, exp] = [scopeId("org", "default-org"), scopeId("personal", admin), Date.now() + 3_600_000];
+  const call = (method: string, path: string, actor = admin, body?: unknown) =>
+    fetch(`${s.base}${path}`, {
+      method,
+      headers: { "x-admin-actor": actor, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const del = (path: string, actor = admin) => call("DELETE", path, actor).then((r) => r.status);
+  await s.keychain.setConnectorToken(
+    "gmail.googleapis.com",
+    bob,
+    { accessToken: "ya29.bob", refreshToken: "1//bob-ref", idToken: "bob-id", expiresAt: exp },
+    "personal",
+  );
+  await s.keychain.setConnectorToken("mcp.example.com", bob, { accessToken: "mcp-bob", expiresAt: exp });
+  await s.keychain.setConnectorToken("gmail.googleapis.com", admin, { accessToken: "ya29.admin", expiresAt: exp });
+  await s.keychain.setServiceCredential(org, { slug: "serp", name: "SERP", secret: "serp-s", host: "api.serper.dev" });
+  const saved = await s.keychain.save({ ownerId: bob, service: "linear", secret: "lin-s" });
+
+  let gmail: any;
+  for (const path of ["/v1/admin/keychain", `/v1/admin/keychain?principal=${encodeURIComponent(bob)}`]) {
+    const body: any = await (await call("GET", path)).json();
+    const raw = JSON.stringify(body);
+    for (const bad of "ya29.bob 1//bob-ref bob-id mcp-bob serp-s refreshTokenEnc idTokenEnc secretEnc".split(" "))
+      assert.equal(raw.includes(bad), false, bad);
+    gmail = body.credentials.find((c: any) => c.ownerId === bob && c.host === "gmail.googleapis.com");
+    const mcp = body.credentials.find((c: any) => c.ownerId === bob && c.host === "mcp.example.com");
+    assert.deepEqual(
+      [gmail?.managed, gmail?.envKey, gmail?.refresh?.hasRefreshToken, mcp?.managed],
+      ["connector", "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", true, "connector"],
+    );
+    assert.ok(!body.credentials.some((c: any) => c.kind === "broker"));
+  }
+
+  const granted = await call("POST", "/v1/admin/keychain/grants", admin, {
+    credentialId: gmail.id,
+    scope: adminScope,
+    purpose: "debug",
+  });
+  const { grant, credentialHandle } = (await granted.json()) as any;
+  assert.deepEqual([granted.status, credentialHandle], [200, gmail.credentialHandle]);
+
+  const scopeKeychainGrants = async () =>
+    (await s.keychain.grantsForScope(adminScope, { includePersonGrants: true })).map((r) => ({
+      ...r,
+      grantScope: adminScope,
+    }));
+  const catalog = await createCredentialCatalog({
+    deps: { keychain: s.keychain, connectorTokens: s.keychain },
+    input: { origin: { kind: "user" } },
+    actor: { id: admin, type: "internal" },
+    conversation: { kind: "dm", audience: [] },
+    scopeId: adminScope,
+    environmentId: adminScope,
+    sharingSources: [],
+    scopeKeychainGrants,
+  } as any);
+  await registerKeychainCredentials(catalog, catalog.addCredentialToCatalog);
+  await registerConnectorCredentials(catalog, catalog.addCredentialToCatalog);
+  const resolved = await catalog.commandCredentials.find((c) => c.handle === credentialHandle)!.resolve!();
+  assert.deepEqual(resolved.env, [{ key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.bob" }]);
+
+  assert.equal(await del(`/v1/admin/keychain/grants/${grant.id}`, member), 403);
+  assert.equal(await del(`/v1/admin/keychain/grants/${grant.id}`), 200);
+  assert.equal((await s.keychain.getGrant(grant.id))?.status, "revoked");
+  assert.equal(await del("/v1/admin/keychain/grants/missing"), 404);
+
+  const g2 = await s.keychain.createGrant({
+    credentialId: saved.id,
+    ownerId: bob,
+    audienceScopeId: scopeId("channel", "C1"),
+    mode: "standing",
+    purpose: "ops",
+  });
+  assert.equal(await del(`/v1/admin/keychain/credentials/${saved.id}`, member), 403);
+  assert.equal(await del(`/v1/admin/keychain/credentials/${saved.id}`), 200);
+  assert.deepEqual(
+    [await s.keychain.getCredential(saved.id), (await s.keychain.getGrant(g2.id))?.status],
+    [null, "revoked"],
+  );
+  assert.equal(await del(`/v1/admin/keychain/credentials/${gmail.id}`), 200);
+  assert.equal((await s.keychain.connectorTokenStatus("gmail.googleapis.com", bob, "personal")).connected, false);
+  assert.equal(await del(`/v1/admin/keychain/credentials/${hashId([org, "serp", "broker"])}`), 404);
+  const actions = (await s.built.auditLog.events(testTenant)).map((e) => e.action);
+  assert.ok(actions.includes("keychain.admin_revoke") && actions.includes("keychain.admin_delete"));
 });

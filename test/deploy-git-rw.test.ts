@@ -39,6 +39,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const backings = testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } });
   const deployStore = createDeployStore(backings);
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const isOrgAdmin = async (id: string) => id === "U-admin";
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -46,9 +47,11 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 19998 }),
       destroy: async () => {},
+      logs: async () => "ok\n",
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
+    isOrgAdmin,
     deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
   });
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
@@ -58,6 +61,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(backings.databaseUrl),
     identity,
+    isOrgAdmin,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -96,177 +100,197 @@ async function gitPost(url: string, service: string, body: Buffer): Promise<Resp
   });
 }
 
+async function cloneEditPush(url: string, edit: (work: string) => Promise<void>): Promise<string> {
+  const work = mkdtempSync(join(tmpdir(), "git-rw-push-"));
+  await execFileP("git", ["clone", "--quiet", url, work], { env: GIT_ENV });
+  await edit(work);
+  await execFileP("git", ["add", "-A"], { cwd: work, env: GIT_ENV });
+  await execFileP("git", ["commit", "-q", "-m", "v2"], { cwd: work, env: GIT_ENV });
+  const { stdout } = await execFileP("git", ["rev-parse", "HEAD"], { cwd: work, env: GIT_ENV });
+  await execFileP("git", ["push", "origin", "HEAD:current"], { cwd: work, env: GIT_ENV });
+  return stdout.trim();
+}
+
 async function pushStatus(url: string): Promise<number> {
   return (await gitPost(url, "git-receive-pack", Buffer.alloc(0))).status;
 }
 
-const capFor = (actorId: string, scope?: string) =>
+const capFor = (actorId: string, extra: Record<string, unknown> = {}) =>
   mintCapabilityToken(
     {
       actorId,
-      scopeId: scope ?? scopeId("personal", actorId),
+      scopeId: scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
       liveActor: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
+      ...extra,
     },
     SECRET,
   );
 
-test("a read token can clone but cannot push (403 on receive-pack)", async () => {
+test("a read token can clone but cannot push (403 on receive-pack)", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "node server.js",
-      files: [{ path: "server.js", data: "console.log('v1')" }],
-    });
-    const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
-    await execFileP("git", ["clone", "--quiet", await gitUrl(f.base, d.id, "read"), work], { env: GIT_ENV });
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "console.log('v1')" }],
+  });
+  const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
+  await execFileP("git", ["clone", "--quiet", await gitUrl(f.base, d.id, "read"), work], { env: GIT_ENV });
 
-    await writeFile(join(work, "server.js"), "console.log('v2')");
-    await execFileP("git", ["add", "-A"], { cwd: work, env: GIT_ENV });
-    await execFileP("git", ["commit", "-q", "-m", "v2"], { cwd: work, env: GIT_ENV });
-    await execFileP("git", ["remote", "set-url", "origin", await gitUrl(f.base, d.id, "read")], {
-      cwd: work,
-      env: GIT_ENV,
-    });
-    await assert.rejects(
-      execFileP("git", ["push", "origin", "HEAD:current"], { cwd: work, env: GIT_ENV }),
-      /403|read-only|forbidden/i,
-    );
+  await writeFile(join(work, "server.js"), "console.log('v2')");
+  await execFileP("git", ["add", "-A"], { cwd: work, env: GIT_ENV });
+  await execFileP("git", ["commit", "-q", "-m", "v2"], { cwd: work, env: GIT_ENV });
+  await execFileP("git", ["remote", "set-url", "origin", await gitUrl(f.base, d.id, "read")], {
+    cwd: work,
+    env: GIT_ENV,
+  });
+  await assert.rejects(
+    execFileP("git", ["push", "origin", "HEAD:current"], { cwd: work, env: GIT_ENV }),
+    /403|read-only|forbidden/i,
+  );
 
-    const after = await f.deploy.listApps();
-    assert.equal(after[0]!.versions.length, 1);
-  } finally {
-    await f.close();
-  }
+  const after = await f.deploy.listApps();
+  assert.equal(after[0]!.versions.length, 1);
 });
 
-test("a git request whose body the backend stops reading completes and leaves the endpoint working", async () => {
+test("a git request whose body the backend stops reading completes and leaves the endpoint working", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "node server.js",
-      files: [{ path: "server.js", data: "console.log('v1')" }],
-    });
-    const url = await gitUrl(f.base, d.id, "read");
-    await (await gitPost(url, "git-upload-pack", Buffer.alloc(16 * 1024 * 1024, "z"))).arrayBuffer();
-    const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
-    await execFileP("git", ["clone", "--quiet", url, work], { env: GIT_ENV });
-  } finally {
-    await f.close();
-  }
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "console.log('v1')" }],
+  });
+  const url = await gitUrl(f.base, d.id, "read");
+  await (await gitPost(url, "git-upload-pack", Buffer.alloc(16 * 1024 * 1024, "z"))).arrayBuffer();
+  const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
+  await execFileP("git", ["clone", "--quiet", url, work], { env: GIT_ENV });
 });
 
-test("a write token can push, and the push registers a new immutable version", async () => {
+test("a write token can push, and the push registers a new immutable version", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "node server.js",
-      files: [{ path: "server.js", data: "console.log('v1')" }],
-    });
-    const work = mkdtempSync(join(tmpdir(), "git-rw-push-"));
-    await execFileP("git", ["clone", "--quiet", await gitUrl(f.base, d.id, "write"), work], { env: GIT_ENV });
-
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "console.log('v1')" }],
+  });
+  const pushedSha = await cloneEditPush(await gitUrl(f.base, d.id, "write"), async (work) => {
     await mkdir(join(work, "sub"), { recursive: true });
     await writeFile(join(work, "server.js"), "console.log('v2')");
     await writeFile(join(work, "sub/new.txt"), "added");
-    await execFileP("git", ["add", "-A"], { cwd: work, env: GIT_ENV });
-    await execFileP("git", ["commit", "-q", "-m", "v2"], { cwd: work, env: GIT_ENV });
-    const { stdout: pushedSha } = await execFileP("git", ["rev-parse", "HEAD"], { cwd: work, env: GIT_ENV });
-    await execFileP("git", ["push", "origin", "HEAD:current"], { cwd: work, env: GIT_ENV });
+  });
 
-    const fresh = (await f.deploy.listApps())[0]!;
-    assert.equal(fresh.versions.length, 2);
-    assert.equal(fresh.currentVersion, 2);
-    const v2 = fresh.versions.find((v) => v.version === 2)!;
-    assert.equal(v2.commit, pushedSha.trim());
-    assert.equal(v2.entrypoint, "node server.js");
-  } finally {
-    await f.close();
-  }
+  const fresh = (await f.deploy.listApps())[0]!;
+  assert.equal(fresh.versions.length, 2);
+  assert.equal(fresh.currentVersion, 2);
+  const v2 = fresh.versions.find((v) => v.version === 2)!;
+  assert.equal(v2.commit, pushedSha);
+  assert.equal(v2.entrypoint, "node server.js");
 });
 
-test("a write token minted before principal deactivation is revoked at push time", async () => {
+test("a write token minted before principal deactivation is revoked at push time", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "node server.js",
-      files: [{ path: "server.js", data: "console.log('v1')" }],
-    });
-    const url = await gitUrl(f.base, d.id, "write");
-    await f.identity.deactivate("U1");
-    assert.equal(await pushStatus(url), 403);
-  } finally {
-    await f.close();
-  }
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "console.log('v1')" }],
+  });
+  const url = await gitUrl(f.base, d.id, "write");
+  await f.identity.deactivate("U1");
+  assert.equal(await pushStatus(url), 403);
 });
 
-test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
+test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [{ path: "server.js", data: "1" }],
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [{ path: "server.js", data: "1" }],
+  });
+  await f.acl.grant(tenant, {
+    ownerScopeId: scopeId("personal", "U1"),
+    ref: `deployment:${d.id}`,
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "read",
+    grantedBy: "U1",
+  });
+
+  const ask = async (actor: string) =>
+    fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
+      headers: { "x-agent-capability": await capFor(actor) },
     });
-    await f.acl.grant(tenant, {
-      ownerScopeId: scopeId("personal", "U1"),
-      ref: `deployment:${d.id}`,
-      granteeScopeId: scopeId("personal", "U2"),
-      permission: "read",
-      grantedBy: "U1",
-    });
 
-    const ask = async (actor: string) =>
-      fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
-        headers: { "x-agent-capability": await capFor(actor) },
-      });
+  const owner = await ask("U1");
+  assert.equal(owner.status, 200);
+  const ownerBody = (await owner.json()) as { url: string; permission: string };
+  assert.equal(ownerBody.permission, "write");
+  assert.match(ownerBody.url, new RegExp(`/v1/apps/${d.id}/git`));
+  assert.equal((await verifyDeployGitAccess(SECRET, new URL(ownerBody.url).password))?.principalId, "U1");
 
-    const owner = await ask("U1");
-    assert.equal(owner.status, 200);
-    const ownerBody = (await owner.json()) as { url: string; permission: string };
-    assert.equal(ownerBody.permission, "write");
-    assert.match(ownerBody.url, new RegExp(`/v1/apps/${d.id}/git`));
-    assert.equal((await verifyDeployGitAccess(SECRET, new URL(ownerBody.url).password))?.principalId, "U1");
+  await f.identity.deactivate("U1");
+  await assert.rejects(
+    execFileP("git", ["ls-remote", ownerBody.url], { env: GIT_ENV }),
+    /401|403|Authentication failed/i,
+  );
 
-    await f.identity.deactivate("U1");
-    await assert.rejects(
-      execFileP("git", ["ls-remote", ownerBody.url], { env: GIT_ENV }),
-      /401|403|Authentication failed/i,
+  const reader = await ask("U2");
+  assert.equal(reader.status, 200);
+  assert.equal(((await reader.json()) as { permission: string }).permission, "read");
+
+  const stranger = await ask("U3");
+  assert.equal(stranger.status, 403);
+
+  await f.acl.grant(tenant, {
+    ownerScopeId: scopeId("personal", "U1"),
+    ref: `deployment:${d.id}`,
+    granteeScopeId: scopeId("personal", "U3"),
+    permission: "write",
+    grantedBy: "U1",
+  });
+  const writer = await ask("U3");
+  assert.equal(writer.status, 200);
+  assert.equal(((await writer.json()) as { permission: string }).permission, "write");
+
+  const anon = await fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`);
+  assert.equal(anon.status, 401);
+
+  const get = (p: string, cap: string) => fetch(`${f.base}${p}`, { headers: { "x-agent-capability": cap } });
+  const live = await capFor("U-admin");
+  assert.deepEqual(((await (await get("/v1/apps", live)).json()) as { apps: unknown[] }).apps, []);
+  assert.equal(
+    ((await (await get(`/v1/apps/${d.id}`, live)).json()) as { app: { permission: string } }).app.permission,
+    "write",
+  );
+  assert.deepEqual(await (await get(`/v1/apps/${d.id}/logs`, live)).json(), { logs: "ok\n" });
+  assert.equal((await get(`/v1/apps/${d.id}/fetch`, live)).status, 502);
+  const adminGit = (await (await get(`/v1/apps/${d.id}/git-url`, live)).json()) as {
+    url: string;
+    permission: string;
+  };
+  assert.equal(adminGit.permission, "write");
+  await cloneEditPush(adminGit.url, (work) => writeFile(join(work, "server.js"), "2"));
+  assert.equal((await f.app.getApp(d.id))?.currentVersion, 2);
+  for (const cap of [
+    await capFor("U-stranger"),
+    await capFor("U-admin", { liveActor: false }),
+    await capFor("U-admin", { botActor: true }),
+  ])
+    assert.deepEqual(
+      await Promise.all(
+        ["", "/logs", "/fetch", "/git-url"].map((s) => get(`/v1/apps/${d.id}${s}`, cap).then((r) => r.status)),
+      ),
+      [404, 404, 404, 403],
     );
-
-    const reader = await ask("U2");
-    assert.equal(reader.status, 200);
-    assert.equal(((await reader.json()) as { permission: string }).permission, "read");
-
-    const stranger = await ask("U3");
-    assert.equal(stranger.status, 403);
-
-    await f.acl.grant(tenant, {
-      ownerScopeId: scopeId("personal", "U1"),
-      ref: `deployment:${d.id}`,
-      granteeScopeId: scopeId("personal", "U3"),
-      permission: "write",
-      grantedBy: "U1",
-    });
-    const writer = await ask("U3");
-    assert.equal(writer.status, 200);
-    assert.equal(((await writer.json()) as { permission: string }).permission, "write");
-
-    const anon = await fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`);
-    assert.equal(anon.status, 401);
-  } finally {
-    await f.close();
-  }
 });
 
 test("git-url endpoint returns a clonable API URL when web and API origins differ", async () => {
@@ -308,36 +332,33 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   }
 });
 
-test("git-url endpoint: an org-owned app is read for a plain member, write only with a write grant", async () => {
+test("git-url endpoint: an org-owned app is read for a plain member, write only with a write grant", async (t) => {
   const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [{ path: "server.js", data: "1" }],
+  t.after(() => f.close());
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("org", "default-org"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [{ path: "server.js", data: "1" }],
+  });
+  const ask = async (actor: string) =>
+    fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
+      headers: { "x-agent-capability": await capFor(actor) },
     });
-    const ask = async (actor: string) =>
-      fetch(`${f.base}/v1/apps/${encodeURIComponent(d.id)}/git-url`, {
-        headers: { "x-agent-capability": await capFor(actor) },
-      });
 
-    const member = await ask("U2");
-    assert.equal(member.status, 200);
-    assert.equal(((await member.json()) as { permission: string }).permission, "read");
+  const member = await ask("U2");
+  assert.equal(member.status, 200);
+  assert.equal(((await member.json()) as { permission: string }).permission, "read");
 
-    await f.acl.grant(tenant, {
-      ownerScopeId: scopeId("org", "default-org"),
-      ref: `deployment:${d.id}`,
-      granteeScopeId: scopeId("personal", "U2"),
-      permission: "write",
-      grantedBy: "U1",
-    });
-    const promoted = await ask("U2");
-    assert.equal(((await promoted.json()) as { permission: string }).permission, "write");
-  } finally {
-    await f.close();
-  }
+  await f.acl.grant(tenant, {
+    ownerScopeId: scopeId("org", "default-org"),
+    ref: `deployment:${d.id}`,
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "write",
+    grantedBy: "U1",
+  });
+  const promoted = await ask("U2");
+  assert.equal(((await promoted.json()) as { permission: string }).permission, "write");
 });
 
 test("a garbage push body that git rejects early fails the request without crashing core", async () => {

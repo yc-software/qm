@@ -1381,7 +1381,7 @@ async function appLogs(ctx: ApiCtx): Promise<void> {
       message: `tailLines must be an integer from 1 to ${LOGS_MAX_TAIL_LINES}`,
     });
   }
-  const result = await app.appLogsFor(params.id!, viewer, { tailLines });
+  const result = await app.appLogsFor(params.id!, viewer, { tailLines, caller: capability ?? { actorId: viewer } });
   if (result.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   if (result.logs === null) return sendJson(res, 200, { logs: null, message: "no logs available for this app" });
   return sendJson(res, 200, { logs: result.logs });
@@ -1401,7 +1401,7 @@ async function fetchApp(ctx: ApiCtx): Promise<void> {
       message: `maxBytes must be an integer from 1 to ${AGENT_FETCH_MAX_BYTES}`,
     });
   }
-  const reach = await app.reachApp(params.id!, viewer);
+  const reach = await app.reachApp(params.id!, viewer, { caller: capability ?? { actorId: viewer } });
   if (reach.status !== "ok") return sendJson(res, 404, { error: "not_found" });
   try {
     const response = await fetchAppResponse(reach, path, maxBytes);

@@ -220,11 +220,19 @@ export async function verifyBlobTransferCapability(
   return claims as BlobTransferClaims;
 }
 
+export interface AdminActor {
+  actorId: string;
+  botActor?: boolean;
+  liveActor?: boolean;
+  liveAuthor?: boolean;
+  scopeId?: string;
+}
+
 export async function asOrgAdmin(
   admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
-  actor: { actorId: string; botActor?: boolean; liveActor?: boolean; liveAuthor?: boolean; scopeId?: string },
+  actor: AdminActor,
 ): Promise<boolean> {
-  if (actor.botActor === true) return false;
+  if (!actor.actorId || actor.botActor === true) return false;
   if (actor.scopeId !== undefined && actor.liveActor !== true && actor.liveAuthor !== true) return false;
   return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }
