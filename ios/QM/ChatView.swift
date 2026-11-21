@@ -124,6 +124,7 @@ struct ChatView: View {
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        .safeAreaInset(edge: .top, spacing: 0) { pinsSection }
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
         }
@@ -354,28 +355,38 @@ struct ChatView: View {
   @ViewBuilder
   private var pinsSection: some View {
     if !model.pins.isEmpty {
-      NativeDisclosureRow(expanded: pinsExpanded) {
-        pinsExpanded.toggle()
-      } label: {
-        Label("Pinned (\(model.pins.count))", systemImage: "pin")
-          .font(.subheadline).foregroundStyle(.secondary)
-      }
-      if pinsExpanded {
-        ForEach(model.pins) { pin in
-          VStack(alignment: .leading, spacing: 6) {
-            Text(pin.text ?? pin.preview ?? "Pinned message").textSelection(.enabled)
-            if pin.text != nil, let preview = pin.preview {
-              Text(preview).font(.caption).foregroundStyle(.secondary)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 8) {
+          NativeDisclosureRow(expanded: pinsExpanded) {
+            pinsExpanded.toggle()
+          } label: {
+            Label("Pinned (\(model.pins.count))", systemImage: "pin")
+              .font(.subheadline).foregroundStyle(.secondary)
+          }
+          if pinsExpanded {
+            ForEach(model.pins) { pin in
+              VStack(alignment: .leading, spacing: 6) {
+                Text(pin.text ?? pin.preview ?? "Pinned message").textSelection(.enabled)
+                if pin.text != nil, let preview = pin.preview {
+                  Text(preview).font(.caption).foregroundStyle(.secondary)
+                }
+                if let sequence = pin.entrySeq {
+                  Button("Go to message") {
+                    followsLatest = false
+                    targetSequence = sequence
+                  }
+                }
+              }.padding(.vertical, 6)
             }
-            if let sequence = pin.entrySeq {
-              Button("Go to message") {
-                followsLatest = false
-                targetSequence = sequence
-              }
-            }
-          }.padding(.vertical, 6)
+          }
         }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
+        .frame(maxWidth: .infinity)
       }
+      .frame(maxHeight: 240).fixedSize(horizontal: false, vertical: true)
+      .background(QMTheme.paper)
+      .overlay(alignment: .bottom) { Divider() }
     }
   }
 
@@ -506,7 +517,6 @@ struct ChatView: View {
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
     return VStack(alignment: .leading, spacing: 16) {
       Group {
-        pinsSection
         forkOrigin
         if model.earlierItems > 0,
           inheritedExpanded || model.conversation.forkBoundarySeq == nil
