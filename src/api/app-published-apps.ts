@@ -76,7 +76,7 @@ export function createAppMethods(
     return permission === "write" || (await asOrgAdmin(deps, caller)) ? "write" : permission;
   }
   async function canReadApp(d: PublishedApp, principalId: string, caller?: AdminActor): Promise<boolean> {
-    return (await principalCanReadApp(d, principalId)) || asOrgAdmin(deps, caller ?? { actorId: principalId });
+    return (await principalCanReadApp(d, principalId)) || (caller ? asOrgAdmin(deps, caller) : false);
   }
   const invitationLock = deps.advisoryLock;
   return {

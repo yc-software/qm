@@ -10,12 +10,8 @@ async function scopeBackgroundJobs(
 ) {
   if (!processes) return [];
   const ownedIds = new Set(sandboxes.filter((s) => s.ownerScopeId === scopeId).map((s) => s.id));
-  const [byScope, live] = await Promise.all([
-    processes.listByScope(scopeId),
-    ownedIds.size ? processes.listLive() : Promise.resolve([]),
-  ]);
-  const seen = new Map<string, (typeof byScope)[number]>();
-  for (const r of [...byScope, ...live]) {
+  const seen = new Map<string, Awaited<ReturnType<typeof processes.listLive>>[number]>();
+  for (const r of await processes.listLive()) {
     if (r.kind !== "background") continue;
     if (r.scopeId !== scopeId && !(r.sandboxId && ownedIds.has(r.sandboxId))) continue;
     seen.set(r.processId, r);
