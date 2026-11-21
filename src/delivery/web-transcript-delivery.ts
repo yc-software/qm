@@ -3,6 +3,7 @@ import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { type Item, type NewItem } from "../sessions/items.ts";
+import { cronIdOf } from "../sessions/session-store.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 import { withTenant } from "../tenants/context.ts";
@@ -38,6 +39,12 @@ function classify(d: Delivery): Disposition {
 }
 
 const transcribed = (type: string): boolean => type === "web";
+
+function viaBody(d: Delivery, via: string): Record<string, unknown> {
+  const sourceTitle = d.provenance?.sourceTitle?.trim();
+  const cronId = via === "cron" ? cronIdOf(d.provenance?.sourceThreadRef) : null;
+  return { via, ...(sourceTitle ? { sourceTitle } : {}), ...(cronId ? { cronId } : {}) };
+}
 
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,
@@ -77,7 +84,7 @@ export function withWebTranscriptDeliveries(
     } else if (failure) {
       item = turnFailureItem(d.text, failure.runId);
     } else {
-      item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
+      item = { kind: "AgentMessage", text: d.text, body: via ? viaBody(d, via) : {} };
     }
     const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
     if (!inserted) return true;

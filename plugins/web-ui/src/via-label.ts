@@ -1,5 +1,5 @@
 const SOURCES: Record<string, string> = { cron: "Scheduled task", webhook: "Webhook", monitor: "Monitor" };
 
-export function assistantSpeakerText(name: string, via: string | undefined): string {
-  return via ? `${name} · ${SOURCES[via] ?? via}` : name;
+export function viaSourceText(via: string, title?: string): string {
+  return title?.trim() || SOURCES[via] || via;
 }

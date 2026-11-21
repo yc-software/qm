@@ -74,7 +74,7 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
         variant: null,
         text: "Reminder: standup in 10 minutes",
         turnId: drained[0]!.id,
-        body: { via: "cron" },
+        body: { via: "cron", cronId: "c1" },
       },
     ],
   );
@@ -82,6 +82,36 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
   assert.equal(messages.at(-1)!.role, "user");
   assert.match(JSON.stringify(messages), /<message from=\\"agent\\" via=\\"cron\\">Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
+});
+
+test("a delivered post records the source's title, and the cron id only for crons", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions);
+
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "digest",
+    idempotencyKey: "agent:main:cron:c1:150",
+    provenance: cronProvenance({ fireKey: "agent:main:cron:c1:150", sourceTitle: " Gmail unread digest " }),
+  });
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "hook fired",
+    idempotencyKey: "webhook:w1:1",
+    provenance: cronProvenance({
+      trigger: "webhook",
+      surface: "webhook",
+      fireKey: "webhook:w1:1",
+      sourceThreadRef: "webhook:w1",
+    }),
+  });
+  await deliveries.pending("web");
+
+  const bodies = (await sessions.getItems(session.id)).map((e) => [e.text, e.body]);
+  assert.deepEqual(bodies.sort(), [
+    ["digest", { via: "cron", sourceTitle: "Gmail unread digest", cronId: "c1" }],
+    ["hook fired", { via: "webhook" }],
+  ]);
 });
 
 test("the recorded entry renders through the transcript source", async () => {
