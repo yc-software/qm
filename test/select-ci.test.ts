@@ -76,8 +76,8 @@ test("tests reach what they list, name from the root, fill into a path or copy i
     "src/vendor/bar.js": "export {};\n",
     "src/asset.ts": "readFileSync(new URL(`./vendor/bar.${name}`, import.meta.url));\n",
     "src/config.ts": 'readdirSync("./plugins");\n',
-    "test/boot.test.ts": 'import "../src/config.ts";\n',
-    "test/brand.test.ts": 'execFileSync("git", ["ls-files"]);\n',
+    "test/boot.test.ts": 'import "../src/config.ts";\nreaddirSync(`docs/drafts/${name}`);\n',
+    "test/brand.test.ts": 'execSync("git ls-files -z");\n',
     "test/child.test.ts": 'spawn("node", ["-e", "import(\'./src/asset.ts\')"]);\nreadFileSync(".env.example");\n',
     "test/image.test.ts": 'readFileSync("deploy/core/Dockerfile");\n',
   };

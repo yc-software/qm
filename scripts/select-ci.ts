@@ -70,8 +70,10 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
   };
   const literalEdges = (text: string, open: boolean) => {
     const pieces = text.split(/[\s=,:;()"']+/);
-    if (open) pieces.push(`${posix.dirname(pieces.at(-1)!)}/`);
+    const last = pieces.at(-1)!;
+    if (open) pieces.push(last.slice(0, last.lastIndexOf("/") + 1));
     for (const piece of pieces) {
+      if (piece === "ls-files") found.listsTracked = true;
       if (!piece.replaceAll(".", "").replaceAll("/", "") || !(piece.includes("/") || posix.extname(piece))) continue;
       add(posix.join(here, piece), [posix.join(here, piece)]);
       const fromRoot = posix.normalize(piece).replace(/^\/+/, "");
@@ -85,10 +87,8 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
       ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0];
     if (loaded && ts.isStringLiteralLike(loaded)) return importEdge(loaded.text);
     if (specifier && ts.isStringLiteralLike(specifier)) return importEdge(specifier.text);
-    if (literals && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node))) {
-      if (node.text === "ls-files") found.listsTracked = true;
+    if (literals && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)))
       literalEdges(node.text, ts.isTemplateHead(node));
-    }
     ts.forEachChild(node, visit);
   };
   visit(ts.createSourceFile(path, runtimeCode(path, source), ts.ScriptTarget.Latest));
