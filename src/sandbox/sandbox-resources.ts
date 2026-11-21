@@ -578,13 +578,13 @@ export function createTurnSandboxAccess(ctx: {
   const planFor = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
     const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
     if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
-    await deps.config?.refreshSecurity([resource.ownerScopeId]);
+    await deps.config!.refreshSecurity([resource.ownerScopeId]);
     const credentialScopeId = resource.ownerScopeId === personalScope(actor.id) ? resource.ownerScopeId : undefined;
     return {
       resource,
       crossScope: true,
-      egress: intersectEgressPolicies(resolution.egress, deps.config?.getEgress(resource.ownerScopeId) ?? null),
-      commandPolicy: deps.config?.getCommandPolicy(resource.ownerScopeId) ?? null,
+      egress: intersectEgressPolicies(resolution.egress, deps.config!.getEgress(resource.ownerScopeId)),
+      commandPolicy: deps.config!.getCommandPolicy(resource.ownerScopeId),
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
@@ -592,7 +592,8 @@ export function createTurnSandboxAccess(ctx: {
     planFor(await accessConversationSandbox(deps.sandboxResources, actor.id, id, canUseSandboxScope, botMayUse));
   const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
     if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
-    return planFor(resource);
+    if (orgAdmin && !samePerson(resource.createdBy, actor.id)) return planFor(resource);
+    return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
   };
   return { accessResource, jobComputerPlan };
 }
