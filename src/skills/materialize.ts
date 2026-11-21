@@ -2,6 +2,7 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
+import { flatText } from "../util/text.ts";
 import { assertSafeSkillName } from "./skill-name.ts";
 
 export const SKILLS_DIR = "skills";
@@ -144,7 +145,7 @@ export function skillsIndex(resolved: SkillResolution[], budget = SKILLS_INDEX_B
   const items = rankedSkills(resolved);
   if (!items.length) return "";
   const heads = items.map((r) => `- ${r.skill!.manifest.name}`);
-  const descriptions = items.map((r) => r.skill!.manifest.description.trim());
+  const descriptions = items.map((r) => flatText(r.skill!.manifest.description));
   const cap = fitDescriptions(heads, descriptions, budget);
   let lines: string[];
   let note = "";
