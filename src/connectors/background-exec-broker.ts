@@ -18,6 +18,7 @@ export interface BackgroundExecBrokerDeps {
   livePersonTurn?: boolean;
   sessionRef?: string;
   runId?: string;
+  actorId?: string;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -129,14 +130,8 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const redacted = redactCommand(normalized, handle.env);
 
       let processId =
-        redacted === normalized && !credentials
-          ? ((await deps.registry.listByScope(deps.scopeId)).find(
-              (r) =>
-                r.kind === "background" &&
-                r.command === redacted &&
-                r.status === "running" &&
-                r.sandboxId === sandboxId,
-            )?.processId ?? null)
+        redacted === normalized && !credentials && deps.actorId
+          ? await deps.registry.runningJobStartedBy(deps.scopeId, sandboxId, redacted, deps.actorId)
           : null;
 
       if (processId) {

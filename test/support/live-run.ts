@@ -8,6 +8,14 @@ export function testRuns(): RunStore {
   return createPostgresRunStore(testDatabaseUrl()).runs;
 }
 
+export async function startedBy(url: string, id: string) {
+  const actor = { id, type: "internal" as const };
+  const conversation = { kind: "dm" as const, threadRef: id, audience: [actor] };
+  const request = { actor, conversation, origin: { kind: "direct" as const }, text: "run it" };
+  const { run } = await createPostgresRunStore(url).runs.enqueue({ sessionId: id, request });
+  return { actorId: id, runId: run.id };
+}
+
 export async function holdThread(runs: RunStore, threadRef: string): Promise<() => Promise<void>> {
   const request = {
     surface: "test",

@@ -56,6 +56,7 @@ export function createTurnBrokers(turn: {
           livePersonTurn,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
+          actorId: actor.id,
           ttlMs: deps.backgroundJobTtlMs,
           ttlMaxMs: deps.backgroundJobTtlMaxMs,
           assertComputerUsable: assertDefaultUsable,

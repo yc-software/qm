@@ -47,6 +47,7 @@ export interface ProcessRegistry {
   register(rec: NewProcessRecord): Promise<ProcessRecord>;
   get(processId: string): Promise<ProcessRecord | null>;
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
+  runningJobStartedBy(scopeId: string, sandboxId: string, command: string, actorId: string): Promise<string | null>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
   getMany(tenant: Tenant, processIds: readonly string[]): Promise<ProcessRecord[]>;
@@ -219,6 +220,15 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async listByScope(scopeId) {
       return (await q("SELECT * FROM process_sessions WHERE scope_id = $1", [scopeId])).map(pgRowToRecord);
+    },
+    async runningJobStartedBy(scopeId, sandboxId, command, actorId) {
+      const rows = await q(
+        `SELECT p.process_id FROM process_sessions p JOIN runs r ON r.tenant_id = p.tenant_id AND r.id = p.run_id
+          WHERE p.scope_id = $1 AND p.sandbox_id = $2 AND p.command = $3 AND p.kind = 'background' AND p.status = 'running'
+            AND pg_input_is_valid(r.request, 'jsonb') AND r.request::jsonb -> 'actor' ->> 'id' = $4 LIMIT 1`,
+        [scopeId, sandboxId, command, actorId],
+      );
+      return (rows[0]?.process_id as string | undefined) ?? null;
     },
     async liveByScope(scopeId, now = Date.now()) {
       const rows = await q(
