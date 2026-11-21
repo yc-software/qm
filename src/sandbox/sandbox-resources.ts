@@ -549,12 +549,14 @@ export function createTurnSandboxAccess(ctx: {
   resolution: Resolution;
   scopeId: ScopeId;
   openResourceAccess?: boolean;
+  orgAdmin?: boolean;
   botMayUse?: (resource: SandboxResource) => Promise<boolean>;
 }) {
-  const { deps, actor, resolution, scopeId, openResourceAccess, botMayUse } = ctx;
+  const { deps, actor, resolution, scopeId, openResourceAccess, orgAdmin, botMayUse } = ctx;
   const writableScopeId = resolution.writableScopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
+    if (orgAdmin && actor.type === "internal") return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
       return false;
     const personal = personalScope(actor.id);

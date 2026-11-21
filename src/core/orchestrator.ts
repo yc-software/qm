@@ -1355,6 +1355,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForTurn,
         egressTokenForPolicy,
         openResourceAccess: !external && (livePersonTurn || openAutomationKeychain),
+        orgAdmin: !external && actorIsOrgAdmin,
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)

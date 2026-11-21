@@ -61,6 +61,7 @@ export interface TurnSandboxContext {
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
+  orgAdmin?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
 }
 
@@ -424,6 +425,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     resolution,
     scopeId,
     openResourceAccess,
+    orgAdmin: ctx.orgAdmin === true,
     botMayUse,
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
