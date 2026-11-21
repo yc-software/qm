@@ -1177,7 +1177,7 @@ test("every resource-bound command reports the computer's load without disturbin
 
 test("a computer without an io pressure gauge reports it unavailable rather than a number", async () => {
   const { router } = fixture((backend) =>
-    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600\n"),
+    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600 - -\n"),
   );
   const r = await router.run(await router.provision("personal:alice"), "true");
   assert.equal(r.stdout, "out\n");
@@ -1211,7 +1211,7 @@ test("output a background job prints after the load line, and an unterminated he
 });
 
 test("load samples are written at most once per ten seconds per computer", async (t) => {
-  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2\n"));
+  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2 - -\n"));
   const handle = await router.provision("personal:alice");
   const puts: number[] = [];
   const put = options.loads.put.bind(options.loads);
@@ -1231,7 +1231,7 @@ test("load samples are written at most once per ten seconds per computer", async
 test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
   let io = "88";
   const events: string[] = [];
-  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2\n`));
+  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2 - -\n`));
   const router = createSandboxRouter({
     backends: { local: f.backend },
     defaultBackend: "local",
@@ -1251,7 +1251,7 @@ test("sustained io pressure is reported once per episode, then re-arms after it 
 
 test("the Sandboxes line counts the asking turn plus the runs holding the default and stays quiet when nothing is notable", async () => {
   const { router, resources, options } = fixture((backend) =>
-    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600\n"),
+    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600 - -\n"),
   );
   const handle = await router.provision("personal:alice");
   const id = handle.resourceId!;
@@ -1294,7 +1294,7 @@ test("a single session still sees the line when the disk is nearly full, without
 });
 
 test("the recorded load sample takes mem and disk totals from the created size, falling back to the kernel's", async () => {
-  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912\n";
+  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912 - -\n";
   const kernel = fixture((backend) => shellRun(backend, () => hostLine));
   const bare = await kernel.router.provision("personal:alice");
   await kernel.router.run(bare, "true");

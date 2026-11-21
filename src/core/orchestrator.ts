@@ -1019,7 +1019,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const skillSourceContext = await tracePhase(
         "turn.skills",
         () => context.listSkills([scopeId, resolution.orgScopeId]),
-        { counts: countSkills },
+        { attributes: countSkills },
       );
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
