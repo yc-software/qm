@@ -1589,6 +1589,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           memoryScopeId,
           livePersonTurn,
+          orgAdmin: !external && actorIsOrgAdmin,
           defaultDestination,
           provision,
           provisionJobSandbox,

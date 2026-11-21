@@ -3,6 +3,37 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
+async function scopeBackgroundJobs(
+  processes: ApiCtx["deps"]["processes"],
+  scopeId: string,
+  sandboxes: ReadonlyArray<{ id: string; ownerScopeId: string }>,
+) {
+  if (!processes) return [];
+  const ownedIds = new Set(sandboxes.filter((s) => s.ownerScopeId === scopeId).map((s) => s.id));
+  const [byScope, live] = await Promise.all([
+    processes.listByScope(scopeId),
+    ownedIds.size ? processes.listLive() : Promise.resolve([]),
+  ]);
+  const seen = new Map<string, (typeof byScope)[number]>();
+  for (const r of [...byScope, ...live]) {
+    if (r.kind !== "background") continue;
+    if (r.scopeId !== scopeId && !(r.sandboxId && ownedIds.has(r.sandboxId))) continue;
+    seen.set(r.processId, r);
+  }
+  return [...seen.values()]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .map((r) => ({
+      processId: r.processId,
+      ...(r.sandboxId ? { sandboxId: r.sandboxId } : {}),
+      scopeId: r.scopeId,
+      command: r.command,
+      ...(r.purpose ? { purpose: r.purpose } : {}),
+      status: r.status,
+      startedAt: r.startedAt,
+      expiresAt: r.expiresAt,
+    }));
+}
+
 export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return;
@@ -11,7 +42,11 @@ export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
   const scopeId = ctx.params.scopeId!;
   const input = (ctx.body ?? {}) as Record<string, unknown>;
   try {
-    if (ctx.req.method === "GET") return sendJson(ctx.res, 200, await resources.list(actor.id, scopeId));
+    if (ctx.req.method === "GET") {
+      const listing = await resources.list(actor.id, scopeId);
+      const jobs = await scopeBackgroundJobs(ctx.deps.processes, scopeId, listing.sandboxes);
+      return sendJson(ctx.res, 200, { ...listing, jobs });
+    }
     if (input.action === "retire") {
       if (typeof input.sandboxId !== "string") throw new Error("retire requires sandboxId");
       const record = await resources.access(actor.id, input.sandboxId);

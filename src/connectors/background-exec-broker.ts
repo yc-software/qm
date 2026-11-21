@@ -16,6 +16,7 @@ export interface BackgroundExecBrokerDeps {
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
   livePersonTurn?: boolean;
+  orgAdmin?: boolean;
   sessionRef?: string;
   runId?: string;
   ttlMs?: number;
@@ -109,10 +110,16 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.live))
       throw new Error("a background job that saves a live sign-in takes input and stop only from a person's live turn");
   };
+  const lookup = async (processId: string): Promise<ProcessRecord> => {
+    const rec = await deps.registry.get(processId);
+    if (!rec || rec.kind !== "background" || (rec.scopeId !== deps.scopeId && !deps.orgAdmin)) {
+      throw new Error("no such background job");
+    }
+    return rec;
+  };
   return {
     async handleFor(processId) {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") throw new Error("no such background job");
+      const rec = await lookup(processId);
       if (!rec.sandboxId) throw new Error("this background job has no recorded computer and can no longer be reached");
       if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
       return deps.provisionSandbox(rec.sandboxId);
@@ -230,10 +237,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async poll(handle, processId, opts): Promise<BackgroundPollResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
+      const rec = await lookup(processId);
       if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
         handle = await deps.provisionSandbox(rec.sandboxId);
@@ -248,10 +252,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async write(handle, processId, data): Promise<BackgroundWriteResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
+      const rec = await lookup(processId);
       await assertSteerable(rec);
       if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");
@@ -264,10 +265,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     },
 
     async stop(handle, processId, signal = "TERM"): Promise<BackgroundStopResult> {
-      const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
-        throw new Error("no such background job");
-      }
+      const rec = await lookup(processId);
       await assertSteerable(rec);
       if (rec.sandboxId && rec.sandboxId !== handle.resourceId) {
         if (!deps.provisionSandbox) throw new Error("background job sandbox is unavailable");

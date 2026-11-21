@@ -455,7 +455,13 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: listSecurityFlags,
     },
-    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
+    {
+      method: "GET",
+      path: "/v1/admin/sandboxes/:scopeId",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: manageSandboxResources,
+    },
     { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     {
       method: "POST",

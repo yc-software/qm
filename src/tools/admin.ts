@@ -156,7 +156,7 @@ export const adminOperations = {
   reactivate_user: operation("Turn a deactivated person's sign-in back on.", "POST", "/users/:id/reactivate", {
     id: string,
   }),
-  sandboxes: operation("List a scope's sandboxes.", "GET", "/sandboxes/:scope", scope),
+  sandboxes: operation("List a scope's sandboxes and background jobs.", "GET", "/sandboxes/:scope", scope),
   create_sandbox: operation("Create a sandbox in a scope.", "POST", "/sandboxes/:scope", {
     ...scope,
     value: Type.Object(

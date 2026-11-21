@@ -104,6 +104,7 @@ export interface MonitorBrokerDeps {
   owner: string;
   ownerScopeId: ScopeId;
   botActor?: boolean;
+  orgAdmin?: boolean;
   threadRef: string;
   destination?: Destination;
   returnsToParent?: boolean;
@@ -113,10 +114,11 @@ export interface MonitorBrokerDeps {
 
 export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
   const graceMs = deps.graceMs ?? EXPIRY_GRACE_MS;
+  const admin = deps.orgAdmin === true && deps.botActor !== true;
   return {
     async watch(processId, opts) {
       const rec = await deps.registry.get(processId);
-      if (!rec || rec.scopeId !== deps.scopeId || rec.kind !== "background") {
+      if (!rec || rec.kind !== "background" || (rec.scopeId !== deps.scopeId && !admin)) {
         throw new Error("no such background job to watch");
       }
       await deps.assertComputerUsable?.(rec.sandboxId);
@@ -173,11 +175,14 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     },
     async unwatch(monitorId) {
       const m = await deps.store.get(monitorId);
-      if (!m || m.ownerScopeId !== deps.ownerScopeId) return { monitorId, removed: false };
+      if (!m) return { monitorId, removed: false };
+      const inScope = m.ownerScopeId === deps.ownerScopeId;
+      if (!inScope && !admin) return { monitorId, removed: false };
       const owns = async () => samePerson(m.owner, deps.owner);
       const caller = { actorId: deps.owner, botActor: deps.botActor };
-      if (!(await personOrOwningBot(caller, owns, m)) || !(isSystemActor(m.owner) || (await owns())))
-        return { monitorId, removed: false, notYours: true };
+      const permitted =
+        inScope && (await personOrOwningBot(caller, owns, m)) && (isSystemActor(m.owner) || (await owns()));
+      if (!permitted && !admin) return { monitorId, removed: false, notYours: true };
       await deps.store.delete(monitorId);
       return { monitorId, removed: true };
     },

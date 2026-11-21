@@ -32,7 +32,7 @@ admin's own; find others' ids with `/v1/admin/crons`, `/v1/admin/apps` or `/v1/a
 credential, grant it to this conversation with
 `POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
 (ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
-handle in `execute.credentials`. An admin's own turns can also run commands on another person's computer by passing its `sandbox_id` (find ids with `/v1/admin/sandboxes?scope=`); it runs under that computer's network and command policy, and the owner's credentials come only through a keychain grant. Credential grants and most edits are audited.
+handle in `execute.credentials`. An admin's own turns can also run commands on another person's computer by passing its `sandbox_id` (find ids with `/v1/admin/sandboxes?scope=`); it runs under that computer's network and command policy, and the owner's credentials come only through a keychain grant. The same turns can poll, send input to, stop, watch, or unwatch another person's background job by `process_id` or `monitor_id` (find job ids in `jobs` from `GET /v1/admin/sandboxes/<scope>` / `admin` `sandboxes`). Credential grants and most edits are audited.
 Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.
