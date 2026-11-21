@@ -313,14 +313,17 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   if (requested) {
     const { principalId } = await resolveAdminUser(deps, requested);
     const [credentials, grants] = await Promise.all([
-      deps.keychain.listByOwner(principalId),
+      deps.keychain.listByOwner(principalId, { includeConnectors: true }),
       deps.keychain.listGrants({ ownerId: principalId }),
     ]);
     return sendJson(res, 200, { scopeId: scope, credentials, grants, enabled: true });
   }
 
   if (ctx.url.searchParams.get("summary") === "1") {
-    const [credentials, grants] = await Promise.all([deps.keychain.listAllMetadata(), deps.keychain.listGrants({})]);
+    const [credentials, grants] = await Promise.all([
+      deps.keychain.listAllMetadata({ includeConnectors: true }),
+      deps.keychain.listGrants({}),
+    ]);
     return sendJson(res, 200, {
       users: new Set(credentials.map((credential) => credential.ownerId)).size,
       standing: grants.filter(
@@ -331,7 +334,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   }
 
   const [credentials, grants, asks, roster, adminGrants] = await Promise.all([
-    deps.keychain.listAllMetadata(),
+    deps.keychain.listAllMetadata({ includeConnectors: true }),
     deps.keychain.listGrants({}),
     deps.keychain.listAsks({}),
     deps.admin!.users.list(),
@@ -587,9 +590,49 @@ export async function createAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
       resource: credential.id,
       scopeLabel: audience,
     });
-    return sendJson(res, 200, { grant });
+    return sendJson(res, 200, {
+      grant,
+      ...(credential.credentialHandle ? { credentialHandle: credential.credentialHandle } : {}),
+    });
   } catch (e) {
     const status = e instanceof KeychainError ? e.status : 400;
     return sendJson(res, status, { error: "grant_failed", message: errMessage(e) });
   }
+}
+
+export async function revokeAdminKeychainGrant(ctx: ApiCtx): Promise<void> {
+  const { res, deps, params } = ctx;
+  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  if (!actor) return;
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found", message: "keychain is not enabled" });
+  const grant = await deps.keychain.getGrant(params.id!);
+  if (!grant) return sendJson(res, 404, { error: "not_found", message: "unknown grant" });
+  const ok = await deps.keychain.revokeGrant(grant.ownerId, grant.id);
+  if (!ok) return sendJson(res, 404, { error: "not_found", message: "unknown grant" });
+  audit(ctx, {
+    principalId: actor.id,
+    action: "keychain.admin_revoke",
+    resource: grant.id,
+    scopeLabel: grant.audienceScopeId,
+  });
+  return sendJson(res, 200, { ok: true });
+}
+
+export async function deleteAdminKeychainCredential(ctx: ApiCtx): Promise<void> {
+  const { res, deps, params } = ctx;
+  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  if (!actor) return;
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found", message: "keychain is not enabled" });
+  const credential = await deps.keychain.getCredential(params.id!);
+  if (!credential || credential.kind === "broker")
+    return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
+  const ok = await deps.keychain.remove(credential.ownerId, credential.id, { includeConnectors: true });
+  if (!ok) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
+  audit(ctx, {
+    principalId: actor.id,
+    action: "keychain.admin_delete",
+    resource: credential.id,
+    scopeLabel: makeScopeId("personal", credential.ownerId),
+  });
+  return sendJson(res, 200, { ok: true });
 }

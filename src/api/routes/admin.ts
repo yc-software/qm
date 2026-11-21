@@ -28,6 +28,8 @@ import {
   inviteTeammate,
   listKeychainStatus,
   createAdminKeychainGrant,
+  revokeAdminKeychainGrant,
+  deleteAdminKeychainCredential,
   listUsers,
   resetUserToBrandNew,
   revokeAdminGrant,
@@ -384,6 +386,13 @@ const routes: Route<ApiCtx>[] = [
       handle: listKeychainStatus,
     },
     { method: "POST", path: "/v1/admin/keychain/grants", auth: "either", handle: createAdminKeychainGrant },
+    { method: "DELETE", path: "/v1/admin/keychain/grants/:id", auth: "either", handle: revokeAdminKeychainGrant },
+    {
+      method: "DELETE",
+      path: "/v1/admin/keychain/credentials/:id",
+      auth: "either",
+      handle: deleteAdminKeychainCredential,
+    },
     {
       method: "GET",
       path: "/v1/admin/users/:principalId",
