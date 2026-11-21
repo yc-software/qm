@@ -497,6 +497,7 @@ export function createChatSurface(
 
   let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
+  let followReadOnlySend = false;
 
   function teardownActiveChat(): void {
     sideChats.dispose();
@@ -1342,6 +1343,14 @@ export function createChatSurface(
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
+    const previousScroll =
+      chatState.sessionId === s.id ? container.querySelector<HTMLElement>(".readonly-scroll") : null;
+    const kept = previousScroll && {
+      top: previousScroll.scrollTop,
+      fromBottom: previousScroll.scrollHeight - previousScroll.scrollTop - previousScroll.clientHeight,
+      prepended: readOnlyView?.anchorSeq !== anchorSeq,
+      typing: Boolean(document.activeElement?.closest("qm-slack-reply")),
+    };
     preserveOutgoingWorkingDot(s.threadRef);
     dropAbandonedNewChat(s.threadRef);
     detachActiveChat();
@@ -1378,7 +1387,11 @@ export function createChatSurface(
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
-      if (!priorReply) slackReply.addEventListener("slack-sent", () => onDelivery(s.threadRef));
+      if (!priorReply)
+        slackReply.addEventListener("slack-sent", () => {
+          followReadOnlySend = true;
+          onDelivery(s.threadRef);
+        });
     }
     let approvals: PendingApproval[] = [];
     const draw = () => {
@@ -1501,7 +1514,12 @@ export function createChatSurface(
     void refreshApprovals();
     draw();
     container.replaceChildren(host);
-    if (!sameSession) scrollToBottom();
+    const scroller = host.querySelector<HTMLElement>(".readonly-scroll");
+    if (!kept || !scroller || followReadOnlySend || kept.fromBottom < 40) scrollToBottom();
+    else if (kept.prepended) scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - kept.fromBottom;
+    else scroller.scrollTop = kept.top;
+    followReadOnlySend = false;
+    if (kept?.typing) slackReply?.querySelector<HTMLTextAreaElement>(".composer-input")?.focus();
     readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
     ctx.ensureDeliveryStream();
     consumeBackgroundPanelRequest();
