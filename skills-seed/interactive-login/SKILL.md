@@ -11,30 +11,49 @@ to the keychain with the script shipped with this skill. Never log in against th
 keychain handle is. Use the same explicit `sandbox_id` for the skill read, login,
 and save-login commands so the temporary home and save script stay on one computer.
 
-## Approved codes are thrown away unless you save them
+## One expiry, one code
 
-A CLI login (`aws sso login`, `gh auth login`, …) writes its token into whatever home
-directory the command runs in, and neither place lasts. A command that names a credential
-runs in a private home that is discarded when the command ends, along with any new token.
-A token left in the computer's own `$HOME` is never seen by the keychain, other
-conversations or other computers, and the computer itself may be replaced. Either way,
-the person approves your code, the login seems to work, and later commands fail and ask
-for another code. Nothing warns you when this happens. Only the save in step 3 turns an
-approved code into a login that later commands and other conversations can use.
+A saved login is shared: every conversation that names its handle gets the same files. When
+it expires, it expires for all of them at once, and one approved code that gets saved fixes
+it for all of them. Asking the person twice for the same expiry is a mistake on your side.
 
-The mistake to avoid: one afternoon, several agents found the saved AWS login expired and
-each ran `aws sso login --use-device-code` directly, sometimes more than once. The person
-approved about eight codes, and most of them were lost because they were never saved.
+- **Check before you ask, and again before you ask twice.** Name the handle in
+  `execute.credentials` and run the CLI's identity check (AWS:
+  `aws sts get-caller-identity --profile <profile>`). Another conversation may have renewed
+  the login while you waited.
+- **A subagent or unattended run does not start a sign-in.** Report the expired login to
+  whoever started you. The conversation the person is in starts one sign-in and relays one
+  code.
+- **Don't send a second code until you know why the first approval didn't stick**, and tell
+  the person what happened.
 
-So, before you show anyone a code:
+### How an approved code gets lost
 
-- **Check the saved login first.** Name its handle in `execute.credentials` and run the
-  CLI's identity check (for AWS, `aws sts get-caller-identity --profile <profile>`).
-  Another conversation may already have renewed it. Ask for a code only if that check fails.
-- **Only start a login through the steps below**, ending in the save, so the person's
-  approval replaces the saved login for everyone.
-- **If a saved login still fails right after an approved, saved sign-in, stop.** Tell
-  the person what failed instead of asking for another code.
+A command that names a handle does not use your computer's home directory. It works on a
+private copy of the saved files. Its changes are saved back at most once, when that command
+or background job exits, and then the copy is deleted. That loses approved codes three ways:
+
+- **The login outlives its command.** This job exits after six seconds, before anyone can
+  approve:
+
+  ```bash
+  nohup aws sso login --profile work --use-device-code --no-browser > /tmp/sso.log 2>&1 &
+  sleep 6; cat /tmp/sso.log
+  ```
+
+  The login keeps waiting on its own. The person approves, the CLI prints "Successfully
+  logged into Start URL", and the token goes into a copy that was already thrown away. A
+  script that starts the login and returns does the same.
+
+- **You check from another command.** Each command gets its own copy of what was last
+  saved, so it cannot see a login that is still running or was never saved.
+- **You log in with no handle and no save.** The token stays in the computer's own `$HOME`,
+  which no saved login reads.
+
+The steps below avoid all three: the login is the background job's own command, it writes
+to a directory that stays on your computer, and step 3 saves it.
+
+## Steps
 
 1. In the person's own turn, make a fresh directory and start the sign-in with the script
    shipped with this skill, under the absolute directory the skill read reported. It gets a
