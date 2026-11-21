@@ -25,6 +25,7 @@ import { createPostgresProcessRegistry } from "../src/processes/process-registry
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
+import { startedBy } from "./support/live-run.ts";
 import { sleep } from "../src/util/async.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
@@ -679,7 +680,8 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const registry = createPostgresProcessRegistry(url);
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -698,7 +700,8 @@ test("retirement waits for background startup to commit its live registry row", 
     await release.promise;
     return register(row);
   };
-  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
+  const alice = await startedBy(url, "alice");
+  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0, ...alice });
   const starting = broker.start(handle, "sleep 60", "Run background tests");
   await entering.promise;
   let destroyed = false;

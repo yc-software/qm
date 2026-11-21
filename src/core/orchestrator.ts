@@ -1577,9 +1577,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
           deps.turnStream.begin(input.runId);
+          if (wornPersona) deps.turnStream.notePersona(input.runId, wornPersona);
         }
 
         const { backgroundBroker, monitorBroker } = createTurnBrokers({
+          tenant,
           deps,
           input,
           actor,
