@@ -6,7 +6,7 @@ import { createMonitorBroker } from "../src/monitors/monitor-broker.ts";
 const bob = "personal:bob@x.com";
 const adm = "personal:admin@x.com";
 const job = { processId: "p1", scopeId: bob, sandboxId: "b1", kind: "background", command: "s", startedAt: 1 };
-const [h1, h2] = ["b0", "b1"].map((resourceId, i) => ({ id: `h${i + 1}`, rootDir: "/w", resourceId }));
+const [h1, h2] = ["b0", "b1"].map((resourceId, i) => ({ id: `h${i + 1}`, rootDir: "/w", resourceId })) as [any, any];
 const reg = {
   get: async (id: string) => (id === "p1" ? { ...job, expiresAt: 9, status: "running" } : null),
   listByScope: async (s: string) => (s === bob ? [job] : []),
