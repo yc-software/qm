@@ -237,17 +237,20 @@ async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean>
   return (await ctx.deps.featureFlags?.enabled("ui_canvas", scopeId("personal", principalId))) === true;
 }
 
-async function isCanvasTarget(ctx: ApiCtx, target: string): Promise<boolean> {
-  return target === ALWAYS_ON_CANVAS || Boolean(await ctx.deps.sessions?.get(target));
+async function rejectsCanvasRequest(ctx: ApiCtx, principalId: string, target: string): Promise<boolean> {
+  if (!principalId) {
+    sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    return true;
+  }
+  if (target === ALWAYS_ON_CANVAS || (await ctx.deps.sessions?.get(target))) return false;
+  sendJson(ctx.res, 404, { error: "not_found" });
+  return true;
 }
 
 async function userCanvasOf(ctx: ApiCtx): Promise<UiCanvas | null> {
   const { res, deps, url, params } = ctx;
   const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!))) {
-    sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-    return null;
-  }
+  if (await rejectsCanvasRequest(ctx, principalId, params.sessionId!)) return null;
   const canvas =
     deps.uiState && (await canvasEnabled(ctx, principalId))
       ? await readUiCanvas(deps.uiState, principalId, params.sessionId!)
@@ -284,8 +287,7 @@ async function userCanvas(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const sessionId = params.sessionId!;
-  if (!principalId || !(await isCanvasTarget(ctx, sessionId)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
+  if (await rejectsCanvasRequest(ctx, principalId, sessionId)) return;
   if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
   if (b.dismiss !== true && typeof b.pinned !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "pass dismiss or pinned" });
