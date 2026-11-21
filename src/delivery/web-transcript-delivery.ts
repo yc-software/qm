@@ -3,7 +3,6 @@ import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { type Item, type NewItem } from "../sessions/items.ts";
-import { cronIdOf, webhookIdOf } from "../sessions/session-store.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 import { withTenant } from "../tenants/context.ts";
@@ -40,14 +39,9 @@ function classify(d: Delivery): Disposition {
 
 const transcribed = (type: string): boolean => type === "web";
 
-const SOURCE_ID_OF: Record<string, (threadRef: string | undefined) => string | null> = {
-  cron: cronIdOf,
-  webhook: webhookIdOf,
-};
-
 function viaBody(d: Delivery, via: string): Record<string, unknown> {
   const sourceTitle = d.provenance?.sourceTitle?.trim();
-  const sourceId = SOURCE_ID_OF[via]?.(d.provenance?.sourceThreadRef);
+  const sourceId = d.provenance?.sourceId;
   return { via, ...(sourceTitle ? { sourceTitle } : {}), ...(sourceId ? { sourceId } : {}) };
 }
 

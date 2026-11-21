@@ -123,6 +123,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         securityScreenData: event.securityScreenData,
         fireKey,
         surface: "webhook",
+        sourceId: wh.id,
         ownerFire: ownerAuthored(wh),
         ...(destination ? { destination } : {}),
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,

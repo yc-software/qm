@@ -26,6 +26,7 @@ const cronProvenance = (over: Partial<DeliveryProvenance> = {}): DeliveryProvena
   sourceScopeId: SCOPE,
   sourceThreadRef: "agent:main:cron:c1",
   sourceSessionId: "cron-session",
+  sourceId: "c1",
   ...over,
 });
 
@@ -103,6 +104,7 @@ test("a delivered post records the source's title and the id of the cron or webh
       surface: "webhook",
       fireKey: "webhook:w1:1",
       sourceThreadRef: "webhook:w1:1",
+      sourceId: "w1",
     }),
   });
   await deliveries.enqueue({
@@ -114,6 +116,7 @@ test("a delivered post records the source's title and the id of the cron or webh
       surface: "monitor",
       fireKey: "monitor:m1:1",
       sourceThreadRef: "monitor:m1",
+      sourceId: undefined,
     }),
   });
   await deliveries.pending("web");

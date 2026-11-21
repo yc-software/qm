@@ -164,7 +164,6 @@ const STABLE_ORIGIN_RE = new RegExp(`^agent:main:${ORIGINS}:[^:]+$`);
 const BARE_ORIGIN_RE = new RegExp(`^${ORIGINS}:[^:]+(:.+)?$`);
 const STABLE_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
 const BARE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
-const WEBHOOK_ID_RE = /^webhook:([^:]+)(:.+)?$/;
 
 export function sessionOrigin(threadRef: string | null | undefined): SessionOrigin {
   const stable = STABLE_ORIGIN_RE.exec(threadRef ?? "");
@@ -181,10 +180,6 @@ export function sessionCategory(origin: SessionOrigin): SessionCategory {
 export function cronIdOf(threadRef: string | null | undefined): string | null {
   const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? BARE_CRON_ID_RE.exec(threadRef ?? "");
   return m ? m[1]! : null;
-}
-
-export function webhookIdOf(threadRef: string | null | undefined): string | null {
-  return WEBHOOK_ID_RE.exec(threadRef ?? "")?.[1] ?? null;
 }
 
 export interface SessionRef {
