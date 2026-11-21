@@ -7,6 +7,7 @@ import { jsonbStringify } from "../src/util/text.ts";
 import { createSessionMailbox, type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { openTurnPrompt } from "../src/agent/turn-open.ts";
 import {
   createSessionSyscalls,
   isSubagentThreadRef,
@@ -1436,7 +1437,6 @@ test("a finished child durably wakes its Slack parent exactly once and leaves th
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0]!.dedupKey, `subagent-return:${finished!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
   assert.equal(wakes[0]!.request.surfaceTools, true);
 });
 
@@ -1845,7 +1845,6 @@ test("terminal children remain recoverable until their return is acknowledged", 
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0]!.dedupKey, `subagent-return:${pending!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
   assert.equal(wakes[0]!.request.surfaceTools, true);
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${pending!.id}`]);
   assert.equal(
@@ -3621,4 +3620,23 @@ test("detaching an ancestor revokes a descendant's delegated live authority", as
   assert.equal((await delegatedAuthorization(run.request, r))?.origin.kind, "human");
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorization(run.request, r), undefined);
+});
+
+test("a woken turn opens with its subagent's result once, and a quarantined result stays pending without pausing it", async () => {
+  const r = await rig();
+  const [lane] = await delegatedLanes(r, ["work"]);
+  await r.runs.complete(lane!.run.id, lane!.leaseToken, { status: "ok", reply: "child result" });
+  await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(lane!.run.id))!);
+  const open = async (outcome: "allow" | "quarantine") => {
+    const ref = {
+      current: { sessionSyscalls: r.syscallsFor(r.room) },
+      screenToolResult: async () => ({ outcome }),
+    } as { pausedOnApproval?: boolean };
+    const turn = { input: "woken", history: [], emit: async (item: object) => ({ ...item, seq: 1 }) };
+    const { modelPrompt } = await openTurnPrompt({ entry: { ref }, turn, continueTurn: false } as never);
+    return [modelPrompt.includes("child result"), !!ref.pausedOnApproval];
+  };
+  assert.deepEqual(await open("quarantine"), [false, false]);
+  assert.deepEqual(await open("allow"), [true, false]);
+  assert.deepEqual(await open("allow"), [false, false]);
 });

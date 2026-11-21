@@ -33,6 +33,7 @@ export interface ToolContextRef {
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
   current: ToolContext | null;
+  quarantinedMail?: Set<string>;
   pendingApprovals?: Array<{
     command: string;
     reason: string;
