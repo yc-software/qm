@@ -8,7 +8,6 @@ import {
   stripReactionDirectives,
 } from "./lib.ts";
 import { withinReactionBudget } from "../surfaces/reactions.ts";
-import type { WornPersona } from "../types.ts";
 
 import type { SlackConversationKind } from "./message-gating.ts";
 export type { SlackConversationKind } from "./message-gating.ts";
@@ -19,14 +18,13 @@ export async function updateSlackMessage(
   ts: string | undefined,
   text: string,
   blocks?: Array<Record<string, unknown>>,
-  persona?: WornPersona,
 ): Promise<boolean> {
   if (!ts) return false;
   await client.chat.update({
     channel,
     ts,
     text: text.length > SLACK_TEXT_LIMIT ? `${text.slice(0, SLACK_TEXT_LIMIT - 1)}…` : text,
-    ...botIdentityArgs(persona),
+    ...botIdentityArgs(),
     unfurl_links: false,
     unfurl_media: false,
     blocks: blocks ?? [],

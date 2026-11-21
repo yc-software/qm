@@ -12,7 +12,7 @@ import {
   createThreadTracker,
   recoveredApprovalContext,
   resolveReactionTargets,
-  slackReplyArgs,
+  slackPersonaReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -75,6 +75,7 @@ export function createApprovals(deps: {
   flow: TurnFlow;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
+  webUiPublicUrl?: string;
 }): Approvals {
   const { core, flow, directory, threads } = deps;
 
@@ -142,7 +143,11 @@ export function createApprovals(deps: {
     persona?: WornPersona,
   ): Promise<void> {
     await client.chat.postMessage(
-      slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly, persona }),
+      slackPersonaReplyArgs(ctx.channel, text, ctx.replyThreadTs, {
+        threadOnly: ctx.threadOnly,
+        persona,
+        webUiPublicUrl: deps.webUiPublicUrl,
+      }),
     );
   }
 
@@ -365,7 +370,7 @@ export function createApprovals(deps: {
         let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (cardIsRemote || !reply) {
+        if (cardIsRemote || !reply || result.persona) {
           await updateCard(decisionCard());
           if (reply) await postApprovalFollowup(client, ctx, reply, result.persona);
         } else {
@@ -376,7 +381,6 @@ export function createApprovals(deps: {
             messageTs,
             reply,
             replyBlocks.length < 48 ? [...replyBlocks, ...approvalDecisionMessage(ctx, decided).blocks] : undefined,
-            result.persona,
           );
         }
         if (result.attachments?.length) {

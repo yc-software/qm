@@ -4,7 +4,7 @@ import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
 import { emojiNameOf } from "./emoji-map.ts";
-import { escapeSlackText } from "./mrkdwn.ts";
+import { blocksWithContext, escapeSlackText } from "./mrkdwn.ts";
 import { projectScopeId } from "../projects/project-store.ts";
 
 export interface SlackReplyArgs {
@@ -112,6 +112,28 @@ export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: str
   const shared = /^(channel|group):(.+)$/.exec(scopeId);
   if (shared?.[1] && shared[2]) return `${base}/projects/${shared[1]}/${encodeURIComponent(shared[2])}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
+}
+
+export function slackPersonaReplyArgs(
+  channel: string,
+  text: string,
+  replyThreadTs: string | undefined,
+  opts?: {
+    threadOnly?: boolean;
+    unfurlLinks?: boolean;
+    persona?: WornPersona;
+    webUiPublicUrl?: string;
+    footer?: Array<Record<string, unknown>>;
+  },
+): PostMessageArgs {
+  const origin = opts?.persona
+    ? originContext({ persona: opts.persona, webUiPublicUrl: opts.webUiPublicUrl })
+    : undefined;
+  const footer = [...(opts?.footer ?? []), ...(origin ? [origin] : [])];
+  return {
+    ...slackReplyArgs(channel, text, replyThreadTs, opts),
+    ...(footer.length ? { blocks: blocksWithContext(text, footer) } : {}),
+  };
 }
 
 export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId: string): string | undefined {

@@ -281,7 +281,14 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
+  const approvals = createApprovals({
+    core,
+    flow,
+    directory,
+    threads,
+    externalAccess: !!cfg.externalAccess,
+    ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
+  });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   registerDeployAccessActions(app, { core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
@@ -351,7 +358,8 @@ export async function startSlackPlugin(
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
+    continuePrivate: (runId, task) =>
+      continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
     onEngaged: (runId, channel, threadTs, emoji) => {
       void core.sessionStatus
         ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)

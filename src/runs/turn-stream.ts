@@ -43,7 +43,7 @@ export interface TurnStream {
 }
 
 interface TurnStreamListener {
-  onFirstBlock?(text: string, persona?: WornPersona): void;
+  onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
 }
 
@@ -187,7 +187,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
       if (entry.firstBlockClosed) {
-        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock, entry.persona ?? undefined);
+        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
       }
     },
 

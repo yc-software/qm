@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
   originContext,
+  slackPersonaReplyArgs,
   createDeliveryTracker,
   createThreadTracker,
   deliverWithRetry,
@@ -275,7 +276,12 @@ export function createSlackDeliverer(deps: {
               throwIfRateLimited(err);
               console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, errMessage(err));
               await client.chat
-                .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root, { persona: d.destination.persona }))
+                .postMessage(
+                  slackPersonaReplyArgs(channel, uploadFailureNote(err), root, {
+                    persona: d.destination.persona,
+                    webUiPublicUrl: deps.webUiPublicUrl,
+                  }),
+                )
                 .catch(swallowAs("slack: post upload-failure note", undefined));
             }
           };
@@ -431,8 +437,9 @@ export function createSlackDeliverer(deps: {
           if (uploadError) {
             await client.chat
               .postMessage(
-                slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
+                slackPersonaReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
                   persona: d.destination.persona,
+                  webUiPublicUrl: deps.webUiPublicUrl,
                 }),
               )
               .catch(swallowAs("slack: post principal upload-failure note", undefined));

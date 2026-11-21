@@ -7,7 +7,13 @@ import type { ExternalSlackAccess } from "./external-access.ts";
 import { companySlackActor, externalSlackNamespace } from "./external-access.ts";
 import { dmThreadRef } from "./message-gating.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
-import { encodeDeliveryTarget, parseDeliveryTarget, postWithVerify, slackReplyArgs } from "./delivery.ts";
+import {
+  encodeDeliveryTarget,
+  parseDeliveryTarget,
+  postWithVerify,
+  slackPersonaReplyArgs,
+  slackReplyArgs,
+} from "./delivery.ts";
 
 export const PRIVATE_CONTINUATION_ACK = "I'll continue this in your DM, where I can use your private context.";
 
@@ -23,6 +29,7 @@ export async function continueInPrivate(
         inFlightRuns?: { add(id: string): void; delete(id: string): void };
       }
     | undefined,
+  webUiPublicUrl?: string,
 ): Promise<void> {
   const source = await core.privateContinuationSource?.(runId);
   const origin = source?.surfaceOrigin;
@@ -95,7 +102,11 @@ export async function continueInPrivate(
       if (text)
         await postWithVerify(
           client,
-          { ...slackReplyArgs(dm, text, undefined, { unfurlLinks: false, persona: outcome.persona }) },
+          slackPersonaReplyArgs(dm, text, undefined, {
+            unfurlLinks: false,
+            persona: outcome.persona,
+            webUiPublicUrl,
+          }),
           `run:${dmRunId}`,
           { verifyFirst: true, verifyOldest: sourceTs },
         );

@@ -3,13 +3,12 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import {
   type PostMessageArgs,
   SLACK_POST_SPLIT_LIMIT,
-  blocksWithContext,
   botIdentityArgs,
-  originContext,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
   safeChunks,
+  slackPersonaReplyArgs,
   slackReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
@@ -39,24 +38,24 @@ export function createSlackTurnTransport(at: {
   const notices = new Set<string>();
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
-    const origin = opts.persona
-      ? originContext({ persona: opts.persona, webUiPublicUrl: at.webUiPublicUrl })
-      : undefined;
-    const footer = [...(opts.note ? [plainContext(opts.note)] : []), ...(origin ? [origin] : [])];
-    let blocks: Array<Record<string, unknown>> | undefined;
-    if (opts.notice) blocks = noticeBlocks(msg);
-    else if (footer.length) blocks = blocksWithContext(msg, footer);
-    const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
-      ...slackReplyArgs(channel, text, threadTs, {
-        threadOnly: at.kind === "channel",
-        unfurlLinks: false,
-        persona: opts.persona,
-      }),
-      ...(withBlocks && blocks ? { blocks } : {}),
-    });
-    if (opts.idempotencyKey)
-      return (await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, opts.idempotencyKey)).ts;
-    const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
+    const baseOpts = { threadOnly: at.kind === "channel", unfurlLinks: false, persona: opts.persona };
+    const hasBlocks = Boolean(opts.notice || opts.note || opts.persona);
+    const replyArgs = (text: string, withBlocks: boolean): PostMessageArgs => {
+      if (opts.notice) {
+        return {
+          ...slackReplyArgs(channel, text, threadTs, baseOpts),
+          ...(withBlocks ? { blocks: noticeBlocks(text) } : {}),
+        };
+      }
+      if (!withBlocks) return { ...slackReplyArgs(channel, text, threadTs, baseOpts) };
+      return slackPersonaReplyArgs(channel, text, threadTs, {
+        ...baseOpts,
+        webUiPublicUrl: at.webUiPublicUrl,
+        ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
+      });
+    };
+    if (opts.idempotencyKey) return (await postWithVerify(client, replyArgs(msg, true), opts.idempotencyKey)).ts;
+    const parts = hasBlocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
     let firstTs: string | undefined;
     for (const [i, part] of parts.entries()) {
       const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
