@@ -96,8 +96,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>, exclusive = false): Promise<T> =>
-    handle.resourceId ? resources.use(handle.resourceId, action, exclusive) : action();
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>, lock?: "shared"): Promise<T> =>
+    handle.resourceId ? resources.use(handle.resourceId, action, lock) : action();
 
   const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
     sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
@@ -243,7 +243,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           const held = parks && !!(await resources.get(resourceId)).holders?.length;
           return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
         },
-        !!tdOpts?.destroy || parks,
+        tdOpts?.destroy || parks ? "exclusive" : undefined,
       );
     },
 
@@ -273,7 +273,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
                 }
                 return started;
               },
-              true,
+              "shared",
             ),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
@@ -321,7 +321,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
             const target = await computerTarget(scopeId, sandboxId);
             const action = () =>
               requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
-            return resources.use(target.resourceId, action, true);
+            return resources.use(target.resourceId, action, "exclusive");
           },
         }
       : {}),
