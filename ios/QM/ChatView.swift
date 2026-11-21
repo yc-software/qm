@@ -284,6 +284,15 @@ struct ChatView: View {
         } else {
           NavigationLink("Activity log") { NativeActivityView(model: model) }
         }
+        if let app, let onShowConversations, model.conversation.localOnly != true,
+          model.conversation.archived != true
+        {
+          Button("Archive", systemImage: "archivebox") {
+            Task { await app.update(model.conversation, patch: ["archived": true]) }
+            onShowConversations()
+          }
+          .disabled(app.updatingConversationIDs.contains(model.conversation.id))
+        }
       } label: {
         Image(systemName: "ellipsis.circle")
       }
