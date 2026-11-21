@@ -728,3 +728,45 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   const pinned = await sysprompt(ALICE, { kind: "channel", channelRef: "C_BEA", threadRef: "channel:C_BEA:t1" });
   assert.match(pinned.reply, /## Persona: Bea[\s\S]*route-ada picked the persona .* already wears Bea, pinned here/);
 });
+
+test("wildcard persona turn_start rule offers only personas the sender can use in that scope", async () => {
+  const offered: Record<string, string>[] = [];
+  const decisionBackend: DecisionBackend = {
+    async choose({ questions }) {
+      const opts = questions["route-any"]!.options;
+      offered.push(opts);
+      const pick = Object.keys(opts).find((k) => k !== "keep")!;
+      return { "route-any": Object.fromEntries(Object.keys(opts).map((k) => [k, k === pick ? 0.9 : 0.1])) };
+    },
+  };
+  const { built, personas, enable, sysprompt } = setup({ decisionBackend });
+  for (const who of [ALICE, BOB]) await enable(who);
+  const ada = ok(await personas.create(ALICE, { name: "Ada", description: "Haiku" }));
+  const bea = ok(await personas.create(ALICE, { name: "Bea" }));
+  const grants = [
+    { scopeId: scopeId("personal", ALICE), role: "owner" },
+    { scopeId: "channel:C_DYN", role: "read" },
+  ];
+  ok(await personas.setAccess(ALICE, bea.id, grants));
+  const by = { actorId: ALICE };
+  await built.decisions!.saveProvider(testTenant, { id: "gw", protocol: "chat-completions" }, by);
+  const options = {
+    keep: { description: "No", action: "keep" as const },
+    any: { description: "Any", action: "use_persona" as const, persona: "*" },
+  };
+  const model = { provider: "gw", model: "example/decision-model" };
+  await built.decisions!.saveRule(
+    testTenant,
+    { id: "route-any", hook: "turn_start", question: "Pick", options, model, mode: "enforce", onError: "keep" },
+    by,
+  );
+  const dm = await sysprompt(ALICE, { kind: "dm", threadRef: "dm:U_ALICE:dyn" });
+  assert.deepEqual(offered[0], { keep: "No", p1: "Ada: Haiku", p2: "Bea" });
+  assert.equal((await built.sessions.get(dm.sessionId))?.personaId, ada.id);
+  const bobDm = await sysprompt(BOB, { kind: "dm", threadRef: "dm:U_BOB:dyn" });
+  assert.equal(offered.length, 1);
+  assert.equal((await built.sessions.get(bobDm.sessionId))?.personaId, undefined);
+  const bobCh = await sysprompt(BOB, { kind: "channel", channelRef: "C_DYN", threadRef: "channel:C_DYN:t1" });
+  assert.deepEqual(offered[1], { keep: "No", p1: "Bea" });
+  assert.equal((await built.sessions.get(bobCh.sessionId))?.personaId, bea.id);
+});

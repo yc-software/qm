@@ -1576,6 +1576,7 @@ export function buildApp(
         },
       }),
     auditLog,
+    (tenant, actorId, scope) => personas.summaries(tenant, actorId, scope),
   );
   const utilityModelId = (): string => modelRoutes.utilityModelId();
   const judgeModelId = (): string => modelRoutes.utilityModelId(config.judgeModelId);

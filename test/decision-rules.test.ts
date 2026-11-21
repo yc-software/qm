@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   checkRuleSet,
+  expandPersonaRule,
   parseDecisionRule,
   runHook,
   type DecisionBackend,
@@ -701,4 +702,34 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
     undefined,
   );
   assert.equal(guidanceReads, 4, "guidance is not read when no rule is active");
+});
+
+test("wildcard persona options validate, expand, and fall back to onError on lookup failure", async () => {
+  const mk = (options: Record<string, unknown>, onError = "keep") =>
+    parse({ ...injection(), id: "p-route", hook: "turn_start", onError, options });
+  const keep = { description: "stay", action: "keep" };
+  const star = { description: "any", action: "use_persona", persona: "*" };
+  const ok = mk({ keep, any: star });
+  assert.ok("rule" in ok);
+  assert.match(err(mk({ keep, any: star }, "any")), /onError cannot name/);
+  assert.match(err(mk({ keep, a: star, b: star })), /at most one wildcard/);
+  assert.equal(expandPersonaRule(ok.rule, []), undefined);
+  const list = [
+    { id: "a", name: "Ada", description: "Ops" },
+    { id: "b", name: "Bea", description: "" },
+  ];
+  const exp = expandPersonaRule(ok.rule, list)!;
+  assert.deepEqual(Object.keys(exp.options), ["keep", "p1", "p2"]);
+  assert.deepEqual(exp.options.p1, { description: "Ada: Ops", action: "use_persona", persona: "a" });
+  assert.equal(exp.options.p2?.description, "Bea");
+  const st = mk({ keep, p1: { description: "Ada", action: "use_persona", persona: "a" }, any: star });
+  assert.ok("rule" in st);
+  assert.deepEqual(Object.keys(expandPersonaRule(st.rule, list)!.options), ["keep", "p1", "p2"]);
+  const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  const fail = () => Promise.reject(new Error("db down"));
+  const decide = createDecisionHooks({ rules: async () => [ok.rule] } as never, fixed({}), audit, fail);
+  const [res] = await decide("turn_start", "hi", { tenant, actorId: "u1", scopeLabel: "personal:u1" });
+  assert.equal(res?.option, "keep");
+  assert.match(res?.error ?? "", /db down/);
 });
