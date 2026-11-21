@@ -15,7 +15,10 @@ const upstream = createServer((req: IncomingMessage, res) => {
   }
   if (req.url?.startsWith("/v1/admin/whoami")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
+    const actor = req.headers["x-admin-actor"];
+    if (actor === "U-admin@acme") return void res.end(JSON.stringify({ isAdmin: true, role: "org_admin" }));
+    if (actor === "U-owner@acme") return void res.end(JSON.stringify({ isAdmin: true, role: "owner" }));
+    return void res.end(JSON.stringify({ isAdmin: false }));
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url }));
@@ -79,6 +82,26 @@ test("unconfigured deployment: settings pages reach the web UI, so onboarding ne
     assert.equal(hit.lane, "shell", path);
     assert.equal(hit.url, path);
   }
+});
+
+test("owner role reaches onboarding redirect when unconfigured and is refused impersonation", async () => {
+  const redirectRes = await fetch(`${base}/`, {
+    headers: { accept: "text/html", cookie: sessionCookie("U-owner") },
+    redirect: "manual",
+  });
+  assert.equal(redirectRes.status, 302);
+  assert.equal(redirectRes.headers.get("location"), "/settings/onboarding");
+
+  const impRes = await fetch(`${base}/auth/impersonate`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "http://portal.test",
+      cookie: sessionCookie("U-owner"),
+    },
+    body: JSON.stringify({ target: "U-member" }),
+  });
+  assert.equal(impRes.status, 403);
 });
 
 test("once a provider is configured, admin HTML navigation reaches the web UI again", async () => {

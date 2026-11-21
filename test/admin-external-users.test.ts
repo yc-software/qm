@@ -359,7 +359,7 @@ test("invite validation: past expiry, missing expiry, bad email, and bad role ar
       { email: "a@b.example" },
       { email: "a@b.example", expiresAt: "not a date" },
       { email: "not-an-email", expiresAt: Date.now() + DAY_MS },
-      { email: "a@b.example", role: "owner", expiresAt: Date.now() + DAY_MS },
+      { email: "a@b.example", role: "superuser", expiresAt: Date.now() + DAY_MS },
     ];
     for (const body of cases) {
       const r = await invite(s.base, body);

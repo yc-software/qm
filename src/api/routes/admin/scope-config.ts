@@ -115,7 +115,10 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
 export async function adminPermissions(deps: ApiCtx["deps"], tenant: Tenant, actor: Principal) {
   if (!deps.admin || !(await activePrincipal(deps, actor.id))) return null;
   const status = await deps.admin.adminStatusOf(tenant, actor);
-  return { ...status, permissions: status.isAdmin ? ["admin"] : [] };
+  let permissions: string[] = [];
+  if (status.role === "org_admin") permissions = ["admin"];
+  else if (status.role === "owner") permissions = ["owner"];
+  return { ...status, permissions };
 }
 
 export async function whoami(ctx: ApiCtx): Promise<void> {

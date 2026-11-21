@@ -256,7 +256,8 @@ function misconfiguration(deps: BrowserLaneDeps): string | null {
 async function isAdmin(deps: ServerDeps, tenant: Tenant | undefined, principalId: string): Promise<boolean> {
   if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
   if (!tenant) throw new Error("No tenant is bound to this request");
-  return (await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" })).isAdmin;
+  const status = await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" });
+  return status.isAdmin && status.role !== "owner";
 }
 
 export async function browserIdentity(

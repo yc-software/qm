@@ -142,7 +142,9 @@ export class OnboardingWelcome extends LitElement {
   private async refreshWorkspace(): Promise<void> {
     if (
       this.widget === "apps" ||
-      (this.widget !== "slack-account" && this.me?.permissions?.includes("admin") && !this.seeded)
+      (this.widget !== "slack-account" &&
+        (this.me?.permissions?.includes("admin") || this.me?.permissions?.includes("owner")) &&
+        !this.seeded)
     )
       return;
     try {
@@ -679,7 +681,8 @@ export class OnboardingWelcome extends LitElement {
       ${this.preview ? html`<div class="connection-preview-label">Connection preview · No accounts are linked <button @click=${() => resetPreview(this.previewUser())}>Reset</button></div>` : nothing}
       ${this.setupOnly ? nothing : this.intro(name ? `Hi ${name}!` : "", connected)}
       ${
-        !["apps", "slack-account"].includes(this.widget) && this.me?.permissions?.includes("admin")
+        !["apps", "slack-account"].includes(this.widget) &&
+        (this.me?.permissions?.includes("admin") || this.me?.permissions?.includes("owner"))
           ? html`<qm-onboarding-slack
               class="welcome-beat"
               style=${`--welcome-delay:${paced ? 3050 : 900}ms`}

@@ -55,10 +55,10 @@ export function destinations(): Destination[] {
   ];
   if (personasState.enabled) list.push(to("personas", Bot, "Personas", "Reusable roles you can chat with"));
   if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
-  if (can("admin")) {
+  if (can("admin") || can("owner")) {
     list.push({
       view: null,
-      href: ADMIN_HOME_URL,
+      href: can("admin") ? ADMIN_HOME_URL : ADMIN_HOME_URL.replace(/\/history$/, "/governance"),
       glyph: ShieldUser,
       label: "Admin",
       blurb: "Org settings, people, and policy",
