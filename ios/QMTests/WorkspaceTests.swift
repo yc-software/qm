@@ -476,6 +476,7 @@ struct WorkspaceTests {
         #"{"id":"a","scopeId":"personal:test","threadRef":"web:test:a","subagents":{"running":1,"waiting":1}}"#
           .utf8))
     #expect(parent.needsInput)
+    #expect(parent.showsWorking)
     #expect(!Conversation(id: "b", scopeId: "personal:test", threadRef: "web:test:b").needsInput)
   }
 

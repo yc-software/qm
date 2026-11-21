@@ -68,7 +68,7 @@ struct NativeConversationRow: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      if conversation.working == true {
+      if conversation.showsWorking {
         NativeWave()
           .frame(width: 19, height: 12)
           .foregroundStyle(.blue)
@@ -113,7 +113,7 @@ struct NativeConversationRow: View {
         conversation.label, conversation.surface == "slack" ? "Slack" : nil, context,
         showsUnread ? "Unread" : nil,
         conversation.awaitingInput == true ? "Needs attention" : nil,
-        conversation.working == true ? "Working" : nil,
+        conversation.showsWorking ? "Working" : nil,
         conversation.status?.text, updating ? "Updating" : nil,
       ].compactMap { $0 }.joined(separator: ", ")
     )
