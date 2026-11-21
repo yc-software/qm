@@ -97,4 +97,5 @@ to a directory that stays on your computer, and step 3 saves it.
    that command or job, and refreshes the CLI writes are saved back when it ends.
 
 Never print token files or paste their contents into the conversation. If the login fails
-or expires, start again from step 1 with a new directory.
+or expires, follow "One expiry, one code" above before starting again from step 1 with a
+new directory.
