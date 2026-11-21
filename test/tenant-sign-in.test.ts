@@ -114,9 +114,7 @@ function start(
     directory: {
       tenantsForEmail: tenants,
       tenantsForPrincipal: (principal: string) => directory.tenantsForPrincipal!(principal),
-      tenantForAppHandle: (handle: string) => directory.tenantForAppHandle!(handle),
       tenantForAppHost: (label: string) => directory.tenantForAppHost!(label),
-      trustedClientFor: (tenant: string) => directory.trustedClientFor!(tenant),
     } as unknown as DirectoryStore,
   });
   server.listen(0);
@@ -294,26 +292,16 @@ test("on a shared host the directory, not the install allowlist, permits email s
     assert.equal((await srv.get(canonical, { "x-portal-identity": asBeta })).status, 200);
   }));
 
-test("a workspace handle names exactly one company and its own trusted client, and a company hostname no longer maps", (t) =>
+test("a company hostname no longer maps and only a workspace app host names its company", (t) =>
   withoutTenant(async () => {
     const srv = start(identityAdmitting(undefined, []), async () => []);
     t.after(srv.close);
     const handle = `ws${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    await owner.q(
-      `UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text,
-        'oidcClient', '{"clientId":"beta-client","clientSecret":"beta-client-secret-0123456789abcdef"}'::jsonb) WHERE id = $1`,
-      [beta, handle],
-    );
-    t.after(() => owner.q(`UPDATE tenants SET settings = settings - 'handle' - 'oidcClient' WHERE id = $1`, [beta]));
-    const workspace = async (name: string) =>
-      (await srv.get(`/v1/auth/broker/workspace?handle=${encodeURIComponent(name)}`)).body;
-    assert.deepEqual(await workspace(handle), {
-      tenant: beta,
-      trustedClient: { clientId: "beta-client", clientSecret: "beta-client-secret-0123456789abcdef" },
-    });
-    assert.deepEqual(await workspace(handle.toUpperCase()), await workspace(handle));
-    assert.deepEqual(await workspace("nosuchworkspace"), { tenant: null });
-    assert.equal((await srv.get("/v1/auth/broker/workspace")).status, 400);
+    await owner.q(`UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text) WHERE id = $1`, [
+      beta,
+      handle,
+    ]);
+    t.after(() => owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [beta]));
     assert.deepEqual((await srv.get("/v1/auth/broker/host-tenant?host=beta.company.test")).body, { tenant: null });
     const appHost = async (host: string) => (await srv.get(`/v1/auth/broker/host-tenant?host=${host}`)).body;
     await owner.q(`INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'dash', '{"name":"sales-dash"}')`, [beta]);

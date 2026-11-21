@@ -103,9 +103,7 @@ export interface DirectoryStore {
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
   setAppHandle?(handle: string): Promise<"ok" | "taken" | "app_taken">;
-  tenantForAppHandle?(handle: string): Promise<string | undefined>;
   tenantForAppHost?(label: string): Promise<string | undefined>;
-  trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 
 export const MAX_CANDIDATES = 10;
