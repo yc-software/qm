@@ -826,7 +826,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : undefined;
       const routed =
-        external || ambientTurn || !deps.personas || !turnDecisions
+        external || ambientTurn || input.personaId || !deps.personas || !turnDecisions
           ? undefined
           : (await turnDecisions()).find((r) => r.persona);
       const { turn: personaTurn, note: personaNote } =
