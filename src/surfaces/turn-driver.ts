@@ -84,11 +84,11 @@ export async function runSurfaceTurn(
   const startAck = (): AckPresenter =>
     (ack ??= createAckPresenter({
       taskManaged: !!turn.taskAck,
-      postAck: async (text) => {
-        const ref = await transport.post(
-          transport.render?.(text) ?? text,
-          queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : undefined,
-        );
+      postAck: async (text, persona) => {
+        const ref = await transport.post(transport.render?.(text) ?? text, {
+          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : {}),
+          ...(persona ? { persona } : {}),
+        });
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
         try {
           await deps.reportEditRef(queuedRunId, ref);
@@ -151,7 +151,8 @@ export async function runSurfaceTurn(
         },
         ...(acknowledges
           ? {
-              onFirstBlock: (blockText: string) => startAck().onFirstBlock(transport.readReply(blockText).text),
+              onFirstBlock: (blockText: string, persona?: WornPersona) =>
+                startAck().onFirstBlock(transport.readReply(blockText).text, persona),
               onSurfacePosted: () => startAck().onSurfacePosted(),
             }
           : {}),

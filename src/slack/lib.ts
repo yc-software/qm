@@ -111,6 +111,7 @@ export {
 export {
   botIdentityFromEnv,
   botIdentityArgs,
+  originContext,
   slackReplyArgs,
   channelSurfaceUrl,
   channelWelcomeMessage,

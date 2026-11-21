@@ -978,6 +978,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         persona,
       });
+      if (input.runId && wornPersona) deps.turnStream.notePersona(input.runId, wornPersona);
 
       await deps.skillsReady?.();
       const configuredProviders =

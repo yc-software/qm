@@ -4,6 +4,8 @@ import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
 import { emojiNameOf } from "./emoji-map.ts";
+import { escapeSlackText } from "./mrkdwn.ts";
+import { projectScopeId } from "../projects/project-store.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -52,6 +54,38 @@ export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
     ...(username ? { username } : {}),
     ...(icon_emoji ? { icon_emoji } : {}),
   };
+}
+
+export function originContext(opts: {
+  persona?: WornPersona;
+  project?: { id: string; name: string };
+  webUiPublicUrl?: string;
+  cron?: { id: string; title?: string };
+}): Record<string, unknown> | undefined {
+  const base = trimTrailingSlashes(opts.webUiPublicUrl?.trim() ?? "");
+  const linked = (name: string, path: string): string => {
+    const label = escapeSlackText(name);
+    return base ? `<${base}/${path}|${label}>` : label;
+  };
+  const origin = [
+    ...(opts.persona
+      ? [linked(opts.persona.name.trim() || "Persona", `personas/${encodeURIComponent(opts.persona.id)}`)]
+      : []),
+    ...(opts.project
+      ? [
+          linked(
+            opts.project.name.trim() || "Project",
+            `contexts?scope=${encodeURIComponent(projectScopeId(opts.project.id))}`,
+          ),
+        ]
+      : []),
+  ];
+  const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
+  if (base && opts.cron) {
+    const title = escapeSlackText(opts.cron.title?.trim() || "Cron");
+    parts.push(`${title} · <${base}/crons/${encodeURIComponent(opts.cron.id)}|Settings>`);
+  }
+  return parts.length ? { type: "mrkdwn", text: parts.join(" · "), verbatim: true } : undefined;
 }
 
 export function slackReplyArgs(

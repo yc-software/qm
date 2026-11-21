@@ -380,6 +380,7 @@ export async function startSlackPlugin(
     ...(devIntrospection ? { markEvent: () => devIntrospection.markEvent() } : {}),
     botToken: BOT_TOKEN,
     ...(TRUSTED_FILE_HOST ? { trustedFileHost: TRUSTED_FILE_HOST } : {}),
+    ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
     ensureHeader,
   });
   approvals.registerActions(app);

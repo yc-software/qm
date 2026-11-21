@@ -1,6 +1,7 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { turnFailureText } from "../surfaces/turn-flow.ts";
+import type { WornPersona } from "../types.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
 import {
   type StoredApproval,
@@ -134,8 +135,15 @@ export function createApprovals(deps: {
     }
   }
 
-  async function postApprovalFollowup(client: any, ctx: SlackApprovalContext, text: string): Promise<void> {
-    await client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
+  async function postApprovalFollowup(
+    client: any,
+    ctx: SlackApprovalContext,
+    text: string,
+    persona?: WornPersona,
+  ): Promise<void> {
+    await client.chat.postMessage(
+      slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly, persona }),
+    );
   }
 
   async function handleApprovalAction({ ack, body, action, client }: ActionArgs): Promise<void> {
@@ -359,7 +367,7 @@ export function createApprovals(deps: {
         else if (result.attachments?.length || reactions.length) reply = "Done.";
         if (cardIsRemote || !reply) {
           await updateCard(decisionCard());
-          if (reply) await postApprovalFollowup(client, ctx, reply);
+          if (reply) await postApprovalFollowup(client, ctx, reply, result.persona);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
           await updateSlackMessage(
@@ -368,6 +376,7 @@ export function createApprovals(deps: {
             messageTs,
             reply,
             replyBlocks.length < 48 ? [...replyBlocks, ...approvalDecisionMessage(ctx, decided).blocks] : undefined,
+            result.persona,
           );
         }
         if (result.attachments?.length) {
@@ -375,7 +384,7 @@ export function createApprovals(deps: {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
             console.error("[slack-plugin] file upload failed:", errMessage(err));
-            await postApprovalFollowup(client, ctx, uploadFailureNote(err));
+            await postApprovalFollowup(client, ctx, uploadFailureNote(err), result.persona);
           }
         }
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());

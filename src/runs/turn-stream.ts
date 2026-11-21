@@ -1,5 +1,5 @@
 import type { GoalRecord } from "../agent/goal.ts";
-import type { TurnRuntime } from "../types.ts";
+import type { TurnRuntime, WornPersona } from "../types.ts";
 
 export interface GoalView {
   objective: string;
@@ -29,6 +29,8 @@ export interface TurnStream {
   goal(runId: string): GoalView | null;
   noteRuntime(runId: string, runtime: TurnRuntime): void;
   runtime(runId: string): TurnRuntime | null;
+  notePersona(runId: string, persona: WornPersona): void;
+  persona(runId: string): WornPersona | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
@@ -41,7 +43,7 @@ export interface TurnStream {
 }
 
 interface TurnStreamListener {
-  onFirstBlock?(text: string): void;
+  onFirstBlock?(text: string, persona?: WornPersona): void;
   onSurfacePosted?(): void;
 }
 
@@ -50,6 +52,7 @@ interface Entry {
   totalChars: number;
   goal: GoalView | null;
   runtime: TurnRuntime | null;
+  persona: WornPersona | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
@@ -81,6 +84,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
     totalChars: 0,
     goal: null,
     runtime: null,
+    persona: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
@@ -183,7 +187,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
       if (entry.firstBlockClosed) {
-        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
+        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock, entry.persona ?? undefined);
       }
     },
 
@@ -202,6 +206,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     runtime(runId) {
       return runs.get(runId)?.runtime ?? null;
+    },
+
+    notePersona(runId, persona) {
+      ensure(runId).persona = persona;
+    },
+
+    persona(runId) {
+      return runs.get(runId)?.persona ?? null;
     },
 
     firstBlock(runId) {

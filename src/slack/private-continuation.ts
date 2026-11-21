@@ -95,7 +95,7 @@ export async function continueInPrivate(
       if (text)
         await postWithVerify(
           client,
-          { ...slackReplyArgs(dm, text, undefined, { unfurlLinks: false }) },
+          { ...slackReplyArgs(dm, text, undefined, { unfurlLinks: false, persona: outcome.persona }) },
           `run:${dmRunId}`,
           { verifyFirst: true, verifyOldest: sourceTs },
         );

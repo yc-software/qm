@@ -5,6 +5,7 @@ import {
   SLACK_POST_SPLIT_LIMIT,
   blocksWithContext,
   botIdentityArgs,
+  originContext,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
@@ -30,6 +31,7 @@ export function createSlackTurnTransport(at: {
   triggerTs: string;
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
+  webUiPublicUrl?: string;
   onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
   onSettled?: () => void;
 }): SurfaceTransport {
@@ -37,9 +39,13 @@ export function createSlackTurnTransport(at: {
   const notices = new Set<string>();
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
+    const origin = opts.persona
+      ? originContext({ persona: opts.persona, webUiPublicUrl: at.webUiPublicUrl })
+      : undefined;
+    const footer = [...(opts.note ? [plainContext(opts.note)] : []), ...(origin ? [origin] : [])];
     let blocks: Array<Record<string, unknown>> | undefined;
     if (opts.notice) blocks = noticeBlocks(msg);
-    else if (opts.note) blocks = blocksWithContext(msg, [plainContext(opts.note)]);
+    else if (footer.length) blocks = blocksWithContext(msg, footer);
     const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
       ...slackReplyArgs(channel, text, threadTs, {
         threadOnly: at.kind === "channel",

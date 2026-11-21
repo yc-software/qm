@@ -1,7 +1,7 @@
 import type { App } from "../api/app-types.ts";
 import { isTerminal, type RunStore, type SessionWatch } from "../runs/run-store.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
-import type { TurnResult } from "../types.ts";
+import type { TurnResult, WornPersona } from "../types.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { RunHooks } from "./turn-flow.ts";
@@ -23,10 +23,10 @@ export function createRunWaiter(deps: {
       replyingSignaled = true;
       hooks.onReplying?.();
     };
-    const signalFirstBlock = (text: string): void => {
+    const signalFirstBlock = (text: string, persona?: WornPersona): void => {
       if (firstBlockSignaled || !text.trim()) return;
       firstBlockSignaled = true;
-      hooks.onFirstBlock?.(text);
+      hooks.onFirstBlock?.(text, persona ?? deps.turnStream.persona(runId) ?? undefined);
     };
     const signalSurface = (): void => {
       if (surfaceSignaled) return;
@@ -72,7 +72,7 @@ export function createRunWaiter(deps: {
           signalReplying(run.deliveryState?.replying === true);
           await emitGoal().catch(swallowAs("run wait: goal refresh", undefined));
           const fb = deps.turnStream.firstBlock(runId);
-          if (fb?.closed) signalFirstBlock(fb.text);
+          if (fb?.closed) signalFirstBlock(fb.text, deps.turnStream.persona(runId) ?? undefined);
           const mark = `${run.status}:${run.attempts}:${run.leaseExpiresAt ?? ""}`;
           if (mark !== lastMark) {
             lastMark = mark;

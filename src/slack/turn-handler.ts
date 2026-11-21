@@ -136,6 +136,7 @@ export function createTurnHandler(deps: {
   markEvent?: () => void;
   botToken: string;
   trustedFileHost?: string;
+  webUiPublicUrl?: string;
   ensureHeader?: (
     client: SurfaceHeaderClient,
     channel: string,
@@ -248,6 +249,7 @@ export function createTurnHandler(deps: {
       triggerTs: inc.ts,
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
+      ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),
     });
