@@ -30,7 +30,7 @@ export function createSlackTurnTransport(at: {
   triggerTs: string;
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
-  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
 }): SurfaceTransport {
   const { client, channel, threadTs } = at;
@@ -85,7 +85,7 @@ export function createSlackTurnTransport(at: {
     },
     async typing(on, run) {
       if (!on) at.onSettled?.();
-      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs, run.emoji());
+      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs);
     },
     async upload(attachments) {
       try {

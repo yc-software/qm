@@ -352,9 +352,9 @@ export async function startSlackPlugin(
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
-    onEngaged: (runId, channel, threadTs, emoji) => {
+    onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
-        ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
         .catch(swallowAs("slack: session status start", undefined))
         .finally(() => {
           void reconcileStatus();
