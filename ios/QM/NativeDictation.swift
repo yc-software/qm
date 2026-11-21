@@ -64,6 +64,7 @@ private final class OnDeviceSpeechSession {
   private let recognizer: SFSpeechRecognizer
   private var task: SFSpeechRecognitionTask?
   private var continuation: CheckedContinuation<String, any Error>?
+  private var transcript = ""
 
   init(recognizer: SFSpeechRecognizer) { self.recognizer = recognizer }
 
@@ -92,6 +93,7 @@ private final class OnDeviceSpeechSession {
 
   private func receive(text: String?, isFinal: Bool, errorMessage: String?) {
     guard let continuation else { return }
+    if let text { transcript = NativeDictationModel.appending(text, to: transcript) }
     if let errorMessage {
       self.continuation = nil
       task = nil
@@ -99,7 +101,7 @@ private final class OnDeviceSpeechSession {
     } else if isFinal {
       self.continuation = nil
       task = nil
-      continuation.resume(returning: text ?? "")
+      continuation.resume(returning: transcript)
     }
   }
 
