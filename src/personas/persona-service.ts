@@ -374,11 +374,12 @@ export async function routedPersonaTurn(
   contextScope: ScopeId,
 ): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
   const current = await personas.forTurn(personaId, actorId, contextScope);
-  if (!routed?.persona || routed.persona === personaId) return { turn: current };
-  if (current && typeof current === "object")
+  const currentId = current && typeof current === "object" ? current.persona.id : personaId;
+  if (!routed?.persona || routed.persona === currentId) return { turn: current };
+  if (current && typeof current === "object" && (current.pinned || actsAsScope(actorId, current.scope)))
     return {
       turn: current,
-      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence.`,
+      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence. PUT /v1/sessions/:id/persona switches to another persona.`,
     };
   const picked = await personas.forTurn(routed.persona, actorId, contextScope);
   if (picked && typeof picked === "object")
