@@ -13,6 +13,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { memberBrainId, putMemberBrain } from "../src/memory/registry.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { buildApp } from "./support/build-app.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { bill } from "./support/spend-usage.ts";
@@ -50,6 +51,7 @@ async function start(overrides: Record<string, unknown> = {}) {
     memory: built.memory,
     memoryRegistry: built.memoryRegistry,
     secretDrops: built.secretDrops,
+    brokerSessions: built.brokerSessions,
     sessions,
     runs: liveRunStore(built.runs),
     errors: built.errors,
@@ -58,7 +60,7 @@ async function start(overrides: Record<string, unknown> = {}) {
     principalLinks: built.principalLinks,
     replayDedupe: built.replayDedupe,
     capabilitySecret: SECRET,
-    portalUrl: "https://portal.example",
+    ...browserSessionDeps,
     portalIdentitySecret: SECRET,
   });
   server.listen(0);
@@ -126,9 +128,7 @@ test("owner whoami, org management, private-read denial, and privilege-escalatio
       ["GET", "/v1/admin/egress?scope=personal:bob"],
       ["GET", "/v1/admin/keychain"],
       ["GET", "/v1/admin/users/bob"],
-      ["POST", "/v1/admin/users/bob/offboard", {}],
       ["POST", "/v1/admin/users/bob/reset", {}],
-      ["POST", "/v1/admin/users/bob/reactivate", {}],
       ["PUT", "/v1/admin/users/bob/onboarding", { state: "done" }],
       ["GET", "/v1/admin/slack-mirror?scope=org:default-org"],
       ["GET", "/v1/admin/ambient-judgments?scope=org:default-org"],
@@ -363,6 +363,113 @@ test("owner manages org memory registry config while member-owned brains stay or
     assert.deepEqual(
       afterDelete.brains.map((b: any) => b.id),
       [bobId],
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("owner offboards and reactivates members access-only while keeping org_admin, last-owner, and private content protected", async () => {
+  const s = await start({ adminGrants: "admin-alice:org_admin,owner-pat:owner,owner-sam:owner" });
+  try {
+    await s.built.app.upsertDirectory([
+      { principalId: "admin-alice", displayName: "Alice", type: "internal" },
+      { principalId: "owner-pat", displayName: "Pat", type: "internal" },
+      { principalId: "owner-sam", displayName: "Sam", type: "internal" },
+      { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
+    ]);
+    const bobCron = await s.built.app.createCron({
+      ownerScopeId: "personal:bob@example.com",
+      owner: "bob@example.com",
+      createdBy: "bob@example.com",
+      title: "Bob private digest",
+      schedule: { everyMs: 3_600_000 },
+      action: "private prompt",
+    });
+    await s.built.featureFlags.setEnabled("personas", ORG, true, "admin-alice");
+    const bobPersona = await s.built.app.personas!.create("bob@example.com", { name: "Bob Persona" });
+    assert.equal(bobPersona.status, "ok");
+    const brokerSession = await s.built.brokerSessions!.create("bob@example.com", 3600, 7200);
+    const bobCookie = browserSessionCookie("bob@example.com");
+    assert.equal((await fetch(`${s.base}/api/sessions`, { headers: { cookie: bobCookie } })).status, 200);
+
+    const preview = await req(s.base, "POST", "/v1/admin/users/bob%40example.com/offboard", OWNER_ACTOR, {});
+    assert.equal(preview.status, 200);
+    const planned: any = await preview.json();
+    assert.deepEqual(
+      planned.changes.map((c: any) => `${c.kind}:${c.action}`),
+      ["principal:deactivate"],
+    );
+    assert.ok(!JSON.stringify(planned).includes("Bob private digest"));
+    assert.ok(!JSON.stringify(planned).includes("Bob Persona"));
+
+    const adminPreview: any = await (
+      await req(s.base, "POST", "/v1/admin/users/bob%40example.com/offboard", ADMIN_ACTOR, {})
+    ).json();
+    assert.ok(adminPreview.changes.some((c: any) => c.kind === "cron" && c.id === bobCron.id));
+    assert.ok(adminPreview.changes.some((c: any) => c.kind === "persona" && c.id === bobPersona.value.id));
+
+    const applied = await req(s.base, "POST", "/v1/admin/users/bob%40example.com/offboard", OWNER_ACTOR, {
+      apply: true,
+    });
+    assert.equal(applied.status, 200);
+    assert.equal(s.built.identity.classify("bob@example.com").type, "guest");
+    assert.equal(await s.built.brokerSessions!.use(brokerSession.token), null);
+    assert.equal((await fetch(`${s.base}/api/sessions`, { headers: { cookie: bobCookie } })).status, 401);
+    assert.equal((await s.built.app.getCron(bobCron.id))!.enabled, true);
+    assert.equal((await s.built.app.personas!.detail("admin-alice", bobPersona.value.id)).status, "not_found");
+
+    assert.equal((await req(s.base, "POST", "/v1/admin/users/bob%40example.com/reactivate", OWNER_ACTOR)).status, 200);
+    assert.equal(s.built.identity.classify("bob@example.com").type, "internal");
+    assert.equal((await fetch(`${s.base}/api/sessions`, { headers: { cookie: bobCookie } })).status, 200);
+
+    assert.equal(
+      (await req(s.base, "POST", "/v1/admin/users/admin-alice/offboard", OWNER_ACTOR, { apply: true })).status,
+      403,
+    );
+    assert.equal((await req(s.base, "POST", "/v1/admin/users/admin-alice/reactivate", OWNER_ACTOR)).status, 403);
+    assert.equal(
+      (await req(s.base, "POST", "/v1/admin/users/owner-pat/offboard", OWNER_ACTOR, { apply: true })).status,
+      400,
+    );
+
+    const removeSam = await req(s.base, "POST", "/v1/admin/users/owner-sam/offboard", OWNER_ACTOR, { apply: true });
+    assert.equal(removeSam.status, 200);
+    assert.equal(s.built.identity.classify("owner-sam").type, "guest");
+    assert.equal(
+      (await s.built.admin.listGrants(tenant)).some((g) => g.principalId === "owner-sam"),
+      false,
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test("owner cannot offboard the last owner when no org_admin exists", async () => {
+  const s = await start({ adminGrants: "owner-pat:owner,owner-sam:owner" });
+  try {
+    await s.built.identity.deactivate("owner-sam");
+    assert.equal(
+      (await req(s.base, "POST", "/v1/admin/users/owner-pat/offboard", "owner-pat@default-org", { apply: true }))
+        .status,
+      400,
+    );
+    await s.built.identity.reactivate("owner-sam");
+    assert.equal(
+      (await req(s.base, "POST", "/v1/admin/users/owner-sam/offboard", "owner-pat@default-org", { apply: true }))
+        .status,
+      200,
+    );
+    assert.equal(
+      (
+        await req(
+          s.base,
+          "DELETE",
+          `/v1/admin/grants/owner-pat?scope=${encodeURIComponent(ORG)}&role=owner`,
+          "owner-pat@default-org",
+        )
+      ).status,
+      400,
     );
   } finally {
     await s.close();

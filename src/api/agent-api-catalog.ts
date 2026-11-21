@@ -758,6 +758,17 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "revoke an external member's access",
       },
       {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/offboard",
+        summary:
+          "revoke a member's access and sign them out without inspecting or handing over private items ({apply?:true}; cannot remove an org_admin or the last owner; DM or effective Open sharing)",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/reactivate",
+        summary: "turn a deactivated member's sign-in back on (cannot manage an org_admin)",
+      },
+      {
         method: "GET",
         path: "/v1/admin/directory?q=",
         summary: "resolve a name or principal id to org-directory candidates",

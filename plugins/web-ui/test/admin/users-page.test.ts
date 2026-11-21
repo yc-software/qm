@@ -244,11 +244,13 @@ test("user detail: opens by user id, lists every sign-in, and acts on the person
   page.close();
 });
 
-test("users as owner hides Keychain tab, user-detail links, and org_admin actions", async () => {
+test("users as owner hides Keychain tab, user-detail links, and org_admin actions, and removes or reactivates members", async () => {
+  const actions: Array<[string, unknown]> = [];
+  let removed = false;
   const page = await mountPage(
     "/settings/users",
     {
-      "GET /users": {
+      "GET /users": () => ({
         users: [
           {
             principalId: "admin-1",
@@ -258,15 +260,37 @@ test("users as owner hides Keychain tab, user-detail links, and org_admin action
             turnCount: 5,
           },
           {
+            principalId: "owner-1",
+            displayName: "Owner",
+            admin: { isAdmin: true, role: "owner", scopeId: "org:acme" },
+            sessionCount: 1,
+            turnCount: 2,
+          },
+          {
             principalId: "member-1",
             displayName: "Member",
             admin: { isAdmin: false },
+            offboarded: removed,
+            deactivated: removed,
             sessionCount: 1,
             turnCount: 1,
           },
         ],
-        grants: [{ principalId: "admin-1", role: "org_admin", scopeId: "org:acme" }],
+        grants: [
+          { principalId: "admin-1", role: "org_admin", scopeId: "org:acme" },
+          { principalId: "owner-1", role: "owner", scopeId: "org:acme" },
+        ],
         externalUsers: [],
+      }),
+      "POST /users/member-1/offboard": ({ body }) => {
+        actions.push(["offboard", body]);
+        removed = true;
+        return { principalId: "member-1", applied: true, changes: [] };
+      },
+      "POST /users/member-1/reactivate": () => {
+        actions.push(["reactivate", null]);
+        removed = false;
+        return { principalId: "member-1", active: true };
       },
     },
     { fullAdmin: false },
@@ -276,6 +300,23 @@ test("users as owner hides Keychain tab, user-detail links, and org_admin action
   assert.equal(page.host.querySelector('a[href*="/settings/user"]'), null);
   assert.equal(page.host.querySelector('option[value="org_admin"]'), null);
   assert.ok(page.host.querySelector('option[value="owner"]'));
-  assert.ok(page.host.textContent?.includes("Make owner"));
-  assert.ok(!page.host.textContent?.includes("Revoke"));
+  const rows = [...page.host.querySelectorAll("tbody tr")];
+  assert.equal(rows[0]!.querySelector("button"), null);
+  assert.ok(rows[1]!.textContent?.includes("Revoke"));
+  assert.ok(rows[2]!.textContent?.includes("Make owner"));
+  const removeBtn = [...rows[2]!.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Remove");
+  assert.ok(removeBtn);
+  removeBtn.click();
+  await page.settle();
+  assert.deepEqual(actions, [["offboard", { apply: true }]]);
+  assert.ok(!page.host.textContent?.includes("member-1"));
+  button(page.host, "Show offboarded (1)").click();
+  await page.settle();
+  button(page.host, "Reactivate").click();
+  await page.settle();
+  assert.deepEqual(actions, [
+    ["offboard", { apply: true }],
+    ["reactivate", null],
+  ]);
+  page.close();
 });

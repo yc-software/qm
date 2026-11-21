@@ -494,10 +494,16 @@ const routes: Route<ApiCtx>[] = [
       method: "POST",
       path: "/v1/admin/users/:principalId/offboard",
       auth: "either",
-      admin: { privateRead: "always" },
+      admin: { privateRead: "always", owner: true },
       handle: offboardUser,
     },
-    { method: "POST", path: "/v1/admin/users/:principalId/reactivate", auth: "either", handle: reactivateUser },
+    {
+      method: "POST",
+      path: "/v1/admin/users/:principalId/reactivate",
+      auth: "either",
+      admin: { owner: true },
+      handle: reactivateUser,
+    },
     {
       method: "GET",
       path: "/v1/admin/principal-links",

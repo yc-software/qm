@@ -295,6 +295,8 @@ export async function browserIdentity(
   for (const header of RELAY_IDENTITY_HEADERS) delete req.headers[header];
   await deps.identity?.refresh();
   const sub = canonicalPerson(session.sub);
+  if (deps.identity?.deactivationSource?.(sub) === "manual")
+    return { status: 401, error: "unauthorized", message: "this account has been deactivated" };
   const foreign = req.headers.origin !== undefined && !sameOriginRequest(req, originOf(deps.portalUrl!));
   const imp = foreign
     ? null

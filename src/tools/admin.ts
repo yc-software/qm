@@ -254,6 +254,8 @@ export const OWNER_ADMIN_ACTIONS: ReadonlySet<string> = new Set([
   "directory",
   "invite_external",
   "revoke_external",
+  "offboard_user",
+  "reactivate_user",
   "slack_installation",
   "slack_start",
   "slack_delete",

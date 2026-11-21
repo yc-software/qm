@@ -1,9 +1,10 @@
-import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
+import type { AdminGrant } from "../../../admin/admin-grant-store.ts";
+import { personKey, samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
-import { type ApiCtx } from "../route.ts";
+import { audit, authorizeAdmin, isObj, orgScope, type AuthorizedAdmin } from "../shared.ts";
+import { tenantOf, type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
 import { syncLoopSchedule } from "../loops.ts";
 
@@ -18,11 +19,64 @@ interface Change {
 
 type Step = Change & { run: () => Promise<unknown> };
 
-async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<Step[]> {
+interface TargetGovernance {
+  grants: AdminGrant[];
+  isOrgAdmin: boolean;
+  isOwner: boolean;
+  otherActiveOrgAdmins: number;
+  otherActiveOwners: number;
+}
+
+async function targetGovernance(ctx: ApiCtx, isThem: (id: string) => Promise<boolean>): Promise<TargetGovernance> {
+  const { deps } = ctx;
+  const all = (await deps.admin?.listGrants(tenantOf(ctx))) ?? [];
+  const grants: AdminGrant[] = [];
+  for (const grant of all) if (await isThem(grant.principalId)) grants.push(grant);
+  const owned = new Set(grants);
+  const activeOther = (role: "org_admin" | "owner") => {
+    const seen = new Set<string>();
+    for (const grant of all) {
+      if (grant.role !== role || owned.has(grant)) continue;
+      if (deps.identity?.deactivationSource(grant.principalId) !== undefined) continue;
+      seen.add(personKey(grant.principalId));
+    }
+    return seen.size;
+  };
+  return {
+    grants,
+    isOrgAdmin: grants.some((grant) => grant.role === "org_admin"),
+    isOwner: grants.some((grant) => grant.role === "owner"),
+    otherActiveOrgAdmins: activeOther("org_admin"),
+    otherActiveOwners: activeOther("owner"),
+  };
+}
+
+async function deactivateAndSignOut(
+  deps: ApiCtx["deps"],
+  principalId: string,
+  emails: Iterable<string>,
+): Promise<void> {
+  await deps.identity!.deactivate(principalId);
+  if (!deps.brokerSessions) return;
+  const revoked = new Set<string>();
+  for (const candidate of emails) {
+    const email = candidate.trim().toLowerCase();
+    if (!email.includes("@") || revoked.has(email)) continue;
+    revoked.add(email);
+    await deps.brokerSessions.revoke(email);
+  }
+}
+
+async function plan(
+  ctx: ApiCtx,
+  actor: AuthorizedAdmin,
+  principalId: string,
+  emails: string[],
+  isThem: (id: string) => Promise<boolean>,
+  governance: TargetGovernance,
+): Promise<Step[]> {
   const { app, deps } = ctx;
-  const isThem = deps.directory
-    ? await samePersonMatcher(deps.directory, principalId)
-    : async (id: string) => samePerson(id, principalId);
+  const actorId = actor.id;
   const personal = async (scope: ScopeId) => {
     const { kind, ref } = parseScopeId(scope);
     return kind === "personal" && (await isThem(ref));
@@ -33,7 +87,15 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
     steps.push({ kind, id, label: label || id, action, run });
 
   if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
-    step("principal", principalId, "sign-in", "deactivate", () => deps.identity!.deactivate(principalId));
+    step("principal", principalId, "sign-in", "deactivate", () => deactivateAndSignOut(deps, principalId, emails));
+  if (actor.role === "owner") {
+    for (const grant of governance.grants)
+      if (grant.role === "owner")
+        step("admin_grant", `${grant.principalId}:${grant.role}`, "owner access", "revoke", () =>
+          deps.admin!.revokeGrant(tenantOf(ctx), actor, grant.principalId, grant.scopeId, grant.role),
+        );
+    return steps;
+  }
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
@@ -88,10 +150,21 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     !["boolean", "undefined"].includes(typeof input.apply)
   )
     return sendJson(res, 400, { error: "bad_request", message: "body is { apply?: boolean }; omit apply to preview" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId, user: resolvedUser } = await resolveAdminUser(deps, params.principalId!);
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
-  const steps = await plan(ctx, actor.id, principalId);
+  const isThem = deps.directory
+    ? await samePersonMatcher(deps.directory, principalId)
+    : async (id: string) => samePerson(id, principalId);
+  const governance = await targetGovernance(ctx, isThem);
+  if (actor.role === "owner" && governance.isOrgAdmin)
+    return sendJson(res, 403, { error: "forbidden", message: "only an org admin may offboard an org admin" });
+  if (governance.isOrgAdmin && governance.otherActiveOrgAdmins === 0)
+    return sendJson(res, 400, { error: "bad_request", message: "cannot offboard the last org admin" });
+  if (governance.isOwner && governance.otherActiveOrgAdmins === 0 && governance.otherActiveOwners === 0)
+    return sendJson(res, 400, { error: "bad_request", message: "cannot offboard the last owner" });
+  const emails = [principalId, params.principalId!, ...(resolvedUser?.aliases ?? [])];
+  const steps = await plan(ctx, actor, principalId, emails, isThem, governance);
   const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
@@ -122,6 +195,14 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  if (actor.role === "owner") {
+    const isThem = deps.directory
+      ? await samePersonMatcher(deps.directory, principalId)
+      : async (id: string) => samePerson(id, principalId);
+    const governance = await targetGovernance(ctx, isThem);
+    if (governance.isOrgAdmin)
+      return sendJson(res, 403, { error: "forbidden", message: "only an org admin may reactivate an org admin" });
+  }
   const user = await deps.admin!.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
   audit(ctx, {

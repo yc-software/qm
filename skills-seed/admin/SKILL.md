@@ -61,7 +61,7 @@ Limits the API enforces (don't offer what it will refuse):
   DM or an Open conversation. Mutations work anywhere, including from the admin's own
   fires; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
-- **`owner` vs `org_admin`**: an `owner` can manage org-wide configuration, org memory, org memory-brain registry config, models, connectors, spend, retention, and the user roster/external invites, but cannot access other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, user detail/reset/offboard, principal links, or impersonation).
+- **`owner` vs `org_admin`**: an `owner` can manage org-wide configuration, org memory, org memory-brain registry config, models, connectors, spend, retention, the user roster/external invites, and access-only member removal/reactivation (cannot remove an `org_admin` or the last owner), but cannot access other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, user detail/reset, persona/cron handovers, principal links, or impersonation).
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 
 All calls share one shape — only method/path/body vary:

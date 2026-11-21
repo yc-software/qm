@@ -64,6 +64,22 @@ function users(page: AdminPage, initial: any) {
       "Could not update admin access",
     );
   };
+  const removeMember = (u: any) => {
+    if (
+      !window.confirm(
+        `Remove ${u.principalId} from this instance? Their access will be revoked and they will be signed out.`,
+      )
+    )
+      return;
+    void act(
+      () => page.api("POST", `/api/users/${encodeURIComponent(u.principalId)}/offboard`, { apply: true }),
+      "Remove failed",
+    );
+  };
+  const reactivateMember = (u: any) => {
+    if (!window.confirm(`Turn sign-in back on for ${u.principalId}?`)) return;
+    void act(() => page.api("POST", `/api/users/${encodeURIComponent(u.principalId)}/reactivate`), "Reactivate failed");
+  };
   const revokeExternal = (m: any) => {
     const question =
       m.status === "active"
@@ -115,6 +131,44 @@ function users(page: AdminPage, initial: any) {
     const lastGovernorTitle = (u: any) => {
       if (!lastGovernor(u)) return "";
       return u.admin?.role === "owner" ? "The last owner cannot be revoked." : "The last admin cannot be revoked.";
+    };
+    const ownerRowAction = (u: any) => {
+      if (u.admin?.role === "org_admin") return "";
+      if (u.offboarded || u.deactivated) {
+        if (u.kind === "app") return "";
+        return {
+          node: html`<button
+            type="button"
+            class="btn compact rowbtn"
+            ?disabled=${busy}
+            @click=${() => reactivateMember(u)}
+          >
+            Reactivate
+          </button>`,
+        };
+      }
+      const roleBtn = html`<button
+        type="button"
+        class=${"btn compact rowbtn" + (u.admin?.isAdmin ? " danger" : "")}
+        ?disabled=${busy || lastGovernor(u)}
+        title=${lastGovernorTitle(u)}
+        @click=${() => admin(u)}
+      >
+        ${u.admin?.isAdmin ? "Revoke" : makeLabel}
+      </button>`;
+      const removeBtn =
+        u.kind === "app"
+          ? nothing
+          : html`<button
+              type="button"
+              class="btn compact rowbtn danger"
+              ?disabled=${busy || lastGovernor(u)}
+              title=${lastGovernor(u) ? "The last owner cannot be removed." : ""}
+              @click=${() => removeMember(u)}
+            >
+              Remove
+            </button>`;
+      return { node: html`${roleBtn}${removeBtn}` };
     };
     render(
       html`${pageHeader({
@@ -194,9 +248,8 @@ function users(page: AdminPage, initial: any) {
                   { text: u.lastSeenAt ? relTime(u.lastSeenAt) : "-", cls: "num" },
                   { text: String(u.sessionCount), cls: "num" },
                   { text: String(u.turnCount), cls: "num" },
-                  !page.fullAdmin && u.admin?.role === "org_admin"
-                    ? ""
-                    : {
+                  page.fullAdmin
+                    ? {
                         action: {
                           label: u.admin?.isAdmin ? "Revoke" : makeLabel,
                           danger: !!u.admin?.isAdmin,
@@ -204,7 +257,8 @@ function users(page: AdminPage, initial: any) {
                           title: lastGovernorTitle(u),
                           run: () => admin(u),
                         },
-                      },
+                      }
+                    : ownerRowAction(u),
                 ]),
                 "No users match.",
               )}`,
