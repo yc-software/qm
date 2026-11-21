@@ -574,7 +574,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin, org owner for org brains, or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -701,7 +701,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (v) => v.role === "owner" && livePersonCapability(v.claims),
     guidance:
-      "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
+      "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, the org memory-brain registry, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       { method: "GET", path: "/v1/admin/resources", summary: "list configurable org resources" },
@@ -720,6 +720,29 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET|POST|PATCH|DELETE",
         path: "/v1/admin/memory?scope=:orgScopeId",
         summary: "read or update org-wide notebook facts ({facts:[text]}, {facts:[{id,text}]}, {ids})",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/memory-registry",
+        summary: "org-level memory brains, their bindings, and the memberBrains switch (DM or effective Open sharing)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/brains/:id",
+        summary:
+          "read or configure an org memory brain without clientSecret or moving url (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/bindings/:id",
+        summary:
+          "read or configure a binding for an org memory brain (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/memory-registry/member-brains",
+        summary:
+          "turn members' own memory brains on or off for the whole org ({enabled}); off stops every one at once (DM or effective Open sharing)",
       },
       { method: "GET", path: "/v1/admin/spend", summary: "org-wide spend summary" },
       { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },

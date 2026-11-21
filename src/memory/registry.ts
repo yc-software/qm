@@ -434,6 +434,7 @@ export function brainRefusal(
   standing: "inactive" | "org_admin" | "owner" | "member",
 ): string | undefined {
   if (standing === "org_admin") return undefined;
+  if (standing === "owner" && !brain.owner) return undefined;
   if ((standing === "member" || standing === "owner") && brain.owner === principalId)
     return memberBrainsOn(record) ? undefined : memberBrainsOff().message;
   return `only an org admin or the brain's owner can set brain ${brain.id}'s secret`;

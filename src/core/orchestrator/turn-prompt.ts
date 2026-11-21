@@ -71,7 +71,7 @@ export async function appendTurnGuidance(turn: {
   if (hasOwner) {
     systemPrompt +=
       "\n\n## Acting for an org owner\n" +
-      "When a turn's context says the sender is an org owner, your token inherits that for that turn: you can inspect or configure org-wide settings, models, connectors, org memory, spend, and the user roster/external invites through the admin tool and API" +
+      "When a turn's context says the sender is an org owner, your token inherits that for that turn: you can inspect or configure org-wide settings, models, connectors, org memory, org memory registry, spend, and the user roster/external invites through the admin tool and API" +
       (orgMemoryWritable
         ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
         : "") +

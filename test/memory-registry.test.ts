@@ -380,10 +380,14 @@ test("the org switch stops members' brains and refuses new ones, and leaves org 
 
 test("a brain's owner who is no longer an active member can't set its secret", () => {
   const record = aliceBrain();
+  const orgRecord = personalBrain(EMPTY_MEMORY_REGISTRY);
   assert.match(
     brainRefusal(record, record.brains[0]!, "U1", "inactive") ?? "",
     /only an org admin or the brain's owner/,
   );
+  assert.equal(brainRefusal(orgRecord, orgRecord.brains[0]!, "U2", "owner"), undefined);
+  assert.equal(brainRefusal(record, record.brains[0]!, "U1", "owner"), undefined);
+  assert.match(brainRefusal(record, record.brains[0]!, "U2", "owner") ?? "", /only an org admin or the brain's owner/);
 });
 
 test("setting a brain's secret restates the url the secret goes to", () => {

@@ -122,8 +122,7 @@ export async function authorizeAdmin(
     sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
     return null;
   }
-  const ownerAllowed =
-    ctx.adminAccess?.owner === true && ctx.adminAccess.privateRead !== "always" && parseScopeId(scope).kind === "org";
+  const ownerAllowed = ctx.adminAccess?.owner === true && parseScopeId(scope).kind === "org";
   if (standing === "owner" && !ownerAllowed) {
     sendJson(res, 403, { error: "forbidden", message: "org admin access required" });
     return null;

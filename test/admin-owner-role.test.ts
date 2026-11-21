@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { memberBrainId, putMemberBrain } from "../src/memory/registry.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -47,6 +48,8 @@ async function start(overrides: Record<string, unknown> = {}) {
     auditLog: built.auditLog,
     config: built.config,
     memory: built.memory,
+    memoryRegistry: built.memoryRegistry,
+    secretDrops: built.secretDrops,
     sessions,
     runs: liveRunStore(built.runs),
     errors: built.errors,
@@ -113,7 +116,6 @@ test("owner whoami, org management, private-read denial, and privilege-escalatio
       ["GET", "/v1/admin/memory?scope=personal:bob"],
       ["POST", "/v1/admin/memory?scope=personal:bob", { facts: ["nope"] }],
       ["GET", "/v1/admin/memory/scopes"],
-      ["GET", "/v1/admin/memory-registry"],
       ["GET", "/v1/admin/files?scope=personal:bob"],
       ["GET", "/v1/admin/crons?scope=personal:bob"],
       ["GET", "/v1/admin/apps?scope=personal:bob"],
@@ -219,11 +221,149 @@ test("owner agent capability exposes owner self-API catalog and enforces owner r
     const headers = { "x-agent-capability": token };
     const apisText = await (await fetch(`${s.base}/v1/apis`, { headers })).text();
     assert.match(apisText, /Admin plane \(org owner\)/);
+    assert.ok(apisText.includes("/v1/admin/memory-registry"));
     assert.ok(!apisText.includes("/v1/admin/sessions"));
     assert.ok(!apisText.includes("/v1/admin/keychain"));
     assert.equal((await fetch(`${s.base}/v1/admin/users`, { headers })).status, 200);
     assert.equal((await fetch(`${s.base}/v1/admin/sessions?scope=personal:bob`, { headers })).status, 403);
     assert.equal((await fetch(`${s.base}/v1/admin/memory?scope=personal:bob`, { headers })).status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("owner manages org memory registry config while member-owned brains stay org_admin-only", async () => {
+  const s = await start();
+  try {
+    const bobId = memberBrainId("bob");
+    await s.built.memoryRegistry.update((record) =>
+      putMemberBrain(
+        record,
+        "bob",
+        { url: "https://bob.private.example/mcp", clientId: "bob-client", label: "Bob private brain" },
+        {
+          actor: "bob",
+          now: Date.now(),
+          overlayIds: s.built.memoryRegistry.overlayIds,
+          key: s.built.memoryRegistry.key,
+        },
+      ),
+    );
+    await s.built.directory.replaceChannels(
+      [{ channelId: "C1", name: "general", isPrivate: false }],
+      [{ channelId: "C1", principalId: "owner-pat" }],
+    );
+
+    const orgBrain = {
+      preset: "gbrain-v1",
+      url: "https://brain.org.example/mcp",
+      clientId: "org-qm",
+      label: "Org memory",
+    };
+    const putBrainRes = await req(s.base, "PUT", "/v1/admin/memory-registry/brains/org-brain", OWNER_ACTOR, orgBrain);
+    assert.equal(putBrainRes.status, 200);
+    const putBrainText = await putBrainRes.text();
+    assert.doesNotMatch(putBrainText, /bob\.private\.example|bob-client|Bob private brain/);
+
+    const putBindRes = await req(s.base, "PUT", "/v1/admin/memory-registry/bindings/org-all", OWNER_ACTOR, {
+      brain: "org-brain",
+      scope: "personal",
+    });
+    assert.equal(putBindRes.status, 200);
+
+    const toggleOff = await req(s.base, "PUT", "/v1/admin/memory-registry/member-brains", OWNER_ACTOR, {
+      enabled: false,
+    });
+    assert.equal(toggleOff.status, 200);
+    const toggleJson: any = await toggleOff.json();
+    assert.equal(toggleJson.memberBrains, false);
+    assert.deepEqual(
+      toggleJson.brains.map((b: any) => b.id),
+      ["org-brain"],
+    );
+    assert.deepEqual(
+      toggleJson.bindings.map((b: any) => b.id),
+      ["org-all"],
+    );
+    assert.ok(toggleJson.disabled.every((d: any) => d.provider !== bobId));
+
+    const ownerView: any = await (await req(s.base, "GET", "/v1/admin/memory-registry", OWNER_ACTOR)).json();
+    assert.deepEqual(
+      ownerView.brains.map((b: any) => b.id),
+      ["org-brain"],
+    );
+    assert.equal((await req(s.base, "GET", "/v1/admin/memory-registry/brains/org-brain", OWNER_ACTOR)).status, 200);
+    assert.equal((await req(s.base, "GET", "/v1/admin/memory-registry/bindings/org-all", OWNER_ACTOR)).status, 200);
+    assert.equal((await req(s.base, "GET", `/v1/admin/memory-registry/brains/${bobId}`, OWNER_ACTOR)).status, 404);
+    assert.equal((await req(s.base, "GET", `/v1/admin/memory-registry/bindings/${bobId}`, OWNER_ACTOR)).status, 404);
+
+    for (const [method, path, body] of [
+      ["PUT", `/v1/admin/memory-registry/brains/${bobId}`, { label: "Nope" }],
+      ["DELETE", `/v1/admin/memory-registry/brains/${bobId}`, undefined],
+      ["PUT", `/v1/admin/memory-registry/bindings/${bobId}`, { label: "Nope" }],
+      ["PUT", "/v1/admin/memory-registry/bindings/hijack", { brain: bobId, scope: "personal:bob" }],
+      ["DELETE", `/v1/admin/memory-registry/bindings/${bobId}`, undefined],
+    ] as const) {
+      assert.equal((await req(s.base, method, path, OWNER_ACTOR, body)).status, 403, `owner refused ${method} ${path}`);
+    }
+
+    const adminView: any = await (await req(s.base, "GET", "/v1/admin/memory-registry", ADMIN_ACTOR)).json();
+    assert.deepEqual(adminView.brains.map((b: any) => b.id).sort(), [bobId, "org-brain"].sort());
+    assert.equal((await req(s.base, "GET", `/v1/admin/memory-registry/brains/${bobId}`, ADMIN_ACTOR)).status, 200);
+
+    const dmToken = await mintCapabilityToken(
+      {
+        actorId: "owner-pat",
+        aud: CONTROL_PLANE_AUD,
+        scopeId: scopeId("personal", "owner-pat"),
+        exp: Date.now() + 60_000,
+        ...liveRunClaims("owner-pat"),
+      },
+      SECRET,
+    );
+    const channelToken = await mintCapabilityToken(
+      {
+        actorId: "owner-pat",
+        aud: CONTROL_PLANE_AUD,
+        scopeId: scopeId("channel", "C1"),
+        exp: Date.now() + 60_000,
+        ...liveRunClaims("owner-pat"),
+      },
+      SECRET,
+    );
+    const agentCall = (token: string, method: string, path: string, body?: unknown) =>
+      fetch(`${s.base}${path}`, {
+        method,
+        headers: {
+          "x-agent-capability": token,
+          ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+
+    assert.equal((await agentCall(channelToken, "GET", "/v1/admin/memory-registry")).status, 403);
+    assert.equal((await agentCall(dmToken, "GET", "/v1/admin/memory-registry")).status, 200);
+    assert.equal(
+      (await agentCall(dmToken, "PUT", "/v1/admin/memory-registry/brains/org-brain", { label: "Org" })).status,
+      200,
+    );
+    assert.equal((await agentCall(dmToken, "DELETE", "/v1/admin/memory-registry/bindings/org-all")).status, 403);
+    assert.equal(
+      (await agentCall(dmToken, "POST", "/v1/keychain/drops", { memoryBrain: "org-brain", purpose: "connect" })).status,
+      200,
+    );
+    assert.equal(
+      (await agentCall(dmToken, "POST", "/v1/keychain/drops", { memoryBrain: bobId, purpose: "nope" })).status,
+      403,
+    );
+
+    assert.equal((await req(s.base, "DELETE", "/v1/admin/memory-registry/bindings/org-all", OWNER_ACTOR)).status, 200);
+    assert.equal((await req(s.base, "DELETE", "/v1/admin/memory-registry/brains/org-brain", OWNER_ACTOR)).status, 200);
+    const afterDelete: any = await (await req(s.base, "GET", "/v1/admin/memory-registry", ADMIN_ACTOR)).json();
+    assert.deepEqual(
+      afterDelete.brains.map((b: any) => b.id),
+      [bobId],
+    );
   } finally {
     await s.close();
   }
