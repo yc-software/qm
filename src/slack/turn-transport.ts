@@ -41,7 +41,11 @@ export function createSlackTurnTransport(at: {
     if (opts.notice) blocks = noticeBlocks(msg);
     else if (opts.note) blocks = blocksWithContext(msg, [plainContext(opts.note)]);
     const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
-      ...slackReplyArgs(channel, text, threadTs, { threadOnly: at.kind === "channel", unfurlLinks: false }),
+      ...slackReplyArgs(channel, text, threadTs, {
+        threadOnly: at.kind === "channel",
+        unfurlLinks: false,
+        persona: opts.persona,
+      }),
       ...(withBlocks && blocks ? { blocks } : {}),
     });
     if (opts.idempotencyKey)

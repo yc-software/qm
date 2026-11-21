@@ -210,6 +210,7 @@ export async function selectTurnResult(turn: {
           sessionId: session.id,
           reply,
           pendingApprovals: approvals,
+          ...(wornPersona ? { persona: wornPersona } : {}),
           ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
           ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
           ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

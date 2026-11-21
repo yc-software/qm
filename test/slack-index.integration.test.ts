@@ -647,6 +647,20 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
   }
 });
 
+test("a DM reply wearing a persona posts under its name and icon", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-persona";
+    const persona = { id: "p1", name: "Ada", icon: { kind: "emoji" as const, value: "🎨" } };
+    f.core.result = { status: "ok", reply: "on it", persona };
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hi", ts: "100.1" });
+    assert.equal(f.client.posts[0]?.username, "Ada");
+    assert.equal(f.client.posts[0]?.icon_emoji, ":art:");
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a forwarded Slack message reaches the turn with labeled nested content and files", async (t) => {
   const fetchMock = t.mock.method(
     globalThis,
