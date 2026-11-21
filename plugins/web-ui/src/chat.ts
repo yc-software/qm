@@ -237,7 +237,7 @@ import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
-import { createTranscriptViewport } from "./transcript-viewport";
+import { createTranscriptViewport, preserveTranscriptScroll } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
 import { reportHandledError } from "./browser-errors.ts";
 import { uiCanvasPanel } from "./ui-canvas";
@@ -1343,14 +1343,6 @@ export function createChatSurface(
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
-    const previousScroll =
-      chatState.sessionId === s.id ? container.querySelector<HTMLElement>(".readonly-scroll") : null;
-    const kept = previousScroll && {
-      top: previousScroll.scrollTop,
-      fromBottom: previousScroll.scrollHeight - previousScroll.scrollTop - previousScroll.clientHeight,
-      prepended: readOnlyView?.anchorSeq !== anchorSeq,
-      typing: Boolean(document.activeElement?.closest("qm-slack-reply")),
-    };
     preserveOutgoingWorkingDot(s.threadRef);
     dropAbandonedNewChat(s.threadRef);
     detachActiveChat();
@@ -1377,7 +1369,9 @@ export function createChatSurface(
     syncLocation();
 
     resetBackgroundPanel();
-    const host = document.createElement("div");
+    const priorHost = sameSession ? container.querySelector<HTMLElement>(":scope > .readonly-chat") : null;
+    const restoreScroll = priorHost ? preserveTranscriptScroll(priorHost) : null;
+    const host = priorHost ?? document.createElement("div");
     host.className = "custom-chat readonly-chat";
     const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
@@ -1513,13 +1507,10 @@ export function createChatSurface(
     readonlyRedraw = draw;
     void refreshApprovals();
     draw();
-    container.replaceChildren(host);
-    const scroller = host.querySelector<HTMLElement>(".readonly-scroll");
-    if (!kept || !scroller || followReadOnlySend || kept.fromBottom < 40) scrollToBottom();
-    else if (kept.prepended) scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - kept.fromBottom;
-    else scroller.scrollTop = kept.top;
+    if (!priorHost) container.replaceChildren(host);
+    if (!restoreScroll || followReadOnlySend) scrollToBottom();
+    else restoreScroll();
     followReadOnlySend = false;
-    if (kept?.typing) slackReply?.querySelector<HTMLTextAreaElement>(".composer-input")?.focus();
     readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
     ctx.ensureDeliveryStream();
     consumeBackgroundPanelRequest();
