@@ -99,7 +99,9 @@ persona's notebook gets a nightly tidy of its own. With `MEMORY_PROVIDER_CONFIG`
 `default` route has to serve the `persona` kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
-Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
+Decision rules) whose option has the action `use_persona` and a `persona` id, or `*` to expand
+that option at turn time into every persona the sender can use in that scope (ordered
+alphabetically by name; skipped if fewer than two options remain). The turn evaluates
 its `turn_start` rules once, before it settles its persona, and model selection reuses the same
 verdicts, so one enforcing rule may pick a persona while another picks a runtime: the hook
 allows one enforcing rule per action. The state the rules see includes the conversation kind
