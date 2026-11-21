@@ -26,9 +26,6 @@ test("an org admin's turn can open another person's computer by id, under that c
   assert.equal(plan.resource.id, "box-bob");
   assert.equal(plan.crossScope, true);
   assert.equal("credentialScopeId" in plan, false, "the owner's credentials are not loaded");
-  assert.equal((await access(true).jobComputerPlan({ ...bobBox, jobOnly: true } as any)).crossScope, true);
-});
-
-test("a non-admin turn still cannot open another person's computer", async () => {
   await assert.rejects(access(false).accessResource("box-bob"), /no longer authorized/);
+  assert.equal((await access(true).jobComputerPlan({ ...bobBox, jobOnly: true } as any)).crossScope, true);
 });

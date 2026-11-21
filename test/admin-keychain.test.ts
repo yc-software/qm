@@ -247,16 +247,7 @@ test("admin keychain lists OAuth connectors without secrets, grants them for exe
   for (const path of ["/v1/admin/keychain", `/v1/admin/keychain?principal=${encodeURIComponent(bob)}`]) {
     const body: any = await (await call("GET", path)).json();
     const raw = JSON.stringify(body);
-    for (const bad of [
-      "ya29.bob",
-      "1//bob-ref",
-      "bob-id",
-      "mcp-bob",
-      "serp-s",
-      "refreshTokenEnc",
-      "idTokenEnc",
-      "secretEnc",
-    ])
+    for (const bad of "ya29.bob 1//bob-ref bob-id mcp-bob serp-s refreshTokenEnc idTokenEnc secretEnc".split(" "))
       assert.equal(raw.includes(bad), false, bad);
     gmail = body.credentials.find((c: any) => c.ownerId === bob && c.host === "gmail.googleapis.com");
     const mcp = body.credentials.find((c: any) => c.ownerId === bob && c.host === "mcp.example.com");
@@ -264,10 +255,7 @@ test("admin keychain lists OAuth connectors without secrets, grants them for exe
       [gmail?.managed, gmail?.envKey, gmail?.refresh?.hasRefreshToken, mcp?.managed],
       ["connector", "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", true, "connector"],
     );
-    assert.equal(
-      body.credentials.some((c: any) => c.kind === "broker"),
-      false,
-    );
+    assert.ok(!body.credentials.some((c: any) => c.kind === "broker"));
   }
 
   const granted = await call("POST", "/v1/admin/keychain/grants", admin, {
