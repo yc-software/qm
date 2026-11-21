@@ -136,39 +136,26 @@ function users(page: AdminPage, initial: any) {
       if (u.admin?.role === "org_admin") return "";
       if (u.offboarded || u.deactivated) {
         if (u.kind === "app") return "";
-        return {
-          node: html`<button
-            type="button"
-            class="btn compact rowbtn"
-            ?disabled=${busy}
-            @click=${() => reactivateMember(u)}
-          >
-            Reactivate
-          </button>`,
-        };
+        return { action: { label: "Reactivate", disabled: busy, run: () => reactivateMember(u) } };
       }
-      const roleBtn = html`<button
-        type="button"
-        class=${"btn compact rowbtn" + (u.admin?.isAdmin ? " danger" : "")}
-        ?disabled=${busy || lastGovernor(u)}
-        title=${lastGovernorTitle(u)}
-        @click=${() => admin(u)}
-      >
-        ${u.admin?.isAdmin ? "Revoke" : makeLabel}
-      </button>`;
-      const removeBtn =
-        u.kind === "app"
-          ? nothing
-          : html`<button
-              type="button"
-              class="btn compact rowbtn danger"
-              ?disabled=${busy || lastGovernor(u)}
-              title=${lastGovernor(u) ? "The last owner cannot be removed." : ""}
-              @click=${() => removeMember(u)}
-            >
-              Remove
-            </button>`;
-      return { node: html`${roleBtn}${removeBtn}` };
+      const actions: any[] = [
+        {
+          label: u.admin?.isAdmin ? "Revoke" : makeLabel,
+          danger: !!u.admin?.isAdmin,
+          disabled: busy || lastGovernor(u),
+          title: lastGovernorTitle(u),
+          run: () => admin(u),
+        },
+      ];
+      if (u.kind !== "app")
+        actions.push({
+          label: "Remove",
+          danger: true,
+          disabled: busy || lastGovernor(u),
+          title: lastGovernor(u) ? "The last owner cannot be removed." : "",
+          run: () => removeMember(u),
+        });
+      return { actions };
     };
     render(
       html`${pageHeader({

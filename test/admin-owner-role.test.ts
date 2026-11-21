@@ -433,6 +433,23 @@ test("owner offboards and reactivates members access-only while keeping org_admi
       400,
     );
 
+    const ownerDmToken = await mintCapabilityToken(
+      {
+        actorId: "owner-pat",
+        aud: CONTROL_PLANE_AUD,
+        scopeId: scopeId("personal", "owner-pat"),
+        exp: Date.now() + 60_000,
+        ...liveRunClaims("owner-pat"),
+      },
+      SECRET,
+    );
+    const agentOffboardOwner = await fetch(`${s.base}/v1/admin/users/owner-sam/offboard`, {
+      method: "POST",
+      headers: { "x-agent-capability": ownerDmToken, "content-type": "application/json" },
+      body: JSON.stringify({ apply: true }),
+    });
+    assert.equal(agentOffboardOwner.status, 403);
+
     const removeSam = await req(s.base, "POST", "/v1/admin/users/owner-sam/offboard", OWNER_ACTOR, { apply: true });
     assert.equal(removeSam.status, 200);
     assert.equal(s.built.identity.classify("owner-sam").type, "guest");

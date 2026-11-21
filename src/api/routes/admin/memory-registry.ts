@@ -40,11 +40,18 @@ function forbidMemberBrain(record: MemoryRegistry, brainId: unknown, orgOnly: bo
 
 function view(record: MemoryRegistry, registry: MemoryRegistryStore, orgOnly = false) {
   const hidden = orgOnly ? memberBrainIds(record) : null;
+  const scoped: MemoryRegistry = hidden
+    ? {
+        ...record,
+        brains: record.brains.filter((brain) => !brain.owner),
+        bindings: record.bindings.filter((binding) => !hidden.has(binding.brain)),
+      }
+    : record;
   return {
-    memberBrains: memberBrainsOn(record),
-    brains: (hidden ? record.brains.filter((brain) => !brain.owner) : record.brains).map(redactBrain),
-    bindings: hidden ? record.bindings.filter((binding) => !hidden.has(binding.brain)) : record.bindings,
-    disabled: resolveMemoryRegistry(record, registry).disabled.filter((entry) => !hidden?.has(entry.provider)),
+    memberBrains: memberBrainsOn(scoped),
+    brains: scoped.brains.map(redactBrain),
+    bindings: scoped.bindings,
+    disabled: resolveMemoryRegistry(scoped, registry).disabled,
     overlay: [...registry.overlayIds],
   };
 }

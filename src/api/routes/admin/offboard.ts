@@ -1,4 +1,5 @@
 import type { AdminGrant } from "../../../admin/admin-grant-store.ts";
+import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { personKey, samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
 import { errMessage } from "../../../util/errors.ts";
@@ -27,17 +28,33 @@ interface TargetGovernance {
   otherActiveOwners: number;
 }
 
-async function targetGovernance(ctx: ApiCtx, isThem: (id: string) => Promise<boolean>): Promise<TargetGovernance> {
+function keysFor(id: string, member?: DirectoryMember | null): string[] {
+  const keys = [personKey(id)];
+  if (member?.principalId) keys.push(personKey(member.principalId));
+  if (member?.slackId) keys.push(personKey(member.slackId));
+  return keys;
+}
+
+async function targetGovernance(
+  ctx: ApiCtx,
+  principalId: string,
+  aliases: readonly string[],
+  targetMember?: DirectoryMember | null,
+): Promise<TargetGovernance> {
   const { deps } = ctx;
   const all = (await deps.admin?.listGrants(tenantOf(ctx))) ?? [];
-  const grants: AdminGrant[] = [];
-  for (const grant of all) if (await isThem(grant.principalId)) grants.push(grant);
+  const grantIds = [...new Set(all.map((grant) => grant.principalId))];
+  const members = grantIds.length && deps.directory ? await deps.directory.getMany(grantIds) : new Map();
+  const targetKeys = new Set([...keysFor(principalId, targetMember), ...aliases.map((alias) => personKey(alias))]);
+  const grants = all.filter((grant) =>
+    keysFor(grant.principalId, members.get(grant.principalId)).some((key) => targetKeys.has(key)),
+  );
   const owned = new Set(grants);
+  const isActive = (id: string) => (deps.identity ? deps.identity.classify(id).type === "internal" : true);
   const activeOther = (role: "org_admin" | "owner") => {
     const seen = new Set<string>();
     for (const grant of all) {
-      if (grant.role !== role || owned.has(grant)) continue;
-      if (deps.identity?.deactivationSource(grant.principalId) !== undefined) continue;
+      if (grant.role !== role || owned.has(grant) || !isActive(grant.principalId)) continue;
       seen.add(personKey(grant.principalId));
     }
     return seen.size;
@@ -88,14 +105,15 @@ async function plan(
 
   if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
     step("principal", principalId, "sign-in", "deactivate", () => deactivateAndSignOut(deps, principalId, emails));
-  if (actor.role === "owner") {
-    for (const grant of governance.grants)
-      if (grant.role === "owner")
-        step("admin_grant", `${grant.principalId}:${grant.role}`, "owner access", "revoke", () =>
-          deps.admin!.revokeGrant(tenantOf(ctx), actor, grant.principalId, grant.scopeId, grant.role),
-        );
-    return steps;
-  }
+  for (const grant of governance.grants)
+    step(
+      "admin_grant",
+      `${grant.principalId}:${grant.role}`,
+      grant.role === "owner" ? "owner access" : "admin access",
+      "revoke",
+      () => deps.admin!.revokeGrant(tenantOf(ctx), actor, grant.principalId, grant.scopeId, grant.role),
+    );
+  if (actor.role === "owner") return steps;
   for (const c of await app.listCrons())
     if (!c.loopId && !c.archived && (await owns(c.owner, c.ownerScopeId)))
       step("cron", c.id, c.title ?? "", "disable_and_archive", () =>
@@ -150,15 +168,20 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     !["boolean", "undefined"].includes(typeof input.apply)
   )
     return sendJson(res, 400, { error: "bad_request", message: "body is { apply?: boolean }; omit apply to preview" });
-  const { principalId, user: resolvedUser } = await resolveAdminUser(deps, params.principalId!);
-  if (samePerson(principalId, actor.id))
-    return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
+  const { principalId, user: resolvedUser, member } = await resolveAdminUser(deps, params.principalId!);
   const isThem = deps.directory
     ? await samePersonMatcher(deps.directory, principalId)
     : async (id: string) => samePerson(id, principalId);
-  const governance = await targetGovernance(ctx, isThem);
+  if (await isThem(actor.id))
+    return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
+  const governance = await targetGovernance(ctx, principalId, resolvedUser?.aliases ?? [], member);
   if (actor.role === "owner" && governance.isOrgAdmin)
     return sendJson(res, 403, { error: "forbidden", message: "only an org admin may offboard an org admin" });
+  if (ctx.capability && governance.grants.length > 0)
+    return sendJson(res, 403, {
+      error: "portal_only",
+      message: "offboarding an admin or owner must be done in the admin portal",
+    });
   if (governance.isOrgAdmin && governance.otherActiveOrgAdmins === 0)
     return sendJson(res, 400, { error: "bad_request", message: "cannot offboard the last org admin" });
   if (governance.isOwner && governance.otherActiveOrgAdmins === 0 && governance.otherActiveOwners === 0)
@@ -194,12 +217,9 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { principalId, user: resolvedUser, member } = await resolveAdminUser(deps, params.principalId!);
   if (actor.role === "owner") {
-    const isThem = deps.directory
-      ? await samePersonMatcher(deps.directory, principalId)
-      : async (id: string) => samePerson(id, principalId);
-    const governance = await targetGovernance(ctx, isThem);
+    const governance = await targetGovernance(ctx, principalId, resolvedUser?.aliases ?? [], member);
     if (governance.isOrgAdmin)
       return sendJson(res, 403, { error: "forbidden", message: "only an org admin may reactivate an org admin" });
   }
