@@ -638,6 +638,16 @@
 .loadout-search input::placeholder {
   color: var(--muted-foreground);
 }
+.loadout-submenu .loadout-more {
+  gap: 2px;
+  padding-left: 33px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.loadout-submenu .loadout-more:hover,
+.loadout-submenu .loadout-more:focus-visible {
+  color: var(--foreground);
+}
 .loadout-empty {
   padding: 12px 10px;
   color: var(--muted-foreground);
