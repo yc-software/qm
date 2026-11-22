@@ -1,7 +1,7 @@
 import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, LayoutGrid, List, Plus, RotateCcw, Trash2, X } from "lucide";
+import { AppWindow, Archive, Check, Copy, ExternalLink, LayoutGrid, List, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
@@ -180,20 +180,10 @@ function appTabs(): TemplateResult {
   `;
 }
 
-function appHue(d: AppView): number {
-  const key = appSlug(d) || d.id;
-  let h = 0;
-  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h % 360;
-}
-
 function appThumb(d: AppView): TemplateResult {
-  const title = appTitle(d);
-  const initial = (title.replace(/^(qm|yc|eve|labs)[-\s]+/i, "").trim()[0] ?? title[0] ?? "?").toLocaleUpperCase();
-  // The placeholder always renders underneath, so a missing or broken screenshot falls back to it.
-  return html`<span class="app-card-placeholder" style=${`--app-hue:${appHue(d)}`} aria-hidden="true">
-      <span class="app-card-monogram">${initial}</span>
-    </span>
+  // A blank "page" with a quiet icon sits underneath, so a missing or broken screenshot falls back to it.
+  return html`<span class="app-card-screen" aria-hidden="true">
+    <span class="app-card-fallback">${icon(AppWindow, 20)}</span>
     ${
       d.thumbnailUrl
         ? html`<img
@@ -204,7 +194,8 @@ function appThumb(d: AppView): TemplateResult {
             @error=${(e: Event) => (e.currentTarget as HTMLElement).remove()}
           />`
         : nothing
-    }`;
+    }
+  </span>`;
 }
 
 function appCard(d: AppView): TemplateResult {
