@@ -196,13 +196,13 @@ struct ModelPicker: View {
           row(pick, configuration, active: pick.value == current.modelId)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
               if pick.value != current.modelId {
-                Button(role: .destructive) {
+                Button {
                   picks.save(shown.filter { $0.value != pick.value })
                 } label: {
                   Label("Remove", systemImage: "xmark")
                 }
                 .labelStyle(.iconOnly)
-                .tint(.red)
+                .tint(Color(uiColor: .systemGray))
               }
             }
             .contextMenu {
