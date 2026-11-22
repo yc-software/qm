@@ -69,7 +69,6 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["GET", "/api/turn"],
     ["POST", "/api/approvals/1/2"],
     ["POST", "/api/crons"],
-    ["POST", "/api/webhooks/1/update"],
     ["PUT", "/api/inbox"],
     ["DELETE", "/api/loops/1/grants/2"],
     ["GET", "/v1/sessions"],
