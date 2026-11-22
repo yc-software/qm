@@ -139,7 +139,6 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.equal(saved.sandboxGroupId, snapshot.sandboxGroupId);
   assert.equal(saved.status, "available");
   assert.equal(saved.capturedAtMs, Date.parse(snapshot.capturedAt));
-  assert.equal(saved.expiresAtMs, Date.parse(snapshot.expiresAt));
   assert.deepEqual(await client.getSnapshot(saved), saved);
   await client.deleteSnapshot(saved);
   assert.deepEqual(requests[0]!.body, { kind: "runtime", name: "qm-test", ttlSeconds: 0 });
@@ -173,6 +172,13 @@ test("Render SDK adapter imports an image into the default group and starts a sa
   fake.failImport("manifest unknown");
   const failed = await client.importImage(source, "qm-sandbox-base-other");
   assert.deepEqual([failed.status, failed.failureReason], ["failed", "import failed"]);
+
+  fake.failImport();
+  await client.terminate(created.id);
+  fake.publishImage(source, `sha256:${"c".repeat(64)}`);
+  const newer = await client.importImage(source, "qm-sandbox-base-0123456");
+  await client.deleteImage("qm-sandbox-base-0123456", `sha256:${"b".repeat(64)}`);
+  assert.deepEqual([...fake.images.keys()], [failed.id, newer.id]);
 });
 
 test("Render SDK adapter creates the default sandbox group of a workspace that has none", async (t) => {
@@ -204,7 +210,7 @@ test("Render SDK adapter waits for a checkpoint and keeps the provider reason wh
     return Response.json({ ...snapshot, status, ...(status === "failed" ? { error: "Provider: no capacity" } : {}) });
   });
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
-  const pending = { id: "snp-test", sandboxGroupId: "sbg-test", status: "creating" as const, expiresAtMs: 0 };
+  const pending = { id: "snp-test", sandboxGroupId: "sbg-test", status: "creating" as const };
   assert.equal((await client.waitSnapshot(pending)).status, "available");
   await assert.rejects(client.waitSnapshot(pending), /Render checkpoint snp-test failed: Provider: no capacity/);
 });
@@ -227,7 +233,7 @@ test("Render SDK adapter keeps waiting through a transient API error while a san
   });
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   assert.equal((await client.create({ lifetimeSec: 86400 })).status, "running");
-  const pending = { id: "snp-test", sandboxGroupId: "sbg-test", status: "creating" as const, expiresAtMs: 0 };
+  const pending = { id: "snp-test", sandboxGroupId: "sbg-test", status: "creating" as const };
   assert.equal((await client.waitSnapshot(pending)).status, "available");
   assert.deepEqual([sandboxReads, snapshotReads], [2, 2]);
 });
@@ -368,7 +374,7 @@ test("Render SDK adapter retries reads, deletes, and file transfers after a serv
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   assert.equal((await client.get("sbx-test"))?.id, "sbx-test");
   await client.terminate("sbx-test");
-  const checkpoint = { id: "snp-test", sandboxGroupId: "sbg-test", status: "available" as const, expiresAtMs: 0 };
+  const checkpoint = { id: "snp-test", sandboxGroupId: "sbg-test", status: "available" as const };
   assert.equal((await client.getSnapshot(checkpoint)).id, "snp-test");
   await client.deleteSnapshot(checkpoint);
   await client.writeFileBytes("sbx-test", "/root/file", Buffer.from("data"));
@@ -625,7 +631,6 @@ test("Render SDK adapter preserves missing checkpoint details and accepts deleti
     id: "snp-gone",
     sandboxGroupId: "sbg-test",
     status: "available" as const,
-    expiresAtMs: Date.now(),
   };
   await assert.rejects(client.getSnapshot(checkpoint), (error: unknown) => {
     assert.ok(error instanceof SandboxSnapshotNotFoundError);

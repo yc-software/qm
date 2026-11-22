@@ -146,18 +146,27 @@ test("Render base keeps a golden snapshot that is still being created and rebuil
   assert.equal(fake.images.size, 1);
 });
 
-test("Render base keeps serving the previous golden until a new release's golden is ready", async (t) => {
+test("Render base serves the previous golden until a new one is ready, then retires it and its unused image", async (t) => {
   const { fake, store, make } = setup(t);
   await prepare(make(REF_A));
   const goldenA = (await store.get(DIGEST_A))!.snapshot!.id;
+  const computer = await fake.client.create({ snapshotId: goldenA, lifetimeSec: 60 });
   const releaseB = make(REF_B);
   assert.deepEqual(await source(releaseB), { ref: REF_A, snapshotId: goldenA });
 
+  await new Promise((resolve) => setTimeout(resolve, 2));
   await prepare(releaseB);
   const goldenB = (await store.get(DIGEST_B))!.snapshot!.id;
   assert.deepEqual(await source(releaseB), { ref: REF_B, snapshotId: goldenB });
-  assert.deepEqual(await source(make(REF_A)), { ref: REF_A, snapshotId: goldenA });
-  assert.ok(fake.snapshots.has(goldenA));
+  assert.deepEqual(await source(make(REF_A)), { ref: REF_B, snapshotId: goldenB });
+  assert.ok(fake.deleted.includes(goldenA));
+  const digests = () => [...fake.images.values()].map((image) => image.sourceDigest).sort();
+  assert.deepEqual(digests(), [DIGEST_A, DIGEST_B]);
+
+  await fake.client.terminate(computer.id);
+  await prepare(make(REF_B));
+  assert.deepEqual(digests(), [DIGEST_B]);
+  assert.equal(await store.get(DIGEST_A), null);
 });
 
 test("Render base waits for the first golden snapshot", async (t) => {
@@ -242,7 +251,6 @@ test("Render base never serves a rebuilt golden that is still being created", as
       id: "snap-rebuilding",
       sandboxGroupId: "group",
       status: "creating",
-      expiresAtMs: Date.now() + 3_600_000,
     },
   });
   await assert.rejects(make(REF_A).ready(), /still being prepared/);

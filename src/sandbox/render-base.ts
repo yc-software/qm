@@ -1,4 +1,4 @@
-import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
+import { SandboxImageInUseError, SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import { setTimeout as wait } from "node:timers/promises";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
@@ -49,7 +49,13 @@ export interface RenderBaseOptions {
 }
 
 const isReady = (record: StoredRenderBase): boolean =>
-  record.readyAtMs !== undefined && record.snapshot?.status === "available" && record.snapshot.expiresAtMs > Date.now();
+  record.readyAtMs !== undefined && record.snapshot?.status === "available";
+
+const goldenOf = (record: StoredRenderBase): RenderGolden => ({
+  ref: record.ref,
+  snapshotId: record.snapshot!.id,
+  ...(record.tools ? { tools: record.tools } : {}),
+});
 
 export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   const { client, store } = opts;
@@ -59,7 +65,6 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   const waitMs = opts.waitMs ?? READY_WAIT_MS;
   const prepareMs = opts.prepareMs ?? PREPARE_POLL_MS;
   const retryMs = opts.retryMs ?? PREPARE_RETRY_MS;
-  let ownGolden: RenderGolden | undefined;
 
   async function finish(snapshot: RenderSnapshot): Promise<Progress> {
     try {
@@ -136,6 +141,27 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     }
   }
 
+  async function retireSuperseded(): Promise<void> {
+    const entries = await store.entries();
+    const readyAtMs = entries.find(([digest]) => digest === image.digest)?.[1].readyAtMs;
+    if (readyAtMs === undefined) return;
+    for (const [digest, record] of entries) {
+      if (digest === image.digest || record.readyAtMs === undefined || record.readyAtMs >= readyAtMs) continue;
+      try {
+        if (record.snapshot) {
+          await client.deleteSnapshot(record.snapshot);
+          await store.merge(digest, { snapshot: undefined });
+        }
+        const retired = parseRenderSandboxImage(record.ref);
+        await client.deleteImage(retired.name, retired.digest);
+        await store.delete(digest);
+      } catch (error) {
+        if (error instanceof SandboxImageInUseError) continue;
+        swallow(`render-base: retire superseded golden ${record.ref}`, error);
+      }
+    }
+  }
+
   return {
     async prepare(signal) {
       while (!signal.aborted) {
@@ -144,28 +170,24 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
           opts.onError?.({ category: "sandbox_image", code: "base_image_failed", message: errMessage(error) });
           return "failed";
         });
-        if (progress === "ready") return;
+        if (progress === "ready") {
+          await hold(retireSuperseded).catch(swallowAs("render-base: retire superseded goldens", undefined));
+          return;
+        }
         await wait(progress === "failed" ? retryMs : prepareMs, undefined, { signal, ref: false }).catch(() => {});
       }
     },
     async ready(onStatus) {
-      if (ownGolden) return ownGolden;
       const deadline = Date.now() + waitMs;
       for (let announced = false; ; announced = true) {
         const entries = await store.entries();
         const own = entries.find(([digest]) => digest === image.digest)?.[1];
-        if (own && isReady(own))
-          return (ownGolden = {
-            ref: own.ref,
-            snapshotId: own.snapshot!.id,
-            ...(own.tools ? { tools: own.tools } : {}),
-          });
-        const older = entries
+        if (own && isReady(own)) return goldenOf(own);
+        const other = entries
           .map(([, record]) => record)
           .filter(isReady)
           .sort((a, b) => b.readyAtMs! - a.readyAtMs!)[0];
-        if (older)
-          return { ref: older.ref, snapshotId: older.snapshot!.id, ...(older.tools ? { tools: older.tools } : {}) };
+        if (other) return goldenOf(other);
         if (own?.error) throw new Error(`Render sandbox image ${image.ref} is not ready: ${own.error}`);
         if (Date.now() >= deadline)
           throw new Error(
