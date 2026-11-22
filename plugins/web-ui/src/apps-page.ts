@@ -188,12 +188,23 @@ function appHue(d: AppView): number {
 }
 
 function appThumb(d: AppView): TemplateResult {
-  if (d.thumbnailUrl) return html`<img src=${d.thumbnailUrl} alt="" loading="lazy" decoding="async" />`;
   const title = appTitle(d);
   const initial = (title.replace(/^(qm|yc|eve|labs)[-\s]+/i, "").trim()[0] ?? title[0] ?? "?").toLocaleUpperCase();
+  // The placeholder always renders underneath, so a missing or broken screenshot falls back to it.
   return html`<span class="app-card-placeholder" style=${`--app-hue:${appHue(d)}`} aria-hidden="true">
-    <span class="app-card-monogram">${initial}</span>
-  </span>`;
+      <span class="app-card-monogram">${initial}</span>
+    </span>
+    ${
+      d.thumbnailUrl
+        ? html`<img
+            src=${d.thumbnailUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            @error=${(e: Event) => (e.currentTarget as HTMLElement).remove()}
+          />`
+        : nothing
+    }`;
 }
 
 function appCard(d: AppView): TemplateResult {
