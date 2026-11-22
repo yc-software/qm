@@ -1,5 +1,5 @@
 import { previewFile } from "./file-open.ts";
-import { readListLayout, saveListLayout, type ListLayout } from "./list-layout";
+import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
@@ -18,13 +18,13 @@ import {
 } from "lucide";
 import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, fieldSelect, formatBytes, relTime } from "./ui";
+import { browserRenderableImage, formatBytes, relTime } from "./ui";
 import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
-import { listGroupsTpl, listRowsTpl } from "./list-page";
+import { listGroupsTpl, listRowsTpl, listSelect } from "./list-page";
 import { isTouch } from "./viewport";
 
 interface FileItem {
@@ -115,22 +115,6 @@ function groupFilesByScope(files: FileRow[]): Array<{ scope: string | null; file
   return [...groups.values()];
 }
 
-function selectControl(
-  label: string,
-  value: string,
-  options: Array<[string, string]>,
-  onChange: (value: string) => void,
-) {
-  return html`<label class="list-select"
-    ><span>${label}</span>${fieldSelect({
-      compact: true,
-      value,
-      onChange,
-      options: options.map(([v, text]) => html`<option value=${v}>${text}</option>`),
-    })}</label
-  >`;
-}
-
 function visibleFiles(): FileRow[] {
   const q = filesQuery.trim().toLowerCase();
   return fileRows
@@ -177,7 +161,7 @@ function drawFiles(loading = false): void {
         /></label>
       </div>
       <div class="list-toolbar">
-        ${selectControl(
+        ${listSelect(
           "Ownership",
           filesOwnership,
           [
@@ -191,7 +175,7 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
-        ${selectControl(
+        ${listSelect(
           "Type",
           filesType,
           [
@@ -206,15 +190,7 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
-        ${selectControl(
-          "View",
-          filesLayout,
-          [
-            ["list", "List"],
-            ["grid", "Grid"],
-          ],
-          (v) => setFilesLayout(v as ListLayout),
-        )}
+        ${listLayoutSelect(filesLayout, setFilesLayout)}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button

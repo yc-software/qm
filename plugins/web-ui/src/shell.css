@@ -14220,61 +14220,13 @@ button:disabled .qm-switch {
   }
 }
 
-.apps-layout-toggle {
-  margin-left: auto;
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.apps-layout-option {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 24px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.apps-layout-option:hover {
-  color: var(--foreground);
-}
-.apps-layout-option.active {
-  background: var(--secondary);
-  color: var(--foreground);
-}
 .app-grid {
-  display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 16px;
-  padding: 8px 0 24px;
-}
-.app-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--background);
-  transition: border-color 120ms ease;
-}
-.app-card:hover {
-  border-color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
-}
-.app-card-archived {
-  opacity: 0.6;
 }
 .app-card-link {
   display: block;
   color: inherit;
-}
-.app-card-link:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--foreground) 34%, transparent);
-  outline-offset: -2px;
 }
 .app-card-thumb {
   position: relative;

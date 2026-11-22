@@ -1,7 +1,7 @@
 import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { AppWindow, Archive, Check, Copy, ExternalLink, LayoutGrid, List, Plus, RotateCcw, Trash2, X } from "lucide";
+import { AppWindow, Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
@@ -32,7 +32,7 @@ import {
   type AppView,
 } from "./app-view";
 import { tip } from "./tooltip";
-import { readListLayout, saveListLayout, type ListLayout } from "./list-layout";
+import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
 const APP_TABS: Array<{ value: AppTab; label: string }> = [
@@ -74,24 +74,6 @@ function setAppsLayout(layout: ListLayout): void {
   appsLayout = layout;
   saveListLayout(APPS_LAYOUT_KEY, layout);
   drawAppsPage();
-}
-
-function layoutToggle(): TemplateResult {
-  const option = (value: ListLayout, label: string, glyph: typeof List) => html`
-    <button
-      type="button"
-      class="apps-layout-option ${appsLayout === value ? "active" : ""}"
-      aria-pressed=${appsLayout === value}
-      aria-label=${`${label} view`}
-      ${tip(`${label} view`)}
-      @click=${() => setAppsLayout(value)}
-    >
-      ${icon(glyph, 15)}
-    </button>
-  `;
-  return html`<div class="apps-layout-toggle" role="group" aria-label="Layout">
-    ${option("list", "List", List)}${option("grid", "Grid", LayoutGrid)}
-  </div>`;
 }
 
 function statusLabel(d: AppView): string {
@@ -163,7 +145,6 @@ function appTabs(): TemplateResult {
           </button>
         `,
       )}
-      ${layoutToggle()}
     </div>
   `;
 }
@@ -189,7 +170,7 @@ function appCard(d: AppView): TemplateResult {
   const running = d.status === "running";
   const thumb = html`<span class="app-card-thumb">${appThumb(d)}</span>`;
   return html`
-    <div class="app-card ${d.status === "archived" ? "app-card-archived" : ""}">
+    <div class="file-card app-card ${d.status === "archived" ? "unavailable" : ""}">
       ${
         running && d.webUrl
           ? html`<a
@@ -257,7 +238,7 @@ function appRow(d: AppView): TemplateResult {
 }
 
 function appRows(rows: AppView[]): TemplateResult[] {
-  if (appsLayout === "grid") return [html`<div class="app-grid">${rows.map(appCard)}</div>`];
+  if (appsLayout === "grid") return [html`<div class="file-grid app-grid">${rows.map(appCard)}</div>`];
   return rows.map(appRow);
 }
 
@@ -299,6 +280,7 @@ function drawAppsPage(): void {
       ${scopedViewTopbar("apps", drawAppsPage)}
       ${listPageTpl({
         title: "Apps",
+        controls: appList.length ? listLayoutSelect(appsLayout, setAppsLayout) : undefined,
         search: {
           value: appQuery,
           placeholder: "Search apps",

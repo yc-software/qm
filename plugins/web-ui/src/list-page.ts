@@ -3,6 +3,7 @@ import { live } from "lit/directives/live.js";
 import { ArrowLeft, Plus, Search } from "lucide";
 import { icon } from "./icons";
 import { scopeFilterControl } from "./contexts";
+import { fieldSelect } from "./ui";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {
   return html`<button class="context-back" type="button" @click=${onBack}>
@@ -90,4 +91,20 @@ export function listPageTpl(o: ListPageOpts): TemplateResult {
     </div>
     ${o.filters ?? nothing} ${listBodyTpl(o)}
   `;
+}
+
+export function listSelect(
+  label: string,
+  value: string,
+  options: Array<[string, string]>,
+  onChange: (value: string) => void,
+): TemplateResult {
+  return html`<label class="list-select"
+    ><span>${label}</span>${fieldSelect({
+      compact: true,
+      value,
+      onChange,
+      options: options.map(([v, text]) => html`<option value=${v}>${text}</option>`),
+    })}</label
+  >`;
 }
