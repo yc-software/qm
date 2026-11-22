@@ -802,9 +802,11 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
 const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
   agentMemory(async (ctx, memory, capability) => {
     const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
-    const isPersonaScope =
-      typeof requestedScope === "string" && parseScopeId(requestedScope as ScopeId).kind === "persona";
-    if (requestedScope !== undefined && requestedScope !== "org" && !isPersonaScope) {
+    const personaScope: ScopeId | undefined =
+      typeof requestedScope === "string" && parseScopeId(requestedScope as ScopeId).kind === "persona"
+        ? (requestedScope as ScopeId)
+        : undefined;
+    if (requestedScope !== undefined && requestedScope !== "org" && !personaScope) {
       return sendJson(ctx.res, 400, {
         error: "bad_request",
         message: 'scope must be "org" or persona:<id> when present',
@@ -812,15 +814,20 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     }
     let write: string | undefined;
     if (requestedScope === "org") write = capability.memory?.orgWrite;
-    else if (isPersonaScope) {
-      if (personAtKeyboard(capability) && (await ctx.app.managesScope(capability.actorId, requestedScope as ScopeId)))
-        write = requestedScope;
+    else if (personaScope) {
+      if (
+        capability.memory?.write &&
+        personAtKeyboard(capability) &&
+        (await ctx.app.managesScope(capability.actorId, personaScope))
+      )
+        write = personaScope;
     } else write = capability.memory?.write;
     if (!write) {
       let message = "memory capture is not enabled for this conversation";
       if (requestedScope === "org")
         message = "org memory writes need an org admin's own turn while it is still running";
-      else if (isPersonaScope) message = "persona memory writes need a persona owner or write holder on a live turn";
+      else if (personaScope && capability.memory?.write)
+        message = "persona memory writes need a persona owner or write holder on a live turn";
       return sendJson(ctx.res, 403, { error: "forbidden", message });
     }
     return handle(ctx, memory, capability, write);

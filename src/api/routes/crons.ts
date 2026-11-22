@@ -9,7 +9,7 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { administersCron, canAdministerCron, cronTaskRewrite } from "../control-service.ts";
+import { administersCron, cronTaskRewrite } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -228,13 +228,14 @@ async function listCrons(ctx: ApiCtx): Promise<void> {
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
-  const decorate = async (cron: Cron) => ({
+  const admits = await app.cronAdministration({ actorId: viewer }, [...owned, ...visible]);
+  const decorate = (cron: Cron, i: number) => ({
     ...cron,
-    permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",
+    permission: admits[i] ? "manage" : "read",
   });
   return sendJson(res, 200, {
-    crons: await Promise.all(owned.map(decorate)),
-    visible: await Promise.all(visible.map(decorate)),
+    crons: owned.map((cron, i) => decorate(cron, i)),
+    visible: visible.map((cron, i) => decorate(cron, owned.length + i)),
   });
 }
 

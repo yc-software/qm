@@ -1158,7 +1158,7 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   assert.ok(def.ok && optOut.ok && readDef.ok);
   assert.equal(def.cron.ownerScopeId, `persona:${personaId}`);
   assert.equal(optOut.cron.ownerScopeId, "personal:U1");
-  assert.equal(optOut.cron.sessionRef, undefined);
+  assert.equal((await control.createCron({ ...cron, persona: "  " }, worn("U1"))).ok, false);
   assert.equal(readDef.cron.ownerScopeId, "personal:U3");
 
   assert.ok((await control.patchCron(def.cron.id, { title: "v2" }, claims("U2"))).ok);

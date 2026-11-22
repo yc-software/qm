@@ -226,7 +226,7 @@ async function mayShare(
   if (cron)
     return (
       (await ownsCron(app, cron, capability.actorId)) ||
-      (await managesPersonaCron(app, cron, capability.actorId)) ||
+      (!actsAsScope(cron.owner, cron.ownerScopeId) && (await managesPersonaCron(app, cron, capability.actorId))) ||
       asOrgAdmin(app, capability)
     );
   return (
@@ -570,7 +570,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
-      if (typeof req.persona === "string" && req.persona.trim()) {
+      if (typeof req.persona === "string") {
+        if (!req.persona.trim())
+          return { ok: false, code: "bad_request", message: "persona must be a non-empty name/id or null" };
         const home = await personaHome(app, capability.actorId, req.persona);
         if (typeof home === "object") return home;
         ownerScopeId = home;
@@ -578,9 +580,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       } else if (
         req.persona === undefined &&
         !wantsPersonal &&
-        !resolvedChannel &&
-        !resolvedGroup &&
+        !resolvedRecipient &&
         !script &&
+        parseScopeId(destination?.audienceScopeId ?? ownerScopeId).kind === "personal" &&
         capability.destination?.persona?.id
       ) {
         const home = scopeId("persona", capability.destination.persona.id);
@@ -606,10 +608,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
       };
-      const sessionRef =
-        req.session === false || (req.persona === null && req.session !== true)
-          ? undefined
-          : liveSessionRef(capability, ownerScopeId);
+      const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
       try {
         const cron = await app.createCron(input, trial);
@@ -628,8 +627,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async listCrons(capability) {
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
-      const isActor = await app.personMatcher(capability.actorId);
-      const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
+      const admits = await app.cronAdministration(capability, all);
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };

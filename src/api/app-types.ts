@@ -469,6 +469,7 @@ export interface App {
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
+  cronAdministration(actor: Pick<CapabilityClaims, "actorId" | "botActor">, crons: readonly Cron[]): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
