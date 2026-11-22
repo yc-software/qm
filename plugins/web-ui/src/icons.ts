@@ -16,7 +16,6 @@ const MARK_KEYS: Record<string, "claude" | "gemini" | "openai"> = {
   openai: "openai",
 };
 
-/** The brand whose mark a provider key shows, if it has one. */
 export function modelBrand(key: string): "claude" | "gemini" | "openai" | undefined {
   return MARK_KEYS[key.toLocaleLowerCase()];
 }

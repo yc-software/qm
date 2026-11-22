@@ -107,7 +107,6 @@ export interface ModelProviderGroup {
   options: ModelOption[];
 }
 
-/** Groups picker options by provider: branded providers first, the rest A–Z, incoming order kept inside each group. */
 export function groupModelsByProvider(options: readonly ModelOption[]): ModelProviderGroup[] {
   const groups = new Map<string, { rank: number; options: ModelOption[] }>();
   for (const option of options) {
