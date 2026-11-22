@@ -202,30 +202,28 @@ for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
   });
 }
 
-test("picker models group under fixed provider headings and keep their order inside each group", () => {
-  const as = (id: string, provider: string, displayProvider?: string): ModelOption => {
+test("picker models group by provider label, branded providers first and the rest A-Z, keeping order inside groups", () => {
+  const as = (id: string, groupLabel: string, provider: string, displayProvider?: string): ModelOption => {
     const base = option(id);
-    return { ...base, model: { ...base.model, provider }, ...(displayProvider ? { displayProvider } : {}) };
+    return { ...base, groupLabel, model: { ...base.model, provider }, ...(displayProvider ? { displayProvider } : {}) };
   };
   const groups = groupModelsByProvider([
-    as("grok", "openrouter"),
-    as("gemini-flash", "google"),
-    as("sonnet", "anthropic"),
-    as("gpt-sol", "openai"),
-    as("gateway/claude-opus", "qm:gateway", "anthropic"),
-    as("glm", "amazon-bedrock"),
+    as("custom", "Abliteration", "abliteration"),
+    as("gateway/router/grok", "Gateway", "qm:gateway"),
+    as("gateway/router/gemini-flash", "Google", "qm:gateway", "google"),
+    as("sonnet", "Anthropic", "anthropic"),
+    as("gpt-sol", "OpenAI", "openai"),
+    as("gateway/claude-opus", "Anthropic", "qm:gateway", "anthropic"),
+    as("gateway/bedrock/glm", "Gateway", "qm:gateway"),
   ]);
   assert.deepEqual(
     groups.map(({ label, options }) => [label, options.map(({ value }) => value)]),
     [
       ["Anthropic", ["sonnet", "gateway/claude-opus"]],
       ["OpenAI", ["gpt-sol"]],
-      ["Google", ["gemini-flash"]],
-      ["Other", ["grok", "glm"]],
+      ["Google", ["gateway/router/gemini-flash"]],
+      ["Abliteration", ["custom"]],
+      ["Gateway", ["gateway/router/grok", "gateway/bedrock/glm"]],
     ],
-  );
-  assert.deepEqual(
-    groupModelsByProvider([as("gpt-sol", "openai")]).map(({ label }) => label),
-    ["OpenAI"],
   );
 });

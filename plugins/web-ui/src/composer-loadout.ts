@@ -100,29 +100,29 @@ export function modelLoadoutOptions(options: readonly ModelOption[], entries: re
   });
 }
 
-const BRAND_GROUPS = [
-  ["claude", "Anthropic"],
-  ["openai", "OpenAI"],
-  ["gemini", "Google"],
-] as const;
+const BRAND_ORDER = ["claude", "openai", "gemini"] as const;
 
 export interface ModelProviderGroup {
   label: string;
   options: ModelOption[];
 }
 
-/** Groups picker options under the provider their mark shows, keeping the incoming order inside each group. */
+/** Groups picker options by provider: branded providers first, the rest A–Z, incoming order kept inside each group. */
 export function groupModelsByProvider(options: readonly ModelOption[]): ModelProviderGroup[] {
-  const groups: ModelProviderGroup[] = [...BRAND_GROUPS.map(([, label]) => label), "Other"].map((label) => ({
-    label,
-    options: [],
-  }));
+  const groups = new Map<string, { rank: number; options: ModelOption[] }>();
   for (const option of options) {
+    const group = groups.get(option.groupLabel);
+    if (group) {
+      group.options.push(option);
+      continue;
+    }
     const brand = modelBrand(option.displayProvider ?? String(option.model.provider));
-    const index = BRAND_GROUPS.findIndex(([key]) => key === brand);
-    groups[index < 0 ? BRAND_GROUPS.length : index]!.options.push(option);
+    const rank = BRAND_ORDER.findIndex((key) => key === brand);
+    groups.set(option.groupLabel, { rank: rank < 0 ? BRAND_ORDER.length : rank, options: [option] });
   }
-  return groups.filter((group) => group.options.length > 0);
+  return [...groups]
+    .sort(([a, x], [b, y]) => x.rank - y.rank || a.localeCompare(b))
+    .map(([label, { options }]) => ({ label, options }));
 }
 
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
