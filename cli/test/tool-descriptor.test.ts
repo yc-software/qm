@@ -4,7 +4,8 @@ import { parseSkillFrontmatter } from "../src/sandbox-layer.ts";
 import { builtInCredentialPaths } from "../src/credential-paths.ts";
 import { compileApproval, parseToolDescriptor } from "../src/tool-descriptor.ts";
 import * as canonical from "../../src/deployment/deployment-layer.ts";
-import { parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
+import { parseFrontmatter as coreParseFrontmatter, parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
+import { parseFrontmatter as cliParseFrontmatter } from "../src/frontmatter.ts";
 
 const P = (o: unknown): ReturnType<typeof parseToolDescriptor> => parseToolDescriptor(JSON.stringify(o), "t.json");
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
@@ -280,6 +281,7 @@ test("drift-lock: cli skill parser matches the core seed parser's output", () =>
     "---\nname: a\ndescription: b\nrequiredCapabilities: [one, 'two']\n---\nbody\n",
     "---\nname: a\ndescription: b\nrequiredCapabilities:\n  - one\n  - two\n---\nbody\n",
     "---\nname: a\ndescription: >\n  folded description\n---\nbody\n",
+    '---\nname: a\ndescription: "Say \\"hi\\"\\nnow"\nrequiredCapabilities: ["a, b", c]\n---\nbody\n',
     "---\nname: a\ndescription: b\nrequiredCapabilities: one, two\n---\nbody\n",
     "---\nname: a\ndescription: b\n---\n",
     "---\nname: a\ndescription: b\n---\n   \n",
@@ -317,6 +319,7 @@ test("drift-lock: cli skill parser matches the core seed parser's output", () =>
 test("core and the CLI share one parser", () => {
   assert.equal(canonical.parseToolDescriptor, parseToolDescriptor);
   assert.equal(canonical.compileApproval, compileApproval);
+  assert.equal(coreParseFrontmatter, cliParseFrontmatter);
 });
 
 test("the CLI rejects the reserved .agent-displaced directory and uses the derived built-in paths", () => {
