@@ -1,4 +1,5 @@
 import { previewFile } from "./file-open.ts";
+import { readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
@@ -56,25 +57,12 @@ let filesHost: HTMLElement | null = null;
 let filesRequestSeq = 0;
 let filesLoadAllQueued = false;
 const FILES_LAYOUT_KEY = "qm.files.layout";
-type FilesLayout = "list" | "grid";
-let filesLayout: FilesLayout = readFilesLayout();
+let filesLayout: ListLayout = readListLayout(FILES_LAYOUT_KEY);
 
-function readFilesLayout(): FilesLayout {
-  try {
-    return localStorage.getItem(FILES_LAYOUT_KEY) === "grid" ? "grid" : "list";
-  } catch {
-    return "list";
-  }
-}
-
-function setFilesLayout(layout: FilesLayout): void {
+function setFilesLayout(layout: ListLayout): void {
   if (filesLayout === layout) return;
   filesLayout = layout;
-  try {
-    localStorage.setItem(FILES_LAYOUT_KEY, layout);
-  } catch {
-    void 0;
-  }
+  saveListLayout(FILES_LAYOUT_KEY, layout);
   drawFiles();
 }
 
@@ -225,7 +213,7 @@ function drawFiles(loading = false): void {
             ["list", "List"],
             ["grid", "Grid"],
           ],
-          (v) => setFilesLayout(v as FilesLayout),
+          (v) => setFilesLayout(v as ListLayout),
         )}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}

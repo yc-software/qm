@@ -32,6 +32,7 @@ import {
   type AppView,
 } from "./app-view";
 import { tip } from "./tooltip";
+import { readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
 const APP_TABS: Array<{ value: AppTab; label: string }> = [
@@ -66,30 +67,17 @@ let restoreArchiveFocus = false;
 let appToast: { app: AppView; text: string; undo?: boolean } | null = null;
 let appRefreshSeq = 0;
 const APPS_LAYOUT_KEY = "qm.apps.layout";
-type AppsLayout = "list" | "grid";
-let appsLayout: AppsLayout = readAppsLayout();
+let appsLayout: ListLayout = readListLayout(APPS_LAYOUT_KEY);
 
-function readAppsLayout(): AppsLayout {
-  try {
-    return localStorage.getItem(APPS_LAYOUT_KEY) === "grid" ? "grid" : "list";
-  } catch {
-    return "list";
-  }
-}
-
-function setAppsLayout(layout: AppsLayout): void {
+function setAppsLayout(layout: ListLayout): void {
   if (appsLayout === layout) return;
   appsLayout = layout;
-  try {
-    localStorage.setItem(APPS_LAYOUT_KEY, layout);
-  } catch {
-    // Private mode or blocked storage: keep the choice for this page only.
-  }
+  saveListLayout(APPS_LAYOUT_KEY, layout);
   drawAppsPage();
 }
 
 function layoutToggle(): TemplateResult {
-  const option = (value: AppsLayout, label: string, glyph: typeof List) => html`
+  const option = (value: ListLayout, label: string, glyph: typeof List) => html`
     <button
       type="button"
       class="apps-layout-option ${appsLayout === value ? "active" : ""}"
@@ -181,7 +169,6 @@ function appTabs(): TemplateResult {
 }
 
 function appThumb(d: AppView): TemplateResult {
-  // A blank "page" with a quiet icon sits underneath, so a missing or broken screenshot falls back to it.
   return html`<span class="app-card-screen" aria-hidden="true">
     <span class="app-card-fallback">${icon(AppWindow, 20)}</span>
     ${
@@ -269,6 +256,11 @@ function appRow(d: AppView): TemplateResult {
   `;
 }
 
+function appRows(rows: AppView[]): TemplateResult[] {
+  if (appsLayout === "grid") return [html`<div class="app-grid">${rows.map(appCard)}</div>`];
+  return rows.map(appRow);
+}
+
 function drawAppsPage(): void {
   if (appState.currentView !== "apps" || !appState.mainEl) return;
   activeApp = null;
@@ -297,11 +289,7 @@ function drawAppsPage(): void {
         ...(appNotices.list
           ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
-        ...(rows.length
-          ? appsLayout === "grid"
-            ? [html`<div class="app-grid">${rows.map(appCard)}</div>`]
-            : rows.map(appRow)
-          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
+        ...(rows.length ? appRows(rows) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);
