@@ -257,6 +257,21 @@ test("parseSkillFrontmatter requires name + description + body; requiredCapabili
     "SKILL.md",
   );
   assert.deepEqual(caps.requiredCapabilities, ["a", "b"]);
+  const commented = parseSkillFrontmatter(
+    '---\nname: demo # note\ndescription: "a # inside quotes" # note\ntag: c#sharp\nrequiredCapabilities: [a, b] # why\n---\nbody',
+    "SKILL.md",
+  );
+  assert.equal(commented.name, "demo");
+  assert.equal(commented.description, "a # inside quotes");
+  assert.deepEqual(commented.requiredCapabilities, ["a", "b"]);
+  assert.throws(
+    () => parseSkillFrontmatter("---\nname: # note\ndescription: y\n---\nbody", "SKILL.md"),
+    /missing "name"/,
+  );
+  const long = `a${" ".repeat(200_000)}${'\\"'.repeat(100_000)}b`;
+  const started = performance.now();
+  assert.equal(parseSkillFrontmatter(`---\nname: x\ndescription: "${long}"\n---\nbody`, "SKILL.md").description, long);
+  assert.ok(performance.now() - started < 2_000, "parseSkillFrontmatter must not backtrack on long scalars");
   assert.throws(() => parseSkillFrontmatter("no frontmatter", "SKILL.md"), /missing YAML frontmatter/);
   assert.throws(() => parseSkillFrontmatter("---\ndescription: y\n---\nbody", "SKILL.md"), /missing "name"/);
   assert.throws(() => parseSkillFrontmatter("---\nname: x\n---\nbody", "SKILL.md"), /missing "description"/);
@@ -278,6 +293,17 @@ test("drift-lock: cli skill parser matches the core seed parser's output", () =>
     "---\nname: a\ndescription: b\n---\nbody\n",
     "\uFEFF---\r\nname: a\r\ndescription: b\r\n---\r\nbody\r\n",
     "---\nname: a\ndescription: b\nrequiredCapabilities: [one, 'two']\n---\nbody\n",
+    "---\nname: a # inline note\ndescription: b # inline note\n---\nbody\n",
+    "---\nname: a\ndescription: b\nrequiredCapabilities: [one, two] # why\n---\nbody\n",
+    "---\nname: a\ndescription: > # note\n  folded\n---\nbody\n",
+    "---\nname: a\ndescription: b\nrequiredCapabilities:\n  - one # why\n---\nbody\n",
+    "---\nname: # note\ndescription: b\n---\nbody\n",
+    "---\nname: a\ndescription: 'b # c'\n---\nbody\n",
+    "---\nname: a\ndescription: b#c\n---\nbody\n",
+    '---\nname: a\ndescription: "He said \\"go\\" # really"\n---\nbody\n',
+    "---\nname: a\ndescription: 'it''s # fine'\n---\nbody\n",
+    "---\nname: a\ndescription: use 'em all # note\n---\nbody\n",
+    "---\nname: a\ndescription: b\nrequiredCapabilities:\n  - one # why\n  - # dropped\n  - two\n---\nbody\n",
     "---\nname: a\ndescription: b\nrequiredCapabilities:\n  - one\n  - two\n---\nbody\n",
     "---\nname: a\ndescription: >\n  folded description\n---\nbody\n",
     "---\nname: a\ndescription: b\nrequiredCapabilities: one, two\n---\nbody\n",
