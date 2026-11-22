@@ -47,48 +47,21 @@ function providerLabel(id: string, name: string, provider: string): string {
   );
 }
 
-function gatewayPresentation(id: string, provider: string): { label: string; provider: string } | null {
-  if (provider !== "qm:gateway" || !id.startsWith("gateway/")) return null;
-  const name = id.split("/").at(-1)!;
-  const family = /^(claude|gpt|gemini)-(.+)$/.exec(name);
-  if (!family) return null;
-  const words = family[2]!.replace(/^((?:[a-z]+-)*)(\d+)-(\d+)(?=-|$)/, "$1$2.$3").split("-");
-  const title = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
-  const brand = {
-    claude: { prefix: "", provider: "anthropic" },
-    gpt: { prefix: "GPT-", provider: "openai" },
-    gemini: { prefix: "Gemini ", provider: "google" },
-  }[family[1] as "claude" | "gpt" | "gemini"];
-  return {
-    label: brand.prefix + title,
-    provider: brand.provider,
-  };
-}
-
 function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>> = {}): ModelOption | null {
   try {
     const dynamic = catalog[id];
     const meta = dynamic ? { label: dynamic.label, buttonLabel: dynamic.buttonLabel } : null;
     if (!meta) return null;
     const model = getBaseModel(id, dynamic);
-    const presentation = gatewayPresentation(id, String(model.provider));
     return {
       value: id,
       model,
       ...meta,
-      ...(presentation
-        ? {
-            label: [id, id.slice("gateway/".length)].includes(meta.label) ? presentation.label : meta.label,
-            buttonLabel: [id, id.slice("gateway/".length)].includes(meta.buttonLabel)
-              ? presentation.label
-              : meta.buttonLabel,
-            displayProvider: presentation.provider,
-          }
-        : {}),
+      ...(dynamic?.displayProvider ? { displayProvider: dynamic.displayProvider } : {}),
       groupLabel: providerLabel(
         id,
         meta.label,
-        presentation?.provider ?? dynamic?.provider ?? String(model?.provider ?? model?.api ?? "other"),
+        dynamic?.displayProvider ?? dynamic?.provider ?? String(model?.provider ?? model?.api ?? "other"),
       ),
     };
   } catch {

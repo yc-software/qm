@@ -63,42 +63,20 @@ test("deleted selection retains identity and transcript rendering does not borro
   assert.equal(transcriptModel("scope:deleted")?.id, "custom");
 });
 
-test("gateway choices display model names and brands without changing serving identity", () => {
-  const cases = [
-    ["anthropic/claude-sonnet-5", "Sonnet 5", "anthropic", "Anthropic"],
-    ["anthropic/claude-fable-5-1", "Fable 5.1", "anthropic", "Anthropic"],
-    ["openai/gpt-6-astra", "GPT-6 Astra", "openai", "OpenAI"],
-    ["openai/gpt-5.6-terra", "GPT-5.6 Terra", "openai", "OpenAI"],
-    ["openai/gpt-5.6-1", "GPT-5.6 1", "openai", "OpenAI"],
-    ["gemini/gemini-3.8-flash", "Gemini 3.8 Flash", "google", "Google"],
-  ];
-  for (const [route, label, provider, group] of cases) {
-    const id = `gateway/${route}`;
-    const data = metadata(id!, route!, "qm:gateway");
-    const [option] = runtimeModelOptions([id], { [id]: data });
-    assert.equal(option?.label, label);
-    assert.equal(option?.buttonLabel, label);
-    assert.equal(option?.displayProvider, provider);
-    assert.equal(option?.groupLabel, group);
-    assert.equal(option?.value, id);
-    assert.equal(option?.model.provider, "qm:gateway");
-    assert.equal(option?.model.id, id);
-    assert.deepEqual(option?.model.cost, data.cost);
-  }
-});
-
-test("gateway display preserves explicit labels and leaves unknown families alone", () => {
+test("gateway choices group under the brand the server names without changing serving identity", () => {
   const id = "gateway/anthropic/claude-sonnet-5";
-  const custom = { ...metadata(id, "Writing model", "qm:gateway"), buttonLabel: "Writer" };
+  const data = { ...metadata(id, "Sonnet 5", "qm:gateway"), displayProvider: "anthropic" };
   const unknownId = "gateway/vendor/special-model";
-  const unknown = metadata(unknownId, "Special", "qm:gateway");
-  const [knownOption, unknownOption] = runtimeModelOptions([id, unknownId], {
-    [id]: custom,
-    [unknownId]: unknown,
+  const [option, unknown] = runtimeModelOptions([id, unknownId], {
+    [id]: data,
+    [unknownId]: metadata(unknownId, "Special", "qm:gateway"),
   });
-  assert.equal(knownOption?.label, "Writing model");
-  assert.equal(knownOption?.buttonLabel, "Writer");
-  assert.equal(knownOption?.displayProvider, "anthropic");
-  assert.equal(unknownOption?.label, "Special");
-  assert.equal(unknownOption?.displayProvider, undefined);
+  assert.equal(option?.label, "Sonnet 5");
+  assert.equal(option?.displayProvider, "anthropic");
+  assert.equal(option?.groupLabel, "Anthropic");
+  assert.equal(option?.model.provider, "qm:gateway");
+  assert.equal(option?.model.id, id);
+  assert.deepEqual(option?.model.cost, data.cost);
+  assert.equal(unknown?.displayProvider, undefined);
+  assert.equal(unknown?.groupLabel, "Gateway");
 });

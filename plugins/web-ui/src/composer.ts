@@ -36,7 +36,7 @@ import {
   fetchUiState,
   putUiState,
 } from "./core-bridge";
-import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
 import { icon } from "./icons";
 import {
@@ -63,8 +63,7 @@ import {
   loadLoadout,
   saveLoadout,
   onLoadoutSaved,
-  adoptRemoteLoadout,
-  loadoutUpdatedAt,
+  adoptServerLoadout,
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForModel,
@@ -74,10 +73,10 @@ import {
 
 import { createModelPicker } from "./model-picker";
 
-/** Saved model picks follow the person across web and iOS through this ui-state key. */
+import { nextPromptSuggestion } from "./next-prompt";
+
 const MODEL_PICKS_KEY = "model-picks";
 let modelPicksSyncing = false;
-import { nextPromptSuggestion } from "./next-prompt";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
@@ -1038,21 +1037,23 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let loadout = loadLoadout(loadoutKey);
   if (!loadoutKey && !modelPicksSyncing) {
     modelPicksSyncing = true;
-    const push = (entries: LoadoutEntry[], updatedAt: number) =>
-      void putUiState(MODEL_PICKS_KEY, entries, updatedAt).catch(swallowAs("web-ui: save model picks", undefined));
-    const pull = () =>
-      void fetchUiState(MODEL_PICKS_KEY)
-        .then(({ value, updatedAt }) => {
-          const adopted = adoptRemoteLoadout(value, updatedAt);
-          if (adopted) {
-            loadout = adopted;
-            ctx.chat.drawActiveChat();
-          } else if (value == null && loadout.length) push(loadout, loadoutUpdatedAt() || Date.now());
-        })
-        .catch(swallowAs("web-ui: load model picks", undefined));
-    onLoadoutSaved(push);
-    pull();
-    window.addEventListener("focus", pull);
+    let touched = false;
+    const push = (entries: LoadoutEntry[]) =>
+      void putUiState(MODEL_PICKS_KEY, entries, Date.now()).catch((error: unknown) =>
+        reportHandledError("web:save_model_picks", error),
+      );
+    onLoadoutSaved((entries) => {
+      touched = true;
+      push(entries);
+    });
+    void fetchUiState(MODEL_PICKS_KEY)
+      .then(({ value }) => {
+        if (touched) return;
+        if (value == null) return void (loadout.length && push(loadout));
+        loadout = adoptServerLoadout(value);
+        ctx.chat.drawActiveChat();
+      })
+      .catch((error: unknown) => reportHandledError("web:load_model_picks", error));
   }
   const modelPicker = createModelPicker<Agent>({
     host: () => ctx.chat.state.host,

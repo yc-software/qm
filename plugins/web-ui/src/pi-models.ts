@@ -7,6 +7,7 @@ export type ModelMetadata = Pick<
 > & {
   label: string;
   buttonLabel: string;
+  displayProvider?: string;
   fastMode: boolean;
   effortLevels?: string[];
 };

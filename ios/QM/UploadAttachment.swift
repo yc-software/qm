@@ -329,16 +329,8 @@ struct AttachmentPicker: View {
         onSelect(providers.map(AttachmentSource.image))
       }
     } label: {
-      Image(systemName: "plus").font(.system(size: 17, weight: .medium))
-        .frame(width: 34, height: 34)
-        .background(QMTheme.ink.opacity(0.07), in: Circle())
-        .frame(width: 44, height: 44)
-        // The menu lifts and settles its label on close; give that a circle, not a square.
-        .contentShape(.contextMenuPreview, Circle())
-        .contentShape(.hoverEffect, Circle())
-        .contentShape(Circle())
+      Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
     }
-    .buttonBorderShape(.circle)
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
     .photosPicker(

@@ -10,7 +10,7 @@ import {
   parseLoadout,
   reconcileLoadout,
   upsertLoadout,
-  adoptRemoteLoadout,
+  adoptServerLoadout,
   onLoadoutSaved,
   saveLoadout,
   type LoadoutEntry,
@@ -45,19 +45,18 @@ test("saved loadouts migrate harness prefixes once and keep every model across d
   }
 });
 
-test("the main loadout syncs across devices: saves push, and only a newer remote copy replaces this one", () => {
+test("server picks replace the local cache, and only the main loadout pushes saves", () => {
   const dom = new JSDOM("", { url: "http://localhost/" });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: dom.window.localStorage });
   try {
+    assert.deepEqual(adoptServerLoadout([entry("gamma", "low", true), { value: "" }]), [entry("gamma", "low", true)]);
+    assert.deepEqual(loadLoadout(), [entry("gamma", "low", true)]);
     const pushed: LoadoutEntry[][] = [];
     onLoadoutSaved((entries) => pushed.push(entries));
-    saveLoadout([entry("alpha", "high")]);
     saveLoadout([entry("beta")], "web-ui:loadout:account:a");
+    saveLoadout([entry("alpha", "high")]);
     assert.deepEqual(pushed, [[entry("alpha", "high")]]);
-    assert.equal(adoptRemoteLoadout([entry("gamma")], 1), null);
-    assert.deepEqual(adoptRemoteLoadout([entry("gamma", "low", true)], Date.now() + 1000), [entry("gamma", "low", true)]);
-    assert.deepEqual(loadLoadout(), [entry("gamma", "low", true)]);
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous);
     else Reflect.deleteProperty(globalThis, "localStorage");

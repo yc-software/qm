@@ -21,6 +21,7 @@ struct RuntimeModelMetadata: Decodable {
   let id: String
   let label: String
   let provider: String?
+  let displayProvider: String?
   let reasoning: Bool?
   let effortLevels: [String]
 }
