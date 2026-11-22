@@ -31,11 +31,9 @@ export function markLink(anchor: Element): void {
   lead.className = "link-mark-lead";
   lead.innerHTML = mark;
   const first = anchor.firstChild;
-  if (first?.nodeType === 3) {
-    const text = first as Text;
-    const space = text.data.indexOf(" ");
-    if (space > 0) text.splitText(space);
-    lead.append(text);
+  if (first?.nodeType === 3 && (first as Text).data) {
+    (first as Text).splitText([...(first as Text).data][0]!.length);
+    lead.append(first);
   }
   anchor.prepend(lead);
 }
