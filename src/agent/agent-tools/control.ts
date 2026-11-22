@@ -343,7 +343,7 @@ export function controlPlaneTools(kit: ToolKit) {
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "cron")
       description =
-        "Share a cron you own. If it posts to your own DM, a teammate (a name or personal:<id>) gets their own linked copy that runs as them, posts to their DM and keeps its persona and project: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Your later edits reach every copy its owner hasn't edited. A cron that posts to a channel or group stays one cron, so sharing it, like permission=write or any other scope, gets access to this cron itself instead.";
+        "Share a cron you own (or a persona-owned cron you hold write/owner on). If it posts to a DM (or is a persona-owned cron not bound to a channel or group), each teammate (name or personal:<id>) gets their own linked copy that runs as them, posts to their DM and keeps the persona's identity and instructions: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Later edits to the source cron reach every copy its owner hasn't edited. A cron that posts to a channel or group stays one cron, so sharing it, like permission=write or any other scope, gets access to this cron itself instead.";
     if (type === "file")
       description =
         "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";

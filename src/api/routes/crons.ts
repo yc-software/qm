@@ -187,7 +187,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
-        ...(typeof b.persona === "string" ? { persona: b.persona } : {}),
+        ...(typeof b.persona === "string" || b.persona === null ? { persona: b.persona } : {}),
       },
       capability,
     );

@@ -185,7 +185,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   await deps.identity.refresh();
   const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
   const scheduled = SCHEDULED_SURFACES.has(spec.surface);
-  const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
+  const destAudience = spec.destination?.audienceScopeId;
+  const destKind = destAudience ? parseScopeId(destAudience).kind : null;
+  const roomScope =
+    parseScopeId(spec.ownerScopeId).kind === "persona" && (destKind === "channel" || destKind === "group")
+      ? destAudience!
+      : spec.ownerScopeId;
+  const currentMembers = await deps.currentScopeMembers?.(roomScope);
   const actorId = spec.owner;
   if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
     return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
@@ -194,22 +200,22 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     runsAsScope && currentMembers?.length
       ? currentMembers.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
       : undefined;
-  const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
+  const { kind: roomKind, ref: roomRef } = parseScopeId(roomScope);
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
   let roster: DirectoryMember[] | undefined;
   let isPrivate: boolean | undefined;
-  if (ownerKind === "channel" || ownerKind === "group") {
+  if (roomKind === "channel" || roomKind === "group") {
     roster = await deps.directory
-      ?.conversationMembers?.(ownerKind, ownerRef)
+      ?.conversationMembers?.(roomKind, roomRef)
       .catch(reportFailureAs("trigger home roster", undefined));
     isPrivate =
-      ownerKind === "channel"
-        ? await deps.directory?.channelPrivacy?.(ownerRef).catch(reportFailureAs("trigger home privacy", undefined))
+      roomKind === "channel"
+        ? await deps.directory?.channelPrivacy?.(roomRef).catch(reportFailureAs("trigger home privacy", undefined))
         : undefined;
     conversation = {
-      kind: ownerKind,
-      channelRef: ownerRef,
+      kind: roomKind,
+      channelRef: roomRef,
       threadRef,
       ...(isPrivate !== undefined ? { isPrivate } : {}),
       ...(audience ? { audience } : {}),
@@ -217,7 +223,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     };
   }
 
-  const members = runsAsScope ? undefined : homeRoster(ownerKind, ownerRef, isPrivate, roster, currentMembers);
+  const members = runsAsScope ? undefined : homeRoster(roomKind, roomRef, isPrivate, roster, currentMembers);
   const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
   if (scheduled && ownerIsMember === false)
     return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
@@ -236,13 +242,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     homeAccess = await actorMayReadScope(
       deps,
       actorId,
-      ownerKind,
-      ownerRef,
-      spec.ownerScopeId,
+      roomKind,
+      roomRef,
+      roomScope,
       deps.currentScopeMembers !== undefined,
     );
   }
-  const destinationIsHome = spec.destination?.audienceScopeId === spec.ownerScopeId;
+  const destinationIsHome = spec.destination?.audienceScopeId === roomScope;
   const deliverable = spec.destination
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;

@@ -83,7 +83,14 @@ export function withWebTranscriptDeliveries(
     } else if (failure) {
       item = turnFailureItem(d.text, failure.runId);
     } else {
-      item = { kind: "AgentMessage", text: d.text, body: via ? viaBody(d, via) : {} };
+      item = {
+        kind: "AgentMessage",
+        text: d.text,
+        body: {
+          ...(via ? viaBody(d, via) : {}),
+          ...(d.destination.persona ? { personaId: d.destination.persona.id } : {}),
+        },
+      };
     }
     const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
     if (!inserted) return true;

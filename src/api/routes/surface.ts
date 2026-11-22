@@ -802,18 +802,26 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
 const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
   agentMemory(async (ctx, memory, capability) => {
     const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
-    if (requestedScope !== undefined && requestedScope !== "org") {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-    }
-    const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-    if (!write) {
-      return sendJson(ctx.res, 403, {
-        error: "forbidden",
-        message:
-          requestedScope === "org"
-            ? "org memory writes need an org admin's own turn while it is still running"
-            : "memory capture is not enabled for this conversation",
+    const isPersonaScope =
+      typeof requestedScope === "string" && parseScopeId(requestedScope as ScopeId).kind === "persona";
+    if (requestedScope !== undefined && requestedScope !== "org" && !isPersonaScope) {
+      return sendJson(ctx.res, 400, {
+        error: "bad_request",
+        message: 'scope must be "org" or persona:<id> when present',
       });
+    }
+    let write: string | undefined;
+    if (requestedScope === "org") write = capability.memory?.orgWrite;
+    else if (isPersonaScope) {
+      if (personAtKeyboard(capability) && (await ctx.app.managesScope(capability.actorId, requestedScope as ScopeId)))
+        write = requestedScope;
+    } else write = capability.memory?.write;
+    if (!write) {
+      let message = "memory capture is not enabled for this conversation";
+      if (requestedScope === "org")
+        message = "org memory writes need an org admin's own turn while it is still running";
+      else if (isPersonaScope) message = "persona memory writes need a persona owner or write holder on a live turn";
+      return sendJson(ctx.res, 403, { error: "forbidden", message });
     }
     return handle(ctx, memory, capability, write);
   });

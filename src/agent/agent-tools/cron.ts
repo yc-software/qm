@@ -127,7 +127,7 @@ export function cronTools(kit: ToolKit) {
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
       'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
       "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin authority the owner's typed turn would have; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner, except an org admin, whose rewrite keeps the owner. A task a fire, other automated turn or bot work wrote runs without that authority; get says how its owner restores it.\n" +
-      "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner (or an org admin) can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
+      "ACCESS: a cron belongs to its creator (or the active persona, when you hold write/owner on it — pass persona:null to keep it in this conversation's scope instead) and runs as its owner; everyone here can see it, only the owner, a persona write/owner holder (for persona-owned crons), or an org admin can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
       "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
       "delete: remove for good. run: fire once now (refused while a fire is running). disable: pause.\n" +
@@ -233,9 +233,9 @@ export function cronTools(kit: ToolKit) {
         ),
       ),
       persona: Type.Optional(
-        Type.String({
+        Type.Union([Type.Null(), Type.String()], {
           description:
-            "create: a persona (name or id) that owns the cron and runs it as itself; works from any conversation for the persona's owners and write holders.",
+            "create: persona (name or id) that owns the cron; defaults to the persona this conversation is wearing when you have write/owner access to it. Pass null to keep the cron in this conversation's own scope instead.",
         }),
       ),
       enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
@@ -291,7 +291,7 @@ export function cronTools(kit: ToolKit) {
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.script ? { script: params.script } : {}),
-            ...(params.persona ? { persona: params.persona } : {}),
+            ...(params.persona !== undefined ? { persona: params.persona } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
