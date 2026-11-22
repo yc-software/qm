@@ -67,6 +67,13 @@ enum QMTheme {
   static let navy = Color(red: 0.106, green: 0.188, blue: 0.263)
   /// Switches need their own "on" colour: the app tint is `ink`, which is white in dark mode.
   static let switchOn = Color.green
+  /// A solid slate for neutral swipe actions: a plain system gray reads as disabled.
+  static let neutralAction = Color(
+    uiColor: UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? UIColor(red: 0.30, green: 0.34, blue: 0.40, alpha: 1)
+        : UIColor(red: 0.36, green: 0.40, blue: 0.45, alpha: 1)
+    })
   static let unread = Color(red: 47 / 255, green: 129 / 255, blue: 247 / 255)
 }
 

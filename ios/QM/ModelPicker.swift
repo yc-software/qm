@@ -196,8 +196,12 @@ struct ModelPicker: View {
           row(pick, configuration, active: pick.value == current.modelId)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
               if pick.value != current.modelId {
-                Button("Remove") { picks.save(shown.filter { $0.value != pick.value }) }
-                  .tint(.gray)
+                Button {
+                  picks.save(shown.filter { $0.value != pick.value })
+                } label: {
+                  Label("Remove", systemImage: "minus.circle")
+                }
+                .tint(QMTheme.neutralAction)
               }
             }
             .contextMenu {
