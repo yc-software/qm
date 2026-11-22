@@ -68,37 +68,55 @@ function teamsBot(): TeamsBot {
   return bot;
 }
 
+export class TeamsTokenError extends GenericChatHttpError {
+  readonly description: string;
+  constructor(status: number, description: string) {
+    super(status, `teams: token request failed: ${description}`);
+    this.description = description;
+  }
+}
+
+export async function requestTeamsToken(
+  { tenantId, appId, appSecret }: TeamsBot,
+  send: TokenFetch = fetch,
+): Promise<{ token: string; lifetimeMs: number }> {
+  const res = await send(`${PUBLIC.loginEndpoint}/${tenantId}/oauth2/v2.0/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: appId,
+      client_secret: appSecret,
+      scope: PUBLIC.botScope,
+    }).toString(),
+  });
+  const reply = (await res.json().catch(() => ({}))) as {
+    access_token?: unknown;
+    expires_in?: unknown;
+    error_description?: unknown;
+  };
+  if (!res.ok || typeof reply.access_token !== "string")
+    throw new TeamsTokenError(
+      res.status === 400 ? 401 : res.status,
+      typeof reply.error_description === "string" ? reply.error_description : `HTTP ${res.status}`,
+    );
+  return {
+    token: reply.access_token,
+    lifetimeMs: typeof reply.expires_in === "number" ? reply.expires_in * 1000 : 0,
+  };
+}
+
 export function createTeamsClient(deps: { fetch?: TokenFetch; serviceUrl?: string } = {}) {
   const send = deps.fetch ?? fetch;
   const tokens = new Map<string, { value: string; expires: number }>();
 
-  async function token({ tenantId, appId, appSecret }: TeamsBot): Promise<string> {
-    const key = `${tenantId}:${appId}:${appSecret}`;
+  async function token(bot: TeamsBot): Promise<string> {
+    const key = `${bot.tenantId}:${bot.appId}:${bot.appSecret}`;
     const cached = tokens.get(key);
     if (cached && cached.expires > Date.now()) return cached.value;
-    const res = await send(`${PUBLIC.loginEndpoint}/${tenantId}/oauth2/v2.0/token`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: appId,
-        client_secret: appSecret,
-        scope: PUBLIC.botScope,
-      }).toString(),
-    });
-    const reply = (await res.json().catch(() => ({}))) as {
-      access_token?: unknown;
-      expires_in?: unknown;
-      error_description?: unknown;
-    };
-    if (!res.ok || typeof reply.access_token !== "string")
-      throw new GenericChatHttpError(
-        res.status === 400 ? 401 : res.status,
-        `teams: token request failed: ${typeof reply.error_description === "string" ? reply.error_description : `HTTP ${res.status}`}`,
-      );
-    const lifetime = typeof reply.expires_in === "number" ? reply.expires_in * 1000 : 0;
-    tokens.set(key, { value: reply.access_token, expires: Date.now() + lifetime - TOKEN_SKEW_MS });
-    return reply.access_token;
+    const fresh = await requestTeamsToken(bot, send);
+    tokens.set(key, { value: fresh.token, expires: Date.now() + fresh.lifetimeMs - TOKEN_SKEW_MS });
+    return fresh.token;
   }
 
   function api(): Client {

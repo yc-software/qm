@@ -9,59 +9,31 @@ Each organization brings its own bot. The bot is a single-tenant app registratio
 Microsoft Entra tenant, and its credentials live in that QM workspace's settings, never in deployment
 environment variables.
 
-## 1. Register the bot
+## Connect a workspace
 
-In the [Teams Developer Portal](https://dev.teams.microsoft.com/tools/bots), sign in as an admin of the
-organization's tenant, open **Tools → Bot management** and create a bot. Then:
+An org admin connects Teams from **Settings → Microsoft Teams** (also linked from **Settings → Onboarding**).
+The page walks through each step with this deployment's own values to copy:
 
-- **Configure:** choose **HTTPS endpoint** and enter `<public-url>/v1/surfaces/teams/activities`.
-- **Client secrets:** create one and keep it; it is shown once.
-- **Channels:** keep **Microsoft Teams** enabled.
+1. Create a bot in the [Teams Developer Portal](https://dev.teams.microsoft.com/tools/bots), point its HTTPS
+   endpoint at `<public-url>/v1/surfaces/teams/activities`, and create a client secret. An Azure Bot resource
+   created as **Single Tenant** works too; new multi-tenant bots can no longer be created.
+2. Find the organization's directory (tenant) ID in Microsoft Entra.
+3. Paste the tenant ID, bot ID and secret and choose **Verify and connect**. QM asks Microsoft for a bot token
+   with them before saving, and shows Microsoft's reason when it refuses. One Entra tenant binds to one
+   workspace; activities from any other tenant, or signed for any other bot, are refused.
+4. Download the generated Teams app and upload it in the Teams admin center (**Manage apps → Upload new app**).
+   The package carries the bot, the workspace's branding, `supportsChannelFeatures: "tier1"` (manifest 1.25),
+   and the resource-specific consent that lets the bot hear every message in the teams and chats it joins:
+   `ChannelMessage.Read.Group` and `ChatMessage.Read.Chat`. Download and upload again after changing the bot.
+5. Add the app in Teams, message it, and mention it in a channel.
 
-An Azure Bot resource also works. Create it as **Single Tenant**; new multi-tenant bots can no longer be
-created.
-
-## 2. Bind the bot to the workspace
-
-Store the organization's Entra tenant ID, the bot's app ID and its secret on the QM workspace:
+The operator CLI can bind a workspace too:
 
 ```bash
 qm tenant settings set <workspace> teams '{"tenantId":"<entra-tenant-id>","appId":"<bot-app-id>","appSecret":"<client-secret>"}'
 ```
 
-One Entra tenant binds to one workspace. Activities from any other tenant, or signed for any other bot, are
-refused.
-
-## 3. Install the app with access to every message
-
-Teams only delivers @mentions in group chats and channels unless the app holds resource-specific consent.
-QM decides on its own when to join a conversation, so the app manifest asks for every message in the teams
-and chats it is installed in. Create the app in the Developer Portal (**Apps → New app**), add the bot under
-**App features → Bot** with the **Personal**, **Team** and **Group chat** scopes, and make sure the manifest
-carries:
-
-```json
-{
-  "manifestVersion": "1.25",
-  "supportsChannelFeatures": "tier1",
-  "webApplicationInfo": { "id": "<bot-app-id>", "resource": "https://RscBasedStoreApp" },
-  "authorization": {
-    "permissions": {
-      "resourceSpecific": [
-        { "name": "ChannelMessage.Read.Group", "type": "Application" },
-        { "name": "ChatMessage.Read.Chat", "type": "Application" }
-      ]
-    }
-  }
-}
-```
-
-The Teams admin center refuses a team-scoped app without `supportsChannelFeatures`, which needs manifest 1.25
-or later. Download the app package and upload it to the organization's app catalog (Teams admin center → **Manage
-apps → Upload new app**, or **Apps → Manage your apps → Upload an app → Upload an app to your org's app
-catalog** in Teams). The person who adds it to a team or chat grants the consent.
-
-## 4. Sign in with Microsoft
+## Sign in with Microsoft
 
 A Teams organization signs in to QM's web app with Microsoft instead of Slack. Reuse the bot's app
 registration as the sign-in client, in the Entra admin center under **App registrations**:
@@ -81,9 +53,15 @@ OIDC_JWKS_URI=https://login.microsoftonline.com/<entra-tenant-id>/discovery/v2.0
 OIDC_SCOPES="openid profile email"
 OIDC_CLIENT_ID=<bot-app-id>
 OIDC_CLIENT_SECRET=<client-secret>
+OIDC_PRINCIPAL_CLAIM=email
+OIDC_ALLOWED_EMAIL_DOMAIN=<the organization's email domain>
 ```
 
-Leave `PORTAL_EXPECTED_TEAM_ID` unset; the tenant-specific issuer already pins the organization.
+The tenant-specific issuer only accepts work accounts from that Entra directory, so personal Microsoft
+accounts and other organizations never reach QM. `OIDC_ALLOWED_EMAIL_DOMAIN` then refuses any account, B2B
+guests included, whose verified email is outside the organization's domain. Leave `PORTAL_EXPECTED_TEAM_ID`
+unset; it is a Slack concept. Grant consent for the organization the first time an admin signs in so
+employees are not asked individually.
 
 ## Identity
 

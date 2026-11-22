@@ -202,7 +202,7 @@
 }
 #app-view .setup-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 22px;
 }
@@ -2215,6 +2215,58 @@
 }
 #app-view #slack-own-app-guide li {
   padding: 4px 0 8px 4px;
+}
+#app-view #card-teams .teams-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 8px;
+}
+#app-view #card-teams h3 {
+  font-size: var(--font-14);
+  font-weight: 500;
+}
+#app-view #teams-steps {
+  list-style: decimal;
+  color: var(--muted-foreground);
+  max-width: 760px;
+  line-height: 1.65;
+  padding-left: 28px;
+}
+#app-view #teams-steps > li {
+  padding: 6px 0 12px 4px;
+}
+#app-view #teams-steps strong {
+  color: var(--foreground);
+}
+#app-view #teams-steps ul {
+  list-style: disc;
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+#app-view .teams-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+#app-view .teams-value code {
+  word-break: break-all;
+}
+#app-view #teams-editor {
+  max-width: 560px;
+  margin-top: 12px;
+}
+#app-view #teams-download {
+  margin: 4px 8px 4px 0;
+}
+#app-view #teams-download.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+#app-view #st-teams:empty {
+  display: none;
 }
 #app-view #slack-token-editor {
   max-width: 560px;

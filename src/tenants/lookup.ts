@@ -188,6 +188,13 @@ export const TEAMS_TENANT: PgMigrationDefinition = {
       "uuid",
       `SELECT id FROM tenants WHERE settings->'teams'->>'tenantId' = $1${servingTenant("id")}`,
     ),
+    `CREATE OR REPLACE FUNCTION qm_set_tenant_teams(teams jsonb) RETURNS void
+      LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+      AS $set_teams$
+        UPDATE tenants SET settings = CASE WHEN teams IS NULL THEN settings - 'teams'
+          ELSE settings || jsonb_build_object('teams', teams) END
+        WHERE id = qm_bound_tenant()
+      $set_teams$`,
   ],
 };
 

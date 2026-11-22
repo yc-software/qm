@@ -119,6 +119,7 @@ export interface ServerDeps {
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
   slackInstallationFetch?: typeof fetch;
+  teamsTokenFetch?: typeof fetch;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";

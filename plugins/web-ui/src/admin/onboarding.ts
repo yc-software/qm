@@ -66,6 +66,11 @@ export class Onboarding {
       summary: "Create the Slack app, install it, then add its bot and Socket Mode tokens.",
       url: "https://api.slack.com/apps?new_app=1",
     },
+    teams: {
+      text: "Optional",
+      tone: "muted",
+      summary: "Register your own Teams bot, connect it here, and add the generated app to Teams.",
+    },
     oauth: {
       text: "Optional",
       tone: "muted",
@@ -145,14 +150,15 @@ export class Onboarding {
       context = this.context;
     const selection = { provider: this.provider, model: this.model, apiKey: this.apiKey };
     void this.loadRegistry().catch(swallowAs("admin: load model registry", undefined));
-    const [models, slack, catalog, config] = await Promise.all([
+    const [models, slack, teams, catalog, config] = await Promise.all([
       this.context.api("GET", "/api/model-providers?catalog=cached"),
       this.context.api("GET", "/api/slack-installation"),
+      this.context.api("GET", "/api/teams"),
       this.context.api("GET", "/api/connector-catalog"),
       this.context.api("GET", "/api/scopes/" + encodeURIComponent(this.context.orgScope) + "?view=onboarding"),
     ]);
     if (token !== this.request || !context.current()) return;
-    if (!models.ok || !slack.ok || !catalog.ok || !config.ok)
+    if (!models.ok || !slack.ok || !teams.ok || !catalog.ok || !config.ok)
       return this.say("Setup status could not be loaded. Try again.", "err");
     this.providers = models.data.providers || [];
     this.models = {};
@@ -187,6 +193,13 @@ export class Onboarding {
         ? "Connected to " + (slack.data.teamName || slack.data.teamId || "a Slack workspace") + "."
         : "Create the Slack app, install it, then add its bot and Socket Mode tokens.",
       url: slack.data.createUrl || "https://api.slack.com/apps?new_app=1",
+    };
+    this.steps.teams = {
+      text: teams.data.configured ? "Connected" : "Optional",
+      tone: teams.data.configured ? "ok" : "muted",
+      summary: teams.data.configured
+        ? "Connected to bot " + teams.data.appId + "."
+        : "Register your own Teams bot, connect it here, and add the generated app to Teams.",
     };
     const configured = (catalog.data.catalog || []).filter((item: Data) => item.configured);
     this.steps.oauth = {
@@ -445,15 +458,15 @@ export class Onboarding {
   }
   stepsCard() {
     return html`<div class="setup-grid">
-      ${["model", "slack", "oauth"].map(
+      ${["model", "slack", "teams", "oauth"].map(
         (key, i) =>
           html`<section class="setup-step">
             <span class=${"badge " + this.steps[key].tone} id=${"onboarding-" + key + "-badge"}
               >${this.steps[key].text}</span
             >
-            <h2>${["1. Model provider", "2. Slack app", "3. OAuth apps"][i]}</h2>
+            <h2>${["1. Model provider", "2. Slack app", "3. Microsoft Teams", "4. OAuth apps"][i]}</h2>
             <p id=${"onboarding-" + key + "-summary"}>${this.steps[key].summary}</p>
-            ${key === "slack" ? html`<div class="foot"><a class="btn" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><a class="btn" href=${this.context.href("slack-settings")}>Enter Slack tokens</a></div>` : nothing}${key === "oauth" ? html`<div class="foot"><a class="btn" href=${this.context.href("connectors")}>Configure OAuth apps</a></div>` : nothing}
+            ${key === "slack" ? html`<div class="foot"><a class="btn" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><a class="btn" href=${this.context.href("slack-settings")}>Enter Slack tokens</a></div>` : nothing}${key === "teams" ? html`<div class="foot"><a class="btn" id="onboarding-teams-setup" href=${this.context.href("teams-settings")}>Set up Microsoft Teams</a></div>` : nothing}${key === "oauth" ? html`<div class="foot"><a class="btn" href=${this.context.href("connectors")}>Configure OAuth apps</a></div>` : nothing}
           </section>`,
       )}
     </div>`;

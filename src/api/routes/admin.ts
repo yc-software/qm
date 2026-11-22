@@ -52,6 +52,7 @@ import {
   managedSlackEvent,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
+import { deleteTeams, getTeams, getTeamsAppPackage, putTeams } from "./admin/teams.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
@@ -117,6 +118,10 @@ const routes: Route<ApiCtx>[] = [
     { method: "GET", path: "/v1/admin/slack-emoji", auth: "either", handle: getSlackEmojiList },
     { method: "PUT", path: "/v1/admin/slack-installation", auth: "either", handle: putSlackInstallation },
     { method: "DELETE", path: "/v1/admin/slack-installation", auth: "either", handle: deleteSlackInstallation },
+    { method: "GET", path: "/v1/admin/teams", auth: "either", handle: getTeams },
+    { method: "PUT", path: "/v1/admin/teams", auth: "either", handle: putTeams },
+    { method: "DELETE", path: "/v1/admin/teams", auth: "either", handle: deleteTeams },
+    { method: "GET", path: "/v1/admin/teams/app-package", auth: "either", handle: getTeamsAppPackage },
     { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
     { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
     { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
