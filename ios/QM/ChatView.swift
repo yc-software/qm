@@ -862,21 +862,16 @@ struct ChatView: View {
       showingRuntime = true
     } label: {
       HStack(spacing: 5) {
+        if let configuration = model.runtimeConfiguration, let runtime = model.effectiveRuntime {
+          ModelLogo(provider: ModelBrand.provider(runtime.modelId, configuration), size: 20)
+        }
         Text(model.runtimeLabel).lineLimit(1)
         Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
       }
       .font(.footnote.weight(.medium))
       .padding(.horizontal, 8).frame(minHeight: 44)
     }
-    .popover(isPresented: $showingRuntime, arrowEdge: .bottom) {
-      NavigationStack {
-        RuntimeControlsView(
-          client: model.client, scopeID: model.conversation.scopeId, showsCancel: true,
-          selected: model.runtimeSelection, onSelect: model.selectRuntime)
-      }
-      .frame(width: 340, height: 390)
-      .presentationCompactAdaptation(.popover)
-    }
+    .modelPicker(isPresented: $showingRuntime, model: model)
     .accessibilityLabel("Model and effort: \(model.runtimeLabel)")
     .accessibilityValue(model.runtimeDetail ?? "Workspace default")
     .disabled(model.sending)
