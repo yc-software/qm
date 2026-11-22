@@ -88,7 +88,7 @@ async function acquire(app: ConfidentialClientApplication): Promise<string> {
     throw new TeamsTokenError(502, "Microsoft returned no access token");
   } catch (error) {
     if (error instanceof ServerError)
-      throw new TeamsTokenError(error.status ?? 401, error.errorMessage || error.errorCode);
+      throw new TeamsTokenError(error.status ?? 502, error.errorMessage || error.errorCode);
     throw error;
   }
 }
