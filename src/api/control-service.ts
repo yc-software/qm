@@ -132,7 +132,7 @@ export type ControlErr<C extends string> = { ok: false; code: C; message: string
 
 export interface ControlService {
   createCron(req: CronCreateRequest, claims: CapabilityClaims, trial?: CronScriptTrial): Promise<CronCreateResult>;
-  listCrons(claims: CapabilityClaims): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
+  listCrons(claims: CapabilityClaims, tenant: Tenant): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
   getCron(
     id: string,
     claims: CapabilityClaims,
@@ -578,10 +578,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
-    async listCrons(capability) {
+    async listCrons(capability, tenant) {
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
-      const admits = await app.cronAdministration(capability, all);
+      const admits = await app.cronAdministration(tenant, capability, all);
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };

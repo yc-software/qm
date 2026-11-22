@@ -3,7 +3,7 @@ import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/ca
 import { actsAsScope, parseScopeId, type Grant, type Permission, type ScopeId } from "../types.ts";
 import { samePersonInDirectory } from "../directory/person.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import type { Tenant } from "../tenants/context.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import {
   createCanManageScope,
@@ -67,12 +67,12 @@ const grantKey = (r: { ownerScopeId: ScopeId; ref: string }) => `${r.ownerScopeI
 
 export async function cronAdministration(
   deps: AppDeps,
+  tenant: Tenant,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
   crons: readonly Cron[],
 ): Promise<boolean[]> {
   if (!crons.length) return [];
   const { actorId } = actor;
-  const tenant = ambientTenant();
   const resources = crons
     .filter((c) => !c.ownerScopeId.startsWith("personal:"))
     .map((c) => ({ ownerScopeId: c.ownerScopeId, ref: encodeRef(cronRef(c.id)) }));

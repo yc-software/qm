@@ -11,7 +11,7 @@ import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { administersCron, cronTaskRewrite } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -222,13 +222,13 @@ async function createCron(ctx: ApiCtx): Promise<void> {
 async function listCrons(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (capability) {
-    const { crons, visible } = await ctx.deps.control.listCrons(capability);
+    const { crons, visible } = await ctx.deps.control.listCrons(capability, tenantOf(ctx));
     return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
-  const admits = await app.cronAdministration({ actorId: viewer }, [...owned, ...visible]);
+  const admits = await app.cronAdministration(tenantOf(ctx), { actorId: viewer }, [...owned, ...visible]);
   const decorate = (cron: Cron, i: number) => ({
     ...cron,
     permission: admits[i] ? "manage" : "read",

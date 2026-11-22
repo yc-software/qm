@@ -12,6 +12,7 @@ import { createControlService, type ControlService } from "../src/api/control-se
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
@@ -624,7 +625,7 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   assert.ok(created.ok);
   const id = created.cron.id;
 
-  const listed = await control.listCrons(claims("U1"));
+  const listed = await control.listCrons(claims("U1"), testTenant);
   assert.ok("crons" in listed);
   assert.ok(listed.crons.some((c) => c.id === id));
 
@@ -1206,7 +1207,12 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
     roleCalls++;
     return origRoles(id);
   };
-  const listed = await built.app.cronAdministration({ actorId: "U2" }, [granted.cron, c2.cron, sys, c2.cron]);
+  const listed = await built.app.cronAdministration(testTenant, { actorId: "U2" }, [
+    granted.cron,
+    c2.cron,
+    sys,
+    c2.cron,
+  ]);
   assert.deepEqual(listed, [true, true, true, true]);
   assert.equal(roleCalls, 1);
 });

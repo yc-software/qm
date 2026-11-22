@@ -515,7 +515,7 @@ export function createMessagingMethods(
       );
     },
     loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
-    cronAdministration: (actor, crons) => cronAdministration(deps, actor, crons),
+    cronAdministration: (tenant, actor, crons) => cronAdministration(deps, tenant, actor, crons),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },
