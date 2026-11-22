@@ -40,17 +40,17 @@ struct ModelLogo: View {
     Group {
       switch provider {
       case "anthropic":
-        Image("Service-claude").resizable().renderingMode(.template).scaledToFit()
+        NativeServiceLogo(service: "claude", size: size * 0.6)
           .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-      case "openai":
-        Image("Service-openai").resizable().renderingMode(.template).scaledToFit()
-          .foregroundStyle(QMTheme.ink)
-      case "google": Image("Service-gemini").resizable().scaledToFit()
+      case "openai": NativeServiceLogo(service: "openai", size: size * 0.6)
+      case "google":
+        NativeServiceLogo(service: "gemini", size: size * 0.6)
+          .foregroundStyle(Color(red: 0.26, green: 0.52, blue: 0.96))
       default:
-        Image(systemName: "sparkle").resizable().scaledToFit().foregroundStyle(.secondary)
+        Image(systemName: "sparkle").resizable().scaledToFit().padding(size * 0.2)
+          .foregroundStyle(.secondary)
       }
     }
-    .padding(size * 0.2)
     .frame(width: size, height: size)
     .background(QMTheme.ink.opacity(0.06), in: RoundedRectangle(cornerRadius: size * 0.28))
     .accessibilityHidden(true)
