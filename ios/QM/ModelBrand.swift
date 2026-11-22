@@ -13,7 +13,7 @@ enum ModelBrand {
     switch provider {
     case "qm:gateway": "Gateway"
     case "anthropic": "Anthropic"
-    case "openai": "OpenAI"
+    case "openai", "openai-codex": "OpenAI"
     case "openrouter": "OpenRouter"
     default:
       provider.split(whereSeparator: { $0 == "-" || $0 == "_" })
