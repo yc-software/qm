@@ -10,26 +10,6 @@ enum ModelBrand {
     let metadata = configuration.modelCatalog[id]
     return metadata?.label ?? id
   }
-
-  static func groupName(_ provider: String) -> String {
-    switch provider {
-    case "anthropic": "Anthropic"
-    case "openai": "OpenAI"
-    case "google": "Google"
-    case "qm:gateway": "Gateway"
-    case "openrouter": "OpenRouter"
-    case "arcee-ai": "Arcee AI"
-    case "meta-llama": "Meta"
-    case "mistralai": "Mistral AI"
-    default:
-      provider.split(whereSeparator: { $0 == "-" || $0 == "_" })
-        .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
-    }
-  }
-
-  static func order(_ provider: String) -> Int {
-    ["anthropic", "openai", "google"].firstIndex(of: provider) ?? 3
-  }
 }
 
 struct ModelLogo: View {

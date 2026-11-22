@@ -72,13 +72,6 @@ struct ModelPicker: View {
                 .tint(QMTheme.ink.opacity(0.07))
               }
             }
-            .contextMenu {
-              if pick.value != current.modelId {
-                Button("Remove from picks", systemImage: "minus.circle") {
-                  picks.save(shown.filter { $0.value != pick.value })
-                }
-              }
-            }
         }
         NavigationLink {
           ModelCatalog(configuration: configuration, saved: Set(shown.map(\.value))) { id in
@@ -94,7 +87,7 @@ struct ModelPicker: View {
           }
         }
       } header: {
-        Text("Your picks")
+        Text("Presets")
       } footer: {
         if let caption = caption(configuration) { Text(caption) }
       }
@@ -130,7 +123,9 @@ struct ModelPicker: View {
       ModelLogo(provider: ModelBrand.provider(pick.value, configuration))
       VStack(alignment: .leading, spacing: 2) {
         Text(ModelBrand.label(pick.value, configuration)).lineLimit(1)
-        Text(summary(pick, configuration)).font(.footnote).foregroundStyle(.secondary)
+        if let summary = summary(pick, configuration) {
+          Text(summary).font(.footnote).foregroundStyle(.secondary)
+        }
       }
       Spacer(minLength: 8)
       if active {
@@ -155,15 +150,13 @@ struct ModelPicker: View {
     }
   }
 
-  private func summary(_ pick: ModelPick, _ configuration: RuntimeConfiguration) -> String {
+  private func summary(_ pick: ModelPick, _ configuration: RuntimeConfiguration) -> String? {
     var parts: [String] = []
     if configuration.efforts(model: pick.value).count > 1 {
       parts.append(RuntimeSelection.effortLabel(pick.effort))
     }
     if pick.fast { parts.append("Fast") }
-    return parts.isEmpty
-      ? ModelBrand.groupName(ModelBrand.provider(pick.value, configuration))
-      : parts.joined(separator: " · ")
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 
   private func caption(_ configuration: RuntimeConfiguration) -> String? {
@@ -191,13 +184,6 @@ struct ModelPicker: View {
       shown.append(pick.value == active.value ? active : pick)
     }
     if configuration.models.contains(active.value), !listed(active.value) { shown.append(active) }
-    if picks.entries.isEmpty, shown.count == 1,
-      let other = configuration.models.first(where: {
-        ModelBrand.provider($0, configuration) != ModelBrand.provider(active.value, configuration)
-      })
-    {
-      shown.append(ModelPick(value: other, effort: "auto", fast: false))
-    }
     return shown
   }
 
@@ -235,49 +221,32 @@ struct ModelCatalog: View {
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
 
-  private var groups: [(provider: String, ids: [String])] {
-    let matches = configuration.models.filter {
+  private var matches: [String] {
+    configuration.models.filter {
       query.isEmpty || ModelBrand.label($0, configuration).localizedCaseInsensitiveContains(query)
-        || ModelBrand.groupName(ModelBrand.provider($0, configuration))
-          .localizedCaseInsensitiveContains(query)
     }
-    return Dictionary(grouping: matches) { ModelBrand.provider($0, configuration) }
-      .map { (provider: $0.key, ids: $0.value) }
-      .sorted {
-        (ModelBrand.order($0.provider), ModelBrand.groupName($0.provider))
-          < (ModelBrand.order($1.provider), ModelBrand.groupName($1.provider))
-      }
   }
 
   var body: some View {
     QMList {
-      ForEach(groups, id: \.provider) { group in
-        Section {
-          ForEach(group.ids, id: \.self) { id in
-            Button {
-              onAdd(id)
-              dismiss()
-            } label: {
-              HStack(spacing: 12) {
-                ModelLogo(provider: group.provider)
-                Text(ModelBrand.label(id, configuration)).lineLimit(1)
-                Spacer(minLength: 8)
-                Text(saved.contains(id) ? "Saved" : "Add")
-                  .font(.subheadline.weight(saved.contains(id) ? .regular : .medium))
-                  .foregroundStyle(saved.contains(id) ? .secondary : .primary)
-              }
-              .contentShape(Rectangle())
-            }
+      ForEach(matches, id: \.self) { id in
+        Button {
+          onAdd(id)
+          dismiss()
+        } label: {
+          HStack(spacing: 12) {
+            ModelLogo(provider: ModelBrand.provider(id, configuration))
+            Text(ModelBrand.label(id, configuration)).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(saved.contains(id) ? "Saved" : "Add")
+              .font(.subheadline.weight(saved.contains(id) ? .regular : .medium))
+              .foregroundStyle(saved.contains(id) ? .secondary : .primary)
           }
-        } header: {
-          HStack(spacing: 6) {
-            ModelLogo(provider: group.provider, size: 18)
-            Text(ModelBrand.groupName(group.provider))
-          }
+          .contentShape(Rectangle())
         }
       }
     }
-    .overlay { if groups.isEmpty { ContentUnavailableView.search(text: query) } }
+    .overlay { if matches.isEmpty { ContentUnavailableView.search(text: query) } }
     .searchable(
       text: $query, placement: .navigationBarDrawer(displayMode: .always),
       prompt: "Search \(configuration.models.count) models"
