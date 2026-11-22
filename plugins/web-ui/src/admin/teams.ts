@@ -70,7 +70,7 @@ async function save() {
     data = result.data;
     editing = false;
     draft.appSecret = "";
-    say("Connected. Download the app package (step 4) and add it to Teams.", "ok");
+    say("Connected. Download the Teams app below and add it to Teams.", "ok");
   } finally {
     busy = "";
     draw();
