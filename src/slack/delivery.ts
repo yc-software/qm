@@ -60,7 +60,7 @@ export function originContext(opts: {
   persona?: WornPersona;
   project?: { id: string; name: string };
   webUiPublicUrl?: string;
-  cron?: { id: string; title?: string };
+  source?: { page: "crons" | "webhooks"; id: string; title?: string };
 }): Record<string, unknown> | undefined {
   const base = trimTrailingSlashes(opts.webUiPublicUrl?.trim() ?? "");
   const linked = (name: string, path: string): string => {
@@ -81,9 +81,9 @@ export function originContext(opts: {
       : []),
   ];
   const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
-  if (base && opts.cron) {
-    const title = escapeSlackText(opts.cron.title?.trim() || "Cron");
-    parts.push(`${title} · <${base}/crons/${encodeURIComponent(opts.cron.id)}|Settings>`);
+  if (base && opts.source) {
+    const title = escapeSlackText(opts.source.title?.trim() || (opts.source.page === "crons" ? "Cron" : "Webhook"));
+    parts.push(`${title} · <${base}/${opts.source.page}/${encodeURIComponent(opts.source.id)}|Settings>`);
   }
   return parts.length ? { type: "mrkdwn", text: parts.join(" · "), verbatim: true } : undefined;
 }

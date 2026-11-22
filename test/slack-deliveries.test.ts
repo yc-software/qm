@@ -23,6 +23,7 @@ async function deliver(
     loseAck?: boolean;
     approval?: unknown;
     updateError?: string;
+    provenance?: Record<string, unknown>;
   } = {},
 ) {
   const delivery = {
@@ -32,6 +33,7 @@ async function deliver(
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
       : {}),
+    ...(row.provenance ? { provenance: row.provenance } : {}),
     destination: { type: "slack", target: "C1:100.200", ...destination },
     attachments: mixedFiles,
     createdAt: row.createdAt ?? Date.now(),
@@ -107,6 +109,20 @@ async function deliver(
   await deliverer.deliver(client, delivery as never);
   return { acknowledgements, ackBodies, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
+
+test("webhook deliveries link their title to the webhook's settings, defaulting to Webhook", async () => {
+  const footer = async (provenance: Record<string, unknown>) => {
+    const { posts } = await deliver({}, undefined, "https://agent.example", "done", { provenance });
+    const blocks = posts[0]!.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
+    return blocks.at(-1)?.elements?.[0]?.text;
+  };
+  const base = { trigger: "webhook", sourceThreadRef: "webhook:wh-1:d1", sourceId: "wh-1" };
+  assert.equal(
+    await footer({ ...base, sourceTitle: "PR review" }),
+    "PR review · <https://agent.example/webhooks/wh-1|Settings>",
+  );
+  assert.equal(await footer(base), "Webhook · <https://agent.example/webhooks/wh-1|Settings>");
+});
 
 for (const type of ["slack", "group", "principal"]) {
   test(`${type} cron deliveries include settings below the complete message and preserve attachments`, async () => {

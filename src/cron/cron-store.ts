@@ -14,6 +14,7 @@ import {
   contentPart,
   createDeduped,
   type CreateTriggerInput,
+  normalizeTitle,
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
@@ -105,12 +106,6 @@ export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threa
 
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
   return cron.deferUntil !== undefined && now < cron.deferUntil;
-}
-
-function normalizeTitle(title: string | undefined): string | undefined {
-  const trimmed = title?.trim().replace(/\s+/g, " ");
-  if (!trimmed) return undefined;
-  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
 function cronFields(patch: CronPatch): Partial<Cron> {

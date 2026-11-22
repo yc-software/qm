@@ -78,6 +78,7 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
     createdBy: "U1",
+    title: "Issue triage",
     action: "triage this issue",
     verification: { scheme: "github", secret: SECRET },
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
@@ -104,6 +105,7 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
   const [delivered] = await deliveries.pending("slack");
   assert.equal(delivered?.text, "DID-THE-WORK");
   assert.equal(delivered?.provenance?.sourceId, wh.id);
+  assert.equal(delivered?.provenance?.sourceTitle, "Issue triage");
   assert.equal((await webhooks.get(wh.id))?.lastDeliveryId, createHash("sha256").update(body).digest("hex"));
   assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
 });

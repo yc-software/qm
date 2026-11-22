@@ -150,6 +150,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/apps/:id/archive", "/v1/apps/:id/archive"],
   ["POST /api/apps/:id/restore", "/v1/apps/:id/restore"],
   ["POST /api/webhooks", "/v1/webhooks"],
+  ["POST /api/webhooks/:id/update", "/v1/webhooks/:id/update"],
   ["POST /api/webhooks/:id/disable", "/v1/webhooks/:id/disable"],
   ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
   ["POST /api/blobs", "/v1/web/blobs"],

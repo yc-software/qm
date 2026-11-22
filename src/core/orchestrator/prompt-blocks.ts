@@ -285,7 +285,7 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
     ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${w.title || summary(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),

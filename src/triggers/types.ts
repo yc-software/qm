@@ -83,6 +83,7 @@ interface WebhookFilter {
 }
 
 export interface Webhook extends TriggerBase {
+  title?: string;
   action: string;
   verification: WebhookVerification;
   filters?: WebhookFilter[];

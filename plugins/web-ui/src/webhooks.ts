@@ -1,5 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Check, ChevronDown, Plus } from "lucide";
+import { Check, ChevronDown, Pencil, Plus } from "lucide";
+import { live } from "lit/directives/live.js";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
@@ -8,11 +9,13 @@ import { listBackLink, listPageTpl } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
+import { tip } from "./tooltip";
 
 export interface WebhookView {
   id: string;
   ownerScopeId: string;
   owner: string;
+  title?: string;
   action: string;
   verification: { scheme: string; secret?: string };
   filters?: Array<{ path: string; in: string[] }>;
@@ -150,7 +153,9 @@ function drawWebhooksPage(): void {
     .filter(
       (w) =>
         !webhooksSearch.trim() ||
-        `${w.action} ${w.verification.scheme}`.toLowerCase().includes(webhooksSearch.trim().toLowerCase()),
+        `${w.title ?? ""} ${w.action} ${w.verification.scheme}`
+          .toLowerCase()
+          .includes(webhooksSearch.trim().toLowerCase()),
     )
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((w) => webhookPageRow(w));
@@ -198,7 +203,7 @@ function webhookPageRow(w: WebhookView): TemplateResult {
         openWebhook(w, { push: true });
       }}
     >
-      <span class="list-row-title" dir="auto">${actionSnippet(w.action)}</span>
+      <span class="list-row-title" dir="auto">${w.title?.trim() || actionSnippet(w.action)}</span>
       <span class="list-row-meta">
         ${scopeChip(w.ownerScopeId)}
         <span class="badge">${w.verification.scheme}</span>
@@ -220,8 +225,47 @@ function copyRow(text: string) {
   `;
 }
 
-function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
+function webhookTitleTpl(w: WebhookView, editing: boolean): TemplateResult {
+  const title = w.title?.trim() || "Webhook";
+  if (editing)
+    return html`<form
+      class="cron-title-form"
+      @submit=${(e: SubmitEvent) => void saveWebhookTitle(e, w)}
+      @keydown=${(e: KeyboardEvent) => e.key === "Escape" && openWebhook(w)}
+    >
+      <input name="title" maxlength="80" aria-label="Title" .value=${live(w.title ?? "")} required />
+      <button class="btn" type="button" @click=${() => openWebhook(w)}>Cancel</button>
+      <button class="btn primary" type="submit">Save</button>
+    </form>`;
+  return html`<h2 class="cron-title" dir="auto">
+    <button
+      class="cron-title-button"
+      type="button"
+      ${tip("Rename")}
+      @click=${() => openWebhook(w, { editingTitle: true })}
+    >
+      <span>${title}</span>${icon(Pencil, 14)}
+    </button>
+  </h2>`;
+}
+
+async function saveWebhookTitle(event: SubmitEvent, w: WebhookView): Promise<void> {
+  event.preventDefault();
+  const control = (event.currentTarget as HTMLFormElement).elements.namedItem("title") as HTMLInputElement;
+  const title = control.value.trim();
+  if (!title) return control.focus();
+  try {
+    await api(`/api/webhooks/${encodeURIComponent(w.id)}/update`, { method: "POST", body: JSON.stringify({ title }) });
+  } catch (e) {
+    webhooksNotice = errMessage(e, "Couldn't rename webhook.");
+  }
+  await refreshWebhooks();
+  openWebhook(webhookList.find((x) => x.id === w.id) ?? w);
+}
+
+function openWebhook(w: WebhookView, opts: { push?: boolean; editingTitle?: boolean } = {}): void {
   if (!appState.mainEl) return;
+  const editingTitle = opts.editingTitle === true;
   syncWebhookUrl(w.id, opts.push);
   const eventsHost = document.createElement("section");
   const notice = webhooksNotice || webhooksNoticeSticky;
@@ -234,7 +278,7 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
       <div class="resource-detail">
         ${listBackLink("Webhooks", drawWebhooksPage)}
         <div class="resource-heading">
-          <h2>Webhook</h2>
+          ${webhookTitleTpl(w, editingTitle)}
           <button class="btn" @click=${showNewWebhook}>${icon(Plus, 15)}<span>New webhook</span></button>
         </div>
         ${notice ? html`<div class="action-notice">${notice}</div>` : nothing}
@@ -308,6 +352,7 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
     host,
   );
   appState.mainEl.replaceChildren(host);
+  if (editingTitle) host.querySelector<HTMLInputElement>('.cron-title-form input[name="title"]')?.focus();
   void loadWebhookEvents(w.id, eventsHost);
 }
 
@@ -392,6 +437,10 @@ function webhookForm() {
     <form class="resource-form" @submit=${onCreateWebhook}>
       ${listBackLink("Webhooks", drawWebhooksPage)}
       <h2>New webhook</h2>
+      <label
+        >Title <span class="hint">(2-5 words naming what it's for)</span>
+        <input name="title" maxlength="80" placeholder="GitHub issue triage" />
+      </label>
       <label
         >Action <span class="hint">(what the agent should do for each event)</span>
         <textarea
@@ -519,7 +568,9 @@ async function onCreateWebhook(e: Event): Promise<void> {
     if (errSlot) errSlot.textContent = errMessage(err, "Invalid filters.");
     return;
   }
+  const title = field("title").trim();
   const payload: Record<string, unknown> = {
+    ...(title ? { title } : {}),
     action,
     verification: { scheme, ...(secret ? { secret } : {}) },
   };
