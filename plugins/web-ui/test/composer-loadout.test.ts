@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import {
   effortLevelsForModel,
+  groupModelsByProvider,
   loadoutActions,
   loadLoadout,
   ultrafastChoice,
@@ -215,3 +216,29 @@ for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
     assert.deepEqual(current, entry(base.value, "high", false));
   });
 }
+
+test("picker models group by provider label, branded providers first and the rest A-Z, keeping order inside groups", () => {
+  const as = (id: string, groupLabel: string, provider: string, displayProvider?: string): ModelOption => {
+    const base = option(id);
+    return { ...base, groupLabel, model: { ...base.model, provider }, ...(displayProvider ? { displayProvider } : {}) };
+  };
+  const groups = groupModelsByProvider([
+    as("custom", "Abliteration", "abliteration"),
+    as("gateway/router/grok", "Gateway", "qm:gateway"),
+    as("gateway/router/gemini-flash", "Google", "qm:gateway", "google"),
+    as("sonnet", "Anthropic", "anthropic"),
+    as("gpt-sol", "OpenAI", "openai"),
+    as("gateway/claude-opus", "Anthropic", "qm:gateway", "anthropic"),
+    as("gateway/bedrock/glm", "Gateway", "qm:gateway"),
+  ]);
+  assert.deepEqual(
+    groups.map(({ label, options }) => [label, options.map(({ value }) => value)]),
+    [
+      ["Anthropic", ["sonnet", "gateway/claude-opus"]],
+      ["OpenAI", ["gpt-sol"]],
+      ["Google", ["gateway/router/gemini-flash"]],
+      ["Abliteration", ["custom"]],
+      ["Gateway", ["gateway/router/grok", "gateway/bedrock/glm"]],
+    ],
+  );
+});
