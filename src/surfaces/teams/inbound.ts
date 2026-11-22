@@ -61,7 +61,7 @@ function actionId(value: unknown): string | undefined {
 }
 
 export function createTeamsInbound(deps: {
-  client: Pick<TeamsClient, "members">;
+  client: Pick<TeamsClient, "members" | "member">;
   app: Pick<App, "tenantFor">;
   dispatch: (event: unknown, tenant?: string) => Promise<Reply>;
   keys?: JWTVerifyGetKey;
@@ -69,9 +69,9 @@ export function createTeamsInbound(deps: {
   const keys = deps.keys ?? createRemoteJWKSet(new URL("keys", PUBLIC.openIdMetadataUrl));
   const rosters = new LRUCache<string, TeamsChannelAccount[]>({ max: 1_000, ttl: ROSTER_TTL_MS });
 
-  async function verified(authorization: string | undefined, bot: TeamsBot, activity: Activity): Promise<boolean> {
+  async function refusal(authorization: string | undefined, bot: TeamsBot, activity: Activity) {
     const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
-    if (!token) return false;
+    if (!token) return "no bearer token";
     try {
       const { payload } = await jwtVerify(token, keys, {
         issuer: PUBLIC.tokenIssuer,
@@ -79,19 +79,23 @@ export function createTeamsInbound(deps: {
         algorithms: ["RS256"],
         clockTolerance: 300,
       });
-      return payload.serviceurl === activity.serviceUrl;
+      if (payload.serviceurl !== activity.serviceUrl)
+        return `token serviceurl ${String(payload.serviceurl)} does not match the activity's ${activity.serviceUrl}`;
+      return undefined;
     } catch (e) {
-      console.log(`[teams] refused an activity token: ${errMessage(e)}`);
-      return false;
+      return errMessage(e);
     }
   }
 
   async function roster(conversationId: string, authorId: string): Promise<TeamsChannelAccount[]> {
     const cached = rosters.get(conversationId);
-    if (cached?.some((m) => m.id === authorId)) return cached;
-    const fresh = await deps.client.members(conversationId);
-    rosters.set(conversationId, fresh);
-    return fresh;
+    if (!cached) {
+      const fresh = await deps.client.members(conversationId);
+      rosters.set(conversationId, fresh);
+      return fresh;
+    }
+    if (!cached.some((m) => m.id === authorId)) cached.push(await deps.client.member(conversationId, authorId));
+    return cached;
   }
 
   function person(m: TeamsChannelAccount, bot: TeamsBot): GenericChatUser {
@@ -174,7 +178,11 @@ export function createTeamsInbound(deps: {
       return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
     }
     const parsed = activitySchema.safeParse(raw);
-    if (!parsed.success) return { status: 400, body: { error: "bad_request" } };
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+      console.log(`[teams] refused a malformed activity: ${issues.join("; ")}`);
+      return { status: 400, body: { error: "bad_request", issues } };
+    }
     const activity = parsed.data;
     const tenantId = activity.conversation.tenantId ?? activity.channelData?.tenant?.id;
     const tenant = tenantId ? await deps.app.tenantFor("teams_tenant", tenantId) : undefined;
@@ -184,11 +192,21 @@ export function createTeamsInbound(deps: {
     }
     const outcome = await inTenant(tenant, async (): Promise<Reply | object | null> => {
       const bot = tenantSettings().teams;
-      if (!bot || bot.tenantId !== tenantId || !(await verified(authorization, bot, activity)))
+      let refused = bot ? undefined : "this workspace has no Teams bot";
+      if (bot && bot.tenantId !== tenantId) refused = `the workspace's bot belongs to Microsoft tenant ${bot.tenantId}`;
+      if (bot && !refused) refused = await refusal(authorization, bot, activity);
+      if (refused || !bot) {
+        console.log(`[teams] refused a ${activity.type} activity for Microsoft tenant ${tenantId}: ${refused}`);
         return { status: 401, body: { error: "unauthorized" } };
+      }
       return toEvent(activity, bot, tenantId);
     });
-    if (outcome === null) return { status: 200, body: { ok: true, ignored: "activity" } };
+    if (outcome === null) {
+      console.log(
+        `[teams] ignoring a ${activity.type} activity in a ${activity.conversation.conversationType ?? "unknown"} conversation`,
+      );
+      return { status: 200, body: { ok: true, ignored: "activity" } };
+    }
     if ("status" in outcome) return outcome as Reply;
     return deps.dispatch(outcome, tenant);
   }

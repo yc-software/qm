@@ -1,3 +1,4 @@
+import { ConfidentialClientApplication, ServerError, type INetworkModule } from "@azure/msal-node";
 import {
   Client,
   MessageActivityInput,
@@ -14,7 +15,6 @@ import { UnknownGenericChatReaction } from "../generic-chat/reactions.ts";
 import { decodeTeamsChat, decodeTeamsUser, TEAMS, TEAMS_ACTION_KEY, type TeamsBot } from "./ids.ts";
 
 const SERVICE_URL = "https://smba.trafficmanager.net/teams/";
-const TOKEN_SKEW_MS = 60_000;
 
 const REACTIONS: Record<string, string> = {
   "👍": "like",
@@ -31,8 +31,6 @@ const REACTIONS: Record<string, string> = {
 };
 
 const REACTION_NAMES = Object.keys(EMOJI_CHAR_BY_NAME).filter((name) => EMOJI_CHAR_BY_NAME[name]! in REACTIONS);
-
-type TokenFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 const BUTTON_STYLE = { primary: "positive", danger: "destructive", default: "default" } as const;
 
@@ -76,47 +74,37 @@ export class TeamsTokenError extends GenericChatHttpError {
   }
 }
 
-export async function requestTeamsToken(
-  { tenantId, appId, appSecret }: TeamsBot,
-  send: TokenFetch = fetch,
-): Promise<{ token: string; lifetimeMs: number }> {
-  const res = await send(`${PUBLIC.loginEndpoint}/${tenantId}/oauth2/v2.0/token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: appId,
-      client_secret: appSecret,
-      scope: PUBLIC.botScope,
-    }).toString(),
+function confidentialClient({ tenantId, appId, appSecret }: TeamsBot, networkClient?: INetworkModule) {
+  return new ConfidentialClientApplication({
+    auth: { clientId: appId, clientSecret: appSecret, authority: `${PUBLIC.loginEndpoint}/${tenantId}` },
+    ...(networkClient ? { system: { networkClient } } : {}),
   });
-  const reply = (await res.json().catch(() => ({}))) as {
-    access_token?: unknown;
-    expires_in?: unknown;
-    error_description?: unknown;
-  };
-  if (!res.ok || typeof reply.access_token !== "string")
-    throw new TeamsTokenError(
-      res.status === 400 ? 401 : res.status,
-      typeof reply.error_description === "string" ? reply.error_description : `HTTP ${res.status}`,
-    );
-  return {
-    token: reply.access_token,
-    lifetimeMs: typeof reply.expires_in === "number" ? reply.expires_in * 1000 : 0,
-  };
 }
 
-export function createTeamsClient(deps: { fetch?: TokenFetch; serviceUrl?: string } = {}) {
-  const send = deps.fetch ?? fetch;
-  const tokens = new Map<string, { value: string; expires: number }>();
+async function acquire(app: ConfidentialClientApplication): Promise<string> {
+  try {
+    const result = await app.acquireTokenByClientCredential({ scopes: [PUBLIC.botScope] });
+    if (result?.accessToken) return result.accessToken;
+    throw new TeamsTokenError(502, "Microsoft returned no access token");
+  } catch (error) {
+    if (error instanceof ServerError)
+      throw new TeamsTokenError(error.status ?? 401, error.errorMessage || error.errorCode);
+    throw error;
+  }
+}
 
-  async function token(bot: TeamsBot): Promise<string> {
+export function requestTeamsToken(bot: TeamsBot, networkClient?: INetworkModule): Promise<string> {
+  return acquire(confidentialClient(bot, networkClient));
+}
+
+export function createTeamsClient(deps: { networkClient?: INetworkModule; serviceUrl?: string } = {}) {
+  const apps = new Map<string, ConfidentialClientApplication>();
+
+  function token(bot: TeamsBot): Promise<string> {
     const key = `${bot.tenantId}:${bot.appId}:${bot.appSecret}`;
-    const cached = tokens.get(key);
-    if (cached && cached.expires > Date.now()) return cached.value;
-    const fresh = await requestTeamsToken(bot, send);
-    tokens.set(key, { value: fresh.token, expires: Date.now() + fresh.lifetimeMs - TOKEN_SKEW_MS });
-    return fresh.token;
+    let app = apps.get(key);
+    if (!app) apps.set(key, (app = confidentialClient(bot, deps.networkClient)));
+    return acquire(app);
   }
 
   function api(): Client {
@@ -136,11 +124,16 @@ export function createTeamsClient(deps: { fetch?: TokenFetch; serviceUrl?: strin
     return all;
   }
 
-  const client: GenericChatClient & { members: typeof members } = {
+  async function member(conversationId: string, id: string): Promise<TeamsChannelAccount> {
+    return api().conversations.members(conversationId).getById(id).catch(failure);
+  }
+
+  const client: GenericChatClient & { members: typeof members; member: typeof member } = {
     surface: TEAMS,
     tenantKey: "teams_tenant",
     reactions: REACTION_NAMES,
     members,
+    member,
     async post(_account, m) {
       const chat = decodeTeamsChat(m.chat_id);
       const activity = message(m.body, m.actions);

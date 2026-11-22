@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { guestRef } from "../../resolution/guest-audience.ts";
 import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
@@ -76,6 +77,7 @@ export function createGenericChatInbound(deps: {
   const cache = deps.surfaceCache;
   const { surface, tenantKey } = deps.client;
   const containerOf = (event: Pick<GenericChatEvent, "account" | "chat">) => eventContainer(surface, event);
+  const registered = new LRUCache<string, string>({ max: 10_000 });
 
   async function followedThread(container: string, thread: string) {
     const [root, [lastReply]] = await Promise.all([
@@ -164,11 +166,12 @@ export function createGenericChatInbound(deps: {
       );
       return { ignored: "unvouched_participants" } as const;
     }
-    if (chat.kind === "group" && !guests)
-      await deps.registerGroup(
-        containerOf(event),
-        humans.map((p) => p.externalId),
-      );
+    const roster = humans.map((p) => p.externalId).sort();
+    const group = containerOf(event);
+    if (chat.kind === "group" && !guests && registered.get(group) !== roster.join("\n")) {
+      await deps.registerGroup(group, roster);
+      registered.set(group, roster.join("\n"));
+    }
     const actor = listed.bot ? genericChatPrincipal(surface, listed, false) : humans[members.indexOf(listed)]!;
     return { humans, listed, actor, guests: guests > 0 };
   }

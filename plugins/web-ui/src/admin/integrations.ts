@@ -276,17 +276,17 @@ function connectorsCard() {
 function installationCard() {
   const s = installation,
     d = s.data;
-  return html`<section class="card sv-slack-settings" id="card-slack-installation">
+  return html`<section class="card app-card sv-slack-settings" id="card-slack-installation">
     <div class="head">
       <h2>Workspace</h2>
     </div>
     <div class="body">
-      <div class="slack-connection">
-        <div class="slack-connection-info">
+      <div class="app-connection">
+        <div class="app-connection-info">
           <h3 id="slack-installation-state">${installationTitle(d)}</h3>
           <p class="hint" id="slack-installation-description">${installationDescription(d)}</p>
         </div>
-        <div class="slack-connection-actions">
+        <div class="app-connection-actions">
           <button
             class=${d.installAvailable ? "btn" : "btn hidden"}
             id="slack-installation-start"
@@ -309,6 +309,7 @@ function installationCard() {
       </div>
       <details
         id="slack-own-app-guide"
+        class="app-guide"
         .open=${s.guide}
         @toggle=${(e: Event) => {
           s.guide = (e.target as HTMLDetailsElement).open;
@@ -316,7 +317,7 @@ function installationCard() {
       >
         <summary>
           <span id="slack-own-app-label">${d.installAvailable ? "Use your own Slack app" : "Set up Slack"}</span>
-          <span class="slack-guide-arrow" aria-hidden="true">›</span>
+          <span class="app-guide-arrow" aria-hidden="true">›</span>
         </summary>
         <p>
           Give your bot its own name and identity. Start with our preconfigured manifest, then connect your app below.
@@ -370,7 +371,7 @@ function installationCard() {
         >
           I have both tokens
         </button>
-        <div class=${s.editor ? "" : "hidden"} id="slack-token-editor">
+        <div class=${s.editor ? "app-editor" : "app-editor hidden"} id="slack-token-editor">
           ${tokenField(s, "botToken", "Bot User OAuth Token", "slack-bot-token", "xoxb-…")}
           ${tokenField(s, "appToken", "App-Level Token", "slack-app-token", "xapp-…")}
           <p class="field-hint">
@@ -387,7 +388,7 @@ function installationCard() {
           </button>
         </div>
       </details>
-      <span class=${"status " + s.tone} role="status" id="st-slack-installation">${s.message}</span>
+      <span class=${"status app-status " + s.tone} role="status" id="st-slack-installation">${s.message}</span>
     </div>
   </section>`;
 }

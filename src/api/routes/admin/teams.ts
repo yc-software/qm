@@ -56,7 +56,7 @@ export async function putTeams(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "invalid_teams_bot", message: "Paste the bot's client secret." });
   const bot = { tenantId: parsed.data.tenantId, appId: parsed.data.appId, appSecret };
   try {
-    await requestTeamsToken(bot, ctx.deps.teamsTokenFetch);
+    await requestTeamsToken(bot, ctx.deps.teamsNetworkClient);
   } catch (error) {
     if (!(error instanceof TeamsTokenError)) throw error;
     return sendJson(ctx.res, 400, {

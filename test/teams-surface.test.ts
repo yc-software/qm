@@ -12,6 +12,7 @@ import { onTenantLoad } from "../src/tenants/cache.ts";
 import { inTenant } from "../src/tenants/claim.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
+import { fakeEntra } from "./support/fake-entra.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
 
 const TID = "0f2e7c64-5b1a-4d3e-9c8b-2a6f1e4d7b90";
@@ -66,8 +67,12 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
         .setExpirationTime("5m")
         .sign(privateKey);
     const dispatched: [Json, string | undefined][] = [];
+    const lookups: string[] = [];
     const inbound = createTeamsInbound({
-      client: { members: async () => [ada, guest] },
+      client: {
+        members: async () => (lookups.push("roster"), [ada, guest]),
+        member: async (_chat, id) => (lookups.push(id), { ...ada, id, name: "Newcomer" }),
+      },
       app,
       keys,
       dispatch: async (event, tenant) => (
@@ -83,6 +88,8 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
       await send(await token(APP), activity({ value: { qm_action: "approve:a1" }, replyToId: "1700000000050" })),
       200,
     );
+    assert.equal(await send(await token(APP), activity({ from: { id: "29:new", name: "Newcomer" } })), 200);
+    assert.deepEqual(lookups, ["roster", "29:new"]);
     assert.equal(await send(await token("someone-else"), activity()), 401);
     assert.equal(
       await send(
@@ -96,7 +103,7 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
 
     assert.deepEqual(
       dispatched.map(([, tenant]) => tenant),
-      [db.tenants[0], db.tenants[0]],
+      [db.tenants[0], db.tenants[0], db.tenants[0]],
     );
     const [message, click] = dispatched.map(([event]) => event) as [Json, Json];
     assert.equal(message.type, "message.created");
@@ -137,13 +144,10 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
       });
     });
     await new Promise<void>((resolve) => connector.listen(0, "127.0.0.1", resolve));
-    const tokenRequests: string[] = [];
+    const entra = fakeEntra(() => ({ token: "bot-token" }));
     const client = createTeamsClient({
       serviceUrl: `http://127.0.0.1:${(connector.address() as AddressInfo).port}/`,
-      fetch: async (url, init) => (
-        tokenRequests.push(`${url} ${String(init.body)}`),
-        Response.json({ access_token: "bot-token", expires_in: 3600 })
-      ),
+      networkClient: entra.network,
     });
     const chat_id = encodeTeamsChat({ type: "channel", id: CHANNEL });
     try {
@@ -173,8 +177,7 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
     } finally {
       connector.close();
     }
-    assert.equal(tokenRequests.length, 1);
-    assert.ok(tokenRequests[0]!.startsWith(`https://login.microsoftonline.com/${TID}/oauth2/v2.0/token `));
+    assert.deepEqual(entra.secrets, ["bot-secret"]);
     assert.ok(seen.every((r) => r.auth === "Bearer bot-token"));
     const [threaded, carded, targeted, reacted] = seen;
     assert.equal(threaded!.url, `/v3/conversations/${CHANNEL};messageid=1700000000001/activities`);

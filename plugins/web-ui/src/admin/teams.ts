@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import type { AdminPage } from "./sections.ts";
 import { textField } from "./setting-controls.ts";
@@ -106,13 +106,11 @@ async function copy(value: string) {
 }
 
 function value(text: string | undefined, id: string) {
-  if (!text) return html`<em>available once this deployment has a public URL</em>`;
-  return html`<span class="teams-value"
-    ><code id=${id}>${text}</code
-    ><button class="btn ghost" type="button" @click=${() => copy(text)}>
-      ${copied === text ? "Copied" : "Copy"}
-    </button></span
-  >`;
+  if (!text) return html`<p><em>Available once this deployment has a public URL.</em></p>`;
+  return html`<p>
+    <code id=${id}>${text}</code>
+    <button class="btn" type="button" @click=${() => copy(text)}>${copied === text ? "Copied" : "Copy"}</button>
+  </p>`;
 }
 
 function link(href: string, label: string) {
@@ -120,8 +118,8 @@ function link(href: string, label: string) {
 }
 
 function connection() {
-  return html`<div class="teams-connection">
-    <div>
+  return html`<div class="app-connection">
+    <div class="app-connection-info">
       <h3 id="teams-state">${data.configured ? "Connected" : "Not connected"}</h3>
       <p class="hint" id="teams-description">
         ${
@@ -131,7 +129,7 @@ function connection() {
         }
       </p>
     </div>
-    <div class="slack-connection-actions">
+    <div class="app-connection-actions">
       <button
         class=${classMap({ btn: true, hidden: !data.configured || editing })}
         id="teams-edit"
@@ -158,7 +156,7 @@ function editor() {
   const set = (key: keyof typeof draft) => (text: string) => {
     draft = { ...draft, [key]: text };
   };
-  return html`<div id="teams-editor" class=${editing ? "" : "hidden"}>
+  return html`<div id="teams-editor" class=${editing ? "app-editor" : "app-editor hidden"}>
     ${textField("Directory (tenant) ID", "", "teams-tenant-id", draft.tenantId, set("tenantId"), {
       auto: "off",
       placeholder: "00000000-0000-0000-0000-000000000000",
@@ -187,8 +185,8 @@ function steps() {
       after your agent.
       <ul>
         <li>
-          Under <strong>Configure</strong>, pick <strong>HTTPS endpoint</strong> and paste
-          ${value(data.endpoint, "teams-endpoint")}, then <strong>Save</strong>.
+          Under <strong>Configure</strong>, pick <strong>HTTPS endpoint</strong>, paste this address and choose
+          <strong>Save</strong>: ${value(data.endpoint, "teams-endpoint")}
         </li>
         <li>Under <strong>Client secrets</strong>, create a secret and copy it. Microsoft shows it only once.</li>
         <li>Copy the bot ID from the bot's page or the browser address bar.</li>
@@ -202,19 +200,23 @@ function steps() {
       <strong>Verify and connect</strong>. QM checks them with Microsoft before saving. ${editor()}
     </li>
     <li>
-      <strong>Add the app to Teams.</strong>
-      <a
-        class=${classMap({ btn: true, primary: true, disabled: !data.configured })}
-        id="teams-download"
-        href=${data.configured ? page.apiBase + "/teams/app-package" : nothing}
-        aria-disabled=${data.configured ? "false" : "true"}
-        >Download the Teams app</a
-      >
-      It already carries your bot, your branding and the permission to read messages in the teams and chats it is added
-      to, so QM can follow conversations and join in when it can help. In the
-      ${link(PORTALS.apps, "Teams admin center")}, open <strong>Manage apps → Actions → Upload new app</strong> and
-      choose the downloaded file. If uploads are blocked, turn on <strong>Upload custom apps</strong> in
-      ${link(PORTALS.setup, "App setup policies")}. Download and upload again whenever you change the bot.
+      <strong>Add the app to Teams.</strong> Download the app below once the bot is connected. It already carries your
+      bot, your branding and the permission to read messages in the teams and chats it is added to, so QM can follow
+      conversations and join in when it can help. In the ${link(PORTALS.apps, "Teams admin center")}, open
+      <strong>Manage apps → Actions → Upload new app</strong> and choose the downloaded file. If uploads are blocked,
+      turn on <strong>Upload custom apps</strong> in ${link(PORTALS.setup, "App setup policies")}. Download and upload
+      again whenever you change the bot.
+      <p>
+        <button
+          class="btn primary"
+          type="button"
+          id="teams-download"
+          ?disabled=${!data.configured}
+          @click=${() => location.assign(page.apiBase + "/teams/app-package")}
+        >
+          Download the Teams app
+        </button>
+      </p>
     </li>
     <li>
       <strong>Try it.</strong> In Teams, open <strong>Apps → Built for your org</strong>, add the app, send it a direct
@@ -226,7 +228,7 @@ function steps() {
       bot ID.
       <ul>
         <li>
-          Under <strong>Authentication</strong>, add a <strong>Web</strong> platform with the redirect URI
+          Under <strong>Authentication</strong>, add a <strong>Web</strong> platform with this redirect URI:
           ${value(data.signInRedirect, "teams-redirect")}
         </li>
         <li>
@@ -243,14 +245,22 @@ function steps() {
 }
 
 function template() {
-  return html`<div id="view-teams">
-    <section class="card" id="card-teams">
-      <div class="head"><h2>Your Teams bot</h2></div>
-      <div class="body">
-        ${connection()}
-        <div id="teams-guide">${steps()}</div>
-        <span class=${"status " + tone} role="status" id="st-teams">${message}</span>
-      </div>
-    </section>
+  return html`<div id="view-governance">
+    <div class="governance-content">
+      <section class="card app-card" id="card-teams">
+        <div class="head"><h2>Your Teams bot</h2></div>
+        <div class="body">
+          ${connection()}
+          <details id="teams-guide" class="app-guide" .open=${editing || !data.configured}>
+            <summary>
+              <span>${data.configured ? "Setup steps" : "Set up Microsoft Teams"}</span>
+              <span class="app-guide-arrow" aria-hidden="true">›</span>
+            </summary>
+            ${steps()}
+          </details>
+          <span class=${"status app-status " + tone} role="status" id="st-teams">${message}</span>
+        </div>
+      </section>
+    </div>
   </div>`;
 }

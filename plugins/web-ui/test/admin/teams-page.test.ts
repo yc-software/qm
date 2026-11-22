@@ -16,7 +16,7 @@ test("Teams settings show this deployment's endpoint, connect a bot and offer it
   const doc = admin.document;
   assert.equal(doc.getElementById("teams-state")!.textContent, "Not connected");
   assert.equal(doc.getElementById("teams-endpoint")!.textContent, endpoint);
-  assert.equal(doc.getElementById("teams-download")!.getAttribute("aria-disabled"), "true");
+  assert.equal((doc.getElementById("teams-download") as HTMLButtonElement).disabled, true);
   for (const [id, value] of [
     ["teams-tenant-id", " t-1 "],
     ["teams-app-id", "bot-1"],
@@ -30,6 +30,6 @@ test("Teams settings show this deployment's endpoint, connect a bot and offer it
   await admin.settle();
   assert.deepEqual(JSON.parse(JSON.stringify(saves)), [{ tenantId: "t-1", appId: "bot-1", appSecret: "s3cret" }]);
   assert.equal(doc.getElementById("teams-state")!.textContent, "Connected");
-  assert.ok(doc.getElementById("teams-download")!.getAttribute("href")!.endsWith("/teams/app-package"));
+  assert.equal((doc.getElementById("teams-download") as HTMLButtonElement).disabled, false);
   admin.close();
 });

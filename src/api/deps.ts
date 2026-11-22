@@ -1,3 +1,4 @@
+import type { INetworkModule } from "@azure/msal-node";
 import type { WebEvents } from "./routes/web-events.ts";
 import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
@@ -119,7 +120,7 @@ export interface ServerDeps {
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
   slackInstallationFetch?: typeof fetch;
-  teamsTokenFetch?: typeof fetch;
+  teamsNetworkClient?: INetworkModule;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
