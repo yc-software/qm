@@ -3,6 +3,7 @@ import SwiftUI
 struct NativeConversationTools: View {
   @Bindable var model: ChatModel
   @State private var sharing = false
+  @State private var choosingModel = false
   @State private var fork: Conversation?
   @State private var cut = "all"
   var body: some View {
@@ -57,11 +58,7 @@ struct NativeConversationTools: View {
         NavigationLink("Apps") {
           NativeAppsView(client: model.client, user: model.user, scope: model.conversation.scopeId)
         }
-        NavigationLink("Model and effort") {
-          RuntimeControlsView(
-            client: model.client, scopeID: model.conversation.scopeId,
-            selected: model.runtimeSelection, onSelect: model.selectRuntime)
-        }
+        Button("Model and effort") { choosingModel = true }
       }
       Section("Activity") {
         NavigationLink("Background work") {
@@ -72,6 +69,7 @@ struct NativeConversationTools: View {
     }
     .navigationTitle("Conversation tools").navigationBarTitleDisplayMode(.inline)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
+    .modelPicker(isPresented: $choosingModel, model: model)
     .sheet(isPresented: $sharing) {
       NativeConversationShare(client: model.client, conversation: model.conversation)
     }

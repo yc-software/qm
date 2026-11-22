@@ -33,8 +33,10 @@ import {
   type QueuedRun,
   alwaysSteer,
   switchedDefault,
+  fetchUiState,
+  putUiState,
 } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
 import { icon } from "./icons";
 import {
@@ -60,6 +62,9 @@ import {
   ultrafastChoice,
   loadLoadout,
   saveLoadout,
+  onLoadoutSaved,
+  adoptRemoteLoadout,
+  loadoutUpdatedAt,
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForModel,
@@ -68,6 +73,10 @@ import {
 } from "./composer-loadout";
 
 import { createModelPicker } from "./model-picker";
+
+/** Saved model picks follow the person across web and iOS through this ui-state key. */
+const MODEL_PICKS_KEY = "model-picks";
+let modelPicksSyncing = false;
 import { nextPromptSuggestion } from "./next-prompt";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
@@ -1027,6 +1036,24 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   let loadout = loadLoadout(loadoutKey);
+  if (!loadoutKey && !modelPicksSyncing) {
+    modelPicksSyncing = true;
+    const push = (entries: LoadoutEntry[], updatedAt: number) =>
+      void putUiState(MODEL_PICKS_KEY, entries, updatedAt).catch(swallowAs("web-ui: save model picks", undefined));
+    const pull = () =>
+      void fetchUiState(MODEL_PICKS_KEY)
+        .then(({ value, updatedAt }) => {
+          const adopted = adoptRemoteLoadout(value, updatedAt);
+          if (adopted) {
+            loadout = adopted;
+            ctx.chat.drawActiveChat();
+          } else if (value == null && loadout.length) push(loadout, loadoutUpdatedAt() || Date.now());
+        })
+        .catch(swallowAs("web-ui: load model picks", undefined));
+    onLoadoutSaved(push);
+    pull();
+    window.addEventListener("focus", pull);
+  }
   const modelPicker = createModelPicker<Agent>({
     host: () => ctx.chat.state.host,
     redraw: () => ctx.chat.drawActiveChat(),

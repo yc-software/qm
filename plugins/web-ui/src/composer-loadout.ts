@@ -113,9 +113,38 @@ export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
   }
 }
 
+const LOADOUT_UPDATED_KEY = `${LOADOUT_STORAGE_KEY}:updated-at`;
+let syncLoadout: ((entries: LoadoutEntry[], updatedAt: number) => void) | undefined;
+
+/** The main loadout follows the person across devices; `push` sends each save to the server. */
+export function onLoadoutSaved(push: (entries: LoadoutEntry[], updatedAt: number) => void): void {
+  syncLoadout = push;
+}
+
+export function loadoutUpdatedAt(): number {
+  return Number(localStorage.getItem(LOADOUT_UPDATED_KEY)) || 0;
+}
+
+/** Takes a newer copy saved on another device; returns it, or null when this device's copy is current. */
+export function adoptRemoteLoadout(value: unknown, updatedAt: number): LoadoutEntry[] | null {
+  if (value == null || updatedAt <= loadoutUpdatedAt()) return null;
+  const entries = parseLoadout(JSON.stringify(value));
+  try {
+    localStorage.setItem(LOADOUT_STORAGE_KEY, JSON.stringify(entries));
+    localStorage.setItem(LOADOUT_UPDATED_KEY, String(updatedAt));
+  } catch {
+    return null;
+  }
+  return entries;
+}
+
 export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {
   try {
     localStorage.setItem(key, JSON.stringify(entries));
+    if (key !== LOADOUT_STORAGE_KEY) return;
+    const updatedAt = Date.now();
+    localStorage.setItem(LOADOUT_UPDATED_KEY, String(updatedAt));
+    syncLoadout?.(entries, updatedAt);
   } catch {
     return;
   }

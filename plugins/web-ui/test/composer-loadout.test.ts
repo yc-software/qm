@@ -10,6 +10,9 @@ import {
   parseLoadout,
   reconcileLoadout,
   upsertLoadout,
+  adoptRemoteLoadout,
+  onLoadoutSaved,
+  saveLoadout,
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
 import type { ModelOption } from "../src/model-options.ts";
@@ -35,6 +38,26 @@ test("saved loadouts migrate harness prefixes once and keep every model across d
       assert.deepEqual(JSON.parse(localStorage.getItem(key)!), expected);
       assert.deepEqual(loadLoadout(key), expected);
     }
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+    dom.window.close();
+  }
+});
+
+test("the main loadout syncs across devices: saves push, and only a newer remote copy replaces this one", () => {
+  const dom = new JSDOM("", { url: "http://localhost/" });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: dom.window.localStorage });
+  try {
+    const pushed: LoadoutEntry[][] = [];
+    onLoadoutSaved((entries) => pushed.push(entries));
+    saveLoadout([entry("alpha", "high")]);
+    saveLoadout([entry("beta")], "web-ui:loadout:account:a");
+    assert.deepEqual(pushed, [[entry("alpha", "high")]]);
+    assert.equal(adoptRemoteLoadout([entry("gamma")], 1), null);
+    assert.deepEqual(adoptRemoteLoadout([entry("gamma", "low", true)], Date.now() + 1000), [entry("gamma", "low", true)]);
+    assert.deepEqual(loadLoadout(), [entry("gamma", "low", true)]);
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous);
     else Reflect.deleteProperty(globalThis, "localStorage");
