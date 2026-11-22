@@ -7522,7 +7522,8 @@ a.file-card:hover {
   gap: 10px;
   padding-left: 8px;
 }
-.app-row-actions .app-manage {
+.app-row-actions .app-manage,
+.app-card-meta .app-manage {
   min-height: 30px;
   padding: 5px 9px;
 }
