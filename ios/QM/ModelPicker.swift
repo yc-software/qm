@@ -250,13 +250,13 @@ struct ModelPicker: View {
     }
   }
 
-  @ViewBuilder
   private var removeIcon: UIImage {
     let symbol = UIImage(
       systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(weight: .semibold))
     return symbol?.withTintColor(UIColor(QMTheme.ink), renderingMode: .alwaysOriginal) ?? UIImage()
   }
 
+  @ViewBuilder
   private func row(_ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool)
     -> some View
   {
