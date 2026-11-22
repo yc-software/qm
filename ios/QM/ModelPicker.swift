@@ -356,7 +356,7 @@ struct ModelPicker: View {
 }
 
 /// Every model the workspace can run, grouped by provider and searchable.
-private struct ModelCatalog: View {
+struct ModelCatalog: View {
   let configuration: RuntimeConfiguration
   let saved: Set<String>
   let onAdd: (String) -> Void
@@ -416,7 +416,7 @@ private struct ModelCatalog: View {
 }
 
 /// Reasoning effort as a stepped track, plus fast mode when the model offers it.
-private struct ModelEffortView: View {
+struct ModelEffortView: View {
   let model: ChatModel
   let configuration: RuntimeConfiguration
   let update: (_ effort: String?, _ fast: Bool?) -> Void
