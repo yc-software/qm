@@ -1,7 +1,7 @@
 import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
+import { Archive, Check, Copy, ExternalLink, LayoutGrid, List, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
@@ -65,6 +65,46 @@ let archiveCandidate: AppView | null = null;
 let restoreArchiveFocus = false;
 let appToast: { app: AppView; text: string; undo?: boolean } | null = null;
 let appRefreshSeq = 0;
+const APPS_LAYOUT_KEY = "qm.apps.layout";
+type AppsLayout = "list" | "grid";
+let appsLayout: AppsLayout = readAppsLayout();
+
+function readAppsLayout(): AppsLayout {
+  try {
+    return localStorage.getItem(APPS_LAYOUT_KEY) === "grid" ? "grid" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function setAppsLayout(layout: AppsLayout): void {
+  if (appsLayout === layout) return;
+  appsLayout = layout;
+  try {
+    localStorage.setItem(APPS_LAYOUT_KEY, layout);
+  } catch {
+    // Private mode or blocked storage: keep the choice for this page only.
+  }
+  drawAppsPage();
+}
+
+function layoutToggle(): TemplateResult {
+  const option = (value: AppsLayout, label: string, glyph: typeof List) => html`
+    <button
+      type="button"
+      class="apps-layout-option ${appsLayout === value ? "active" : ""}"
+      aria-pressed=${appsLayout === value}
+      aria-label=${`${label} view`}
+      ${tip(`${label} view`)}
+      @click=${() => setAppsLayout(value)}
+    >
+      ${icon(glyph, 15)}
+    </button>
+  `;
+  return html`<div class="apps-layout-toggle" role="group" aria-label="Layout">
+    ${option("list", "List", List)}${option("grid", "Grid", LayoutGrid)}
+  </div>`;
+}
 
 function statusLabel(d: AppView): string {
   if (
@@ -135,6 +175,58 @@ function appTabs(): TemplateResult {
           </button>
         `,
       )}
+      ${layoutToggle()}
+    </div>
+  `;
+}
+
+function appHue(d: AppView): number {
+  const key = appSlug(d) || d.id;
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+function appThumb(d: AppView): TemplateResult {
+  if (d.thumbnailUrl) return html`<img src=${d.thumbnailUrl} alt="" loading="lazy" decoding="async" />`;
+  const title = appTitle(d);
+  const initial = (title.replace(/^(qm|yc|eve|labs)[-\s]+/i, "").trim()[0] ?? title[0] ?? "?").toLocaleUpperCase();
+  return html`<span class="app-card-placeholder" style=${`--app-hue:${appHue(d)}`} aria-hidden="true">
+    <span class="app-card-monogram">${initial}</span>
+  </span>`;
+}
+
+function appCard(d: AppView): TemplateResult {
+  const running = d.status === "running";
+  const thumb = html`<span class="app-card-thumb">${appThumb(d)}</span>`;
+  return html`
+    <div class="app-card ${d.status === "archived" ? "app-card-archived" : ""}">
+      ${
+        running && d.webUrl
+          ? html`<a
+              class="app-card-link"
+              href=${d.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label=${`Open ${appTitle(d)}`}
+              >${thumb}</a
+            >`
+          : thumb
+      }
+      <div class="app-card-body">
+        <span class="list-row-title" dir="auto" title=${appTitle(d)}>${appTitle(d)}</span>
+        <div class="app-card-meta">
+          <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+          <button
+            class="btn compact app-manage"
+            type="button"
+            aria-label=${`Manage ${appTitle(d)}`}
+            @click=${() => void openApp(d)}
+          >
+            Manage
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -203,7 +295,11 @@ function drawAppsPage(): void {
         ...(appNotices.list
           ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
-        ...(rows.length ? rows.map(appRow) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
+        ...(rows.length
+          ? appsLayout === "grid"
+            ? [html`<div class="app-grid">${rows.map(appCard)}</div>`]
+            : rows.map(appRow)
+          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);

@@ -17,6 +17,8 @@ export interface AppView {
   currentVersion?: number;
   appliedVersion?: number;
   webUrl?: string;
+  /** Small screenshot of the app, captured after publish. */
+  thumbnailUrl?: string;
   gitUrl?: string;
   name?: string;
   displayName?: string;
