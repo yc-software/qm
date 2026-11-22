@@ -380,6 +380,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                         type="button"
                         role="menuitem"
                         aria-label=${`Add ${modelLabel(option)} to presets`}
+                        data-model=${option.value}
                         @click=${() => {
                           dismissSelection();
                           presets?.add(option, agent);
@@ -408,7 +409,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                                 bindings
                                   .host()
                                   ?.querySelector<HTMLElement>(
-                                    `.loadout-submenu [aria-label="${CSS.escape(`Add ${modelLabel(next)} to presets`)}"]`,
+                                    `.loadout-submenu [data-model="${CSS.escape(next.value)}"]`,
                                   )
                                   ?.focus(),
                               );
