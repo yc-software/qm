@@ -56,7 +56,7 @@ export function escapeLoneDollars(text: string): string {
       const indented = indent >= codeIndent || (listItem !== null && markerGap >= 5);
       inIndentedCode = indented && (prevBlank || inIndentedCode || listItem !== null);
       prevBlank = false;
-      return inIndentedCode ? line : line.replace(/(?<!\$)\$(?!\$)/g, "&#36;");
+      return inIndentedCode ? line : line.replace(/(?<![\\$])\$(?!\$)/g, "&#36;");
     })
     .join("\n");
   return escaped.replace(
