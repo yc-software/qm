@@ -444,10 +444,9 @@ export function safeModelMetadata(id: string) {
   if (!model) return undefined;
   const entry = REGISTRY_BY_ID.get(id);
   const name = modelDisplayName(id) === id ? model.name : modelDisplayName(id);
+  const label = entry ? name.replace(/^Claude /, "") : name;
   const gateway = gatewayPresentation(id);
-  const routeName = gateway && (name === id || name === id.slice(id.indexOf("/") + 1));
-  const ownName = entry ? name.replace(/^Claude /, "") : name;
-  const label = routeName ? gateway.label : ownName;
+  const displayLabel = gateway && [id, id.slice(id.indexOf("/") + 1)].includes(name) ? gateway.label : undefined;
   const buttonLabel = entry?.buttonLabel ?? label;
   return {
     id,
@@ -456,6 +455,7 @@ export function safeModelMetadata(id: string) {
     buttonLabel,
     provider: String(model.provider),
     ...(gateway ? { displayProvider: gateway.provider } : {}),
+    ...(displayLabel ? { displayLabel } : {}),
     api: model.api,
     reasoning: model.reasoning,
     input: [...model.input],

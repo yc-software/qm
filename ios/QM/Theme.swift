@@ -65,7 +65,6 @@ enum QMTheme {
   }
   @MainActor static var border: Color { ink.opacity(0.12) }
   static let navy = Color(red: 0.106, green: 0.188, blue: 0.263)
-  static let switchOn = Color.green
   static let unread = Color(red: 47 / 255, green: 129 / 255, blue: 247 / 255)
 }
 

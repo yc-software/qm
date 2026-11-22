@@ -33,8 +33,6 @@ import {
   type QueuedRun,
   alwaysSteer,
   switchedDefault,
-  fetchUiState,
-  putUiState,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
@@ -62,8 +60,7 @@ import {
   ultrafastChoice,
   loadLoadout,
   saveLoadout,
-  onLoadoutSaved,
-  adoptServerLoadout,
+  syncLoadoutWithServer,
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForModel,
@@ -74,9 +71,6 @@ import {
 import { createModelPicker } from "./model-picker";
 
 import { nextPromptSuggestion } from "./next-prompt";
-
-const MODEL_PICKS_KEY = "model-picks";
-let modelPicksSyncing = false;
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
 
@@ -1035,26 +1029,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   let loadout = loadLoadout(loadoutKey);
-  if (!loadoutKey && !modelPicksSyncing) {
-    modelPicksSyncing = true;
-    let touched = false;
-    const push = (entries: LoadoutEntry[]) =>
-      void putUiState(MODEL_PICKS_KEY, entries, Date.now()).catch((error: unknown) =>
-        reportHandledError("web:save_model_picks", error),
-      );
-    onLoadoutSaved((entries) => {
-      touched = true;
-      push(entries);
+  if (!loadoutKey)
+    syncLoadoutWithServer((entries) => {
+      loadout = entries;
+      ctx.chat.drawActiveChat();
     });
-    void fetchUiState(MODEL_PICKS_KEY)
-      .then(({ value }) => {
-        if (touched) return;
-        if (value == null) return void (loadout.length && push(loadout));
-        loadout = adoptServerLoadout(value);
-        ctx.chat.drawActiveChat();
-      })
-      .catch((error: unknown) => reportHandledError("web:load_model_picks", error));
-  }
   const modelPicker = createModelPicker<Agent>({
     host: () => ctx.chat.state.host,
     redraw: () => ctx.chat.drawActiveChat(),

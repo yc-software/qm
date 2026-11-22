@@ -1,5 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
+import { fetchUiState, putUiState } from "./core-bridge.ts";
+import { reportHandledError } from "./browser-errors.ts";
 import { EFFORT_LEVELS, migrateStoredModelValue, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
@@ -113,20 +115,33 @@ export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
   }
 }
 
+const MODEL_PICKS_KEY = "model-picks";
 let syncLoadout: ((entries: LoadoutEntry[]) => void) | undefined;
-
-export function onLoadoutSaved(push: (entries: LoadoutEntry[]) => void): void {
-  syncLoadout = push;
-}
 
 export function adoptServerLoadout(value: unknown): LoadoutEntry[] {
   const entries = parseLoadout(JSON.stringify(value));
   try {
     localStorage.setItem(LOADOUT_STORAGE_KEY, JSON.stringify(entries));
-  } catch {
-    return entries;
+  } catch (error) {
+    reportHandledError("web:cache_model_picks", error);
   }
   return entries;
+}
+
+export function syncLoadoutWithServer(onAdopt: (entries: LoadoutEntry[]) => void): void {
+  if (syncLoadout) return;
+  let touched = false;
+  syncLoadout = (entries) => {
+    touched = true;
+    void putUiState(MODEL_PICKS_KEY, entries, Date.now()).catch((error: unknown) =>
+      reportHandledError("web:save_model_picks", error),
+    );
+  };
+  void fetchUiState(MODEL_PICKS_KEY)
+    .then(({ value }) => {
+      if (!touched && value != null) onAdopt(adoptServerLoadout(value));
+    })
+    .catch((error: unknown) => reportHandledError("web:load_model_picks", error));
 }
 
 export function saveLoadout(entries: LoadoutEntry[], key = LOADOUT_STORAGE_KEY): void {

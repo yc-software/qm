@@ -11,8 +11,6 @@ import {
   reconcileLoadout,
   upsertLoadout,
   adoptServerLoadout,
-  onLoadoutSaved,
-  saveLoadout,
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
 import type { ModelOption } from "../src/model-options.ts";
@@ -45,18 +43,13 @@ test("saved loadouts migrate harness prefixes once and keep every model across d
   }
 });
 
-test("server picks replace the local cache, and only the main loadout pushes saves", () => {
+test("server picks replace the local cache with only valid entries", () => {
   const dom = new JSDOM("", { url: "http://localhost/" });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: dom.window.localStorage });
   try {
     assert.deepEqual(adoptServerLoadout([entry("gamma", "low", true), { value: "" }]), [entry("gamma", "low", true)]);
     assert.deepEqual(loadLoadout(), [entry("gamma", "low", true)]);
-    const pushed: LoadoutEntry[][] = [];
-    onLoadoutSaved((entries) => pushed.push(entries));
-    saveLoadout([entry("beta")], "web-ui:loadout:account:a");
-    saveLoadout([entry("alpha", "high")]);
-    assert.deepEqual(pushed, [[entry("alpha", "high")]]);
   } finally {
     if (previous) Object.defineProperty(globalThis, "localStorage", previous);
     else Reflect.deleteProperty(globalThis, "localStorage");

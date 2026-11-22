@@ -22,6 +22,7 @@ struct RuntimeModelMetadata: Decodable {
   let label: String
   let provider: String?
   let displayProvider: String?
+  let displayLabel: String?
   let reasoning: Bool?
   let effortLevels: [String]
 }
@@ -99,7 +100,7 @@ struct RuntimeControlsView: View {
                 Text("\(draft.model) (unavailable)").tag(draft.model)
               }
               ForEach(configuration.models, id: \.self) { id in
-                Text(configuration.modelCatalog[id]?.label ?? id).tag(id)
+                Text(ModelBrand.label(id, configuration)).tag(id)
               }
             }
             if configuration.efforts(model: draft.model).count > 1 {
@@ -112,15 +113,14 @@ struct RuntimeControlsView: View {
               }
             }
             if configuration.supportsFastMode(model: draft.model) {
-              Toggle("Fast mode", isOn: fastBinding).tint(QMTheme.switchOn)
+              Toggle("Fast mode", isOn: fastBinding)
             }
           }
         }
         Section {
           LabeledContent(
             "Organization default",
-            value: configuration.modelCatalog[configuration.orgDefault.modelId]?.label
-              ?? configuration.orgDefault.modelId)
+            value: ModelBrand.label(configuration.orgDefault.modelId, configuration))
           if configuration.scopeOverride != nil {
             Button("Use organization default") { Task { await save(inherit: true) } }
           } else {

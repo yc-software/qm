@@ -50,7 +50,12 @@ function providerLabel(id: string, name: string, provider: string): string {
 function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>> = {}): ModelOption | null {
   try {
     const dynamic = catalog[id];
-    const meta = dynamic ? { label: dynamic.label, buttonLabel: dynamic.buttonLabel } : null;
+    const meta = dynamic
+      ? {
+          label: dynamic.displayLabel ?? dynamic.label,
+          buttonLabel: dynamic.displayLabel ?? dynamic.buttonLabel,
+        }
+      : null;
     if (!meta) return null;
     const model = getBaseModel(id, dynamic);
     return {

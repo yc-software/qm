@@ -14,12 +14,9 @@ struct ModelEffortView: View {
       if levels.count > 1 { slider(current, levels) }
       Spacer(minLength: 0)
       if configuration.supportsFastMode(model: current.model) {
-        Toggle(
-          "Fast mode", isOn: Binding(get: { current.fast }, set: { update(nil, $0) })
-        )
-        .tint(QMTheme.switchOn)
-        .padding(.horizontal, 16).frame(minHeight: 52)
-        .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
+        Toggle("Fast mode", isOn: Binding(get: { current.fast }, set: { update(nil, $0) }))
+          .padding(.horizontal, 16).frame(minHeight: 52)
+          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
       }
     }
     .padding(.horizontal, 20).padding(.vertical, 24)

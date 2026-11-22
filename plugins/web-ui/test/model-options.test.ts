@@ -65,13 +65,18 @@ test("deleted selection retains identity and transcript rendering does not borro
 
 test("gateway choices group under the brand the server names without changing serving identity", () => {
   const id = "gateway/anthropic/claude-sonnet-5";
-  const data = { ...metadata(id, "Sonnet 5", "qm:gateway"), displayProvider: "anthropic" };
+  const data = {
+    ...metadata(id, "anthropic/claude-sonnet-5", "qm:gateway"),
+    displayLabel: "Sonnet 5",
+    displayProvider: "anthropic",
+  };
   const unknownId = "gateway/vendor/special-model";
   const [option, unknown] = runtimeModelOptions([id, unknownId], {
     [id]: data,
     [unknownId]: metadata(unknownId, "Special", "qm:gateway"),
   });
   assert.equal(option?.label, "Sonnet 5");
+  assert.equal(option?.buttonLabel, "Sonnet 5");
   assert.equal(option?.displayProvider, "anthropic");
   assert.equal(option?.groupLabel, "Anthropic");
   assert.equal(option?.model.provider, "qm:gateway");
