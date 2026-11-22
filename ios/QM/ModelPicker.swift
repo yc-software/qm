@@ -52,7 +52,6 @@ struct ModelPicker: View {
     }
     .task {
       if model.runtimeConfiguration == nil { await model.loadRuntime() }
-      await picks.load()
     }
   }
 

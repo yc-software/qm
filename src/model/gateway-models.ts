@@ -35,21 +35,6 @@ export function setGatewayModels(
   state.version += 1;
 }
 
-export function gatewayPresentation(id: string): { label: string; provider: string } | null {
-  if (!isGatewayModelId(id)) return null;
-  const name = id.split("/").at(-1)!;
-  const family = /^(claude|gpt|gemini)-(.+)$/.exec(name);
-  if (!family) return null;
-  const words = family[2]!.replace(/^((?:[a-z]+-)*)(\d+)-(\d+)(?=-|$)/, "$1$2.$3").split("-");
-  const title = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
-  const brand = {
-    claude: { prefix: "", provider: "anthropic" },
-    gpt: { prefix: "GPT-", provider: "openai" },
-    gemini: { prefix: "Gemini ", provider: "google" },
-  }[family[1] as "claude" | "gpt" | "gemini"];
-  return { label: brand.prefix + title, provider: brand.provider };
-}
-
 export function resolveGatewayModel(id: string): GatewayModel | undefined {
   const model = gateway.models.get(id);
   return model && !isEmbeddingModel(model) ? model : undefined;

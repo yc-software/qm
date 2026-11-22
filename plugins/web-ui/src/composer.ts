@@ -60,7 +60,6 @@ import {
   ultrafastChoice,
   loadLoadout,
   saveLoadout,
-  syncLoadoutWithServer,
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForModel,
@@ -69,7 +68,6 @@ import {
 } from "./composer-loadout";
 
 import { createModelPicker } from "./model-picker";
-
 import { nextPromptSuggestion } from "./next-prompt";
 
 export type ComposerMenu = "effort" | "model" | "settings" | "loadout";
@@ -1029,11 +1027,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   let loadout = loadLoadout(loadoutKey);
-  if (!loadoutKey)
-    syncLoadoutWithServer((entries) => {
-      loadout = entries;
-      ctx.chat.drawActiveChat();
-    });
   const modelPicker = createModelPicker<Agent>({
     host: () => ctx.chat.state.host,
     redraw: () => ctx.chat.drawActiveChat(),

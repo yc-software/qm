@@ -402,30 +402,3 @@ test("gateway models send session-affinity headers on every API", async () => {
   }
   assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
 });
-
-test("gateway routes add the upstream model's display name and brand without renaming the route", () => {
-  const base = resolveModel("claude-sonnet-4-6")!;
-  const cases = [
-    ["anthropic/claude-sonnet-5", "Sonnet 5", "anthropic"],
-    ["anthropic/claude-fable-5-1", "Fable 5.1", "anthropic"],
-    ["openai/gpt-6-astra", "GPT-6 Astra", "openai"],
-    ["openai/gpt-5.6-terra", "GPT-5.6 Terra", "openai"],
-    ["gemini/gemini-3.8-flash", "Gemini 3.8 Flash", "google"],
-  ] as const;
-  setGatewayModels([
-    ...cases.map(([route]) => ({ ...base, provider: "qm:gateway", id: `gateway/${route}`, name: route })),
-    { ...base, provider: "qm:gateway", id: "gateway/anthropic/claude-named", name: "Writing model" },
-    { ...base, provider: "qm:gateway", id: "gateway/vendor/special-model", name: "vendor/special-model" },
-  ]);
-  for (const [route, label, brand] of cases) {
-    const metadata = safeModelMetadata(`gateway/${route}`);
-    assert.equal(metadata?.label, route);
-    assert.equal(metadata?.displayLabel, label);
-    assert.equal(metadata?.displayProvider, brand);
-    assert.equal(metadata?.provider, "qm:gateway");
-  }
-  assert.equal(safeModelMetadata("gateway/anthropic/claude-named")?.displayLabel, undefined);
-  assert.equal(safeModelMetadata("gateway/anthropic/claude-named")?.displayProvider, "anthropic");
-  assert.equal(safeModelMetadata("gateway/vendor/special-model")?.displayLabel, undefined);
-  assert.equal(safeModelMetadata("gateway/vendor/special-model")?.displayProvider, undefined);
-});

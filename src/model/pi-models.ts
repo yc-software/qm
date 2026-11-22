@@ -1,5 +1,4 @@
 import {
-  gatewayPresentation,
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
@@ -445,8 +444,6 @@ export function safeModelMetadata(id: string) {
   const entry = REGISTRY_BY_ID.get(id);
   const name = modelDisplayName(id) === id ? model.name : modelDisplayName(id);
   const label = entry ? name.replace(/^Claude /, "") : name;
-  const gateway = gatewayPresentation(id);
-  const displayLabel = gateway && [id, id.slice(id.indexOf("/") + 1)].includes(name) ? gateway.label : undefined;
   const buttonLabel = entry?.buttonLabel ?? label;
   return {
     id,
@@ -454,8 +451,6 @@ export function safeModelMetadata(id: string) {
     label,
     buttonLabel,
     provider: String(model.provider),
-    ...(gateway ? { displayProvider: gateway.provider } : {}),
-    ...(displayLabel ? { displayLabel } : {}),
     api: model.api,
     reasoning: model.reasoning,
     input: [...model.input],

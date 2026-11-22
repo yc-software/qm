@@ -3,12 +3,12 @@ import SwiftUI
 enum ModelBrand {
   static func provider(_ id: String, _ configuration: RuntimeConfiguration) -> String {
     let metadata = configuration.modelCatalog[id]
-    return metadata?.displayProvider ?? metadata?.provider ?? "other"
+    return metadata?.provider ?? "other"
   }
 
   static func label(_ id: String, _ configuration: RuntimeConfiguration) -> String {
     let metadata = configuration.modelCatalog[id]
-    return metadata?.displayLabel ?? metadata?.label ?? id
+    return metadata?.label ?? id
   }
 
   static func groupName(_ provider: String) -> String {
