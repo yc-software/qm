@@ -126,6 +126,8 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
       destinationKey?: unknown;
     };
     const ver = isObj(b.verification) ? (b.verification as { scheme?: unknown; secret?: unknown }) : undefined;
+    if (b.title !== undefined && typeof b.title !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: "title must be a string" });
     if (!ver || !isWebhookVerification(ver) || typeof b.action !== "string") {
       return sendJson(res, 400, { error: "bad_request", message: VERIFICATION_MESSAGE });
     }
@@ -209,8 +211,12 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
 async function updateWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, params, capability, actor, url, body } = ctx;
   const patch: WebhookPatch = {};
-  if (isObj(body) && typeof body.title === "string") patch.title = body.title;
-  if (isObj(body) && typeof body.action === "string") patch.action = body.action;
+  for (const field of ["title", "action"] as const) {
+    const value = isObj(body) ? body[field] : undefined;
+    if (value !== undefined && typeof value !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: `${field} must be a string` });
+    if (typeof value === "string") patch[field] = value;
+  }
   const principalId = actor?.p ?? url.searchParams.get("principalId");
   if (!capability && !principalId) return sendJson(res, 404, { error: "not_found" });
   const r = capability
