@@ -124,6 +124,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         fireKey,
         surface: "webhook",
         sourceId: wh.id,
+        ...(wh.title ? { title: wh.title } : {}),
         ownerFire: ownerAuthored(wh),
         ...(destination ? { destination } : {}),
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,

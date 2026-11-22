@@ -4,7 +4,7 @@ import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
-import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { CreateWebhookInput, WebhookPatch } from "../webhooks/webhook-store.ts";
 import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
 import {
   cronFireReadsNotes,
@@ -85,6 +85,7 @@ export type CronCreateResult =
     };
 
 export interface WebhookCreateRequest {
+  title?: string;
   action: string;
   verification: Webhook["verification"];
   filters?: Webhook["filters"];
@@ -185,7 +186,7 @@ export interface ControlService {
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden">>;
   updateWebhook(
     id: string,
-    patch: { action: string },
+    patch: WebhookPatch,
     claims: CapabilityClaims,
   ): Promise<ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request">>;
   readSoul(claims: CapabilityClaims): { effectiveSoul: string; soul: string | null; soulVersion: number };
@@ -280,24 +281,29 @@ export async function cronTaskRewrite(
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
-const WEBHOOK_TASK_OWNER_ONLY =
-  "only the webhook's owner can change its task — its fires run as them. Create your own webhook to run a different task as yourself.";
+const WEBHOOK_OWNER_ONLY =
+  "only the webhook's owner can edit it — its fires run as them. Create your own webhook to run a different task as yourself.";
 
-export async function editWebhookTask(
+export async function editWebhook(
   app: App,
   id: string,
-  action: string,
+  patch: WebhookPatch,
   editor: Pick<CapabilityClaims, "actorId" | "botActor" | "liveActor" | "liveAuthor" | "scopeId"> | { actorId: string },
 ): Promise<ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request">> {
   const principalId = editor.actorId;
-  if (!action.trim()) return { ok: false, code: "bad_request", message: "task cannot be empty" };
+  if (patch.action === undefined && patch.title === undefined)
+    return { ok: false, code: "bad_request", message: "expected a new task and/or title" };
+  if (patch.action !== undefined && !patch.action.trim())
+    return { ok: false, code: "bad_request", message: "task cannot be empty" };
+  if (patch.title !== undefined && !patch.title.trim())
+    return { ok: false, code: "bad_request", message: "title cannot be empty" };
   const webhook = await app.getWebhook(id);
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await administersWebhook(app, webhook, editor)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
   if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, editor)))
-    return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
-  const updated = await app.updateWebhook(id, { action });
+    return { ok: false, code: "forbidden", message: WEBHOOK_OWNER_ONLY };
+  const updated = await app.updateWebhook(id, patch);
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
 
@@ -800,6 +806,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       const input: CreateWebhookInput = {
+        ...(req.title !== undefined ? { title: req.title } : {}),
         action: req.action,
         verification: req.verification,
         owner: capability.actorId,
@@ -842,7 +849,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async updateWebhook(id, patch, capability) {
       if (!personAtKeyboard(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
-      return editWebhookTask(app, id, patch.action, capability);
+      return editWebhook(app, id, patch, capability);
     },
 
     readSoul(capability) {

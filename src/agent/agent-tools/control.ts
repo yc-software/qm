@@ -18,10 +18,10 @@ export function controlPlaneTools(kit: ToolKit) {
     label: "webhook",
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
-      "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
+      'create: always set `title`, a distinctive 2-5 word label for what the webhook is FOR (e.g. "GitHub PR review"), never the command or a generic word; `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). ' +
       "For hmac-sha256 and token (senders that cannot sign) generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
-      "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
+      "list: 25 per page, secrets elided. update: replace one's title and/or task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),
@@ -30,6 +30,11 @@ export function controlPlaneTools(kit: ToolKit) {
         Type.Literal("disable"),
       ]),
       id: Type.Optional(Type.String({ description: "update/disable: the webhook id." })),
+      title: Type.Optional(
+        Type.String({
+          description: "create/update: the webhook's label.",
+        }),
+      ),
       task: Type.Optional(Type.String({ description: "create/update: what to do on each event." })),
       verification: Type.Optional(
         Type.Object(
@@ -72,6 +77,7 @@ export function controlPlaneTools(kit: ToolKit) {
             );
           }
           const r = await tc.webhookCreate({
+            ...(params.title !== undefined ? { title: params.title } : {}),
             action: params.task,
             verification: params.verification,
             ...(params.filters?.length ? { filters: params.filters } : {}),
@@ -102,7 +108,7 @@ export function controlPlaneTools(kit: ToolKit) {
           const { page, offset, note } = pageOf([...r].sort(listOrder), params);
           const lines = page.map(
             (w) =>
-              `- ${w.id} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
+              `- ${w.id}${w.title ? ` "${w.title}"` : ""} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
           );
           return recordResult(
             callId,
@@ -127,22 +133,24 @@ export function controlPlaneTools(kit: ToolKit) {
         }
         case "update": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
-          const task = typeof params.task === "string" ? params.task : "";
           if (!id)
             return recordResult(
               callId,
               { tool: "webhook", error: "id required" },
-              text("[error] webhook update requires `id` and the new `task`."),
+              text("[error] webhook update requires `id` and a new `title` and/or `task`."),
               true,
             );
-          const r = await tc.webhookUpdate(id, task);
+          const r = await tc.webhookUpdate(id, {
+            ...(params.title !== undefined ? { title: params.title } : {}),
+            ...(params.task !== undefined ? { action: params.task } : {}),
+          });
           if (isUnavailable(r)) return unavailable(callId, "webhook");
           if (!r.ok)
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
           return recordResult(
             callId,
             { tool: "webhook", id, updated: true },
-            text(`Updated webhook ${id}. The next delivery uses the new task; URL and secret are unchanged.`),
+            text(`Updated webhook ${id}. The next delivery uses the change; URL and secret are unchanged.`),
           );
         }
       }
