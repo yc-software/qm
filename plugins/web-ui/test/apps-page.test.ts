@@ -199,3 +199,26 @@ test("detail redraws reuse the scroll container and retain focus", async () => {
   assert.equal(host.scrollTop, 450);
   assert.equal(document.activeElement, button);
 });
+
+test("the grid view shows a card per app and is remembered across visits", async () => {
+  localStorage.removeItem("qm.apps.layout");
+  const rendering = renderApps();
+  await settle();
+  request("/api/apps").resolve({
+    apps: [
+      { id: "a", name: "launch-dashboard", status: "running", webUrl: "/d/a/", ownerScopeId: "personal:tester" },
+      { id: "b", name: "notes", status: "stopped", ownerScopeId: "personal:tester" },
+    ],
+  });
+  await rendering;
+  main.querySelector<HTMLButtonElement>('[aria-label="Grid view"]')!.click();
+  const cards = [...main.querySelectorAll(".app-card")];
+  assert.deepEqual(
+    cards.map((card) => card.querySelector(".app-card-icon")?.textContent),
+    ["LD", "NO"],
+  );
+  assert.equal(cards[0]!.querySelector("a.app-card-thumb")?.getAttribute("href"), "/d/a/");
+  assert.equal(cards[1]!.querySelector("a.app-card-thumb"), null);
+  assert.equal(localStorage.getItem("qm.apps.layout"), "grid");
+  localStorage.removeItem("qm.apps.layout");
+});
