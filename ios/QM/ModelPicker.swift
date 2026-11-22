@@ -187,7 +187,7 @@ struct ModelPicker: View {
     return shown
   }
 
-  private func choose(_ pick: ModelPick, _ configuration: RuntimeConfiguration) {
+  func choose(_ pick: ModelPick, _ configuration: RuntimeConfiguration) {
     picks.save(shownPicks(configuration))
     var draft = RuntimeDraft(
       RuntimeSelection(modelId: pick.value, effortLevel: pick.effort, fastMode: pick.fast))
@@ -204,7 +204,7 @@ struct ModelPicker: View {
     choose(next.first(where: { $0.value == id }) ?? pick, configuration)
   }
 
-  private func update(_ configuration: RuntimeConfiguration, effort: String?, fast: Bool?) {
+  func update(_ configuration: RuntimeConfiguration, effort: String?, fast: Bool?) {
     var draft = RuntimeDraft(selection(configuration))
     if let effort { draft.effort = effort }
     if let fast { draft.fast = fast }
