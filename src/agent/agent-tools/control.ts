@@ -32,7 +32,7 @@ export function controlPlaneTools(kit: ToolKit) {
       id: Type.Optional(Type.String({ description: "update/disable: the webhook id." })),
       title: Type.Optional(
         Type.String({
-          description: 'create/update: distinctive 2-5 word label for what it is FOR, e.g. "GitHub PR review".',
+          description: "create/update: the webhook's label.",
         }),
       ),
       task: Type.Optional(Type.String({ description: "create/update: what to do on each event." })),

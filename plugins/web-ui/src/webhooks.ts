@@ -254,12 +254,14 @@ async function saveWebhookTitle(event: SubmitEvent, w: WebhookView): Promise<voi
   const control = (event.currentTarget as HTMLFormElement).elements.namedItem("title") as HTMLInputElement;
   const title = control.value.trim();
   if (!title) return control.focus();
+  let notice = "";
   try {
     await api(`/api/webhooks/${encodeURIComponent(w.id)}/update`, { method: "POST", body: JSON.stringify({ title }) });
   } catch (e) {
-    webhooksNotice = errMessage(e, "Couldn't rename webhook.");
+    notice = errMessage(e, "Couldn't rename webhook.");
   }
   await refreshWebhooks();
+  if (notice) webhooksNotice = notice;
   openWebhook(webhookList.find((x) => x.id === w.id) ?? w);
 }
 
