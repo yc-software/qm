@@ -281,11 +281,11 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
   const schedules = crons
     .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map((c) => ({ title: c.title || "Untitled scheduled task", ...scheduleLabel(c) }));
+    .map((c) => ({ title: summary(c.title || "Untitled scheduled task"), ...scheduleLabel(c) }));
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
     ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${w.title || summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.title || w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),

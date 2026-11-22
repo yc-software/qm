@@ -233,7 +233,7 @@ function webhookTitleTpl(w: WebhookView, editing: boolean): TemplateResult {
       @submit=${(e: SubmitEvent) => void saveWebhookTitle(e, w)}
       @keydown=${(e: KeyboardEvent) => e.key === "Escape" && openWebhook(w)}
     >
-      <input name="title" maxlength="80" aria-label="Title" .value=${live(w.title ?? "")} required />
+      <input name="title" aria-label="Title" .value=${live(w.title ?? "")} required />
       <button class="btn" type="button" @click=${() => openWebhook(w)}>Cancel</button>
       <button class="btn primary" type="submit">Save</button>
     </form>`;
@@ -441,7 +441,7 @@ function webhookForm() {
       <h2>New webhook</h2>
       <label
         >Title <span class="hint">(2-5 words naming what it's for)</span>
-        <input name="title" maxlength="80" placeholder="GitHub issue triage" />
+        <input name="title" placeholder="GitHub issue triage" />
       </label>
       <label
         >Action <span class="hint">(what the agent should do for each event)</span>
