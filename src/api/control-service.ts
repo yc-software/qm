@@ -34,7 +34,7 @@ import {
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
-import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { administersCron, canAdministerCron, managesPersonaCron, ownsCron } from "./cron-administration.ts";
 import { deliversToOwner, withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
@@ -207,13 +207,7 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   return "soul_update_failed";
 }
 
-async function managesPersonaCron(
-  app: Pick<App, "managesScope">,
-  cron: Pick<Cron, "ownerScopeId">,
-  actorId: string,
-): Promise<boolean> {
-  return parseScopeId(cron.ownerScopeId).kind === "persona" && app.managesScope(actorId, cron.ownerScopeId);
-}
+export { administersCron, canAdministerCron };
 
 async function mayShare(
   app: App,
@@ -235,52 +229,12 @@ async function mayShare(
   );
 }
 
-export async function administersCron(
-  app: Parameters<typeof canAdministerCron>[0] & Pick<App, "isOrgAdmin">,
-  cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-): Promise<boolean> {
-  return (await canAdministerCron(app, cron, actor)) || asOrgAdmin(app, actor);
-}
-
 export async function administersWebhook(
   app: Parameters<typeof canAdministerWebhook>[0] & Pick<App, "isOrgAdmin">,
   webhook: Webhook,
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   return (await canAdministerWebhook(app, webhook, actor)) || asOrgAdmin(app, actor);
-}
-
-async function ownsCron(
-  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
-  cron: Cron,
-  actorId: string,
-  isActor?: (id: string) => Promise<boolean>,
-): Promise<boolean> {
-  if (actsAsScope(cron.owner, cron.ownerScopeId))
-    return parseScopeId(cron.ownerScopeId).kind === "persona"
-      ? app.managesScope(actorId, cron.ownerScopeId)
-      : app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
-  if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
-  return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
-}
-
-export async function canAdministerCron(
-  app: Pick<
-    App,
-    "samePerson" | "isCurrentSharedScopeMember" | "artifactGrantPermission" | "membershipControlsScope" | "managesScope"
-  >,
-  cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  isActor?: (id: string) => Promise<boolean>,
-): Promise<boolean> {
-  const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
-  if (!(await personOrOwningBot(actor, owns, cron))) return false;
-  if (await ownsCron(app, cron, actor.actorId, isActor)) return true;
-  if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
-  if (await managesPersonaCron(app, cron, actor.actorId)) return true;
-  if (await ownsCron(app, { ...cron, owner: cron.createdBy }, actor.actorId, isActor)) return true;
-  return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actor.actorId)) === "write";
 }
 
 export async function cronTaskRewrite(

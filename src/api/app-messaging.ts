@@ -1,14 +1,5 @@
 import { loopAdministration } from "./loop-administration.ts";
-import { canAdministerCron } from "./control-service.ts";
-import {
-  createCanManageScope,
-  createIsCurrentSharedScopeMember,
-  createMembershipControlsScope,
-  scopeMembershipSnapshot,
-} from "../resolution/scope-membership.ts";
-import { cronRef, encodeRef } from "../acl/resource-ref.ts";
-import { ambientTenant } from "../tenants/context.ts";
-import type { Grant } from "../types.ts";
+import { cronAdministration } from "./cron-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -524,44 +515,7 @@ export function createMessagingMethods(
       );
     },
     loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
-    async cronAdministration(actor, crons) {
-      if (!crons.length) return [];
-      const { actorId } = actor;
-      const snapshot = await scopeMembershipSnapshot(
-        {
-          directory: deps.directory,
-          identity: deps.identity,
-          ...(deps.projects ? { managedGroups: deps.projects } : {}),
-          ...(deps.personas ? { personas: deps.personas } : {}),
-        },
-        actorId,
-        crons.map((c) => c.ownerScopeId),
-        crons.flatMap((c) => [c.owner, c.createdBy]),
-      );
-      const resources = crons
-        .filter((c) => !c.ownerScopeId.startsWith("personal:"))
-        .map((c) => ({ ownerScopeId: c.ownerScopeId, ref: encodeRef(cronRef(c.id)) }));
-      const grants = resources.length
-        ? ((await deps.acl?.find(ambientTenant(), { resources }).catch(reportFailureAs("cron grants", []))) ?? [])
-        : [];
-      const byCron = new Map<string, Grant[]>();
-      for (const g of grants) {
-        const key = `${g.ownerScopeId}\0${g.ref}`;
-        byCron.set(key, [...(byCron.get(key) ?? []), g]);
-      }
-      const manages = createCanManageScope(snapshot);
-      const sharedMember = createIsCurrentSharedScopeMember(snapshot);
-      const membership = createMembershipControlsScope(snapshot);
-      const policy = {
-        samePerson: (a: string, b: string) => samePersonInDirectory(snapshot.directory, a, b),
-        isCurrentSharedScopeMember: (_actor: string, scope: ScopeId) => sharedMember(actorId, scope),
-        membershipControlsScope: membership,
-        managesScope: (_actor: string, scope: ScopeId) => manages(actorId, scope),
-        artifactGrantPermission: (ownerScopeId: ScopeId, ref: string, principalId: string) =>
-          h.artifactGrantPermission(ownerScopeId, ref, principalId, byCron.get(`${ownerScopeId}\0${ref}`) ?? []),
-      };
-      return Promise.all(crons.map((cron) => canAdministerCron(policy, cron, actor)));
-    },
+    cronAdministration: (actor, crons) => cronAdministration(deps, actor, crons),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

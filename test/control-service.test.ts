@@ -1196,4 +1196,17 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
     (await control.shareArtifact({ type: "file", id: f.artifact.id, scope: `persona:${personaId}` }, claims("U3"))).ok,
     false,
   );
+  const p2 = ((await built.app.personas!.create("U1", { name: "Bea" })) as { value: { id: string } }).value.id;
+  await built.app.personas!.setAccess("U1", p2, writer);
+  const c2 = await control.createCron({ ...cron, persona: "Bea" }, claims("U1"));
+  assert.ok(c2.ok);
+  const origRoles = built.app.personas!.roles.bind(built.app.personas!);
+  let roleCalls = 0;
+  built.app.personas!.roles = async (id) => {
+    roleCalls++;
+    return origRoles(id);
+  };
+  const listed = await built.app.cronAdministration({ actorId: "U2" }, [granted.cron, c2.cron, sys, c2.cron]);
+  assert.deepEqual(listed, [true, true, true, true]);
+  assert.equal(roleCalls, 1);
 });
