@@ -193,17 +193,9 @@ struct ModelPicker: View {
     return QMList {
       Section {
         ForEach(shown, id: \.value) { pick in
-          row(pick, configuration, active: pick.value == current.modelId)
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-              if pick.value != current.modelId {
-                Button {
-                  picks.save(shown.filter { $0.value != pick.value })
-                } label: {
-                  Label("Remove", systemImage: "minus.circle")
-                }
-                .tint(QMTheme.neutralAction)
-              }
-            }
+          row(pick, configuration, active: pick.value == current.modelId) {
+            picks.save(shown.filter { $0.value != pick.value })
+          }
             .contextMenu {
               if pick.value != current.modelId {
                 Button("Remove from picks", systemImage: "minus.circle") {
@@ -249,9 +241,10 @@ struct ModelPicker: View {
   }
 
   @ViewBuilder
-  private func row(_ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool)
-    -> some View
-  {
+  private func row(
+    _ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool,
+    remove: @escaping () -> Void
+  ) -> some View {
     let label = HStack(spacing: 12) {
       ModelLogo(provider: ModelBrand.provider(pick.value, configuration))
       VStack(alignment: .leading, spacing: 2) {
@@ -273,11 +266,19 @@ struct ModelPicker: View {
         label
       }
     } else {
-      Button {
-        choose(pick, configuration)
-      } label: {
-        label.contentShape(Rectangle())
+      HStack(spacing: 0) {
+        Button {
+          choose(pick, configuration)
+        } label: {
+          label.contentShape(Rectangle())
+        }
+        Button(action: remove) {
+          Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            .frame(width: 36, height: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel("Remove \(ModelBrand.label(pick.value, configuration))")
       }
+      .buttonStyle(.plain)
     }
   }
 
