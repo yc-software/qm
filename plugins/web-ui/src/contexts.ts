@@ -187,15 +187,13 @@ export async function renderContexts(): Promise<void> {
     contextsNotice = errMessage(e, "Failed to load contexts.");
   }
   contextsLoading = false;
-  if (
-    contextsState.selected &&
-    contextsState.list.some((c) => c.scopeId === contextsState.selected) &&
-    contextsState.resourcesScope !== contextsState.selected
-  ) {
-    void loadScopeResources(contextsState.selected);
-    void loadAmbientPolicy(contextsState.selected, drawContexts);
+  if (contextsState.selected && contextsState.list.some((c) => c.scopeId === contextsState.selected)) {
+    if (contextsState.resourcesScope !== contextsState.selected) {
+      void loadScopeResources(contextsState.selected);
+      void loadAmbientPolicy(contextsState.selected, drawContexts);
+      void loadChannelHeader(contextsState.selected, drawContexts);
+    }
     void loadContextModel(contextsState.selected, drawContexts);
-    void loadChannelHeader(contextsState.selected, drawContexts);
   }
   drawContexts();
 }

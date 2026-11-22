@@ -28,7 +28,7 @@ import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
-import { contextModelSection, loadContextModel } from "./context-model";
+import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
@@ -201,6 +201,7 @@ function drawPersonasPage(): void {
   viewSeq++;
   syncPersonaUrl(null);
   resetPicker();
+  resetContextModel();
   if (!pageHost || pageHost.parentElement !== appState.mainEl) {
     pageHost = document.createElement("div");
     pageHost.className = "pane personas-page";
@@ -1058,6 +1059,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
 function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
+  resetContextModel();
   const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
   const draw = () =>
     render(
@@ -1119,6 +1121,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   redrawDetail = draw;
   draw();
   if (editable) void loadContextModel(`persona:${persona.id}`, draw);
+  else resetContextModel();
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {
