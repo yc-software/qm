@@ -180,9 +180,6 @@ struct ModelPicker: View {
         }
         .accessibilityLabel("Close")
       }
-      if model.runtimeConfiguration?.models.isEmpty == false {
-        ToolbarItem(placement: .confirmationAction) { EditButton() }
-      }
     }
     .task {
       if model.runtimeConfiguration == nil { await model.loadRuntime() }
@@ -197,17 +194,19 @@ struct ModelPicker: View {
       Section {
         ForEach(shown, id: \.value) { pick in
           row(pick, configuration, active: pick.value == current.modelId)
-            .deleteDisabled(pick.value == current.modelId)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+              if pick.value != current.modelId {
+                Button("Remove") { picks.save(shown.filter { $0.value != pick.value }) }
+                  .tint(.gray)
+              }
+            }
             .contextMenu {
               if pick.value != current.modelId {
-                Button("Remove from picks", systemImage: "minus.circle", role: .destructive) {
+                Button("Remove from picks", systemImage: "minus.circle") {
                   picks.save(shown.filter { $0.value != pick.value })
                 }
               }
             }
-        }
-        .onDelete { offsets in
-          picks.save(shown.enumerated().filter { !offsets.contains($0.offset) }.map(\.element))
         }
         NavigationLink {
           ModelCatalog(configuration: configuration, saved: Set(shown.map(\.value))) { id in
