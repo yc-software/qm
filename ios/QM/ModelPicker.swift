@@ -422,7 +422,9 @@ private struct ModelEffortView: View {
     let current = RuntimeDraft(model.effectiveRuntime ?? configuration.effective)
     let levels = configuration.efforts(model: current.model)
     VStack(spacing: 24) {
+      Spacer(minLength: 0)
       if levels.count > 1 { slider(current, levels) }
+      Spacer(minLength: 0)
       if configuration.supportsFastMode(model: current.model) {
         Toggle(
           "Fast mode", isOn: Binding(get: { current.fast }, set: { update(nil, $0) })
@@ -430,14 +432,29 @@ private struct ModelEffortView: View {
         .padding(.horizontal, 16).frame(minHeight: 52)
         .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
       }
-      Spacer(minLength: 0)
     }
-    .padding(.horizontal, 20).padding(.top, 24)
+    .padding(.horizontal, 20).padding(.vertical, 24)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(QMTheme.paper)
     .foregroundStyle(QMTheme.ink)
     .navigationTitle(ModelBrand.label(current.model, configuration))
     .navigationBarTitleDisplayMode(.inline)
+  }
+
+  static func explanation(_ effort: String) -> String {
+    switch effort {
+    case "auto": "The model decides how long to think for each message."
+    case "default": "Uses the provider's standard amount of thinking."
+    case "adaptive": "Thinks more on hard messages and less on easy ones."
+    case "none": "Answers without extra thinking. Fastest and cheapest."
+    case "minimal": "Barely thinks before answering. Very fast and cheap."
+    case "low": "Light thinking for quick answers. Fast and low cost."
+    case "medium": "Enough thinking for most everyday work."
+    case "high": "Thinks longer on harder problems. Slower and costs more."
+    case "xhigh": "Thinks much longer for complex work. Noticeably slower and costlier."
+    case "max": "Thinks as long as it needs. Slowest and most expensive."
+    default: "Higher effort thinks longer and costs more; lower effort answers faster."
+    }
   }
 
   private func slider(_ current: RuntimeDraft, _ levels: [String]) -> some View {
@@ -487,8 +504,11 @@ private struct ModelEffortView: View {
       .accessibilityAdjustableAction { direction in
         step(direction == .increment ? 1 : direction == .decrement ? -1 : 0)
       }
-      Text("Higher effort thinks longer for more thorough answers, and uses more of your budget.")
+      Text(Self.explanation(current.effort))
         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        .frame(minHeight: 36, alignment: .top)
+        .contentTransition(.opacity)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: current.effort)
     }
   }
 }
