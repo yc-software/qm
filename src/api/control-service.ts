@@ -34,7 +34,7 @@ import {
   isMultiMemberSkillScope,
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
-import { cronRef, encodeRef } from "../acl/resource-ref.ts";
+import { administersCron, canAdministerCron, managesPersonaCron, ownsCron } from "./cron-administration.ts";
 import { deliversToOwner, withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
@@ -55,7 +55,7 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   session?: boolean;
   script?: CronScript;
-  persona?: string;
+  persona?: string | null;
 }
 
 export type CronCreateResult =
@@ -132,7 +132,7 @@ export type ControlErr<C extends string> = { ok: false; code: C; message: string
 
 export interface ControlService {
   createCron(req: CronCreateRequest, claims: CapabilityClaims, trial?: CronScriptTrial): Promise<CronCreateResult>;
-  listCrons(claims: CapabilityClaims): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
+  listCrons(claims: CapabilityClaims, tenant: Tenant): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
   getCron(
     id: string,
     claims: CapabilityClaims,
@@ -207,6 +207,8 @@ function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
   return "soul_update_failed";
 }
 
+export { administersCron, canAdministerCron };
+
 async function mayShare(
   app: App,
   home: ArtifactHome,
@@ -215,19 +217,16 @@ async function mayShare(
 ): Promise<boolean> {
   if (!(await personOrOwningBot(capability, () => app.samePerson(home.createdBy, capability.actorId), cron)))
     return false;
-  if (cron) return (await ownsCron(app, cron, capability.actorId)) || asOrgAdmin(app, capability);
+  if (cron)
+    return (
+      (await ownsCron(app, cron, capability.actorId)) ||
+      (!actsAsScope(cron.owner, cron.ownerScopeId) && (await managesPersonaCron(app, cron, capability.actorId))) ||
+      asOrgAdmin(app, capability)
+    );
   return (
     (await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId)) ||
     asOrgAdmin(app, capability)
   );
-}
-
-export async function administersCron(
-  app: Parameters<typeof canAdministerCron>[0] & Pick<App, "isOrgAdmin">,
-  cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-): Promise<boolean> {
-  return (await canAdministerCron(app, cron, actor)) || asOrgAdmin(app, actor);
 }
 
 export async function administersWebhook(
@@ -236,34 +235,6 @@ export async function administersWebhook(
   actor: Pick<CapabilityClaims, "actorId" | "botActor">,
 ): Promise<boolean> {
   return (await canAdministerWebhook(app, webhook, actor)) || asOrgAdmin(app, actor);
-}
-
-async function ownsCron(
-  app: Pick<App, "samePerson" | "isCurrentSharedScopeMember" | "membershipControlsScope" | "managesScope">,
-  cron: Cron,
-  actorId: string,
-  isActor?: (id: string) => Promise<boolean>,
-): Promise<boolean> {
-  if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
-  if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
-  return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
-}
-
-export async function canAdministerCron(
-  app: Pick<
-    App,
-    "samePerson" | "isCurrentSharedScopeMember" | "artifactGrantPermission" | "membershipControlsScope" | "managesScope"
-  >,
-  cron: Cron,
-  actor: Pick<CapabilityClaims, "actorId" | "botActor">,
-  isActor?: (id: string) => Promise<boolean>,
-): Promise<boolean> {
-  const owns = () => (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actor.actorId));
-  if (!(await personOrOwningBot(actor, owns, cron))) return false;
-  if (await ownsCron(app, cron, actor.actorId, isActor)) return true;
-  if (actsAsScope(cron.owner, cron.ownerScopeId) || cron.ownerScopeId.startsWith("personal:")) return false;
-  if (await ownsCron(app, { ...cron, owner: cron.createdBy }, actor.actorId, isActor)) return true;
-  return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actor.actorId)) === "write";
 }
 
 export async function cronTaskRewrite(
@@ -553,11 +524,26 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         };
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
-      if (req.persona !== undefined) {
+      if (typeof req.persona === "string") {
+        if (!req.persona.trim())
+          return { ok: false, code: "bad_request", message: "persona must be a non-empty name/id or null" };
         const home = await personaHome(app, capability.actorId, req.persona);
         if (typeof home === "object") return home;
         ownerScopeId = home;
         destination ??= principalDestination(capability.actorId, capability.actorId);
+      } else if (
+        req.persona === undefined &&
+        !wantsPersonal &&
+        !resolvedRecipient &&
+        !script &&
+        parseScopeId(destination?.audienceScopeId ?? ownerScopeId).kind === "personal" &&
+        capability.destination?.persona?.id
+      ) {
+        const home = scopeId("persona", capability.destination.persona.id);
+        if (await app.managesScope(capability.actorId, home)) {
+          ownerScopeId = home;
+          destination ??= principalDestination(capability.actorId, capability.actorId);
+        }
       }
       if (script && ownerScopeId !== capability.scopeId)
         return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
@@ -592,11 +578,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
     },
 
-    async listCrons(capability) {
+    async listCrons(capability, tenant) {
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
-      const isActor = await app.personMatcher(capability.actorId);
-      const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability, isActor)));
+      const admits = await app.cronAdministration(tenant, capability, all);
       const administered = all.filter((_, i) => admits[i]).map(withSharing(all));
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
@@ -979,13 +964,16 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       }
       if (
         !remove &&
-        (toKind === "channel" || toKind === "group" || toKind === "team") &&
+        (toKind === "channel" || toKind === "group" || toKind === "team" || toKind === "persona") &&
         !(await app.belongsToScope(capability.actorId, toScope))
       ) {
         return {
           ok: false,
           code: "forbidden",
-          message: `you can't ${req.move ? "move" : "share"} into ${target.label} — you're not a member of that context`,
+          message:
+            toKind === "persona"
+              ? `you can't ${req.move ? "move" : "share"} into ${target.label} — you need write or owner access on that persona`
+              : `you can't ${req.move ? "move" : "share"} into ${target.label} — you're not a member of that context`,
         };
       }
 
@@ -994,8 +982,15 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       try {
         if (copyTo && remove) await app.unshareCron(home.id, copyTo);
         if (copyTo && !remove) {
-          if (await app.samePerson(copyTo, capability.actorId))
-            return { ok: false, code: "bad_request", message: "that cron is already yours" };
+          const homeTarget = parseScopeId(cron!.destination?.audienceScopeId ?? cron!.ownerScopeId);
+          if (homeTarget.kind === "personal" && (await app.samePerson(copyTo, homeTarget.ref)))
+            return {
+              ok: false,
+              code: "bad_request",
+              message: (await app.samePerson(copyTo, capability.actorId))
+                ? "that cron is already yours"
+                : "that cron already posts to their DM",
+            };
           const { copy, existed, note } = await app.shareCron(tenant, home.id, copyTo, capability.actorId);
           return {
             ok: true,

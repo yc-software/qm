@@ -1357,7 +1357,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronCreate(req) {
       return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
     },
-    cronList: () => controlOp((c, cl) => c.listCrons(cl)),
+    cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     cronPatch(id, req) {

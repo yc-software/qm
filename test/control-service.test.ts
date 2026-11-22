@@ -12,6 +12,7 @@ import { createControlService, type ControlService } from "../src/api/control-se
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
@@ -624,7 +625,7 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   assert.ok(created.ok);
   const id = created.cron.id;
 
-  const listed = await control.listCrons(claims("U1"));
+  const listed = await control.listCrons(claims("U1"), testTenant);
   assert.ok("crons" in listed);
   assert.ok(listed.crons.some((c) => c.id === id));
 
@@ -1113,7 +1114,8 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
 
 test("a persona's owner gives it a cron from any conversation; it runs as the persona and others are refused", async () => {
   const { built, control } = setup();
-  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+  for (const who of ["U1", "U2", "U3"])
+    await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
   const created = await built.app.personas!.create("U1", { name: "Ada" });
   const personaId = (created as { value: { id: string } }).value.id;
   const cron = { schedule: { everyMs: 60_000 }, action: "digest" };
@@ -1140,4 +1142,77 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   const granted = await control.createCron({ ...cron, persona: "Ada" }, claims("U2"));
   assert.ok(granted.ok, JSON.stringify(granted));
   assert.ok((await built.app.listCronsForViewer("U1")).visible.some((c) => c.id === granted.cron.id));
+  await built.app.personas!.setAccess("U1", personaId, [...writer, { scopeId: "personal:U3", role: "read" }]);
+  const worn = (who: string) =>
+    claims(who, scopeId("personal", who), {
+      threadRef: `web:${who}:p`,
+      destination: {
+        type: "web",
+        target: `web:${who}:p`,
+        audienceScopeId: scopeId("personal", who),
+        persona: { id: personaId, name: "Ada" },
+      },
+    });
+  const def = await control.createCron(cron, worn("U1"));
+  const optOut = await control.createCron({ ...cron, persona: null }, worn("U1"));
+  const readDef = await control.createCron(cron, worn("U3"));
+  assert.ok(def.ok && optOut.ok && readDef.ok);
+  assert.equal(def.cron.ownerScopeId, `persona:${personaId}`);
+  assert.equal(optOut.cron.ownerScopeId, "personal:U1");
+  assert.equal((await control.createCron({ ...cron, persona: "  " }, worn("U1"))).ok, false);
+  assert.equal(readDef.cron.ownerScopeId, "personal:U3");
+
+  assert.ok((await control.patchCron(def.cron.id, { title: "v2" }, claims("U2"))).ok);
+  assert.ok((await control.setCronEnabled(def.cron.id, false, claims("U2"))).ok);
+  const s3 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: "personal:U3" }, claims("U2"));
+  const s2 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: "personal:U2" }, claims("U2"));
+  assert.ok(s3.ok && s3.copy?.id && s2.ok && s2.copy?.id);
+  const c3 = await built.app.getCron(s3.copy.id);
+  assert.equal(c3?.ownerScopeId, "personal:U3");
+  assert.deepEqual(await built.app.cronOrigin(c3!), { personaId });
+  await control.patchCron(def.cron.id, { action: "v3" }, claims("U1"));
+  assert.equal((await built.app.getCron(s3.copy.id))?.action, "v3");
+  assert.equal((await control.patchCron(def.cron.id, { title: "no" }, claims("U3"))).ok, false);
+  assert.ok((await control.deleteCron(def.cron.id, claims("U2"))).ok);
+
+  const sys = await built.app.createCron({
+    ownerScopeId: `persona:${personaId}`,
+    owner: `system:persona:${personaId}`,
+    createdBy: `system:persona:${personaId}`,
+    ...cron,
+  });
+  assert.equal((await control.setCronEnabled(sys.id, false, claims("U2"))).ok, true);
+  assert.equal((await control.setCronEnabled(sys.id, true, claims("U3"))).ok, false);
+  const f = await built.files.put({
+    id: "fp",
+    ownerScopeId: "personal:U3",
+    createdBy: "U3",
+    name: "a.txt",
+    path: "a.txt",
+    mimetype: "text/plain",
+    direction: "in",
+    data: Buffer.from("hi"),
+  });
+  assert.equal(
+    (await control.shareArtifact({ type: "file", id: f.artifact.id, scope: `persona:${personaId}` }, claims("U3"))).ok,
+    false,
+  );
+  const p2 = ((await built.app.personas!.create("U1", { name: "Bea" })) as { value: { id: string } }).value.id;
+  await built.app.personas!.setAccess("U1", p2, writer);
+  const c2 = await control.createCron({ ...cron, persona: "Bea" }, claims("U1"));
+  assert.ok(c2.ok);
+  const origRoles = built.app.personas!.roles.bind(built.app.personas!);
+  let roleCalls = 0;
+  built.app.personas!.roles = async (id) => {
+    roleCalls++;
+    return origRoles(id);
+  };
+  const listed = await built.app.cronAdministration(testTenant, { actorId: "U2" }, [
+    granted.cron,
+    c2.cron,
+    sys,
+    c2.cron,
+  ]);
+  assert.deepEqual(listed, [true, true, true, true]);
+  assert.equal(roleCalls, 1);
 });
