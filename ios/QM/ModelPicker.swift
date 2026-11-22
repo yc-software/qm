@@ -199,10 +199,11 @@ struct ModelPicker: View {
                 Button {
                   picks.save(shown.filter { $0.value != pick.value })
                 } label: {
-                  Label("Remove", systemImage: "xmark")
+                  // Swipe actions draw icons white; keep the x in ink on the light fill the
+                  // composer's attach button uses.
+                  Image(uiImage: removeIcon).accessibilityLabel("Remove")
                 }
-                .labelStyle(.iconOnly)
-                .tint(Color(uiColor: .systemGray))
+                .tint(QMTheme.ink.opacity(0.07))
               }
             }
             .contextMenu {
@@ -250,6 +251,12 @@ struct ModelPicker: View {
   }
 
   @ViewBuilder
+  private var removeIcon: UIImage {
+    let symbol = UIImage(
+      systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(weight: .semibold))
+    return symbol?.withTintColor(UIColor(QMTheme.ink), renderingMode: .alwaysOriginal) ?? UIImage()
+  }
+
   private func row(_ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool)
     -> some View
   {
