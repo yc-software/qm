@@ -148,6 +148,7 @@ struct ModelPicker: View {
   let model: ChatModel
   @Environment(\.dismiss) private var dismiss
   @State private var picks: ModelPicks
+  @State private var revealed: String?
 
   init(model: ChatModel) {
     self.model = model
@@ -194,6 +195,7 @@ struct ModelPicker: View {
       Section {
         ForEach(shown, id: \.value) { pick in
           row(pick, configuration, active: pick.value == current.modelId) {
+            revealed = nil
             picks.save(shown.filter { $0.value != pick.value })
           }
           .contextMenu {
@@ -266,19 +268,22 @@ struct ModelPicker: View {
         label
       }
     } else {
-      HStack(spacing: 0) {
-        Button {
-          choose(pick, configuration)
-        } label: {
-          label.contentShape(Rectangle())
-        }
-        Button(action: remove) {
-          Image(systemName: "xmark").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-            .frame(width: 36, height: 44).contentShape(Rectangle())
-        }
-        .accessibilityLabel("Remove \(ModelBrand.label(pick.value, configuration))")
+      Button {
+        if revealed == pick.value { revealed = nil } else { choose(pick, configuration) }
+      } label: {
+        label.contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .modifier(
+        SwipeToReveal(
+          isOpen: Binding(
+            get: { revealed == pick.value },
+            set: { open in
+              if open { revealed = pick.value } else if revealed == pick.value { revealed = nil }
+            }),
+          action: remove)
+      )
+      .accessibilityAction(named: "Remove", remove)
     }
   }
 
@@ -516,5 +521,44 @@ struct ModelEffortView: View {
         .contentTransition(.opacity)
         .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: current.effort)
     }
+  }
+}
+
+/// Swiping a row left slides it aside to show a plain "Remove" text button behind it.
+/// System swipe actions always draw a filled button, which read as disabled here.
+private struct SwipeToReveal: ViewModifier {
+  @Binding var isOpen: Bool
+  let action: () -> Void
+  @State private var drag: CGFloat = 0
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private let width: CGFloat = 84
+
+  func body(content: Content) -> some View {
+    let offset = min(0, max(-width * 1.4, (isOpen ? -width : 0) + drag))
+    content
+      .offset(x: offset)
+      .background(alignment: .trailing) {
+        Button("Remove", action: action)
+          .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+          .frame(width: width).frame(maxHeight: .infinity).contentShape(Rectangle())
+          .buttonStyle(.plain)
+          .opacity(Double(min(1, -offset / width)))
+          .allowsHitTesting(isOpen)
+          .accessibilityHidden(true)
+      }
+      .simultaneousGesture(
+        DragGesture(minimumDistance: 16)
+          .onChanged { value in
+            guard abs(value.translation.width) > abs(value.translation.height) else { return }
+            drag = value.translation.width
+          }
+          .onEnded { value in
+            let horizontal = abs(value.translation.width) > abs(value.translation.height)
+            let end = (isOpen ? -width : 0) + value.predictedEndTranslation.width
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+              if horizontal { isOpen = end < -width / 2 }
+              drag = 0
+            }
+          })
   }
 }
