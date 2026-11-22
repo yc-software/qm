@@ -192,10 +192,9 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     async ready(onStatus) {
       const deadline = Date.now() + waitMs;
       for (let announced = false; ; announced = true) {
-        const entries = await store.entries();
-        const own = entries.find(([digest]) => digest === image.digest)?.[1];
+        const own = await store.get(image.digest);
         if (own && isReady(own)) return goldenOf(own);
-        const other = entries
+        const other = (await store.entries())
           .map(([, record]) => record)
           .filter(isReady)
           .sort((a, b) => b.readyAtMs! - a.readyAtMs!)[0];

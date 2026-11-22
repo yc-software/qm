@@ -128,8 +128,11 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   };
   const listGroups = () =>
     retryOperation(() => api.listGroups(), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS });
-  const defaultGroupId = (groups: Awaited<ReturnType<typeof listGroups>>): string | undefined =>
-    groups.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
+  const defaultGroupId = (groups: Awaited<ReturnType<typeof listGroups>>): string => {
+    const id = groups.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
+    if (!id) throw new Error("Render workspace has no default sandbox group; set one in the Render dashboard");
+    return id;
+  };
   const isMissing = (error: unknown): boolean => error instanceof ClientError && error.statusCode === 404;
   const get = async (sandboxId: string): Promise<RenderLiveSandbox | null> => {
     try {
@@ -292,8 +295,6 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         listed = await listGroups();
       }
       const sandboxGroupId = defaultGroupId(listed);
-      if (!sandboxGroupId)
-        throw new Error("Render workspace has no default sandbox group; set one in the Render dashboard");
       const image = await retryOperation(() => api.images.import({ sandboxGroupId, name, source }), "idempotent", {
         ...sdkErrors,
         timeoutMs: SUBMIT_TIMEOUT_MS,
@@ -307,7 +308,6 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     },
     async deleteImage(name, sourceDigest) {
       const sandboxGroupId = defaultGroupId(await listGroups());
-      if (!sandboxGroupId) return;
       const versions = await listAll((after) =>
         api.images.list({ sandboxGroupId, name, limit: LIST_PAGE_SIZE, ...after }),
       );
