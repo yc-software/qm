@@ -196,13 +196,13 @@ struct ModelPicker: View {
           row(pick, configuration, active: pick.value == current.modelId) {
             picks.save(shown.filter { $0.value != pick.value })
           }
-            .contextMenu {
-              if pick.value != current.modelId {
-                Button("Remove from picks", systemImage: "minus.circle") {
-                  picks.save(shown.filter { $0.value != pick.value })
-                }
+          .contextMenu {
+            if pick.value != current.modelId {
+              Button("Remove from picks", systemImage: "minus.circle") {
+                picks.save(shown.filter { $0.value != pick.value })
               }
             }
+          }
         }
         NavigationLink {
           ModelCatalog(configuration: configuration, saved: Set(shown.map(\.value))) { id in
