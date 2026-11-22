@@ -11,7 +11,7 @@ interface ActiveConversation {
   threadRef: string | null;
 }
 
-export const PRODUCT_TITLE = "QM · Web";
+export const PRODUCT_TITLE = (typeof document !== "undefined" && document.title) || "QM · Web";
 
 const VIEW_TITLES: Record<View, string> = {
   chats: "Chats",
