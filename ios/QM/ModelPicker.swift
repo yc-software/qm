@@ -518,4 +518,3 @@ struct ModelEffortView: View {
     }
   }
 }
-
