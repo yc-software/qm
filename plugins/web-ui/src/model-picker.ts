@@ -19,6 +19,7 @@ import {
   effortLevelsForModel,
   presetModelId,
   modelLoadoutOptions,
+  groupModelsByProvider,
   type LoadoutEntry,
 } from "./composer-loadout.ts";
 import { tip } from "./tooltip.ts";
@@ -363,23 +364,27 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   }}
                 />
               </label>
-              ${addable.map(
-                (option) =>
-                  html`<button
-                    class="menu-option"
-                    type="button"
-                    role="menuitem"
-                    aria-label=${`Add ${modelLabel(option)} to presets`}
-                    @click=${() => {
+              ${groupModelsByProvider(addable).map(
+                (group) =>
+                  html`<div class="loadout-head loadout-group-head" role="presentation">${group.label}</div>
+                    ${group.options.map(
+                      (option) =>
+                        html`<button
+                          class="menu-option"
+                          type="button"
+                          role="menuitem"
+                          aria-label=${`Add ${modelLabel(option)} to presets`}
+                          @click=${() => {
                       dismissSelection();
                       presets?.add(option, agent);
                     }}
-                  >
-                    ${modelGlyph(option)}<span class="menu-option-copy"
-                      ><span>${modelLabel(option)}</span
-                      >${isUltrafastModel(option.model.id) ? html`<span class="loadout-meta">Ultrafast · 6× cost</span>` : nothing}</span
-                    ><span class="loadout-add-label" aria-hidden="true">Add</span>
-                  </button>`,
+                        >
+                          ${modelGlyph(option)}<span class="menu-option-copy"
+                            ><span>${modelLabel(option)}</span
+                            >${isUltrafastModel(option.model.id) ? html`<span class="loadout-meta">Ultrafast · 6× cost</span>` : nothing}</span
+                          ><span class="loadout-add-label" aria-hidden="true">Add</span>
+                        </button>`,
+                    )}`,
               )}
               ${addable.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
           : nothing

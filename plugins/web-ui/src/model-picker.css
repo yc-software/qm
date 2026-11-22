@@ -541,6 +541,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.loadout-submenu .loadout-group-head {
+  margin-top: 6px;
+  padding-bottom: 2px;
+}
 .loadout-add-label {
   flex: none;
   align-self: center;

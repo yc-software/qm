@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
+import { modelBrand } from "./icons.ts";
 import { EFFORT_LEVELS, migrateStoredModelValue, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
@@ -97,6 +98,31 @@ export function modelLoadoutOptions(options: readonly ModelOption[], entries: re
       compatible[0];
     return preferred ? [preferred] : [];
   });
+}
+
+const BRAND_GROUPS = [
+  ["claude", "Anthropic"],
+  ["openai", "OpenAI"],
+  ["gemini", "Google"],
+] as const;
+
+export interface ModelProviderGroup {
+  label: string;
+  options: ModelOption[];
+}
+
+/** Groups picker options under the provider their mark shows, keeping the incoming order inside each group. */
+export function groupModelsByProvider(options: readonly ModelOption[]): ModelProviderGroup[] {
+  const groups: ModelProviderGroup[] = [...BRAND_GROUPS.map(([, label]) => label), "Other"].map((label) => ({
+    label,
+    options: [],
+  }));
+  for (const option of options) {
+    const brand = modelBrand(option.displayProvider ?? String(option.model.provider));
+    const index = BRAND_GROUPS.findIndex(([key]) => key === brand);
+    groups[index < 0 ? BRAND_GROUPS.length : index]!.options.push(option);
+  }
+  return groups.filter((group) => group.options.length > 0);
 }
 
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";

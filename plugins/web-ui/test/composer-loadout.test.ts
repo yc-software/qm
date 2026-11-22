@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import {
   effortLevelsForModel,
+  groupModelsByProvider,
   loadoutActions,
   loadLoadout,
   ultrafastChoice,
@@ -200,3 +201,31 @@ for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
     assert.deepEqual(current, entry(base.value, "high", false));
   });
 }
+
+test("picker models group under fixed provider headings and keep their order inside each group", () => {
+  const as = (id: string, provider: string, displayProvider?: string): ModelOption => {
+    const base = option(id);
+    return { ...base, model: { ...base.model, provider }, ...(displayProvider ? { displayProvider } : {}) };
+  };
+  const groups = groupModelsByProvider([
+    as("grok", "openrouter"),
+    as("gemini-flash", "google"),
+    as("sonnet", "anthropic"),
+    as("gpt-sol", "openai"),
+    as("gateway/claude-opus", "qm:gateway", "anthropic"),
+    as("glm", "amazon-bedrock"),
+  ]);
+  assert.deepEqual(
+    groups.map(({ label, options }) => [label, options.map(({ value }) => value)]),
+    [
+      ["Anthropic", ["sonnet", "gateway/claude-opus"]],
+      ["OpenAI", ["gpt-sol"]],
+      ["Google", ["gemini-flash"]],
+      ["Other", ["grok", "glm"]],
+    ],
+  );
+  assert.deepEqual(
+    groupModelsByProvider([as("gpt-sol", "openai")]).map(({ label }) => label),
+    ["OpenAI"],
+  );
+});
