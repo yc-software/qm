@@ -65,7 +65,7 @@ struct ModelPicker: View {
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
               if pick.value != current.modelId {
                 Button {
-                  picks.save(shown.filter { $0.value != pick.value })
+                  remove(pick, configuration)
                 } label: {
                   Image(uiImage: removeIcon).accessibilityLabel("Remove")
                 }
@@ -185,6 +185,10 @@ struct ModelPicker: View {
     }
     if configuration.models.contains(active.value), !listed(active.value) { shown.append(active) }
     return shown
+  }
+
+  func remove(_ pick: ModelPick, _ configuration: RuntimeConfiguration) {
+    picks.save(shownPicks(configuration).filter { $0.value != pick.value })
   }
 
   func choose(_ pick: ModelPick, _ configuration: RuntimeConfiguration) {
