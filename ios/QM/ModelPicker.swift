@@ -429,6 +429,7 @@ private struct ModelEffortView: View {
         Toggle(
           "Fast mode", isOn: Binding(get: { current.fast }, set: { update(nil, $0) })
         )
+        .tint(QMTheme.switchOn)
         .padding(.horizontal, 16).frame(minHeight: 52)
         .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 16))
       }

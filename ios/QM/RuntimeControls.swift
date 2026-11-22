@@ -111,7 +111,7 @@ struct RuntimeControlsView: View {
               }
             }
             if configuration.supportsFastMode(model: draft.model) {
-              Toggle("Fast mode", isOn: fastBinding)
+              Toggle("Fast mode", isOn: fastBinding).tint(QMTheme.switchOn)
             }
           }
         }

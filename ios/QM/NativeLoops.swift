@@ -558,7 +558,7 @@ struct NativeLoopTriageEditor: View {
   var body: some View {
     NavigationStack {
       QMForm {
-        Toggle("On", isOn: $enabled)
+        Toggle("On", isOn: $enabled).tint(QMTheme.switchOn)
         TextField("Instructions", text: $draft, axis: .vertical).lineLimit(4...12)
           .disabled(!available)
         if available {

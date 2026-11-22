@@ -123,7 +123,7 @@ struct NativeSettingsView: View {
           if let palette = NativeThemeStore.shared.palette { Text(palette.name).tag("custom") }
         }
         NativeThemeImport()
-        Toggle("Web conversations only", isOn: $webOnly)
+        Toggle("Web conversations only", isOn: $webOnly).tint(QMTheme.switchOn)
       }
       Section("Accounts") {
         NavigationLink {
