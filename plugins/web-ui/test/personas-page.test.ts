@@ -127,10 +127,10 @@ const { vite, dom, close } = await browserEnv({
     if (path.startsWith("/api/runtime-config"))
       return json({
         scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
-        models: [],
-        modelCatalog: {},
-        orgDefault: { modelId: null, revision: 0 },
-        effective: {},
+        models: ["alpha"],
+        modelCatalog: { alpha: { id: "alpha", label: "Alpha", buttonLabel: "Alpha", provider: "anthropic" } },
+        orgDefault: { modelId: "alpha", revision: 1 },
+        effective: { modelId: "alpha" },
         scopeOverride: null,
       });
     return json({});
@@ -147,13 +147,14 @@ after(close);
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-async function mountPage() {
+async function mountPage(openId?: string) {
   const main = document.querySelector("main")!;
   const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
   const personasModule = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = main;
   appState.me = { user: "tester", org: "acme", companyName: "Acme" };
+  if (openId) personasModule.openPersonaById(openId);
   await personasModule.renderPersonasPage();
   return { main, personasModule };
 }
@@ -716,20 +717,29 @@ test("the conversation shows its persona", async () => {
 });
 
 test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {
-  const main = document.querySelector("main")!;
-  const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-  const personasModule = await vite.ssrLoadModule("/src/personas.ts");
-  appState.currentView = "personas";
-  appState.mainEl = main;
-  appState.me = { user: "tester", org: "acme", companyName: "Acme" };
-  personasModule.openPersonaById("p-bo");
-  await personasModule.renderPersonasPage();
+  const { main } = await mountPage("p-bo");
   await settle();
   assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "Bo");
   assert.equal(window.location.pathname, "/personas/p-bo");
   button(main, "Personas").click();
   await settle();
   assert.equal(window.location.pathname, "/personas");
+});
+
+test("the persona model dropdown stays working after saving and after reopening", async () => {
+  const { main } = await openPersonaPage("Ada");
+  const open = () => main.querySelector<HTMLButtonElement>(".context-model .loadout-button")!.click();
+  button(main, "Save").click();
+  await settle();
+  open();
+  assert.ok(main.querySelector(".context-model .loadout-popover"));
+  assert.equal(flash(main), "Saved.");
+  button(main, "Personas").click();
+  await settle();
+  button(main, "Edit", "Ada").click();
+  await settle();
+  open();
+  assert.ok(main.querySelector(".context-model .loadout-popover"));
 });
 
 test("New skill opens the skill editor already set to the persona", async () => {
