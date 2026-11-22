@@ -148,7 +148,6 @@ struct ModelPicker: View {
   let model: ChatModel
   @Environment(\.dismiss) private var dismiss
   @State private var picks: ModelPicks
-  @State private var revealed: String?
 
   init(model: ChatModel) {
     self.model = model
@@ -194,17 +193,25 @@ struct ModelPicker: View {
     return QMList {
       Section {
         ForEach(shown, id: \.value) { pick in
-          row(pick, configuration, active: pick.value == current.modelId) {
-            revealed = nil
-            picks.save(shown.filter { $0.value != pick.value })
-          }
-          .contextMenu {
-            if pick.value != current.modelId {
-              Button("Remove from picks", systemImage: "minus.circle") {
-                picks.save(shown.filter { $0.value != pick.value })
+          row(pick, configuration, active: pick.value == current.modelId)
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+              if pick.value != current.modelId {
+                Button(role: .destructive) {
+                  picks.save(shown.filter { $0.value != pick.value })
+                } label: {
+                  Label("Remove", systemImage: "xmark")
+                }
+                .labelStyle(.iconOnly)
+                .tint(.red)
               }
             }
-          }
+            .contextMenu {
+              if pick.value != current.modelId {
+                Button("Remove from picks", systemImage: "minus.circle") {
+                  picks.save(shown.filter { $0.value != pick.value })
+                }
+              }
+            }
         }
         NavigationLink {
           ModelCatalog(configuration: configuration, saved: Set(shown.map(\.value))) { id in
@@ -243,10 +250,9 @@ struct ModelPicker: View {
   }
 
   @ViewBuilder
-  private func row(
-    _ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool,
-    remove: @escaping () -> Void
-  ) -> some View {
+  private func row(_ pick: ModelPick, _ configuration: RuntimeConfiguration, active: Bool)
+    -> some View
+  {
     let label = HStack(spacing: 12) {
       ModelLogo(provider: ModelBrand.provider(pick.value, configuration))
       VStack(alignment: .leading, spacing: 2) {
@@ -269,21 +275,10 @@ struct ModelPicker: View {
       }
     } else {
       Button {
-        if revealed == pick.value { revealed = nil } else { choose(pick, configuration) }
+        choose(pick, configuration)
       } label: {
         label.contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
-      .modifier(
-        SwipeToReveal(
-          isOpen: Binding(
-            get: { revealed == pick.value },
-            set: { open in
-              if open { revealed = pick.value } else if revealed == pick.value { revealed = nil }
-            }),
-          action: remove)
-      )
-      .accessibilityAction(named: "Remove", remove)
     }
   }
 
@@ -524,41 +519,3 @@ struct ModelEffortView: View {
   }
 }
 
-/// Swiping a row left slides it aside to show a plain "Remove" text button behind it.
-/// System swipe actions always draw a filled button, which read as disabled here.
-private struct SwipeToReveal: ViewModifier {
-  @Binding var isOpen: Bool
-  let action: () -> Void
-  @State private var drag: CGFloat = 0
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  private let width: CGFloat = 84
-
-  func body(content: Content) -> some View {
-    let offset = min(0, max(-width * 1.4, (isOpen ? -width : 0) + drag))
-    content
-      .offset(x: offset)
-      .background(alignment: .trailing) {
-        Button("Remove", action: action)
-          .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-          .frame(width: width).frame(maxHeight: .infinity).contentShape(Rectangle())
-          .buttonStyle(.plain)
-          .opacity(Double(min(1, -offset / width)))
-          .allowsHitTesting(isOpen)
-          .accessibilityHidden(true)
-      }
-      .simultaneousGesture(
-        DragGesture(minimumDistance: 16)
-          .onChanged { value in
-            guard abs(value.translation.width) > abs(value.translation.height) else { return }
-            drag = value.translation.width
-          }
-          .onEnded { value in
-            let horizontal = abs(value.translation.width) > abs(value.translation.height)
-            let end = (isOpen ? -width : 0) + value.predictedEndTranslation.width
-            withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
-              if horizontal { isOpen = end < -width / 2 }
-              drag = 0
-            }
-          })
-  }
-}
