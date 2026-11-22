@@ -2,13 +2,31 @@ import SwiftUI
 
 enum ModelBrand {
   static func provider(_ id: String, _ configuration: RuntimeConfiguration) -> String {
-    let metadata = configuration.modelCatalog[id]
-    return metadata?.provider ?? "other"
+    configuration.modelCatalog[id]?.provider ?? "other"
   }
 
   static func label(_ id: String, _ configuration: RuntimeConfiguration) -> String {
-    let metadata = configuration.modelCatalog[id]
-    return metadata?.label ?? id
+    configuration.modelCatalog[id]?.label ?? id
+  }
+
+  static func groupName(_ provider: String) -> String {
+    switch provider {
+    case "qm:gateway": "Gateway"
+    case "anthropic": "Anthropic"
+    case "openai": "OpenAI"
+    case "openrouter": "OpenRouter"
+    default:
+      provider.split(whereSeparator: { $0 == "-" || $0 == "_" })
+        .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+  }
+
+  static func order(_ provider: String) -> Int {
+    switch provider {
+    case "anthropic": 0
+    case "openai", "openai-codex": 1
+    default: 2
+    }
   }
 }
 
@@ -22,10 +40,7 @@ struct ModelLogo: View {
       case "anthropic":
         NativeServiceLogo(service: "claude", size: size * 0.6)
           .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-      case "openai": NativeServiceLogo(service: "openai", size: size * 0.6)
-      case "google":
-        NativeServiceLogo(service: "gemini", size: size * 0.6)
-          .foregroundStyle(Color(red: 0.26, green: 0.52, blue: 0.96))
+      case "openai", "openai-codex": NativeServiceLogo(service: "openai", size: size * 0.6)
       default:
         Image(systemName: "sparkle").resizable().scaledToFit().padding(size * 0.2)
           .foregroundStyle(.secondary)

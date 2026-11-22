@@ -220,36 +220,55 @@ struct ModelCatalog: View {
   let onAdd: (String) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
+  @State private var expanded: Set<String> = []
+  private static let preview = 4
 
-  private var matches: [String] {
-    configuration.models.filter {
-      query.isEmpty || ModelBrand.label($0, configuration).localizedCaseInsensitiveContains(query)
+  private var groups: [(name: String, ids: [String])] {
+    let matches = configuration.models.filter {
+      !saved.contains($0)
+        && (query.isEmpty
+          || ModelBrand.label($0, configuration).localizedCaseInsensitiveContains(query))
     }
+    let grouped = Dictionary(grouping: matches) {
+      ModelBrand.groupName(ModelBrand.provider($0, configuration))
+    }
+    let rank = { (ids: [String]) in ModelBrand.order(ModelBrand.provider(ids[0], configuration)) }
+    return grouped.map { (name: $0.key, ids: $0.value) }
+      .sorted { (rank($0.ids), $0.name) < (rank($1.ids), $1.name) }
   }
 
   var body: some View {
     QMList {
-      ForEach(matches, id: \.self) { id in
-        Button {
-          onAdd(id)
-          dismiss()
-        } label: {
-          HStack(spacing: 12) {
-            ModelLogo(provider: ModelBrand.provider(id, configuration))
-            Text(ModelBrand.label(id, configuration)).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(saved.contains(id) ? "Saved" : "Add")
-              .font(.subheadline.weight(saved.contains(id) ? .regular : .medium))
-              .foregroundStyle(saved.contains(id) ? .secondary : .primary)
+      ForEach(groups, id: \.name) { group in
+        let open = !query.isEmpty || expanded.contains(group.name)
+        let shown = open ? group.ids : Array(group.ids.prefix(Self.preview))
+        Section(group.name) {
+          ForEach(shown, id: \.self) { id in
+            Button {
+              onAdd(id)
+              dismiss()
+            } label: {
+              HStack(spacing: 12) {
+                ModelLogo(provider: ModelBrand.provider(id, configuration))
+                Text(ModelBrand.label(id, configuration)).lineLimit(1)
+                Spacer(minLength: 8)
+                Text("Add").font(.subheadline.weight(.medium))
+              }
+              .contentShape(Rectangle())
+            }
           }
-          .contentShape(Rectangle())
+          if shown.count < group.ids.count {
+            Button("\(group.ids.count - shown.count) more") { expanded.insert(group.name) }
+              .foregroundStyle(.secondary)
+              .accessibilityLabel("Show \(group.ids.count - shown.count) more \(group.name) models")
+          }
         }
       }
     }
-    .overlay { if matches.isEmpty { ContentUnavailableView.search(text: query) } }
+    .overlay { if groups.isEmpty { ContentUnavailableView.search(text: query) } }
     .searchable(
       text: $query, placement: .navigationBarDrawer(displayMode: .always),
-      prompt: "Search \(configuration.models.count) models"
+      prompt: "Search models"
     )
     .navigationTitle("Add a model")
     .navigationBarTitleDisplayMode(.inline)
