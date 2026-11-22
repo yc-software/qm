@@ -180,6 +180,9 @@ struct ModelPicker: View {
         }
         .accessibilityLabel("Close")
       }
+      if model.runtimeConfiguration?.models.isEmpty == false {
+        ToolbarItem(placement: .confirmationAction) { EditButton() }
+      }
     }
     .task {
       if model.runtimeConfiguration == nil { await model.loadRuntime() }
@@ -195,6 +198,13 @@ struct ModelPicker: View {
         ForEach(shown, id: \.value) { pick in
           row(pick, configuration, active: pick.value == current.modelId)
             .deleteDisabled(pick.value == current.modelId)
+            .contextMenu {
+              if pick.value != current.modelId {
+                Button("Remove from picks", systemImage: "minus.circle", role: .destructive) {
+                  picks.save(shown.filter { $0.value != pick.value })
+                }
+              }
+            }
         }
         .onDelete { offsets in
           picks.save(shown.enumerated().filter { !offsets.contains($0.offset) }.map(\.element))
@@ -204,7 +214,13 @@ struct ModelPicker: View {
             add(id, configuration)
           }
         } label: {
-          Label("Add a model", systemImage: "plus")
+          HStack(spacing: 12) {
+            Image(systemName: "plus").font(.system(size: 14, weight: .semibold))
+              .frame(width: 28, height: 28)
+              .background(QMTheme.ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+              .accessibilityHidden(true)
+            Text("Add a model")
+          }
         }
       } header: {
         Text("Your picks")
