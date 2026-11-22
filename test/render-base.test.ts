@@ -166,7 +166,21 @@ test("Render base serves the previous golden until a new one is ready, then reti
   await fake.client.terminate(computer.id);
   await prepare(make(REF_B));
   assert.deepEqual(digests(), [DIGEST_B]);
-  assert.equal(await store.get(DIGEST_A), null);
+  assert.ok((await store.get(DIGEST_A))?.retiredAtMs);
+});
+
+test("Render base lets a restarted older release rebuild its golden without retiring the newer one", async (t) => {
+  const { store, make } = setup(t);
+  await prepare(make(REF_A));
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  await prepare(make(REF_B));
+  const goldenB = (await store.get(DIGEST_B))!.snapshot!.id;
+  await prepare(make(REF_A));
+  const rebuiltA = (await store.get(DIGEST_A))!.snapshot!.id;
+  assert.deepEqual(await source(make(REF_B)), { ref: REF_B, snapshotId: goldenB });
+  assert.deepEqual(await source(make(REF_A)), { ref: REF_A, snapshotId: rebuiltA });
+  await prepare(make(REF_B));
+  assert.deepEqual(await source(make(REF_A)), { ref: REF_B, snapshotId: goldenB });
 });
 
 test("Render base waits for the first golden snapshot", async (t) => {

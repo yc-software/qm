@@ -20,6 +20,7 @@ export interface StoredRenderBase {
   snapshot?: RenderSnapshot;
   tools?: string[];
   readyAtMs?: number;
+  retiredAtMs?: number;
   error?: string;
 }
 
@@ -69,7 +70,12 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   async function finish(snapshot: RenderSnapshot): Promise<Progress> {
     try {
       const available = await client.waitSnapshot(snapshot);
-      await store.merge(image.digest, { snapshot: available, readyAtMs: Date.now() });
+      await store.update(image.digest, (value) => ({
+        ...value,
+        snapshot: available,
+        readyAtMs: value.readyAtMs ?? Date.now(),
+        retiredAtMs: undefined,
+      }));
       return "ready";
     } catch (error) {
       const current = await client
@@ -146,7 +152,13 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     const readyAtMs = entries.find(([digest]) => digest === image.digest)?.[1].readyAtMs;
     if (readyAtMs === undefined) return;
     for (const [digest, record] of entries) {
-      if (digest === image.digest || record.readyAtMs === undefined || record.readyAtMs >= readyAtMs) continue;
+      if (
+        digest === image.digest ||
+        record.retiredAtMs ||
+        record.readyAtMs === undefined ||
+        record.readyAtMs >= readyAtMs
+      )
+        continue;
       try {
         if (record.snapshot) {
           await client.deleteSnapshot(record.snapshot);
@@ -154,7 +166,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
         }
         const retired = parseRenderSandboxImage(record.ref);
         await client.deleteImage(retired.name, retired.digest);
-        await store.delete(digest);
+        await store.merge(digest, { retiredAtMs: Date.now() });
       } catch (error) {
         if (error instanceof SandboxImageInUseError) continue;
         swallow(`render-base: retire superseded golden ${record.ref}`, error);
