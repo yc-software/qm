@@ -1102,16 +1102,9 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
     "a fire runs as the owner, so only the owner writes its task",
   );
   assert.equal((await built.app.getWebhook(hook.webhook.id))?.action, "handle the event");
-  const rename = await control.updateWebhook(
-    hook.webhook.id,
-    { title: "Deploy events" },
-    chanClaims("U2", { liveActor: true }),
-  );
-  assert.ok(rename.ok, JSON.stringify(rename));
-  assert.equal((await built.app.getWebhook(hook.webhook.id))?.title, "Deploy events");
   const own = await control.updateWebhook(
     hook.webhook.id,
-    { action: "triage the event" },
+    { title: "Deploy events", action: "triage the event" },
     chanClaims("U1", { liveActor: true }),
   );
   assert.ok(own.ok, JSON.stringify(own));

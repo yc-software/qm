@@ -281,8 +281,8 @@ export async function cronTaskRewrite(
   return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
-const WEBHOOK_TASK_OWNER_ONLY =
-  "only the webhook's owner can change its task — its fires run as them. Create your own webhook to run a different task as yourself.";
+const WEBHOOK_OWNER_ONLY =
+  "only the webhook's owner can edit it — its fires run as them. Create your own webhook to run a different task as yourself.";
 
 export async function editWebhook(
   app: App,
@@ -301,12 +301,8 @@ export async function editWebhook(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await administersWebhook(app, webhook, editor)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  if (
-    patch.action !== undefined &&
-    !(await app.samePerson(webhook.owner, principalId)) &&
-    !(await asOrgAdmin(app, editor))
-  )
-    return { ok: false, code: "forbidden", message: WEBHOOK_TASK_OWNER_ONLY };
+  if (!(await app.samePerson(webhook.owner, principalId)) && !(await asOrgAdmin(app, editor)))
+    return { ok: false, code: "forbidden", message: WEBHOOK_OWNER_ONLY };
   const updated = await app.updateWebhook(id, patch);
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
