@@ -375,9 +375,9 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                           role="menuitem"
                           aria-label=${`Add ${modelLabel(option)} to presets`}
                           @click=${() => {
-                      dismissSelection();
-                      presets?.add(option, agent);
-                    }}
+                            dismissSelection();
+                            presets?.add(option, agent);
+                          }}
                         >
                           ${modelGlyph(option)}<span class="menu-option-copy"
                             ><span>${modelLabel(option)}</span
