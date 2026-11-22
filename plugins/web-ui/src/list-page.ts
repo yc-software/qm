@@ -104,7 +104,7 @@ export function listSelect(
       compact: true,
       value,
       onChange,
-      options: options.map(([v, text]) => html`<option value=${v}>${text}</option>`),
+      options: options.map(([v, text]) => html`<option value=${v} ?selected=${v === value}>${text}</option>`),
     })}</label
   >`;
 }

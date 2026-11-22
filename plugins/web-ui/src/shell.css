@@ -14234,11 +14234,8 @@ button:disabled .qm-switch {
   aspect-ratio: 16 / 11;
   padding: 18px 18px 0;
   box-sizing: border-box;
-  background: #f4f4f5;
+  background: var(--muted);
   overflow: hidden;
-}
-:root.dark .app-card-thumb {
-  background: color-mix(in srgb, var(--foreground) 6%, var(--background));
 }
 .app-card-screen {
   position: relative;
@@ -14246,7 +14243,7 @@ button:disabled .qm-switch {
   width: 100%;
   height: calc(100% + 8px);
   border-radius: 7px 7px 0 0;
-  background: #fff;
+  background: var(--background);
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 0.05),
     0 2px 4px rgb(0 0 0 / 0.04),
@@ -14255,7 +14252,6 @@ button:disabled .qm-switch {
   transition: transform 160ms ease;
 }
 :root.dark .app-card-screen {
-  background: color-mix(in srgb, var(--foreground) 10%, var(--background));
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.06),
     0 10px 24px rgb(0 0 0 / 0.35);

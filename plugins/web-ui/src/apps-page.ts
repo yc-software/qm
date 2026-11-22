@@ -188,7 +188,7 @@ function appCard(d: AppView): TemplateResult {
         <div class="app-card-meta">
           <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
           <button
-            class="btn compact app-manage"
+            class="btn app-manage"
             type="button"
             aria-label=${`Manage ${appTitle(d)}`}
             @click=${() => void openApp(d)}
