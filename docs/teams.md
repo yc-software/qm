@@ -71,7 +71,8 @@ external guest treatment that generic chat gives any unvouched participant.
 
 ## Current limits
 
-- Files are not exchanged yet; messages and cards are text only.
+- Files are not exchanged yet: the Teams host declares no file support, so the agent is told it can't attach files here and pastes content instead, and files people attach in Teams don't reach it.
+- Teams refuses a message over about 28 KB, so a longer reply is split into several messages of at most 9,000 characters (under the limit even when every character takes three bytes); an edit is clipped to that length.
 - Replies arrive as whole messages; Teams streaming (1:1 chats only) is not used yet.
 - Reactions are limited to the ones Teams documents: 👍 ❤️ 😆 😮 😢 😡 👀 ✅ 👋 📌 🚀.
 - Bots cannot post in private channels.
