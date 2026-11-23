@@ -252,7 +252,7 @@ function personaActions(persona: PersonaView, opts: { edit: boolean }): Template
   return html`
     ${rowAction("Chat", MessageSquare, () => void chatWithPersona(persona))}
     ${rowAction("Fork", GitFork, () => forkPersona(persona))}
-    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id)) : nothing}
+    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id, "", { push: true })) : nothing}
     ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void openGranteePicker(persona.id, "people")) : nothing}
   `;
 }
@@ -264,7 +264,7 @@ function personaRow(persona: PersonaView): TemplateResult {
         class="persona-row-main"
         type="button"
         aria-label=${`Open ${persona.name}`}
-        @click=${() => void openPersona(persona.id)}
+        @click=${() => void openPersona(persona.id, "", { push: true })}
       >
         <span class="persona-icon">${personaIconTpl(persona.icon, 18)}</span>
         <span class="persona-row-text">
@@ -350,22 +350,24 @@ export function routePersonasHistory(personaId: string | null): void {
   else drawPersonasPage();
 }
 
-function syncPersonaUrl(personaId: string | null): void {
+function syncPersonaUrl(personaId: string | null, push = false): void {
   if (appState.currentView !== "personas") return;
   const next = deepLinkPath(UI_BASE, "personas", null, null, personaId);
-  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
 }
 
 async function fetchPersona(id: string): Promise<PersonaDetail> {
   return (await api<{ persona: PersonaDetail }>(`/api/personas/${encodeURIComponent(id)}`)).persona;
 }
 
-async function openPersona(id: string, flash = ""): Promise<void> {
+async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
     if (seq !== viewSeq || appState.currentView !== "personas") return;
-    showPersonaDetail(persona, flash);
+    showPersonaDetail(persona, flash, opts.push);
   } catch (e) {
     if (seq !== viewSeq) return;
     notice = errMessage(e, "Couldn't open that persona.");
@@ -850,7 +852,7 @@ async function openGranteePicker(personaId: string, kind: PickerKind): Promise<v
   picker = { personaId, kind, query: "", people: [], channels: [], searching: false, searched: false, error: "" };
   const shown = appState.mainEl?.firstElementChild;
   if (shown instanceof HTMLElement && shown.dataset.persona === personaId) redrawDetail();
-  else await openPersona(personaId);
+  else await openPersona(personaId, "", { push: true });
   focusPicker();
 }
 
@@ -1074,10 +1076,10 @@ function showNewPersonaForm(): void {
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
-function showPersonaDetail(persona: PersonaDetail, flash: string): void {
+function showPersonaDetail(persona: PersonaDetail, flash: string, push = false): void {
   const host = paneHost(persona.id);
   if (!host) return;
-  syncPersonaUrl(persona.id);
+  syncPersonaUrl(persona.id, push);
   actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
