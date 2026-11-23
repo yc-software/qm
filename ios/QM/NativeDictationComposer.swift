@@ -211,7 +211,9 @@ private struct NativeDictationWaves: View {
 
   var body: some View {
     let active = model.state == .recording
-    TimelineView(.animation(paused: !active || reduceMotion)) { timeline in
+    // Reduce Motion keeps the lines in place but still lets them rise and fall with the voice.
+    TimelineView(.animation(minimumInterval: reduceMotion ? 0.1 : 1.0 / 60, paused: !active)) {
+      timeline in
       let time = timeline.date.timeIntervalSinceReferenceDate
       Canvas { context, size in
         let level = smoother.step(toward: active ? model.level : 0, at: time)
