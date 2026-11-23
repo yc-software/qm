@@ -2423,6 +2423,12 @@ qm-markdown .tok-in {
 .user-bubble :is(markdown-block, qm-markdown) > *:last-child {
   margin-bottom: 0;
 }
+/* mini-lit wraps rendered markdown in a <div>, so the first block (a list's
+   16px top margin) sits one level below the rule above and stacks on the
+   bubble's own padding. */
+.user-bubble :is(markdown-block, qm-markdown):first-of-type > div > :first-child {
+  margin-top: 0;
+}
 .assistant-body .streaming-text :is(markdown-block, qm-markdown) + :is(markdown-block, qm-markdown) {
   margin-top: 1rem;
 }
