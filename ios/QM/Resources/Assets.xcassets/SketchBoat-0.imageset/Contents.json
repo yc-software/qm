@@ -1,7 +1,7 @@
 {
   "images": [
     {
-      "filename": "wordmark.png",
+      "filename": "sketch-boat.svg",
       "idiom": "universal"
     }
   ],
@@ -10,6 +10,7 @@
     "version": 1
   },
   "properties": {
+    "preserves-vector-representation": true,
     "template-rendering-intent": "template"
   }
 }
