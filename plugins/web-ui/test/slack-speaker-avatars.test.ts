@@ -44,11 +44,11 @@ test("Slack conversations show directory Slack photos on messages and in the hea
   try {
     h.releaseSessions();
     await h.boot();
-    const srcs = () => [...document.querySelectorAll(".slack-m-avatar img")].map((i) => i.getAttribute("src"));
+    const srcs = () => [...document.querySelectorAll(".speaker-label img")].map((i) => i.getAttribute("src"));
     for (let i = 0; i < 100 && srcs().length < 3; i++) await new Promise((r) => setTimeout(r, 10));
     assert.deepEqual(srcs(), [photos["eve@example.com"], photos["regan@example.com"], photos["eve@example.com"]]);
     assert.deepEqual(
-      [...document.querySelectorAll(".slack-people img")].map((i) => i.getAttribute("src")),
+      [...document.querySelectorAll(".chat-participants img")].map((i) => i.getAttribute("src")),
       [photos["eve@example.com"], photos["regan@example.com"]],
     );
     assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com", "tester"], "one lookup per person");
@@ -91,10 +91,10 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
     const rows = [...document.querySelectorAll(".message-stack > .message-row")];
     assert.deepEqual(
       rows.map((row) => [
-        Boolean(row.querySelector(".slack-m-head")),
+        Boolean(row.querySelector(":scope > .speaker-label")),
         row.querySelector(".slack-wire-text")?.textContent?.trim(),
-        row.querySelector(".slack-m-avatar > .brand-mark > img")?.getAttribute("src"),
-        row.classList.contains("slack-m-continued"),
+        row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
+        row.classList.contains("continued-row"),
       ]),
       [
         [true, "deploys broke", undefined, false],
@@ -105,7 +105,10 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
       ],
     );
     assert.equal(rows.at(-1)!.querySelector(".slack-reaction")!.textContent!.replaceAll(/\s/g, ""), "👀1");
-    assert.ok(rows.at(-1)!.querySelector(".slack-m-avatar > .brand-mark"), "a persona's reply keeps the brand mark");
+    assert.ok(
+      rows.at(-1)!.querySelector(":scope > .speaker-label > .brand-mark"),
+      "a persona's reply keeps the brand mark",
+    );
     assert.equal(rows.at(-2)!.querySelectorAll(".user-row").length, 0);
   } finally {
     await h.close();

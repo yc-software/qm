@@ -28,7 +28,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SlackOutbox } from "./slack-outbox";
-import { slackBar, slackRow, slackWireBubble } from "./slack-thread-view";
+import { appTag, openInSurface, reactionChips, slackTitle, slackWireBubble } from "./slack-thread-view";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
@@ -439,30 +439,6 @@ export function createChatSurface(
     return (isSideChatSurface() || isReadOnlySlackView()) && ts !== undefined
       ? html`<time class="speaker-time">${formatMessageTime(ts)}</time>`
       : nothing;
-  }
-
-  function slackRowFor(message: AgentMessage, index: number, body: TemplateResult): TemplateResult {
-    const agent = (message as { role?: string }).role === "assistant";
-    const name = agent
-      ? chatState.assistantSpeakerLabel || brandName()
-      : speakerLabelFor(message) || appState.me?.displayName || "You";
-    const member = agent ? undefined : speakerMember(message);
-    return slackRow({
-      index,
-      entrySeqs: messageEntrySeqs(message)
-        .filter((seq) => !inlineSteers.has(seq))
-        .join(" "),
-      name,
-      app: agent,
-      avatar: agent
-        ? brandMark(slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl))
-        : avatarTpl({ key: member?.principalId ?? name, name, avatarUrl: member?.avatarUrl }),
-      timestamp: (message as { timestamp?: number }).timestamp,
-      continued: continuedSpeakerRows.has(message),
-      sending: slackOutbox.sending(message),
-      reactions: slackReactions.onMessage.get(message),
-      body,
-    });
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -1480,7 +1456,13 @@ export function createChatSurface(
           <div class="custom-chat-shell">
             ${
               s.surface === "slack"
-                ? slackBarFor(s, chatSurface?.label, shownMessages)
+                ? chatHeader(
+                    slackTitle(defaultSessionTitle(s), s.title?.trim()),
+                    chatSurface?.label ?? "",
+                    !chatSurface,
+                    shownMessages,
+                    openInSurface(sessionSlackUrl(s), chatSurface?.label),
+                  )
                 : chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)
             }
             ${
@@ -2069,6 +2051,7 @@ export function createChatSurface(
     detail: string,
     readOnly: boolean,
     messages: AgentMessage[] = [],
+    action: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
     return html`
       <header class="chat-topbar">
@@ -2076,22 +2059,9 @@ export function createChatSurface(
           <div class="chat-title" dir="auto">${title}</div>
           <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
         </div>
-        ${participantStack(conversationParticipants(messages))}
+        ${participantStack(conversationParticipants(messages))} ${action}
       </header>
     `;
-  }
-
-  function slackBarFor(s: CoreSession, label: string | undefined, messages: AgentMessage[]): TemplateResult {
-    const people = conversationParticipants(messages);
-    const named = people.slice(0, 3).map((person) => (person.key === appState.me?.user ? "you" : person.name));
-    return slackBar({
-      channel: defaultSessionTitle(s),
-      leaf: s.title?.trim(),
-      participants: participantStack(people),
-      people: `${named.join(", ")}${people.length > 3 ? ` +${people.length - 3}` : ""}`,
-      href: sessionSlackUrl(s),
-      surface: label,
-    });
   }
 
   async function retryFailedSend(message: AgentMessage, index: number): Promise<void> {
@@ -2239,17 +2209,9 @@ export function createChatSurface(
             : nothing,
           meta: messageMeta(message, index),
         });
-      if (isReadOnlySlackView())
-        return slackRowFor(
-          message,
-          index,
-          html`${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
-          ${slackWireBubble(displayText, slackSelf())}
-          ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}`,
-        );
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""} ${slackOutbox.sending(message) ? "sending-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2260,13 +2222,14 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${markdown(displayText)}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText, slackSelf()) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
               <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
             </button>
           </div>
+          ${reactionChips(slackReactions.onMessage.get(message))}
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -2380,27 +2343,19 @@ export function createChatSurface(
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
-      if (isReadOnlySlackView())
-        return slackRowFor(
-          message,
-          index,
-          html`${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
-          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-          ${workView === nothing ? nothing : html`<div class="slack-work">${workView}</div>`}`,
-        );
       const labeled = chatState.labelSpeakers;
       return html`
         <article
-          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            labeled
+            labeled && !continuedSpeakerRows.has(message)
               ? html`<div class="speaker-label">
-                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${speakerTime(msg)}
+                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${isReadOnlySlackView() ? appTag() : nothing}${speakerTime(msg)}
                 </div>`
               : nothing
           }
@@ -2408,7 +2363,7 @@ export function createChatSurface(
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-            ${isStreaming ? nothing : messageMeta(msg, index)}
+            ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>
         </article>
       `;
