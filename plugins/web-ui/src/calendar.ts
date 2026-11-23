@@ -41,6 +41,7 @@ import {
 } from "./calendar-layout";
 import { openEventEditor } from "./calendar-editor";
 import { popoverTpl, type Popover, type Reply } from "./calendar-popover";
+import { onSpeakerAvatars } from "./speaker-avatars";
 
 const HOUR_PX = 48;
 const MORNING_HOUR = 8;
@@ -122,6 +123,10 @@ export function renderCalendar(): void {
     if (host?.isConnected && appState.currentView === "calendar") draw();
   }, 60_000);
 }
+
+onSpeakerAvatars(() => {
+  if (cal.popover) draw();
+});
 
 function draw(): void {
   if (!host || appState.currentView !== "calendar") return;

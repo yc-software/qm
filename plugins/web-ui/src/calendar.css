@@ -767,8 +767,18 @@
   font-size: 9px;
   font-weight: 600;
 }
+.cal-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
 .cal-rsvp-mark {
   position: absolute;
+  z-index: 1;
   right: -3px;
   bottom: -3px;
   display: grid;

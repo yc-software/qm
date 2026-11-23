@@ -15,7 +15,8 @@ import {
   X,
 } from "lucide";
 import { icon } from "./icons";
-import { initials } from "./ui";
+import { initials, photoTpl } from "./ui";
+import { speakerAvatar } from "./speaker-avatars";
 import type { Calendar, CalendarEvent, ResponseStatus } from "./calendar-api";
 import { eventSpan, whenLabel } from "./calendar-layout";
 
@@ -86,7 +87,9 @@ function guestsTpl(event: CalendarEvent): TemplateResult | typeof nothing {
           (person) =>
             html`<li>
               <span class="cal-avatar" aria-hidden="true"
-                >${initials(person.name || person.email)}${statusIcon(person.responseStatus)}</span
+                >${initials(person.name || person.email)}${photoTpl(speakerAvatar(person.email.toLowerCase()))}${statusIcon(
+                  person.responseStatus,
+                )}</span
               >
               <span class="cal-guest-name">
                 <span>${person.name || person.email}${person.self ? " (you)" : ""}</span>
