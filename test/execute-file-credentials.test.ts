@@ -646,3 +646,18 @@ test("a command whose change loses a conflict says so on stderr", async (t) => {
   );
   assert.equal(await savedValue(f), "saved-meanwhile");
 });
+
+test("a command that leaves a process running on its credential home says so on stderr", async (t) => {
+  const f = await fixture(t);
+  const result = await f.context().execute("nohup sleep 30 >/dev/null 2>&1 & echo $!", { credentials: ["aws"] });
+  const pid = Number(result.stdout.trim());
+  t.after(() => process.kill(pid));
+  assert.equal(result.code, 0);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `^\\[credentials\\] sleep \\(pid ${pid}\\) started by this command is still running with its private credential home`,
+    ),
+  );
+  assert.equal((await f.context().execute("true", { credentials: ["aws"] })).stderr, "");
+});

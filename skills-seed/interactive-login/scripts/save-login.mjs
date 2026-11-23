@@ -26,19 +26,24 @@ const replaceRefused = (text) => {
 };
 
 if (rest.includes("--start")) {
+  const stop = (message) => {
+    console.error(
+      `could not start the ${service} sign-in${message}; don't start the login or show a code until this succeeds`,
+    );
+    process.exit(1);
+  };
   const response = await fetch(`${AGENT_API_URL}/v1/keychain/login-tickets`, {
     method: "POST",
     headers,
     body: JSON.stringify({ service }),
-  }).catch((error) => ({ ok: false, status: 0, text: async () => reason(error) }));
-  if (!response.ok) {
-    const text = await response.text();
-    console.error(
-      `no sign-in ticket (${response.status}): ${text}${replaceRefused(text) ? `; a new login still saves, but replacing an existing ${service} login needs the save to run in the person's own turn` : ""}`,
+  }).catch((error) => stop(`: ${reason(error)}`));
+  const text = await response.text();
+  if (!response.ok)
+    stop(
+      ` (${response.status}): ${text}${replaceRefused(text) ? `; replacing the saved ${service} login needs the sign-in to start in the person's own running turn` : ""}`,
     );
-    process.exit(0);
-  }
-  writeFileSync(ticketFile, (await response.json()).loginTicket, { mode: 0o600 });
+  const { loginTicket } = JSON.parse(text);
+  if (loginTicket) writeFileSync(ticketFile, loginTicket, { mode: 0o600 });
   console.log(`started the ${service} sign-in`);
   process.exit(0);
 }

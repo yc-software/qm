@@ -149,7 +149,9 @@ export async function prepareExecutionFiles(
   } catch (error) {
     return withCleanup(
       () => Promise.reject(error),
-      () => removeDirectory(sandbox, handle, directory),
+      async () => {
+        await removeDirectory(sandbox, handle, directory);
+      },
     );
   }
   const plan = {
@@ -172,8 +174,25 @@ export async function prepareExecutionFiles(
   };
 }
 
-async function removeDirectory(sandbox: Sandbox, handle: SandboxHandle, directory: string): Promise<void> {
-  await runOrThrow(sandbox, handle, `rm -rf -- ${shq(directory)}`, "Could not remove command credential directory");
+async function removeDirectory(sandbox: Sandbox, handle: SandboxHandle, directory: string): Promise<string[]> {
+  const removed = await runOrThrow(
+    sandbox,
+    handle,
+    `{ grep -lF -- ${shq(`${directory}/`)} /proc/[0-9]*/environ; find /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 -lname ${shq(`${directory}/*`)}; } 2>/dev/null | ` +
+      `cut -d/ -f3 | sort -un | while read -r pid; do printf '%s (pid %s)\\n' "$(cat "/proc/$pid/comm" 2>/dev/null)" "$pid"; done; ` +
+      `rm -rf -- ${shq(directory)}`,
+    "Could not remove command credential directory",
+  );
+  return removed.stdout.split("\n").filter(Boolean);
+}
+
+function orphanNote(processes: readonly string[]): string {
+  const one = processes.length === 1;
+  return (
+    `[credentials] ${processes.join(", ")} started by this command ${one ? "is" : "are"} still running with its private credential home, which was removed when the command ended. ` +
+    `Anything ${one ? "it writes" : "they write"} there from now on is lost, including a sign-in approved later. ` +
+    `Keep a process that needs a saved login in a background job that names the credential, and sign in again with the interactive-login skill.`
+  );
 }
 
 async function finishExecutionFiles(
@@ -269,8 +288,13 @@ async function finishExecutionFiles(
     }
     return notes.length ? `[credentials] This command ${notes.join("; and ")}.` : undefined;
   };
-  return withCleanup(work, async () => {
+  let orphans: string[] = [];
+  const note = await withCleanup(work, async () => {
     await settle?.(retry);
-    if (!retry.length) await removeDirectory(sandbox, handle, directory);
+    if (!retry.length) orphans = await removeDirectory(sandbox, handle, directory);
+  }).catch((error: unknown) => {
+    if (orphans.length) console.warn(orphanNote(orphans));
+    throw error;
   });
+  return orphans.length ? [note, orphanNote(orphans)].filter(Boolean).join("\n") : note;
 }

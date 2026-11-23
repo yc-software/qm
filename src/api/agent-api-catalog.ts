@@ -548,7 +548,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/login-tickets",
         summary:
-          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this); {} with no ticket when nothing is saved yet for a run with no one at the keyboard; 409 login_in_progress while another conversation's sign-in for the service awaits approval",
       },
       {
         method: "POST|DELETE",

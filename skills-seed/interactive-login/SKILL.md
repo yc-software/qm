@@ -14,7 +14,9 @@ and save-login commands so the temporary home and save script stay on one comput
 1. In the person's own turn, make a fresh directory and start the sign-in with the script
    shipped with this skill, under the absolute directory the skill read reported. It gets a
    one-time ticket that lets step 3 replace this service's existing login even after the turn
-   ends. Then start the login with `execute(background:true)` with every config location
+   ends. If it fails, stop and follow its message without starting the login or showing a
+   code; it fails when this run can't replace the saved login or another conversation's
+   sign-in for the service is still waiting for approval. Then start the login with `execute(background:true)` with every config location
    pointed into the directory. Copy in any config the CLI needs first (for AWS, the
    `[profile …]`/`[sso-session …]` blocks in `.aws/config`); everything under that
    directory becomes the saved login.

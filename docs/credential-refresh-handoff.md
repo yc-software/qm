@@ -24,6 +24,16 @@ service and conversation in the secret-drop store and returns its id. The save s
 back as `loginTicket`, and the route redeems it once the save has landed, so it allows one
 replace of that service and survives a save that fails before then.
 
+The start refuses a run that isn't the owner's live turn when the owner already has a login
+for the service (403), and answers 200 without a ticket when there is none, because a new
+login saves without one. Under an advisory lock on owner and service, it also answers 409
+`login_in_progress` while an unredeemed ticket another conversation minted for the same owner
+and service is under 15 minutes old, the longest device-code lifetime among the CLIs the
+skill covers. That keeps several conversations that hit the same expired login from each
+asking the person to approve a code. The same conversation may always start again, and an
+abandoned sign-in stops blocking others when its 15 minutes pass. The script exits non-zero
+on any refusal or network failure, so the agent stops before showing a code.
+
 ## Execution
 
 Every command that names a saved login runs on the turn's scratch computer, in shared and
@@ -46,7 +56,10 @@ sessions, bot-marked and impersonated turns, the owner's own messages in a room 
 carry no member list (a web shared channel or group that isn't a project, and a partner-chat
 group chat), and the jobs they start. Anything else such a run changed keeps the stored version;
 the core log names each path and why, and a foreground command's stderr says so. Each execution
-removes its own directory in `finally`.
+removes its own directory in `finally`. Just before removing it, the same command lists processes
+whose environment, working directory or open files still point into it (from `/proc`), such as
+a detached `nohup aws sso login … &`, and the command's stderr (or the core log for a background
+job) names them, because anything they write there afterwards is lost.
 
 A token refresh is recognised only by which fields changed. QM doesn't ask the provider whether
 the new token belongs to the same account, so a run that can write the staged files can put

@@ -1350,6 +1350,38 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(await secret(), "after the turn");
   });
 
+  it("one conversation at a time may start a sign-in, and a run without the owner starts one only when nothing is saved", async () => {
+    const owner = "SIGNIN_OWNER";
+    const start = async (claims: Partial<CapabilityClaims>, service = "aws") => {
+      const response = await post("/v1/keychain/login-tickets", { service }, await capFor(owner, undefined, claims));
+      return { status: response.status, body: (await response.json()) as { loginTicket?: string; message?: string } };
+    };
+    const unattended = { triggered: true, threadRef: "dm:cron" };
+    assert.deepEqual(await start(unattended), { status: 200, body: {} });
+    await built.keychain!.save({ ownerId: owner, service: "aws", secret: "saved", origin: "test" });
+    assert.equal((await start(unattended)).status, 403);
+
+    const conversation = (threadRef: string) => liveRunClaims(owner, threadRef);
+    const racing = await Promise.all([start(conversation("dm:a")), start(conversation("dm:b"))]);
+    assert.deepEqual(racing.map(({ status }) => status).sort(), [200, 409]);
+    const winner = racing[0]!.status === 200 ? "dm:a" : "dm:b";
+    const loser = racing.find(({ status }) => status === 409)!;
+    assert.match(
+      loser.body.message!,
+      /aws sign-in started in another conversation is still waiting.*can start in 15 minutes/,
+    );
+    assert.equal((await start(conversation(winner))).status, 200);
+    assert.equal((await start(conversation("dm:c"), "gh")).status, 200);
+
+    const other = "SIGNIN_ABANDONED";
+    await built.secretDrops!.mint(
+      { kind: "login", ownerId: other, service: "aws", purpose: "login", requestedBy: other, threadRef: "dm:a" },
+      Date.now() - 15 * 60_000,
+    );
+    const later = await capFor(other, undefined, liveRunClaims(other, "dm:b"));
+    assert.equal((await post("/v1/keychain/login-tickets", { service: "aws" }, later)).status, 200);
+  });
+
   it("a credential's writer lease admits one holder until it is released or ends", async () => {
     const owner = "LEASE_OWNER";
     const cap = await capFor(owner, undefined, { triggered: true });

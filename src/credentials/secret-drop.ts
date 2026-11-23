@@ -37,6 +37,7 @@ export interface SecretDropStore {
   peek(dropId: string, now?: number): Promise<SecretDropResult>;
   redeem(dropId: string, now?: number): Promise<SecretDropResult>;
   siblings(rec: SecretDropRecord, now?: number): Promise<SecretDropRecord[]>;
+  logins(ownerId: string, service: string, now?: number): Promise<SecretDropRecord[]>;
 }
 
 export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -82,6 +83,12 @@ export function createSecretDropStore(
           out.push(r);
       }
       return out;
+    },
+    async logins(ownerId, service, now) {
+      const at = now ?? clock();
+      return (await backing.select({ where: { field: "ownerId", anyOfFold: [ownerId] } })).filter(
+        (rec) => rec.kind === "login" && rec.service === service && judge(rec, at).ok,
+      );
     },
   };
 }

@@ -12,6 +12,7 @@ import { parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capability-token.ts";
@@ -217,30 +218,52 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     );
     return sendJson(res, 200, { credential: meta });
   };
-  return ticketId ? kc.withLoginTicket(ticketId, store) : store();
+  return ticketId ? kc.withLoginLock(ticketId, store) : store();
 });
 
-const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef }) => {
-  const { res, deps, tenant, body } = ctx;
-  const { service } = body as { service?: unknown };
-  if (typeof service !== "string" || !service.trim())
+const LOGIN_APPROVAL_MS = 15 * 60_000;
+
+const startLogin = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }) => {
+  const { res, deps, tenant, body, capability } = ctx;
+  const { service: requested } = body as { service?: unknown };
+  if (typeof requested !== "string" || !requested.trim())
     return sendJson(res, 400, { error: "bad_request", message: "service required" });
-  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  const drops = deps.secretDrops;
+  if (!drops) return sendJson(res, 404, { error: "not_found" });
+  const service = keychainService(requested);
+  const saved = (await kc.listByOwner(actorId)).some((meta) => meta.service === service);
+  if (!saved && capability && !personAtKeyboard(capability)) return sendJson(res, 200, {});
   if (!livePersonTurn(ctx)) return;
-  const { dropId } = await deps.secretDrops.mint({
-    kind: "login",
-    ownerId: actorId,
-    service: keychainService(service),
-    purpose: "login",
-    requestedBy: actorId,
-    ...(threadRef ? { threadRef } : {}),
-    requiresToken: true,
+  return kc.withLoginLock(`${actorId}:${service}`, async () => {
+    const now = Date.now();
+    const waiting = (await drops.logins(actorId, service, now)).find(
+      (rec) => rec.threadRef !== threadRef && now - rec.createdAt < LOGIN_APPROVAL_MS,
+    );
+    if (waiting) {
+      const minutes = Math.ceil((waiting.createdAt + LOGIN_APPROVAL_MS - now) / 60_000);
+      return sendJson(res, 409, {
+        error: "login_in_progress",
+        message: `A ${service} sign-in started in another conversation is still waiting for its code to be approved. Don't start another or show a new code: ask the person to finish that one, then use the saved ${service} login. If it was abandoned, a new sign-in can start in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      });
+    }
+    const { dropId } = await drops.mint(
+      {
+        kind: "login",
+        ownerId: actorId,
+        service,
+        purpose: "login",
+        requestedBy: actorId,
+        ...(threadRef ? { threadRef } : {}),
+        requiresToken: true,
+      },
+      now,
+    );
+    audit(
+      { deps, tenant },
+      { principalId: actorId, action: "keychain.login.start", resource: service, scopeLabel: scopeId },
+    );
+    return sendJson(res, 200, { loginTicket: dropId });
   });
-  audit(
-    { deps, tenant },
-    { principalId: actorId, action: "keychain.login.start", resource: keychainService(service), scopeLabel: scopeId },
-  );
-  return sendJson(res, 200, { loginTicket: dropId });
 });
 
 const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {

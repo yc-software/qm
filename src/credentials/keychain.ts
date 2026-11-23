@@ -394,7 +394,7 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
-  withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
+  withLoginLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
   claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
   releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
   updateFiles(
@@ -1133,7 +1133,7 @@ export function createKeychain(deps: {
       return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
     },
 
-    withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
+    withLoginLock: (key, fn) => lock.withLock(`keychain-login:${key}`, fn),
 
     async claimWriter(ownerId, id, writer) {
       let claimed: boolean | null = null;

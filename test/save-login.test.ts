@@ -72,23 +72,36 @@ test("save-login uploads a private login home and re-saving keeps the entry and 
   assert.equal(token.mode, 0o600);
 });
 
-test("save-login names a first login still saving and removes the sign-in directory only on the replace rule's refusals", async (t) => {
-  let error = "forbidden";
-  const server = createServer((_req, res) => res.writeHead(403).end(JSON.stringify({ error })));
+test("save-login --start stops on any refusal and saves a ticket only when the server issues one", async (t) => {
+  let reply: [number, object] = [403, { error: "forbidden" }];
+  const server = createServer((_req, res) => res.writeHead(reply[0]).end(JSON.stringify(reply[1])));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const home = await mkdtemp(join(tmpdir(), "login-home-"));
+  t.after(() => rm(`${home}.ticket`, { force: true }));
   t.after(() => rm(home, { recursive: true, force: true }));
-  await writeFile(join(home, "token"), "synthetic");
-  await writeFile(`${home}.ticket`, "synthetic-ticket");
   const { port } = server.address() as { port: number };
   const env = { ...process.env, AGENT_API_URL: `http://127.0.0.1:${port}`, AGENT_API_TOKEN: "synthetic-token" };
-  const start = async () => (await run("node", [script, "aws", home, "--start"], { env })).stderr;
-  assert.doesNotMatch(await start(), /a new login still saves/);
+  const start = (url = env.AGENT_API_URL) =>
+    run("node", [script, "aws", home, "--start"], { env: { ...env, AGENT_API_URL: url } });
+  await assert.rejects(start("http://127.0.0.1:1"), /could not start the aws sign-in: fetch failed.*show a code/);
+  reply = [403, { error: "human_consent_required" }];
+  await assert.rejects(start(), /\(403\).*needs the sign-in to start in the person's own running turn/);
+  reply = [409, { error: "login_in_progress" }];
+  await assert.rejects(start(), /\(409\)/);
+  await assert.rejects(access(`${home}.ticket`));
+  reply = [200, {}];
+  assert.equal((await start()).stdout, "started the aws sign-in\n");
+  await assert.rejects(access(`${home}.ticket`));
+  reply = [200, { loginTicket: "synthetic-ticket" }];
+  await start();
+  await access(`${home}.ticket`);
+
+  await writeFile(join(home, "token"), "synthetic");
+  reply = [403, { error: "forbidden" }];
   await assert.rejects(run("node", [script, "aws", home], { env }), /run this again to retry/);
   await access(home);
-  error = "human_consent_required";
-  assert.match(await start(), /a new login still saves/);
+  reply = [403, { error: "human_consent_required" }];
   await assert.rejects(run("node", [script, "aws", home], { env }), /start again from step 1/);
   await assert.rejects(access(home));
   await assert.rejects(access(`${home}.ticket`));
