@@ -59,9 +59,13 @@ struct NativeDictationComposer: View {
       ScrollView {
         transcript
           .font(.title3)
-          // New words and the bold on the latest one ease in instead of popping.
-          .contentTransition(reduceMotion ? .identity : .interpolate)
-          .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.liveText)
+          // Each new word rises a few points and comes into focus as it lands.
+          .keyframeAnimator(initialValue: 1.0, trigger: wordCount) { content, progress in
+            content.textRenderer(NativeWordReveal(progress: reduceMotion ? 1 : progress))
+          } keyframes: { _ in
+            MoveKeyframe(0)
+            CubicKeyframe(1, duration: 0.38)
+          }
           .multilineTextAlignment(.center)
           .frame(maxWidth: .infinity)
           .fixedSize(horizontal: false, vertical: true)
@@ -94,8 +98,10 @@ struct NativeDictationComposer: View {
     }
     let latest = model.liveText.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
     let preceding = String(model.liveText.dropLast(latest.count))
-    return Text(preceding) + Text(latest).fontWeight(.semibold)
+    return Text(preceding) + Text(latest).fontWeight(.semibold).customAttribute(NativeNewestWord())
   }
+
+  private var wordCount: Int { model.liveText.split(whereSeparator: \.isWhitespace).count }
 
   private var maximumTranscriptHeight: CGFloat {
     verticalSizeClass == .compact ? 120 : 220
@@ -152,6 +158,29 @@ struct NativeDictationComposer: View {
       .buttonStyle(.plain)
       .disabled(!canFinish)
       .accessibilityLabel(model.state == .transcribing ? "Sending dictation" : "Send dictation")
+    }
+  }
+}
+
+private struct NativeNewestWord: TextAttribute {}
+
+/// Draws the dictation transcript, easing the newest word up into place and into focus.
+private struct NativeWordReveal: TextRenderer {
+  var progress: Double
+
+  func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+    for line in layout {
+      for run in line {
+        guard run[NativeNewestWord.self] != nil, progress < 1 else {
+          context.draw(run)
+          continue
+        }
+        var landing = context
+        landing.opacity = progress
+        landing.addFilter(.blur(radius: (1 - progress) * 4))
+        landing.translateBy(x: 0, y: (1 - progress) * 6)
+        landing.draw(run)
+      }
     }
   }
 }
