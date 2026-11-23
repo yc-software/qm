@@ -777,9 +777,11 @@ struct ChatView: View {
     VStack(alignment: .leading, spacing: 6) {
       if dictation.busy {
         NativeDictationComposer(model: dictation)
+          // Opacity only: a scale would nudge the corner buttons inward and up. On close
+          // the panel clears out quickly so its buttons don't drift with the shrinking chrome.
           .transition(
-            // Opacity only: a scale would nudge the corner buttons inward and up.
-            .opacity)
+            .asymmetric(
+              insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
       } else {
         composerTextField
         if let error = dictation.error {
@@ -844,7 +846,10 @@ struct ChatView: View {
     .composerChrome()
     // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
     // field and the incoming orb move together instead of snapping.
-    .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)
+    // Closing settles without bounce: an overshoot reads as the buttons jumping.
+    .animation(
+      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
+      value: dictation.busy)
     // A soft tap as the panel opens, matching the drawer's haptic.
     .sensoryFeedback(trigger: dictation.busy) { _, open in
       open ? .impact(flexibility: .soft, intensity: 0.7) : nil
