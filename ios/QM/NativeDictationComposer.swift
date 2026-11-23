@@ -30,6 +30,7 @@ struct NativeDictationComposer: View {
       }
 
       // The same corners as the composer row: the plus becomes discard, send stays send.
+      // Both are full 44pt circles so the pair reads as equals.
       HStack {
         discardButton
         Spacer(minLength: 8)
@@ -115,11 +116,10 @@ struct NativeDictationComposer: View {
       model.cancel()
     } label: {
       Image(systemName: "xmark")
-        .font(.system(size: 14, weight: .semibold))
+        .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(QMTheme.ink)
-        .frame(width: 32, height: 32)
-        .background(QMTheme.ink.opacity(0.08), in: Circle())
         .frame(width: 44, height: 44)
+        .background(QMTheme.ink.opacity(0.08), in: Circle())
         .contentShape(Circle())
     }
     .buttonStyle(.plain)
