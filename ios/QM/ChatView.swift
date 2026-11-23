@@ -774,7 +774,9 @@ struct ChatView: View {
   }
 
   private func composer(_ proxy: ScrollViewProxy) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
+    // Bottom-aligned so the outgoing view stays pinned to the bottom edge while the chrome
+    // resizes; in a VStack it rides the moving top edge and the corner buttons jump.
+    ZStack(alignment: .bottom) {
       if dictation.busy {
         NativeDictationComposer(model: dictation)
           // Opacity only: a scale would nudge the corner buttons inward and up. On close
@@ -783,58 +785,61 @@ struct ChatView: View {
             .asymmetric(
               insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
       } else {
-        composerTextField
-        if let error = dictation.error {
-          NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
-            .padding(.horizontal, 8)
-        }
-        if model.uploading, let uploadingName = model.uploadingName {
-          NativeChatUploadStatus(filename: uploadingName)
-            .padding(.horizontal, 8)
-        }
-        HStack(spacing: 6) {
-          AttachmentPicker(
-            uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
-          ).disabled(model.sending)
-          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
-          Spacer(minLength: 0)
-          Button {
-            composerFocused = false
-            dictation.start()
-          } label: {
-            Image(systemName: "mic")
-              .font(.system(size: 18)).frame(width: 44, height: 44)
-              .foregroundStyle(QMTheme.ink)
+        VStack(alignment: .leading, spacing: 6) {
+          composerTextField
+          if let error = dictation.error {
+            NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
+              .padding(.horizontal, 8)
           }
-          .accessibilityLabel("Dictate message")
-          .disabled(model.sending)
-          if model.activeRunID != nil,
-            model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            model.attachments.isEmpty
-          {
+          if model.uploading, let uploadingName = model.uploadingName {
+            NativeChatUploadStatus(filename: uploadingName)
+              .padding(.horizontal, 8)
+          }
+          HStack(spacing: 6) {
+            AttachmentPicker(
+              uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
+            ).disabled(model.sending)
+            if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
+            Spacer(minLength: 0)
             Button {
-              Task { await stop() }
+              composerFocused = false
+              dictation.start()
             } label: {
-              Image(systemName: "stop.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .modifier(NativeLoadingPulse(active: stopping))
-                .foregroundStyle(QMTheme.paper)
-                .frame(width: 44, height: 44)
-                .background(QMTheme.ink, in: Circle())
-            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
-              .disabled(stopping)
-          } else {
-            Button {
-              send(proxy)
-            } label: {
-              ComposerSendLabel(enabled: canSend, sending: model.sending)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.sending)
+              Image(systemName: "mic")
+                .font(.system(size: 18)).frame(width: 44, height: 44)
+                .foregroundStyle(QMTheme.ink)
             }
-            .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
-            .disabled(!canSend)
+            .accessibilityLabel("Dictate message")
+            .disabled(model.sending)
+            if model.activeRunID != nil,
+              model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              model.attachments.isEmpty
+            {
+              Button {
+                Task { await stop() }
+              } label: {
+                Image(systemName: "stop.fill")
+                  .font(.system(size: 15, weight: .semibold))
+                  .modifier(NativeLoadingPulse(active: stopping))
+                  .foregroundStyle(QMTheme.paper)
+                  .frame(width: 44, height: 44)
+                  .background(QMTheme.ink, in: Circle())
+              }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+                .disabled(stopping)
+            } else {
+              Button {
+                send(proxy)
+              } label: {
+                ComposerSendLabel(enabled: canSend, sending: model.sending)
+                  .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.sending)
+              }
+              .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
+              .disabled(!canSend)
+            }
           }
+          if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
         }
-        if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
+        .transition(.opacity)
       }
     }
     .padding(8)
