@@ -175,13 +175,6 @@ struct ChatView: View {
       }
       if expanded { composerFocused = false }
     }
-    .onChange(of: dictation.completedText) { _, text in
-      if let text {
-        model.draft = NativeDictationModel.appending(text, to: model.draft)
-        model.saveDraft()
-        composerFocused = true
-      }
-    }
     .background {
       DrawerOpenWatcher {
         composerFocused = false
@@ -784,6 +777,12 @@ struct ChatView: View {
     VStack(alignment: .leading, spacing: 6) {
       if dictation.busy {
         NativeDictationComposer(model: dictation)
+          .transition(
+            reduceMotion
+              ? .opacity
+              : .asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom)),
+                removal: .opacity))
       } else {
         composerTextField
         if let error = dictation.error {
@@ -840,7 +839,27 @@ struct ChatView: View {
       }
     }
     .padding(8)
+    // Behind the content but above the composer fill, so the glow tints the panel from its
+    // edges inward without covering the text.
+    .background {
+      if dictation.busy { NativeDictationGlow(model: dictation) }
+    }
     .composerChrome()
+    // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
+    // field and the incoming orb move together instead of snapping.
+    .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)
+    // A soft tap as the panel opens, matching the drawer's haptic.
+    .sensoryFeedback(trigger: dictation.busy) { _, open in
+      open ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
+    // Dictated text joins the draft; the send button also sends it, while tapping the
+    // transcript leaves it in the field to edit.
+    .onChange(of: dictation.completedText) { _, text in
+      guard let text else { return }
+      model.draft = NativeDictationModel.appending(text, to: model.draft)
+      model.saveDraft()
+      if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
+    }
   }
 
   private var composerTextField: some View {
