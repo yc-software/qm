@@ -429,9 +429,7 @@ export function createSessionMethods(
       { sessionId: session.id },
       copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
     );
-    await Promise.all(
-      (members ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)),
-    );
+    await Promise.all((members ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)));
     return { session, lastSeq: copiedItems.at(-1)?.seq ?? null };
   };
 

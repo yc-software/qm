@@ -135,6 +135,7 @@ import {
   endSessionMoveDrag,
   projectDropHandlers,
   registerSessionMoveHost,
+  sessionMoveToast,
   sessionsToMove,
 } from "./session-move";
 
@@ -1379,8 +1380,8 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
   redrawSelection();
   if (opened) await openSession(opened, undefined, undefined, "replace");
   else if (moved && appState.currentView === "contexts") await renderContexts();
-  if (failure) canvasToast(failure);
-  else canvasToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
+  if (failure) sessionMoveToast(failure);
+  else sessionMoveToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
 }
 
 registerSessionMoveHost({ sessions: () => sessionsState.list, move: moveSessionsToProject });

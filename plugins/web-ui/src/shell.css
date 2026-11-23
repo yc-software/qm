@@ -712,6 +712,9 @@ a.chat-row-open {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
+.split-toast.session-move-toast {
+  position: fixed;
+}
 .context-detail.session-drop-over {
   outline-offset: 6px;
   border-radius: var(--radius-md);

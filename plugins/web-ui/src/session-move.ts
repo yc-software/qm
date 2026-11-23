@@ -8,18 +8,17 @@ export interface SessionMoveHost {
 }
 
 let host: SessionMoveHost | null = null;
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let dragIds: readonly string[] | null = null;
 
 export function registerSessionMoveHost(next: SessionMoveHost | null): void {
   host = next;
 }
 
-/** A drag of a selected row carries the whole selection; any other row moves alone. */
 export function sessionsToMove(selected: ReadonlySet<string>, draggedId: string): string[] {
   return selected.has(draggedId) && selected.size > 1 ? [...selected] : [draggedId];
 }
 
-/** The dragged sessions that would actually change scope when dropped on `scopeId`. */
 export function movableInto(
   sessions: readonly Pick<CoreSession, "id" | "scopeId">[],
   ids: readonly string[],
@@ -38,7 +37,8 @@ export function beginSessionMoveDrag(ids: readonly string[]): void {
 
 export function endSessionMoveDrag(): void {
   dragIds = null;
-  for (const el of document.querySelectorAll(`.${SESSION_DROP_OVER_CLASS}`)) el.classList.remove(SESSION_DROP_OVER_CLASS);
+  for (const el of document.querySelectorAll(`.${SESSION_DROP_OVER_CLASS}`))
+    el.classList.remove(SESSION_DROP_OVER_CLASS);
 }
 
 function droppable(scopeId: string): string[] {
@@ -53,7 +53,6 @@ export interface ProjectDropHandlers {
   drop(e: DragEvent): void;
 }
 
-/** Event handlers that make an element a drop target that moves dragged sessions into a project. */
 export function projectDropHandlers(scopeId: string): ProjectDropHandlers {
   const accept = (e: DragEvent): boolean => {
     if (!droppable(scopeId).length) return false;
@@ -83,4 +82,20 @@ export function projectDropHandlers(scopeId: string): ProjectDropHandlers {
       void target.move(ids, scopeId);
     },
   };
+}
+
+export function sessionMoveToast(message: string): void {
+  let el = document.querySelector<HTMLElement>(".session-move-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "split-toast session-move-toast";
+    el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  if (toastTimer !== null) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    document.querySelector(".session-move-toast")?.remove();
+  }, 2500);
 }
