@@ -2,8 +2,8 @@ import type { ModelUtilities } from "../../agent/agent.ts";
 import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
-import { SENSITIVITY_PROMPT } from "../classification.ts";
-import { isMemorySensitivity, type MemoryCaptureMetadata, type MemorySensitivity } from "../facts.ts";
+import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
+import type { MemoryCaptureMetadata, MemorySensitivity } from "../facts.ts";
 import { fencedCodeBlocks } from "../../util/markdown.ts";
 import { swallow } from "../../util/errors.ts";
 
@@ -41,7 +41,7 @@ interface ExtractedFact {
 
 function parseExtractedFacts(out: string): ExtractedFact[] {
   const trimmed = out.trim();
-  if (!trimmed || trimmed.toLowerCase() === "none") return [];
+  if (!trimmed) return [];
   const body = (fencedCodeBlocks(trimmed)[0]?.body ?? trimmed).trim();
   try {
     const parsed: unknown = JSON.parse(body);
@@ -50,12 +50,23 @@ function parseExtractedFacts(out: string): ExtractedFact[] {
       return [];
     }
     return parsed.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [];
+      if (!entry || typeof entry !== "object") {
+        swallow(
+          "memory extraction",
+          new Error(`invalid extracted fact entry: ${(JSON.stringify(entry) ?? "undefined").slice(0, 120)}`),
+        );
+        return [];
+      }
       const record = entry as Record<string, unknown>;
       const text = typeof record.text === "string" ? record.text.trim() : "";
-      if (!text) return [];
-      const raw = typeof record.sensitivity === "string" ? record.sensitivity.trim().toLowerCase() : undefined;
-      return [{ text, sensitivity: isMemorySensitivity(raw) ? raw : "unknown" }];
+      if (!text) {
+        swallow(
+          "memory extraction",
+          new Error(`missing fact text in entry: ${(JSON.stringify(entry) ?? "undefined").slice(0, 120)}`),
+        );
+        return [];
+      }
+      return [{ text, sensitivity: parseSensitivity(record.sensitivity, "memory extraction") }];
     });
   } catch (e) {
     swallow("memory extraction", new Error(`invalid JSON output: ${body.slice(0, 200)}`, { cause: e }));

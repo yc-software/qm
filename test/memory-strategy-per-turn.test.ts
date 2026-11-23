@@ -40,13 +40,12 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.doesNotMatch(body, /not a bullet/);
 });
 
-test("parseFacts: JSON array in, empty/malformed/NONE out", () => {
+test("parseFacts: JSON array in, empty/malformed out", () => {
   assert.deepEqual(parseFacts(JSON.stringify([{ text: "a", sensitivity: "ordinary" }, { text: "b" }, { text: "" }])), [
     "a",
     "b",
   ]);
   assert.deepEqual(parseFacts("[]"), []);
-  assert.deepEqual(parseFacts("NONE"), []);
   assert.deepEqual(parseFacts(""), []);
   assert.deepEqual(parseFacts("not json"), []);
 });
@@ -61,9 +60,9 @@ test("per-turn swallows extraction failures and captures nothing", async () => {
   assert.equal(await memory.read(SCOPE), "", "nothing captured");
 });
 
-test("per-turn does not capture when the model says NONE", async () => {
+test("per-turn does not capture when the model returns []", async () => {
   const agent: ModelUtilities = {
-    oneShot: () => Promise.resolve("NONE"),
+    oneShot: () => Promise.resolve("[]"),
   };
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent, memory });

@@ -1,11 +1,11 @@
 import { parseArgs } from "node:util";
 import pg from "pg";
-import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
 import { configRouteOptions, createModelRoutes } from "../src/model/model-route.ts";
 import { loadConfig } from "../src/config.ts";
 import { classifyFacts } from "../src/memory/classification.ts";
 import type { MemorySensitivity } from "../src/memory/facts.ts";
+import { pgConnectionOptions } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
 interface FactRow {
@@ -21,12 +21,8 @@ interface FactRow {
 
 function isCrossScopeRow(row: FactRow): boolean {
   if (row.session_scope_id && row.session_scope_id !== row.scope_id) return true;
-  if (row.sources.some((source) => source !== row.scope_id)) return true;
-  if (row.sources.length === 0) {
-    const lower = row.text.toLowerCase();
-    if (lower.includes("(said in ") || lower.includes("[claimed source:")) return true;
-  }
-  return false;
+  if (row.sources.length === 0) return true;
+  return row.sources.some((source) => source !== row.scope_id);
 }
 
 function needsUpdate(row: FactRow, sensitivity: MemorySensitivity): boolean {
@@ -53,14 +49,14 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
 const config = loadConfig();
-const baseAgent = createAgent({
+const agent = createAgent({
   ...agentConfigOptions(config),
   routes: createModelRoutes(configRouteOptions(config)),
   tempDirPrefix: "membackfill",
 });
-if (!baseAgent.oneShot) throw new Error("model agent has no oneShot configured");
+if (!agent.oneShot) throw new Error("model agent has no oneShot configured");
 
-const client = new pg.Client({ connectionString: databaseUrl });
+const client = new pg.Client(pgConnectionOptions(databaseUrl));
 await client.connect();
 try {
   const params: unknown[] = [values.scope ?? null];
@@ -105,20 +101,7 @@ try {
     }
     for (let i = 0; i < eligible.length; i += batchSize) {
       const slice = eligible.slice(i, i + batchSize);
-      let batchFailed = false;
-      const agent: ModelUtilities = {
-        async oneShot(systemPrompt, prompt, purpose) {
-          try {
-            const out = await baseAgent.oneShot!(systemPrompt, prompt, purpose);
-            if (!out?.trim()) batchFailed = true;
-            return out;
-          } catch (e) {
-            batchFailed = true;
-            throw e;
-          }
-        },
-      };
-      const labels = await withTenant(tenantId, () =>
+      const { labels, error } = await withTenant(tenantId, () =>
         classifyFacts(
           agent,
           slice.map((row) => row.text),
@@ -126,7 +109,10 @@ try {
           undefined,
         ),
       );
-      if (batchFailed) {
+      if (error) {
+        console.error(
+          `[${scopeId}] classification batch failed (${slice[0]!.id}..${slice[slice.length - 1]!.id}): ${error}`,
+        );
         skippedModelErrors += slice.length;
         continue;
       }
