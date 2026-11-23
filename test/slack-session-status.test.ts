@@ -96,11 +96,8 @@ function fixture() {
     },
     () => at,
   );
-  const manager = (rows = store) =>
-    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, {
-      work,
-      publicWebUrl: "https://qm.example.test/web-ui/",
-    });
+  const manager = (rows = store, publicWebUrl = "https://qm.example.test/web-ui/") =>
+    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, { work, publicWebUrl });
   const status = manager();
   const add = (id: string) => {
     const run = {
@@ -248,7 +245,7 @@ test("background lifecycle survives restart, links to the web conversation from 
   const run = f.add("r1");
   await f.start(run.id);
   assert.equal(f.card().length, 1);
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
   const job = f.background();
   run.status = "done";
   await f.reconcile();
@@ -284,12 +281,12 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   f.advance(30_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: thinking it through");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
   f.purposes.set("r1", "Reading status implementation");
   f.advance(51_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: reading status implementation");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM · 1m" }]);
   const posts = f.cards.length;
   await f.reconcile();
   assert.equal(f.cards.length, posts);
@@ -309,6 +306,14 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
   assert.deepEqual(await f.store.all(), []);
+});
+
+test("without a web URL the details line is plain text and offers nothing to open", async () => {
+  const f = fixture();
+  await f.enable();
+  await f.start(f.add("r1").id);
+  await f.manager(f.store, "").reconcile(f.client, "T1:B1");
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it" }]);
 });
 
 test("work that ends before the card is due posts nothing", async () => {
@@ -337,7 +342,7 @@ test("running subagents keep one flat card titled with their latest step", async
   assert.equal(f.card().length, 1);
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Still working: reading Slack docs");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
   f.purposes.set(child.id, "PR checks for the card");
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: PR checks for the card");

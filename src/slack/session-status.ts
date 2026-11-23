@@ -169,16 +169,17 @@ function stillWorking(step: string): string {
   return `Still working: ${lower}`;
 }
 
-function headlineOf(work: SessionWork | undefined): [string, string] {
-  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), "Working on it"];
+function headlineOf(work: SessionWork | undefined, linked: boolean): [string, string] {
+  const working = linked ? "Open in QM" : "Working on it";
+  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), working];
   if (work?.queued) return [work.queued.purpose ?? "Queued", "Picking back up shortly"];
   const branch = work?.branches.find((b) => b.step) ?? work?.branches[0];
   if (branch)
     return [
       stillWorking(branch.step ?? (branch.background ? BACKGROUND_STEP[branch.background] : "Thinking it through")),
-      "Working on it",
+      working,
     ];
-  if (work?.returning) return [stillWorking("Wrapping up"), "Working on it"];
+  if (work?.returning) return [stillWorking("Wrapping up"), working];
   if (work?.background?.kind === "watch") return [work.background.purpose ?? BACKGROUND_STEP.watch, "Keeping watch"];
   if (work?.background) return [work.background.purpose ?? BACKGROUND_STEP.job, "Running in the background"];
   return ["", ""];
@@ -188,7 +189,7 @@ function renderCard(
   work: SessionWork | undefined,
   card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
-  const [title, phrase] = headlineOf(work);
+  const [title, phrase] = headlineOf(work, !!card.followUrl);
   const details = richText(card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase, card.followUrl);
   const blocks: Record<string, unknown>[] = [
     {
