@@ -52,11 +52,12 @@ struct NativeDictationComposer: View {
         // Each word eases up into place and into focus on its own clock, so a fast
         // talker never cuts off the word before. Left-aligned while words arrive so
         // the line grows rightward instead of re-centering on every word.
-        TimelineView(.animation(paused: reduceMotion || !reveal.isAnimating)) { timeline in
+        TimelineView(.animation(paused: reduceMotion || !reveal.animating)) { timeline in
           transcript
             .font(.title3)
             .textRenderer(
-              NativeWordReveal(now: timeline.date.timeIntervalSinceReferenceDate, instant: reduceMotion))
+              NativeWordReveal(
+                now: timeline.date.timeIntervalSinceReferenceDate, instant: reduceMotion))
         }
         .multilineTextAlignment(reveal.words.isEmpty ? .center : .leading)
         .frame(maxWidth: .infinity, alignment: reveal.words.isEmpty ? .center : .leading)
@@ -78,7 +79,7 @@ struct NativeDictationComposer: View {
       }
     }
     .contentShape(Rectangle())
-    .onTapGesture { if canFinish { model.finish() } }
+    .onTapGesture { if model.canFinish { model.finish() } }
     .onAppear { reveal.update(to: model.liveText, flush: reduceMotion) }
     .onChange(of: model.liveText) { _, text in
       reveal.update(to: text, flush: reduceMotion || model.state != .recording)
@@ -87,8 +88,9 @@ struct NativeDictationComposer: View {
       if state != .recording { reveal.update(to: model.liveText, flush: true) }
     }
     .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
-    .accessibilityHint(canFinish ? "Stops recording and puts the text in the message field" : "")
-    .accessibilityAddTraits(canFinish ? .isButton : [])
+    .accessibilityHint(
+      model.canFinish ? "Stops recording and puts the text in the message field" : "")
+    .accessibilityAddTraits(model.canFinish ? .isButton : [])
   }
 
   private var transcript: Text {
@@ -97,8 +99,9 @@ struct NativeDictationComposer: View {
     }
     return reveal.words.enumerated().reduce(Text("")) { text, item in
       let (index, word) = item
-      return text + Text(index == 0 ? word.text : " " + word.text)
+      let piece = Text(index == 0 ? word.text : " " + word.text)
         .customAttribute(NativeWordBirth(time: word.born))
+      return text + piece
     }
   }
 
@@ -117,7 +120,6 @@ struct NativeDictationComposer: View {
     }
   }
 
-  private var canFinish: Bool { model.state == .recording || model.state == .ready }
 
 }
 
@@ -146,7 +148,6 @@ struct NativeDictationSendButton: View {
   let model: NativeDictationModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  private var canFinish: Bool { model.state == .recording || model.state == .ready }
 
   var body: some View {
     if model.state == .retry {
@@ -165,11 +166,11 @@ struct NativeDictationSendButton: View {
       Button {
         model.finish(sending: true)
       } label: {
-        ComposerSendLabel(enabled: canFinish, sending: model.state == .transcribing)
+        ComposerSendLabel(enabled: model.canFinish, sending: model.state == .transcribing)
           .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.state)
       }
       .buttonStyle(.plain)
-      .disabled(!canFinish)
+      .disabled(!model.canFinish)
       .accessibilityLabel(model.state == .transcribing ? "Sending dictation" : "Send dictation")
     }
   }
@@ -211,9 +212,9 @@ private struct NativeWordReveal: TextRenderer {
   }
 }
 
-/// Paces recognizer updates into a steady trickle of words. The recognizer reports
-/// in bursts of two or three words; showing them one by one, a beat apart, gives
-/// each its own entrance. Corrections to words already shown swap in place.
+/// Paces recognizer updates into a steady trickle of words. The recognizer reports in
+/// bursts of two or three words; each new word is scheduled to start landing a beat after
+/// the previous one, so every word gets its own entrance. Corrections swap in place.
 @MainActor @Observable
 final class NativeWordQueue {
   struct Word: Equatable {
@@ -222,44 +223,32 @@ final class NativeWordQueue {
   }
 
   private(set) var words: [Word] = []
-  private var pending: [String] = []
-  private var drain: Task<Void, Never>?
-
-  var isAnimating: Bool {
-    guard !pending.isEmpty || drain != nil else {
-      let now = Date.timeIntervalSinceReferenceDate
-      return words.contains { now - $0.born < wordRevealDuration }
-    }
-    return true
-  }
+  /// True while a word is still landing; the reveal timeline idles otherwise.
+  private(set) var animating = false
+  private var settle: Task<Void, Never>?
 
   func update(to text: String, flush: Bool) {
     let target = text.split(whereSeparator: \.isWhitespace).map(String.init)
     let now = Date.timeIntervalSinceReferenceDate
     // Words already on screen take the recognizer's latest spelling but keep their clock.
-    let shown = min(words.count, target.count)
-    for index in 0..<shown where words[index].text != target[index] {
+    for index in 0..<min(words.count, target.count) where words[index].text != target[index] {
       words[index].text = target[index]
     }
     if words.count > target.count { words.removeLast(words.count - target.count) }
-    pending = Array(target.dropFirst(words.count))
-    if flush {
-      drain?.cancel()
-      drain = nil
-      // Keep words already landing animating; anything still queued lands now, unanimated.
-      words += pending.map { Word(text: $0, born: now - wordRevealDuration) }
-      pending = []
-      return
+    for word in target.dropFirst(words.count) {
+      let last = words.last?.born ?? now
+      // 55ms apart, tightening to 25ms once the schedule runs more than ~3 words ahead.
+      let gap = last - now > 0.15 ? 0.025 : 0.055
+      let born = flush ? now - wordRevealDuration : max(now, last + gap)
+      words.append(Word(text: word, born: born))
     }
-    guard drain == nil, !pending.isEmpty else { return }
-    drain = Task { [weak self] in
-      while let self, !Task.isCancelled, !self.pending.isEmpty {
-        self.words.append(Word(text: self.pending.removeFirst(), born: Date.timeIntervalSinceReferenceDate))
-        // Catch up when the queue backs up so the text never trails speech by much.
-        let gap = self.pending.count > 3 ? 25 : 55
-        try? await Task.sleep(for: .milliseconds(gap))
-      }
-      self?.drain = nil
+    let end = (words.map(\.born).max() ?? now) + wordRevealDuration
+    settle?.cancel()
+    animating = end > now
+    guard animating else { return }
+    settle = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(end - now))
+      if !Task.isCancelled { self?.animating = false }
     }
   }
 }

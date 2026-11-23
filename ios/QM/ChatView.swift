@@ -814,8 +814,9 @@ struct ChatView: View {
         } else {
           AttachmentPicker(
             uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
-          ).disabled(model.sending)
-            .transition(.opacity)
+          )
+          .disabled(model.sending)
+          .transition(.opacity)
           if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
             modelSelector.transition(.opacity)
           }
@@ -849,9 +850,10 @@ struct ChatView: View {
                 .foregroundStyle(QMTheme.paper)
                 .frame(width: 44, height: 44)
                 .background(QMTheme.ink, in: Circle())
-            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
-              .disabled(stopping)
-              .transition(.opacity)
+            }
+            .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+            .disabled(stopping)
+            .transition(.opacity)
           } else {
             Button {
               send(proxy)

@@ -183,6 +183,7 @@ final class NativeDictationModel {
   private(set) var permissionError: NativeAudioPermissionError?
   var error: String?
   var busy: Bool { state != .idle }
+  var canFinish: Bool { state == .recording || state == .ready }
   private let provider: any SpeechToTextProvider
   private let microphonePermission: @MainActor () async -> Bool
   private var audioEngine: AVAudioEngine?
