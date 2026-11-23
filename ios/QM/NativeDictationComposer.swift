@@ -29,24 +29,13 @@ struct NativeDictationComposer: View {
         NativeAudioPermissionNotice(message: error, permission: model.permissionError)
       }
 
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 4) {
-          cancelButton
-          Spacer(minLength: 4)
-          footerStatus
-          Spacer(minLength: 4)
-          primaryButton
-        }
-
-        VStack(spacing: 0) {
-          footerStatus
-          HStack {
-            cancelButton
-            Spacer(minLength: 8)
-            primaryButton
-          }
-        }
+      // The same corners as the composer row: the plus becomes discard, send stays send.
+      HStack {
+        discardButton
+        Spacer(minLength: 8)
+        sendButton
       }
+      .padding(.horizontal, -4)
       .entrance(appeared, delay: 0.18, reduceMotion: reduceMotion)
     }
     .padding(.horizontal, 4)
@@ -88,7 +77,11 @@ struct NativeDictationComposer: View {
         }
       }
     }
+    .contentShape(Rectangle())
+    .onTapGesture { if canFinish { model.finish() } }
     .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
+    .accessibilityHint(canFinish ? "Stops recording and puts the text in the message field" : "")
+    .accessibilityAddTraits(canFinish ? .isButton : [])
   }
 
   private var transcript: Text {
@@ -115,58 +108,48 @@ struct NativeDictationComposer: View {
     }
   }
 
-  private var footerStatus: some View {
-    Text(footerTitle)
-      .font(.footnote)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-  }
+  private var canFinish: Bool { model.state == .recording || model.state == .ready }
 
-  private var footerTitle: String {
-    switch model.state {
-    case .idle: ""
-    case .preparing: "Preparing…"
-    case .recording: "Recording"
-    case .ready: "Recording stopped"
-    case .transcribing: "Finishing…"
-    case .retry: "Saved audio"
+  private var discardButton: some View {
+    Button {
+      model.cancel()
+    } label: {
+      Image(systemName: "xmark")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(QMTheme.ink)
+        .frame(width: 32, height: 32)
+        .background(QMTheme.ink.opacity(0.08), in: Circle())
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
     }
-  }
-
-  private var cancelButton: some View {
-    Button("Cancel") { model.cancel() }
-      .font(.footnote.weight(.medium))
-      .foregroundStyle(QMTheme.ink)
-      .frame(minWidth: 76, minHeight: 44)
-      .buttonStyle(.plain)
-  }
-
-  private var primaryButton: some View {
-    Button(primaryTitle) {
-      switch model.state {
-      case .recording, .ready: model.finish()
-      case .retry: model.retry()
-      case .idle, .preparing, .transcribing: break
-      }
-    }
-    .font(.footnote.weight(.semibold))
-    .foregroundStyle(QMTheme.paper)
-    .frame(minWidth: 90, minHeight: 44)
-    .background(QMTheme.ink.opacity(primaryEnabled ? 1 : 0.35), in: Capsule())
     .buttonStyle(.plain)
-    .disabled(!primaryEnabled)
+    .accessibilityLabel("Discard recording")
   }
 
-  private var primaryTitle: String {
-    switch model.state {
-    case .ready: "Transcribe"
-    case .retry: "Retry"
-    case .idle, .preparing, .recording, .transcribing: "Done"
+  @ViewBuilder private var sendButton: some View {
+    if model.state == .retry {
+      Button {
+        model.retry()
+      } label: {
+        Image(systemName: "arrow.clockwise")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(QMTheme.paper)
+          .frame(width: 44, height: 44)
+          .background(QMTheme.ink, in: Circle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Retry transcription")
+    } else {
+      Button {
+        model.finish(sending: true)
+      } label: {
+        ComposerSendLabel(enabled: canFinish, sending: model.state == .transcribing)
+          .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.state)
+      }
+      .buttonStyle(.plain)
+      .disabled(!canFinish)
+      .accessibilityLabel(model.state == .transcribing ? "Sending dictation" : "Send dictation")
     }
-  }
-
-  private var primaryEnabled: Bool {
-    model.state == .recording || model.state == .ready || model.state == .retry
   }
 }
 

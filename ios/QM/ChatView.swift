@@ -175,13 +175,6 @@ struct ChatView: View {
       }
       if expanded { composerFocused = false }
     }
-    .onChange(of: dictation.completedText) { _, text in
-      if let text {
-        model.draft = NativeDictationModel.appending(text, to: model.draft)
-        model.saveDraft()
-        composerFocused = true
-      }
-    }
     .background {
       DrawerOpenWatcher {
         composerFocused = false
@@ -858,6 +851,14 @@ struct ChatView: View {
     // A soft tap as the panel opens, matching the drawer's haptic.
     .sensoryFeedback(trigger: dictation.busy) { _, open in
       open ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
+    // Dictated text joins the draft; the send button also sends it, while tapping the
+    // transcript leaves it in the field to edit.
+    .onChange(of: dictation.completedText) { _, text in
+      guard let text else { return }
+      model.draft = NativeDictationModel.appending(text, to: model.draft)
+      model.saveDraft()
+      if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
     }
   }
 

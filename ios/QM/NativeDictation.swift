@@ -173,6 +173,8 @@ final class NativeDictationModel {
   private(set) var level = 0.0
   private(set) var liveText = ""
   private(set) var completedText: String?
+  /// Whether the finished text should be sent straight away rather than left in the draft.
+  private(set) var sendsWhenDone = false
   private(set) var permissionError: NativeAudioPermissionError?
   var error: String?
   var busy: Bool { state != .idle }
@@ -201,6 +203,7 @@ final class NativeDictationModel {
   func start() {
     guard state == .idle else { return }
     completedText = nil
+    sendsWhenDone = false
     error = nil
     permissionError = nil
     elapsed = 0
@@ -291,8 +294,9 @@ final class NativeDictationModel {
     }
   }
 
-  func finish() {
+  func finish(sending: Bool = false) {
     guard state == .recording || state == .ready else { return }
+    sendsWhenDone = sending
     state = .transcribing
     stopRecording()
     transcribe()
