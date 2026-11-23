@@ -802,18 +802,33 @@ const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
 const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
   agentMemory(async (ctx, memory, capability) => {
     const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
-    if (requestedScope !== undefined && requestedScope !== "org") {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-    }
-    const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-    if (!write) {
-      return sendJson(ctx.res, 403, {
-        error: "forbidden",
-        message:
-          requestedScope === "org"
-            ? "org memory writes need an org admin's own turn while it is still running"
-            : "memory capture is not enabled for this conversation",
+    const personaScope: ScopeId | undefined =
+      typeof requestedScope === "string" && parseScopeId(requestedScope as ScopeId).kind === "persona"
+        ? (requestedScope as ScopeId)
+        : undefined;
+    if (requestedScope !== undefined && requestedScope !== "org" && !personaScope) {
+      return sendJson(ctx.res, 400, {
+        error: "bad_request",
+        message: 'scope must be "org" or persona:<id> when present',
       });
+    }
+    let write: string | undefined;
+    if (requestedScope === "org") write = capability.memory?.orgWrite;
+    else if (personaScope) {
+      if (
+        capability.memory?.write &&
+        personAtKeyboard(capability) &&
+        (await ctx.app.managesScope(capability.actorId, personaScope))
+      )
+        write = personaScope;
+    } else write = capability.memory?.write;
+    if (!write) {
+      let message = "memory capture is not enabled for this conversation";
+      if (requestedScope === "org")
+        message = "org memory writes need an org admin's own turn while it is still running";
+      else if (personaScope && capability.memory?.write)
+        message = "persona memory writes need a persona owner or write holder on a live turn";
+      return sendJson(ctx.res, 403, { error: "forbidden", message });
     }
     return handle(ctx, memory, capability, write);
   });
@@ -903,16 +918,18 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const resolved = (await app.listVisibleSkills(principalId, false)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archivedChecks = await Promise.all(
-    (await app.listSkills())
-      .filter((skill) => skill.status === "archived")
-      .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId, false) })),
-  );
-  const archived = archivedChecks.filter((row) => row.manageable).map(({ skill }) => ({ skill, shadowed: [] }));
+  const archivedAll = (await app.listSkills()).filter((skill) => skill.status === "archived");
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
   ]);
+  const manageable = await app.manageableSkills(
+    tenantOf(ctx),
+    [...archivedAll, ...visible.map((r) => r.skill)],
+    principalId,
+    false,
+  );
+  const archived = archivedAll.filter((skill) => manageable.has(skill.id)).map((skill) => ({ skill, shadowed: [] }));
   const skills = await Promise.all(
     [...visible, ...archived].map(async (r) => ({
       id: r.skill.id,
@@ -927,7 +944,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
       pack: r.skill.pack,
       assetCount: r.skill.manifest.files?.length ?? 0,
       requiredCapabilities: r.skill.manifest.requiredCapabilities,
-      editable: await app.canManageSkill(r.skill, principalId, false),
+      editable: manageable.has(r.skill.id),
     })),
   );
   return sendJson(res, 200, { skills });

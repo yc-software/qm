@@ -36,7 +36,6 @@ import { createTrustedEntry, trustedEntryConfig, trustedPrincipal } from "./trus
 import { coreAppHostTenant, createAppHandoff } from "./app-handoff.ts";
 import {
   coreEmailTenants,
-  coreWorkspace,
   createTenantChoice,
   verifiedEmail,
   type ExternalOrg,
@@ -243,7 +242,6 @@ if (trustedAdminEnabled && !trustedAssertions)
 const claimTrusted = (key: string, expiresAt: number) =>
   claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt);
 const trustedEntry = trustedOidc ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, claimTrusted) : null;
-const workspaceFor = coreWorkspace(CORE, CORE_SIGNING_SECRET);
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 const appHandoff = createAppHandoff({
   publicUrl: PUBLIC_URL,
@@ -273,7 +271,8 @@ const ADMIN_TTL_MS = 60_000;
 const ADMIN_PROBE_TIMEOUT_MS = 6_500;
 const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
-const adminCache = new LRUCache<string, Map<string, boolean>>({ max: 10_000, ttl: ADMIN_TTL_MS });
+type AdminProbeRole = "org_admin" | "owner" | "none";
+const adminCache = new LRUCache<string, Map<string, AdminProbeRole>>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
 function portalIdentityHeaders(sub: string, t?: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
@@ -286,7 +285,7 @@ function portalIdentityHeaders(sub: string, t?: string): Record<string, string> 
     : {};
 }
 
-async function adminProbeAttempt(sub: string, tenant?: string): Promise<boolean | null> {
+async function adminProbeAttempt(sub: string, tenant?: string): Promise<AdminProbeRole | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
@@ -301,12 +300,13 @@ async function adminProbeAttempt(sub: string, tenant?: string): Promise<boolean 
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
       return null;
     }
-    const j = (await r.json()) as { isAdmin?: unknown };
+    const j = (await r.json()) as { isAdmin?: unknown; role?: unknown };
     if (typeof j.isAdmin !== "boolean") {
       console.warn("[portal] admin probe returned an invalid admin status");
       return null;
     }
-    return j.isAdmin;
+    if (!j.isAdmin) return "none";
+    return j.role === "owner" ? "owner" : "org_admin";
   } catch (error) {
     console.warn(`[portal] admin probe failed: ${errMessage(error)}`);
     return null;
@@ -315,22 +315,30 @@ async function adminProbeAttempt(sub: string, tenant?: string): Promise<boolean 
   }
 }
 
-async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
+async function adminRoleOf(sub: string, tenant?: string): Promise<AdminProbeRole> {
   const hit = adminCache.get(sub)?.get(tenant ?? "");
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
-    const isAdmin = await adminProbeAttempt(sub, tenant);
-    if (isAdmin === null) {
+    const role = await adminProbeAttempt(sub, tenant);
+    if (role === null) {
       if (attempt + 1 < ADMIN_PROBE_ATTEMPTS)
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
     const known = adminCache.get(sub);
-    if (known) known.set(tenant ?? "", isAdmin);
-    else adminCache.set(sub, new Map([[tenant ?? "", isAdmin]]));
-    return isAdmin;
+    if (known) known.set(tenant ?? "", role);
+    else adminCache.set(sub, new Map([[tenant ?? "", role]]));
+    return role;
   }
-  return false;
+  return "none";
+}
+
+async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
+  return (await adminRoleOf(sub, tenant)) !== "none";
+}
+
+async function isOrgAdmin(sub: string, tenant?: string): Promise<boolean> {
+  return (await adminRoleOf(sub, tenant)) === "org_admin";
 }
 
 const CANONICAL_TIMEOUT_MS = 4_000;
@@ -904,7 +912,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/impersonate" && method === "POST") {
     if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    if (!(await isAdmin(session.sub, session.t)))
+    if (!(await isOrgAdmin(session.sub, session.t)))
       return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
@@ -1362,7 +1370,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname !== "/auth/trusted/callback") return json(res, 404, { error: "not_found" });
   setSession(res, [clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES)]);
   try {
-    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, "portal_trusted_tmp"), url, workspaceFor);
+    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, "portal_trusted_tmp"), url);
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
@@ -1393,19 +1401,16 @@ async function trustedLogin(
   url: URL,
   entry: NonNullable<typeof trustedEntry>,
 ): Promise<void> {
-  const handle = url.searchParams.get("workspace");
-  const workspace = handle === null ? undefined : await workspaceFor(handle);
-  if (workspace === null) return sendHtml(res, 404, signInErrorHtml("unknown workspace"));
   const pending = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo;
   const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo") ?? pending ?? null, PUBLIC_URL, APPS_DOMAIN);
   const existing = currentSession(req);
   const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
   const signedIn = existing && !existing.appOnly && existing.sub.startsWith(trustedPrefix);
-  if (signedIn && (!workspace || existing.t === workspace.tenant)) {
+  if (signedIn) {
     res.writeHead(302, { location: returnTo, "cache-control": "no-store" });
     return void res.end();
   }
-  const login = entry.start(returnTo, handle && workspace ? { handle, ...workspace } : undefined);
+  const login = entry.start(returnTo);
   setSession(res, [
     setCookie("portal_trusted_tmp", login.cookie, { path: "/auth/trusted", maxAge: login.ttl, secure: SECURE_COOKIES }),
   ]);

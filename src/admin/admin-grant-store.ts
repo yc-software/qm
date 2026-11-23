@@ -1,7 +1,17 @@
 import type { Tenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 
-export type AdminRole = "org_admin";
+export type AdminRole = "org_admin" | "owner";
+
+export function isAdminRole(role: unknown): role is AdminRole {
+  return role === "org_admin" || role === "owner";
+}
+
+export function adminRoleRank(role: AdminRole | undefined): number {
+  if (role === "org_admin") return 2;
+  if (role === "owner") return 1;
+  return 0;
+}
 
 export interface AdminGrant {
   principalId: string;

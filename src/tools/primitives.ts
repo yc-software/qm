@@ -91,6 +91,7 @@ import type {
 } from "../api/control-service.ts";
 import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
+import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
@@ -329,7 +330,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
   webhookUpdate(
     id: string,
-    action: string,
+    patch: WebhookPatch,
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
@@ -394,6 +395,8 @@ export interface SurfacePostResult {
   message?: string;
   matched?: string;
   attachments?: PostedFileMeta[];
+  ts?: string;
+  notes?: string[];
 }
 
 interface SurfaceReadResult {
@@ -1354,7 +1357,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronCreate(req) {
       return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
     },
-    cronList: () => controlOp((c, cl) => c.listCrons(cl)),
+    cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     cronPatch(id, req) {
@@ -1368,7 +1371,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
-    webhookUpdate: (id, action) => controlOp((c, cl) => c.updateWebhook(id, { action }, cl)),
+    webhookUpdate: (id, patch) => controlOp((c, cl) => c.updateWebhook(id, patch, cl)),
     soulRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);

@@ -42,6 +42,7 @@ export interface TriggerSpec extends Pick<
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
+  sourceId?: string;
   owner: string;
   ownerScopeId: ScopeId;
   input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
@@ -91,6 +92,7 @@ function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResu
     sourceScopeId: spec.ownerScopeId,
     sourceThreadRef: threadRef,
     ...(spec.title ? { sourceTitle: spec.title } : {}),
+    ...(spec.sourceId ? { sourceId: spec.sourceId } : {}),
     ...(res?.sessionId ? { sourceSessionId: res.sessionId } : {}),
     ...(res?.sourceUserSeq !== undefined ? { sourceUserSeq: res.sourceUserSeq } : {}),
     ...(res?.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: res.sourceAssistantEntrySeq } : {}),
@@ -245,8 +247,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const liveDelivery =
-    spec.surface === "monitor" && spec.destination?.type !== "webhook" && Boolean(spec.destination) && deliverable;
+  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -255,7 +256,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let reply: string | undefined;
   let sessionId: string | undefined;
   let heldForApproval = false;
-  let runDelivers = false;
   let scriptVerdict: string | undefined;
   const sendErrorNotice = async (reason: string): Promise<void> => {
     if (!spec.errorNotice || !spec.destination || !deliverable) return;
@@ -322,9 +322,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.readOnly ? { readOnly: true } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-      ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
-        ? { deliveryTarget: spec.destination.target }
-        : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
@@ -337,18 +334,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     reply = res.reply;
     sessionId = res.sessionId;
     heldForApproval = res.pendingApprovals?.some((approval) => !releasesQuarantinedContent(approval)) === true;
-    runDelivers = spec.destination?.type === "webhook" && deliverable && !spec.shadow && Boolean(res.runId);
     scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
-      if (runDelivers) return;
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
       note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
     if (res.status === "ok" && (res.reply || res.attachments?.length)) {
-      if (runDelivers) return;
       if (!spec.destination) return;
       if (liveDelivery) return;
       if (!deliverable) {
@@ -387,7 +381,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(heldForApproval ? { heldForApproval: true as const } : {}),
   };
 
-  if (isTriggerFailure(outcome) && !runDelivers) await sendErrorNotice(userNote ?? note ?? status!);
+  if (isTriggerFailure(outcome)) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }

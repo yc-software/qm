@@ -58,6 +58,8 @@ export interface SurfaceCapabilities {
   textOnly: boolean;
 }
 
+export const NON_WEB_PATHS = "skills' non-web paths apply, such as an ordinary authorization link";
+
 export interface SurfacePromptHints {
   mentionSyntax: string;
   linkSyntax: string;

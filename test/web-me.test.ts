@@ -152,3 +152,20 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
   assert.equal("welcome" in (await me(cookie)), false);
   await built.featureFlags.setEnabled("company_welcome", orgScope() as ScopeId, false, "test");
 });
+
+test("/me names another person in the directory as the teammate, skipping the asker, bots and guests", async () => {
+  const cookie = browserSessionCookie("bob@example.com", { name: "Bob" });
+  await built.directory.replace([
+    { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
+    { principalId: "BOT", displayName: "Abe Bot", type: "internal", isBot: true },
+    { principalId: "guest@example.com", displayName: "Ada Guest", type: "guest" },
+  ]);
+  assert.equal((await me(cookie)).teammate, undefined);
+  await built.directory.replace([
+    { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
+    { principalId: "zoe@example.com", displayName: "Zoe Park", type: "internal" },
+    { principalId: "cy@example.com", displayName: " Cy Lin ", type: "internal" },
+  ]);
+  assert.equal((await me(cookie)).teammate, "Cy Lin");
+  await built.directory.replace([]);
+});

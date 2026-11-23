@@ -102,6 +102,7 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  ephemeral?: boolean;
   botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
@@ -129,6 +130,7 @@ export interface AgentTurnInput {
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
+  turnStart?: () => Promise<import("../decisions/decisions.ts").DecisionResult[]>;
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;

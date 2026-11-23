@@ -6,6 +6,7 @@ import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+export const EPHEMERAL_SESSION_TTL_MS = 24 * 60 * 60_000;
 
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
   if (envelope == null) return null;
@@ -390,6 +391,7 @@ export class DuplicateCallError extends Error {
 interface SessionFacts {
   surfaceBinding?: Session["surfaceBinding"];
   context?: SpawnMeta;
+  ephemeral?: true;
 }
 
 export interface SessionStore {
@@ -459,7 +461,13 @@ export interface SessionStore {
   sameScopeAncestors(threadRefs: readonly string[]): Promise<Session[]>;
 
   deleteSession(sessionId: string): Promise<void>;
+  markEphemeralExpired(tenant: Tenant, sessionId: string): Promise<void>;
   deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
+  claimExpiredEphemeral(
+    cutoff: number,
+    limit?: number,
+    afterId?: string,
+  ): Promise<Array<{ tenantId: string; id: string }>>;
 
   updateParticipantView(sessionId: string, principalId: string, patch: ParticipantViewPatch): Promise<void>;
 

@@ -7,6 +7,7 @@ import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.
 import type { SuccessVerdict } from "./success-evaluation.ts";
 import { workOrder } from "./triage.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export interface IntakeCandidate {
   sourceKey: string;
@@ -66,9 +67,10 @@ function emptySummary(loop: Loop, ran: boolean): FireSummary {
   };
 }
 
-function recordFailure(summary: FireSummary, label: string, error: unknown): void {
-  summary.failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
-  if (!isTransientFailure(error)) summary.persistentFailures += 1;
+function recordFailure(summary: FireSummary, label: string, error: unknown, parked = false): void {
+  console.error("%s", `[loops] ${summary.loopId} ${label} failed:`, errMessage(error));
+  summary.failures.push(`${label}: ${errText(error)}`);
+  if (parked || !isTransientFailure(error)) summary.persistentFailures += 1;
 }
 
 export function fireOutcome(summary: FireSummary): FireOutcome {
@@ -281,8 +283,9 @@ export async function runLoopFire(
           }
         } catch (error) {
           if (!shipStarted) openedOutputs = 0;
-          const reason = error instanceof Error ? error.message : String(error);
-          recordFailure(summary, item.sourceKey, error);
+          const reason = errText(error);
+          const exhausted = item.attempts >= effectiveMaxAttempts;
+          recordFailure(summary, item.sourceKey, error, shipStarted || exhausted);
           if (shipStarted) {
             await stores.items.park(
               item.id,
@@ -293,7 +296,6 @@ export async function runLoopFire(
           }
           const latestRunId = (await stores.items.get(item.id))?.runIds.at(-1);
           if (latestRunId) await stores.outputs.supersedeAttempt(item.id, latestRunId);
-          const exhausted = item.attempts >= effectiveMaxAttempts;
           if (exhausted) {
             await stores.items.park(item.id, reason, claimToken);
             summary.parked.push(item.id);

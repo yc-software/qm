@@ -1,10 +1,10 @@
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId, SCOPE_KINDS, type ScopeId, type ScopeKind } from "../types.ts";
 import { isPrivateNetworkIp, parsePrivateNetworkOrigins } from "../util/network.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
-const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
+const KINDS = new Set<ScopeKind>(SCOPE_KINDS);
 export const MEMORY_PROVIDER_ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;

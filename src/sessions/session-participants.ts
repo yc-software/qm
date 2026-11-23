@@ -42,7 +42,7 @@ export function createSessionParticipants(
   const participantSessions: SessionStore["listByParticipant"] = async (principalId, opts) => {
     const limit = opts?.limit === undefined ? undefined : Math.max(0, Math.floor(opts.limit));
     const rows = await q(
-      participantSessionsSql(BOT_VISIBLE(opts?.botActor), LIST_COLUMNS) +
+      participantSessionsSql(` AND NOT s.ephemeral${BOT_VISIBLE(opts?.botActor)}`, LIST_COLUMNS) +
         (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
       limit === undefined ? [principalId] : [principalId, limit],
     );
@@ -56,7 +56,7 @@ export function createSessionParticipants(
          FROM participants p
         CROSS JOIN LATERAL (
           SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
-            FROM sessions s WHERE s.id = p.session_id OFFSET 0
+            FROM sessions s WHERE s.id = p.session_id AND NOT s.ephemeral OFFSET 0
         ) s
         WHERE p.principal_id = $1
         GROUP BY s.scope_id`,

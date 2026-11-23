@@ -231,6 +231,6 @@ export function aboutTiles(): TemplateResult {
     ["Agent swarms", "Splits a big job across many agents working in parallel, then reports back.", swarmArt()],
   ];
   return html`<div class="tiles">
-    ${tiles.map(([title, text, art]) => html`<div class="tile">${art}<b>${title}</b><span>${text}</span></div>`)}
+    ${tiles.map(([title, text, art]) => html`<div class="tile"><b>${title}</b><span>${text}</span>${art}</div>`)}
   </div>`;
 }

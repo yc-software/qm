@@ -510,7 +510,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const procSessions = createExecProcessSessions(procIo);
 
   const execFileOps = createExecFileOps({
-    combineRemoveAndList: true,
     label: "sprites",
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),

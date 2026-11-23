@@ -204,7 +204,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     conversation: input.conversation,
     actor: input.actor,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
@@ -218,7 +217,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
-const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const HIDDEN_PARENT =
   "your parent conversation is hidden from bot work, so you can't read it; you can still write to it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
@@ -325,7 +323,6 @@ export interface SessionSyscallBinding {
     | "conversation"
     | "actor"
     | "deliveryTarget"
-    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
     | "memoryNotebookOnly"
@@ -464,7 +461,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.liveReplies ? { liveReplies: true } : {}),
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
-    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
@@ -745,7 +741,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       function sidebarRefusal(): string | null {
-        if (binding.request.surface !== "web") return WEB_ONLY;
         if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }

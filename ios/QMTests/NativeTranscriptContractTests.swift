@@ -60,16 +60,20 @@ final class NativeTranscriptContractTests: XCTestCase {
     XCTAssertEqual(history.items.last?.createdAt, 5000)
   }
 
-  func testItemsEnvelopeIsAuthoritativeAndInvalidHistoryStillFails() throws {
+  func testItemsEnvelopeIsAuthoritativeAndCorruptItemsAreDroppedNotFatal() throws {
     XCTAssertThrowsError(try decode(Transcript.self, ["session": NSNull()]))
     XCTAssertThrowsError(try decode(Transcript.self, ["items": NSNull()]))
     var malformed = item("AgentMessage", text: "Answer")
     malformed.removeValue(forKey: "createdAt")
-    XCTAssertThrowsError(try decode(Transcript.self, ["items": [malformed]]))
-    malformed = item("ToolCall", body: ["command": "pwd"])
-    XCTAssertThrowsError(try decode(Transcript.self, ["items": [malformed]]))
+    let lossy = try decode(
+      Transcript.self, ["items": [malformed, item("AgentMessage", seq: 2, text: "Kept")]])
+    XCTAssertEqual(lossy.items.map(\.text), ["Kept"])
     malformed = item("UserMessage", text: "Question", columns: ["hidden": "false"])
-    XCTAssertThrowsError(try decode(Transcript.self, ["items": [malformed]]))
+    XCTAssertEqual(try decode(Transcript.self, ["items": [malformed]]).items.count, 0)
+    let legacyRow = item("ToolCall", body: ["command": "pwd"], columns: ["callId": NSNull()])
+    let legacy = try decode(Transcript.self, ["items": [legacyRow]])
+    XCTAssertEqual(legacy.items.count, 1)
+    XCTAssertNil(legacy.items.first?.callId)
   }
 
   func testWrappedRunActivityAndStreamSnapshotsUseTheSameItemProjection() throws {

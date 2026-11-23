@@ -14,6 +14,7 @@ import {
   contentPart,
   createDeduped,
   type CreateTriggerInput,
+  normalizeTitle,
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
@@ -32,6 +33,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   loopId?: string;
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
 }
 
 export interface CronPatch {
@@ -47,6 +49,8 @@ export interface CronPatch {
   taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
+  forkedAt?: number;
+  sharedFrom?: null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -61,7 +65,9 @@ export interface CronStore {
   list(ids?: readonly string[]): Promise<Cron[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   ownedBy(scopeId: string): Promise<Cron[]>;
+  copiesOf(id: string): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateLinked(id: string, patch: CronPatch, linked: CronPatch): Promise<Cron[]>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
@@ -102,10 +108,28 @@ export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
 
-function normalizeTitle(title: string | undefined): string | undefined {
-  const trimmed = title?.trim().replace(/\s+/g, " ");
-  if (!trimmed) return undefined;
-  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
+function cronFields(patch: CronPatch): Partial<Cron> {
+  const fields: Partial<Cron> = {};
+  if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+  if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
+  if (patch.action !== undefined) fields.action = patch.action;
+  if (patch.message !== undefined) fields.message = patch.message;
+  if (patch.schedule !== undefined) {
+    const normalized = normalizeSchedule(patch.schedule, Date.now());
+    fields.schedule = normalized.schedule;
+    fields.nextFireAt = normalized.nextFireAt;
+  }
+  if (patch.enabled !== undefined) fields.enabled = patch.enabled;
+  if (patch.archived !== undefined) fields.archived = patch.archived;
+  if (patch.destination !== undefined) fields.destination = patch.destination;
+  if (patch.archived === true) fields.enabled = false;
+  if (patch.owner !== undefined) fields.owner = patch.owner;
+  if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
+  if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+  if (patch.script !== undefined) fields.script = patch.script ?? undefined;
+  if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
+  if (patch.sharedFrom === null) fields.sharedFrom = undefined;
+  return fields;
 }
 
 export function createCronStore(
@@ -132,6 +156,7 @@ export function createCronStore(
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
         ...(input.script ? [contentPart(input.script)] : []),
+        ...(input.sharedFrom ? [contentPart(input.sharedFrom)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -145,6 +170,7 @@ export function createCronStore(
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
         ...(input.script ? { script: input.script } : {}),
+        ...(input.sharedFrom ? { sharedFrom: input.sharedFrom } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -156,29 +182,27 @@ export function createCronStore(
     },
     claimTenants: () => backing.claimTenants(),
     ownedBy: (scopeId) => ownedBy(backing, scopeId),
+    copiesOf: async (id) =>
+      (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } })).filter((c) => c.sharedFrom === id),
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
-      const fields: Partial<Cron> = {};
-      if (patch.runtime !== undefined) fields.runtime = patch.runtime;
-      if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
-      if (patch.action !== undefined) fields.action = patch.action;
-      if (patch.message !== undefined) fields.message = patch.message;
-      if (patch.schedule !== undefined) {
-        const normalized = normalizeSchedule(patch.schedule, Date.now());
-        fields.schedule = normalized.schedule;
-        fields.nextFireAt = normalized.nextFireAt;
-      }
-      if (patch.enabled !== undefined) fields.enabled = patch.enabled;
-      if (patch.archived !== undefined) fields.archived = patch.archived;
-      if (patch.destination !== undefined) fields.destination = patch.destination;
-      if (patch.archived === true) fields.enabled = false;
-      if (patch.owner !== undefined) fields.owner = patch.owner;
-      if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
-      if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      if (patch.script !== undefined) fields.script = patch.script ?? undefined;
-      return backing.merge(id, fields);
+      return backing.merge(id, cronFields(patch));
+    },
+    async updateLinked(id, patch, linked) {
+      const before = await backing.get(id);
+      if (!before) return [];
+      assertCronRuntime({ ...before, ...patch });
+      const copies = (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } }))
+        .filter((c) => c.sharedFrom === id && !c.forkedAt)
+        .map((c) => c.id);
+      const own = cronFields(patch);
+      const shared = cronFields(linked);
+      return backing.mutateMany([
+        { id, apply: (c) => ({ ...c!, ...own }) },
+        ...copies.map((copy) => ({ id: copy, apply: (c: Cron | null) => (c!.forkedAt ? c! : { ...c!, ...shared }) })),
+      ]);
     },
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {

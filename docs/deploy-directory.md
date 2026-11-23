@@ -193,7 +193,8 @@ same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
-a teammate or a shared home, withdraws it as the app moves. While the app borrows
+a teammate or a shared home, withdraws it as the app moves, and an app outside that library
+can't borrow again until it moves back; `[]` still withdraws. While the app borrows
 connectors, only the publisher can share it with anyone else. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
@@ -243,7 +244,7 @@ services' private network, so it relays audit records through `apiUrl` (or
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
 port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
-`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations

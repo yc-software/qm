@@ -57,9 +57,10 @@ export function createAppMethods(
   const { effectiveAppPermission, principalCanReadApp, principalGitPermission, appPermissions } = h;
   async function forCaller(
     d: PublishedApp,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor" | "ephemeral">,
     permission: "read" | "write" | null,
   ): Promise<"read" | "write" | null> {
+    if (permission === "write" && caller.ephemeral) return "read";
     if (permission !== "write" || caller.botActor !== true) return permission;
     return (await deps.deploy.canManageApp(d.id, caller)) ? "write" : "read";
   }

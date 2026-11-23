@@ -19,7 +19,7 @@ import type {
   TextContent,
 } from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import { errMessage, swallow } from "../../chassis/src/errors.ts";
+import { errChain, errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
@@ -576,6 +576,8 @@ export type AssistantWork = AssistantMessage & {
   droppedAttachmentIds?: string[];
   continuing?: string;
   via?: string;
+  viaTitle?: string;
+  viaId?: string;
   personaId?: string;
 };
 
@@ -622,6 +624,18 @@ export interface TurnOptions {
   fastMode?: boolean;
   scopeId?: string | null;
   channelName?: string | null;
+  ephemeral?: boolean;
+}
+
+export async function deleteEphemeralSession(threadRef: string, keepalive = false): Promise<void> {
+  const path = `/api/ephemeral?threadRef=${encodeURIComponent(threadRef)}`;
+  if (keepalive) {
+    void webFetch(withBase(path), { method: "DELETE", keepalive: true }).catch(() => {});
+    return;
+  }
+  await api<{ deleted?: boolean }>(path, { method: "DELETE" }).catch((e) =>
+    swallow("web-ui: delete ephemeral session", e),
+  );
 }
 
 export interface ActiveRun {
@@ -1336,6 +1350,7 @@ function turnRequestBody(
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(turnOptions.ephemeral ? { ephemeral: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -1454,7 +1469,7 @@ async function drive(
       fail(stream, partial, errorMessage, true);
       return;
     }
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
+    fail(stream, partial, errChain(e));
   } finally {
     dropStopForGeneration(slot, gen);
   }
@@ -1503,7 +1518,7 @@ async function resumeDrive(
     work.status = "failed";
     work.finishedAt = Date.now();
     notify();
-    fail(stream, partial, e instanceof Error ? e.message : String(e));
+    fail(stream, partial, errChain(e));
   } finally {
     dropStopForGeneration(slot, gen);
   }
@@ -1762,9 +1777,19 @@ export function subscribeDeliveries(
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
   let everOpened = false;
+  let silence: ReturnType<typeof setTimeout> | undefined;
+  const watchSilence = (): void => {
+    clearTimeout(silence);
+    silence = setTimeout(() => {
+      es.close();
+      es = connect();
+    }, SSE_SILENCE_MS);
+  };
   const connect = (): EventSource => {
     const es = new EventSource(withBase("/api/deliveries/events"));
+    es.addEventListener("ping", watchSilence);
     es.onopen = (): void => {
+      watchSilence();
       if (everOpened) {
         onResync?.();
         onInboxResync?.();
@@ -1801,7 +1826,9 @@ export function subscribeDeliveries(
   };
   let es = connect();
   const suspend = (event: PageTransitionEvent): void => {
-    if (event.persisted) es.close();
+    if (!event.persisted) return;
+    clearTimeout(silence);
+    es.close();
   };
   const resume = (event: PageTransitionEvent): void => {
     if (event.persisted) es = connect();
@@ -1811,6 +1838,7 @@ export function subscribeDeliveries(
   return () => {
     window.removeEventListener("pagehide", suspend);
     window.removeEventListener("pageshow", resume);
+    clearTimeout(silence);
     es.close();
   };
 }
@@ -2410,7 +2438,10 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         spillHeldPosts();
         flushWork("", e.createdAt);
         flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
-        (out.at(-1) as AssistantWork).via = e.body.via;
+        const delivered = out.at(-1) as AssistantWork;
+        delivered.via = e.body.via;
+        if (typeof e.body.sourceTitle === "string") delivered.viaTitle = e.body.sourceTitle;
+        if (typeof e.body.sourceId === "string" && e.body.sourceId) delivered.viaId = e.body.sourceId;
       } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {

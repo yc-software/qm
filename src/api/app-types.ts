@@ -59,7 +59,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CronFireRecord } from "../cron/fire-store.ts";
-import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { WebhookStore, WebhookEvent, CreateWebhookInput, WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
   ChannelMembership,
@@ -72,7 +72,7 @@ import type {
   RecipientResolution,
 } from "../directory/directory-store.ts";
 import type { Delivery, Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -201,7 +201,14 @@ export type ReachNowResult =
       candidates?: Array<Record<string, string>>;
     };
 
-export type VisibleCron = Cron & { scopeName?: string };
+export interface CronCopy {
+  id: string;
+  owner: string;
+  status: "on" | "paused" | "edited";
+  deliversTo?: string;
+}
+
+export type VisibleCron = Cron & { scopeName?: string; copies?: CronCopy[]; sharedBy?: string };
 
 export type CronEditor = Pick<CapabilityClaims, "actorId" | "runId" | "botActor">;
 
@@ -440,6 +447,12 @@ export interface App {
   ): Promise<{ resumed: true; goal: GoalView } | { resumed: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
+  deleteEphemeralSession(
+    tenant: Tenant,
+    threadRef: string,
+    principalId: string,
+  ): Promise<{ deleted: true } | { deleted: false; reason: "not_found" | "in_flight" }>;
+  purgeExpiredEphemeralSessions(cutoffMs: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
   forkSession(
     sessionId: string,
     principalId: string,
@@ -461,6 +474,11 @@ export interface App {
   loopAdministration(
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
+  ): Promise<boolean[]>;
+  cronAdministration(
+    tenant: Tenant,
+    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    crons: readonly Cron[],
   ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
@@ -487,6 +505,7 @@ export interface App {
   grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  isOrgAdmin(principalId: string): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
@@ -512,7 +531,17 @@ export interface App {
   createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(ids?: readonly string[]): Promise<Cron[]>;
-  listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
+  listCronsForViewer(principalId: string): Promise<{ owned: VisibleCron[]; visible: VisibleCron[] }>;
+  shareCron(
+    tenant: Tenant,
+    id: string,
+    recipient: string,
+    by: string,
+  ): Promise<{ copy: Cron; existed: boolean; note?: string }>;
+  cronOrigin(cron: Cron): Promise<CronOrigin>;
+  cronCopies(id: string): Promise<CronCopy[]>;
+  cronSharing(cron: VisibleCron): Promise<VisibleCron>;
+  unshareCron(id: string, recipient: string): Promise<void>;
   updateCron(id: string, patch: CronPatch, by: CronEditor, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string, by: CronEditor): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
@@ -527,7 +556,7 @@ export interface App {
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
-  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
+  updateWebhook(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
@@ -566,7 +595,7 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  ackDelivery(id: string, slackApiMs?: number, messageTs?: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
@@ -624,6 +653,12 @@ export interface App {
   archiveSkill(id: string): Promise<Skill>;
   listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
+  manageableSkills(
+    tenant: Tenant,
+    skills: readonly Skill[],
+    principalId: string,
+    botWork: boolean,
+  ): Promise<Set<string>>;
   updateOwnedSkill(
     id: string,
     principalId: string,
@@ -730,6 +765,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -749,6 +785,7 @@ export interface AppDeps {
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
+  promptSnapshots?: { delete(id: string): Promise<void> };
   signals?: RunSignalStore;
   settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;

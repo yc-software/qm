@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   checkRuleSet,
+  expandPersonaRule,
   parseDecisionRule,
   runHook,
   type DecisionBackend,
@@ -92,9 +93,22 @@ test("parseDecisionRule validates hooks, options, actions, onError, provider and
   );
 });
 
-test("checkRuleSet allows one active enforcing rule per most_confident hook", () => {
+test("checkRuleSet allows one active enforcing rule per action on a most_confident hook", () => {
   const second = { ...route(), id: "router-2" };
-  assert.match(String(checkRuleSet([route(), second])), /allows one enforcing rule/);
+  const persona = injection({
+    id: "persona",
+    hook: "turn_start",
+    onError: "keep",
+    options: {
+      keep: { description: "ordinary", action: "keep" },
+      ada: { description: "for Ada", action: "use_persona", persona: "p1" },
+    },
+  });
+  assert.equal(checkRuleSet([route(), persona]), undefined);
+  assert.match(
+    String(checkRuleSet([route(), second])),
+    /allows one enforcing rule per action, and another already uses use_runtime/,
+  );
   assert.equal(checkRuleSet([route(), { ...second, mode: "observe" }]), undefined);
   assert.equal(checkRuleSet([route(), { ...second, mode: "off" }]), undefined);
 });
@@ -362,6 +376,17 @@ test("each hook point only accepts its own actions; use_runtime carries a runtim
     err(router({ keep: { description: "a", action: "keep" }, deep: { description: "b", action: "use_runtime" } })),
     /runtime is required/,
   );
+  assert.match(
+    err(router({ keep: { description: "a", action: "keep" }, ada: { description: "b", action: "use_persona" } })),
+    /persona is required/,
+  );
+  assert.ok(
+    "rule" in
+      router({
+        keep: { description: "a", action: "keep" },
+        ada: { description: "b", action: "use_persona", persona: "p1" },
+      }),
+  );
 });
 
 test("most_confident hook points follow the likeliest enforced verdict and errored rules fall back to onError", async () => {
@@ -448,7 +473,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     sessionId: "s1",
   });
   assert.deepEqual(asked, ["turn_start"]);
-  assert.deepEqual(verdict?.runtime, { modelId: "m-deep" });
+  assert.deepEqual(verdict[0]?.runtime, { modelId: "m-deep" });
   assert.deepEqual(
     records.map((r) => [r.action, r.resource, r.status]),
     [
@@ -456,13 +481,13 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
       ["decision.classify", "shadow", "use_runtime"],
     ],
   );
-  assert.equal(
+  assert.deepEqual(
     await createDecisionHooks(undefined, fixed({}), audit)("turn_start", "x", {
       tenant,
       scopeLabel: "s",
       sessionId: "s",
     }),
-    undefined,
+    [],
   );
 });
 
@@ -487,7 +512,7 @@ test("observe-only rules do not hold up the turn and are still audited", async (
     scopeLabel: "personal:a",
     sessionId: "s1",
   });
-  assert.equal(verdict?.ruleId, "router");
+  assert.equal(verdict[0]?.ruleId, "router");
   assert.deepEqual(
     records.map((r) => r.resource),
     ["router"],
@@ -511,8 +536,10 @@ test("turn_start rules see the turn's context alongside the message", () => {
     runtimePinned: true,
     continueTurn: true,
     scopeLabel: "personal:someone@example.com",
+    conversation: "dm",
   });
   for (const line of [
+    "- conversation: dm",
     "- surface: web",
     "- purpose: interactive",
     "- scope: personal",
@@ -677,21 +704,32 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
   assert.equal(guidanceReads, 4, "guidance is not read when no rule is active");
 });
 
-test("persona rules name a persona on use_persona and fall back to keep", () => {
-  const persona = injection({
-    id: "to-ada",
-    hook: "persona",
-    onError: "keep",
-    options: {
-      keep: { description: "Not for Ada", action: "keep" },
-      ada: { description: "For Ada", action: "use_persona", persona: "ada-1" },
-    },
-  });
-  assert.deepEqual(parse(persona), { rule: persona });
-  const unnamed = {
-    ...persona,
-    options: { ...persona.options, ada: { description: "For Ada", action: "use_persona" } },
-  };
-  assert.match(err(parse(unnamed)), /persona is required with use_persona/);
-  assert.match(err(parse({ ...persona, onError: "ada" })), /onError must name a keep option/);
+test("wildcard persona options validate, expand, and fall back to onError on lookup failure", async () => {
+  const mk = (options: Record<string, unknown>, onError = "keep") =>
+    parse({ ...injection(), id: "p-route", hook: "turn_start", onError, options });
+  const keep = { description: "stay", action: "keep" };
+  const star = { description: "any", action: "use_persona", persona: "*" };
+  const ok = mk({ keep, any: star });
+  assert.ok("rule" in ok);
+  assert.match(err(mk({ keep, any: star }, "any")), /onError cannot name/);
+  assert.match(err(mk({ keep, a: star, b: star })), /at most one wildcard/);
+  assert.equal(expandPersonaRule(ok.rule, []), undefined);
+  const list = [
+    { id: "a", name: "Ada", description: "Ops" },
+    { id: "b", name: "Bea", description: "" },
+  ];
+  const exp = expandPersonaRule(ok.rule, list)!;
+  assert.deepEqual(Object.keys(exp.options), ["keep", "p1", "p2"]);
+  assert.deepEqual(exp.options.p1, { description: "Ada: Ops", action: "use_persona", persona: "a" });
+  assert.equal(exp.options.p2?.description, "Bea");
+  const st = mk({ keep, p1: { description: "Ada", action: "use_persona", persona: "a" }, any: star });
+  assert.ok("rule" in st);
+  assert.deepEqual(Object.keys(expandPersonaRule(st.rule, list)!.options), ["keep", "p1", "p2"]);
+  const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  const fail = () => Promise.reject(new Error("db down"));
+  const decide = createDecisionHooks({ rules: async () => [ok.rule] } as never, fixed({}), audit, fail);
+  const [res] = await decide("turn_start", "hi", { tenant, actorId: "u1", scopeLabel: "personal:u1" });
+  assert.equal(res?.option, "keep");
+  assert.match(res?.error ?? "", /db down/);
 });

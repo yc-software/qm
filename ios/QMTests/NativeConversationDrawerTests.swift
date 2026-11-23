@@ -49,7 +49,7 @@ final class NativeConversationDrawerTests: XCTestCase {
       } detail: {
         NavigationStack {
           ChatView(
-            model: model, showsConversations: state.open,
+            model: model,
             onShowConversations: { state.open = true })
         }
         .background(Marker(view: detailMarker))

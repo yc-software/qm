@@ -1,4 +1,5 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { errMessage } from "../util/errors.ts";
 
 export interface SecretSource {
   get(name: string): Promise<string | undefined>;
@@ -40,7 +41,7 @@ export function createAwsSecretsManagerSource(opts: {
         value = res.SecretString;
       } catch (err) {
         if ((err as { name?: string }).name !== "ResourceNotFoundException") {
-          console.warn(`[secrets] failed to read '${name}' from Secrets Manager: ${(err as Error).message}`);
+          console.warn(`[secrets] failed to read '${name}' from Secrets Manager: ${errMessage(err)}`);
           const stale = hit && t - hit.fetchedAt < maxStaleMs ? hit : undefined;
           cache.set(name, { value: stale?.value, at: t, fetchedAt: stale?.fetchedAt ?? t });
           return stale?.value;

@@ -72,7 +72,14 @@
 .welcome-about .ava.round {
   border-radius: 50%;
 }
+.welcome-about .ava.qm {
+  position: relative;
+  background: var(--brand-accent);
+  font-size: calc(var(--s, 28px) * 0.36);
+}
 .welcome-about .ava .brand-mark {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   flex: none;
@@ -564,11 +571,16 @@
   background: var(--background);
 }
 .welcome-about .tile > b {
-  margin-top: 11px;
-  font-size: var(--font-13-5);
+  font-size: var(--font-15);
   font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* Descriptions run to different lengths; pinning the art to the tile's foot keeps the row of visuals level. */
+.welcome-about .tile > .art {
+  margin-top: auto;
 }
 .welcome-about .tile > span {
+  margin-bottom: 12px;
   font-size: var(--font-12-5);
   line-height: 1.5;
   color: var(--muted-foreground);
@@ -1087,9 +1099,11 @@
   min-width: 0;
 }
 .welcome-about .W-figs figcaption {
-  margin-top: 10px;
-  font-size: var(--font-13);
-  color: var(--muted-foreground);
+  margin-bottom: 10px;
+  font-size: var(--font-17);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--foreground);
 }
 .welcome-about .art-sw {
   display: flex;

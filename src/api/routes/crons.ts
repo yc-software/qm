@@ -9,9 +9,9 @@ import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
-import { canAdministerCron, cronTaskRewrite } from "../control-service.ts";
+import { administersCron, cronTaskRewrite } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
-import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -48,6 +48,7 @@ type CapabilityCronBody = {
   scope?: unknown;
   unfurlLinks?: unknown;
   session?: unknown;
+  persona?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -70,7 +71,7 @@ async function gateSourceCron(ctx: ApiCtx, id: string): Promise<Cron | null> {
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
+  if (principalId && (await administersCron(app, cron, { actorId: principalId }))) return cron;
   sendJson(res, 404, { error: "not_found" });
   return null;
 }
@@ -83,7 +84,7 @@ async function gateSourceCronRead(ctx: ApiCtx, id: string): Promise<Cron | null>
     return null;
   }
   const principalId = url.searchParams.get("principalId");
-  if (principalId && (await canAdministerCron(app, cron, { actorId: principalId }))) return cron;
+  if (principalId && (await administersCron(app, cron, { actorId: principalId }))) return cron;
   if (principalId && (await app.listCronsForViewer(principalId)).visible.some((candidate) => candidate.id === id))
     return cron;
   sendJson(res, 404, { error: "not_found" });
@@ -186,6 +187,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
+        ...(typeof b.persona === "string" || b.persona === null ? { persona: b.persona } : {}),
       },
       capability,
     );
@@ -220,19 +222,20 @@ async function createCron(ctx: ApiCtx): Promise<void> {
 async function listCrons(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
   if (capability) {
-    const { crons, visible } = await ctx.deps.control.listCrons(capability);
+    const { crons, visible } = await ctx.deps.control.listCrons(capability, tenantOf(ctx));
     return sendJson(res, 200, { crons, visible });
   }
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const { owned, visible } = await app.listCronsForViewer(viewer);
-  const decorate = async (cron: Cron) => ({
+  const admits = await app.cronAdministration(tenantOf(ctx), { actorId: viewer }, [...owned, ...visible]);
+  const decorate = (cron: Cron, i: number) => ({
     ...cron,
-    permission: (await canAdministerCron(app, cron, { actorId: viewer })) ? "manage" : "read",
+    permission: admits[i] ? "manage" : "read",
   });
   return sendJson(res, 200, {
-    crons: await Promise.all(owned.map(decorate)),
-    visible: await Promise.all(visible.map(decorate)),
+    crons: owned.map((cron, i) => decorate(cron, i)),
+    visible: visible.map((cron, i) => decorate(cron, owned.length + i)),
   });
 }
 

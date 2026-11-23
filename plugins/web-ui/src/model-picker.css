@@ -1,4 +1,5 @@
-.menu-control {
+.menu-control,
+.form-menu-control {
   position: relative;
   min-width: 0;
 }
@@ -47,15 +48,15 @@
   border-radius: 12px;
   background: var(--background);
 }
-.menu-control[data-drop="down"] .menu-popover {
+:is(.menu-control, .form-menu-control)[data-drop="down"] .menu-popover {
   top: calc(100% + 6px);
   bottom: auto;
 }
-.menu-control[data-drop="down"] .menu-popover.drop-up {
+:is(.menu-control, .form-menu-control)[data-drop="down"] .menu-popover.drop-up {
   top: auto;
   bottom: calc(100% + 6px);
 }
-.menu-control[data-align="right"] .menu-popover {
+:is(.menu-control, .form-menu-control)[data-align="right"] .menu-popover {
   right: 0;
   left: auto;
   width: 230px;
@@ -541,6 +542,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.loadout-submenu .loadout-group-head {
+  margin-top: 6px;
+  padding-bottom: 2px;
+}
 .loadout-add-label {
   flex: none;
   align-self: center;
@@ -633,6 +638,16 @@
 }
 .loadout-search input::placeholder {
   color: var(--muted-foreground);
+}
+.loadout-submenu .loadout-more {
+  gap: 2px;
+  padding-left: 33px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+}
+.loadout-submenu .loadout-more:hover,
+.loadout-submenu .loadout-more:focus-visible {
+  color: var(--foreground);
 }
 .loadout-empty {
   padding: 12px 10px;

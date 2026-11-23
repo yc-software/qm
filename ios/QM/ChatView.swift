@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var showsConversations = false
   var onShowConversations: (() -> Void)?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
@@ -33,10 +32,8 @@ struct ChatView: View {
   @FocusState private var composerFocused: Bool
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, showsConversations: Bool = false,
-    onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
   ) {
-    self.showsConversations = showsConversations
     self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
@@ -117,10 +114,19 @@ struct ChatView: View {
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
-        transcriptScroll(width: geometry.size.width, proxy: proxy)
-          .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar(proxy)
-          }
+        ZStack {
+          // A fresh scroll view for arriving history takes its bottom anchor as its initial
+          // offset, instead of scrolling down after laying out from the top.
+          transcriptScroll(width: geometry.size.width, proxy: proxy)
+            .transition(
+              .asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity)
+            )
+            .id(model.hasLoadedTranscript)
+        }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          bottomBar(proxy)
+        }
       }
     }
     .background(QMTheme.paper)
@@ -169,15 +175,8 @@ struct ChatView: View {
       }
       if expanded { composerFocused = false }
     }
-    .onChange(of: dictation.completedText) { _, text in
-      if let text {
-        model.draft = NativeDictationModel.appending(text, to: model.draft)
-        model.saveDraft()
-        composerFocused = true
-      }
-    }
-    .onChange(of: showsConversations) { _, showing in
-      if showing {
+    .background {
+      DrawerOpenWatcher {
         composerFocused = false
         showingAgents = false
         dictation.stop()
@@ -764,6 +763,13 @@ struct ChatView: View {
         .id(model.conversation.id)
       }
     }
+    // The composer grows into the dictation panel on one spring applied to the whole bar, so
+    // the chrome, the rows above it that hide while dictating, and the buttons all move in
+    // one transaction; animating only the composer let the bar snap and the buttons jump.
+    // Closing settles without bounce.
+    .animation(
+      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
+      value: dictation.busy)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -776,34 +782,61 @@ struct ChatView: View {
 
   private func composer(_ proxy: ScrollViewProxy) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      if dictation.busy {
-        NativeDictationComposer(model: dictation)
-      } else {
-        composerTextField
-        if let error = dictation.error {
-          NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
-            .padding(.horizontal, 8)
+      // Only the content above the button row swaps; bottom-aligned so the outgoing view
+      // stays on the row while the chrome resizes.
+      ZStack(alignment: .bottom) {
+        if dictation.busy {
+          NativeDictationComposer(model: dictation)
+            .transition(
+              .asymmetric(
+                insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
+        } else {
+          VStack(alignment: .leading, spacing: 6) {
+            composerTextField
+            if let error = dictation.error {
+              NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
+                .padding(.horizontal, 8)
+            }
+            if model.uploading, let uploadingName = model.uploadingName {
+              NativeChatUploadStatus(filename: uploadingName)
+                .padding(.horizontal, 8)
+            }
+          }
+          .transition(.opacity)
         }
-        if model.uploading, let uploadingName = model.uploadingName {
-          NativeChatUploadStatus(filename: uploadingName)
-            .padding(.horizontal, 8)
-        }
-        HStack(spacing: 6) {
+      }
+      // One button row for both states, so the plus becomes ✕ and send stays send in exactly
+      // the same spots instead of two rows crossfading while the chrome resizes.
+      HStack(spacing: 6) {
+        if dictation.busy {
+          NativeDictationDiscardButton(model: dictation)
+            .transition(.opacity)
+        } else {
           AttachmentPicker(
             uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
-          ).disabled(model.sending)
-          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
-          Spacer(minLength: 0)
+          )
+          .disabled(model.sending)
+          .transition(.opacity)
+          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
+            modelSelector.transition(.opacity)
+          }
+        }
+        Spacer(minLength: 0)
+        if dictation.busy {
+          NativeDictationSendButton(model: dictation)
+            .transition(.opacity)
+        } else {
           Button {
             composerFocused = false
             dictation.start()
           } label: {
             Image(systemName: "mic")
-              .font(.system(size: 21)).frame(width: 44, height: 44)
+              .font(.system(size: 18)).frame(width: 44, height: 44)
               .foregroundStyle(QMTheme.ink)
           }
           .accessibilityLabel("Dictate message")
           .disabled(model.sending)
+          .transition(.opacity)
           if model.activeRunID != nil,
             model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             model.attachments.isEmpty
@@ -817,8 +850,10 @@ struct ChatView: View {
                 .foregroundStyle(QMTheme.paper)
                 .frame(width: 44, height: 44)
                 .background(QMTheme.ink, in: Circle())
-            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
-              .disabled(stopping)
+            }
+            .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+            .disabled(stopping)
+            .transition(.opacity)
           } else {
             Button {
               send(proxy)
@@ -828,13 +863,33 @@ struct ChatView: View {
             }
             .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
             .disabled(!canSend)
+            .transition(.opacity)
           }
         }
-        if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
+      }
+      if !dictation.busy, dynamicTypeSize.isAccessibilitySize, verticalSizeClass != .compact {
+        modelSelector
       }
     }
     .padding(8)
+    // Behind the content but above the composer fill, so the glow tints the panel from its
+    // edges inward without covering the text.
+    .background {
+      if dictation.busy { NativeDictationGlow(model: dictation) }
+    }
     .composerChrome()
+    // A soft tap as the panel opens, matching the drawer's haptic.
+    .sensoryFeedback(trigger: dictation.busy) { _, open in
+      open ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
+    // Dictated text joins the draft; the send button also sends it, while tapping the
+    // transcript leaves it in the field to edit.
+    .onChange(of: dictation.completedText) { _, text in
+      guard let text else { return }
+      model.draft = NativeDictationModel.appending(text, to: model.draft)
+      model.saveDraft()
+      if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
+    }
   }
 
   private var composerTextField: some View {
@@ -856,21 +911,16 @@ struct ChatView: View {
       showingRuntime = true
     } label: {
       HStack(spacing: 5) {
+        if let configuration = model.runtimeConfiguration, let runtime = model.effectiveRuntime {
+          ModelLogo(provider: ModelBrand.provider(runtime.modelId, configuration), size: 20)
+        }
         Text(model.runtimeLabel).lineLimit(1)
         Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
       }
       .font(.footnote.weight(.medium))
       .padding(.horizontal, 8).frame(minHeight: 44)
     }
-    .popover(isPresented: $showingRuntime, arrowEdge: .bottom) {
-      NavigationStack {
-        RuntimeControlsView(
-          client: model.client, scopeID: model.conversation.scopeId, showsCancel: true,
-          selected: model.runtimeSelection, onSelect: model.selectRuntime)
-      }
-      .frame(width: 340, height: 390)
-      .presentationCompactAdaptation(.popover)
-    }
+    .modelPicker(isPresented: $showingRuntime, model: model)
     .accessibilityLabel("Model and effort: \(model.runtimeLabel)")
     .accessibilityValue(model.runtimeDetail ?? "Workspace default")
     .disabled(model.sending)
@@ -915,5 +965,17 @@ private struct TranscriptGeometry: Equatable {
 
   func sizeChanged(since previous: Self) -> Bool {
     contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+  }
+}
+
+// Reads the drawer state on its own, so opening the drawer doesn't re-render the transcript.
+private struct DrawerOpenWatcher: View {
+  @Environment(\.conversationDrawerOpen) private var open
+  let onOpen: () -> Void
+
+  var body: some View {
+    Color.clear.onChange(of: open) { _, open in
+      if open { onOpen() }
+    }
   }
 }

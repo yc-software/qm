@@ -61,6 +61,22 @@ export const SESSION = {
   canContinue: true,
 };
 
+export const settle = async (done: () => boolean): Promise<void> => {
+  for (let i = 0; i < 200 && !done(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+};
+
+export function connectWidget(): HTMLElement {
+  const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    me: { org: "test", user: "tester" },
+    widget: "apps",
+    setupOnly: true,
+    toolkit: "gmail",
+    returnKey: "reply:1:0:0",
+  });
+  document.querySelector(".message-stack")!.append(widget);
+  return widget;
+}
+
 export async function harness(opts: HarnessOptions): Promise<Harness> {
   const session = opts.session ?? SESSION;
   let transcriptStatus = opts.transcriptStatus;

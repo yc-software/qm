@@ -20,6 +20,10 @@ export function contentPart(value: unknown): string {
   return canonicalJson(value);
 }
 
+export function normalizeTitle(title: string | undefined): string | undefined {
+  return title?.trim().replace(/\s+/g, " ") || undefined;
+}
+
 export function createDeduped<T extends { id: string }>(
   backing: DurableMap<T>,
   contentId: string,

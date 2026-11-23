@@ -2836,42 +2836,6 @@ test("completion wakes run Slack parents as coordinators unless the author is ex
   }
 });
 
-test("a bound delegated follow-up does not overwrite its completed foreground response", async () => {
-  const r = await delegatedHumanRig({
-    surface: "web",
-    idempotencyKey: "foreground-request",
-    deliveryTarget: conversation.threadRef,
-    deliveryWebhook: { binding: "bound-conversation", url: "https://receiver.example/qm" },
-  });
-  const parent = await r.runs.claimById(r.parent.id, "parent", 60_000);
-  await r.runs.complete(r.parent.id, parent!.leaseToken!, { status: "ok", reply: "The delegated task is running." });
-  const foreground = runResultDelivery((await r.runs.get(r.parent.id))!);
-  assert.equal(foreground?.provenance.sourceRequestId, "foreground-request");
-  const child = await r.runs.claimById(r.run.id, "child", 60_000);
-  await r.runs.complete(r.run.id, child!.leaseToken!, { status: "ok", reply: "The delegated task finished." });
-  await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(r.run.id))!);
-  const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
-  const claimed = await r.runs.claimById(wake.id, "parent-followup", 60_000);
-  await r.runs.complete(wake.id, claimed!.leaseToken!, { status: "ok", reply: "Here is the delegated result." });
-  const completed = (await r.runs.get(wake.id))!;
-  const followup = runResultDelivery(completed);
-  assert.equal(followup?.provenance.sourceRequestId, undefined);
-  assert.equal(followup?.provenance.sourceRunId, wake.id);
-  assert.deepEqual(followup?.destination.webhook, {
-    binding: "bound-conversation",
-    url: "https://receiver.example/qm",
-  });
-  const continuation = runResultDelivery({
-    ...completed,
-    request: {
-      ...completed.request,
-      idempotencyKey: "followup-approval-request",
-      approval: { requestId: "followup-approval", approved: true },
-    },
-  });
-  assert.equal(continuation?.provenance.sourceRequestId, "followup-approval-request");
-});
-
 test("delegated human origin retains live authority boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");
@@ -3568,18 +3532,22 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
     assert.equal(out.ok, true, JSON.stringify(out));
+  const cron = forTurn(false, { surface: "cron" });
+  assert.equal((await cron.list!()).ok, true);
+  assert.equal((await cron.read({ peer: true, target: peer.id })).ok, true);
+  assert.equal((await cron.start!({ fork: true })).ok, false);
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),
     await slack.start!({ fork: true }),
     await slack.read({ peer: true, target: peer.id }),
   ])
-    assert.deepEqual(out, { ok: false, message: "sessions are a web UI feature and aren't available here." });
+    assert.equal(out.ok, true, JSON.stringify(out));
   for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 3);
+  assert.equal(started.length, 4);
 });
 
 test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {

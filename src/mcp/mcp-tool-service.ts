@@ -8,7 +8,13 @@ import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { connectorApps, type ConnectorApp } from "./connector-apps.ts";
-import { attestsInAudience, attestedPerson, OutsideAudience, type AttestingTurn } from "../directory/person.ts";
+import {
+  attestsInAudience,
+  attestedPerson,
+  attestedActorHeaders,
+  OutsideAudience,
+  type AttestingTurn,
+} from "../directory/person.ts";
 import type { AddressFetch } from "../util/network.ts";
 import type { ScopeId } from "../types.ts";
 
@@ -181,7 +187,7 @@ function refuseOutsideAudience(
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
-  return { "x-qm-actor": actor, ...(approval ? { "x-qm-approval": approval } : {}) };
+  return { ...attestedActorHeaders(actor), ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
@@ -200,7 +206,7 @@ function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): s
   return lines.join("\n");
 }
 
-function authOf(server: McpServer): McpAuth {
+export function mcpServerAuth(server: McpServer): McpAuth {
   if (server.auth === "bearer") return { mode: "bearer", token: server.bearerToken ?? "" };
   if (server.auth === "client-credentials")
     return { mode: "client-credentials", clientId: server.clientId ?? "", clientSecret: server.clientSecret ?? "" };
@@ -273,7 +279,7 @@ export function createMcpToolService(opts: {
     const { clients } = tenantState();
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch });
+    const client = createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch });
     clients.set(server.id, { client, server });
     return client;
   }
@@ -556,7 +562,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      return createMcpClient({ url: server.url, auth: authOf(server), fetch: opts.fetch }).listTools({
+      return createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });

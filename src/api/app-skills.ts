@@ -8,6 +8,8 @@ import { planIngest, importPack, collectSharedBundle, type ImportResult } from "
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
 import { authorPublishesSkill, triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { asOrgAdmin } from "../auth/capability-token.ts";
+import type { Skill } from "../skills/skill-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -15,6 +17,7 @@ import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -153,11 +156,12 @@ async function reconcilePack(
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
+    console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
     await packs.recordImport(id, {
       at: Date.now(),
       commit: pack.ref,
       status: "error",
-      error: e instanceof Error ? e.message : String(e),
+      error: errText(e),
     });
     throw e;
   }
@@ -219,11 +223,12 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
+      console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
       await packs.recordImport(id, {
         at: Date.now(),
         commit: pack.ref,
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errText(e),
       });
       throw e;
     }
@@ -241,6 +246,7 @@ export function createSkillMethods(
   | "archiveSkill"
   | "listVisibleSkills"
   | "canManageSkill"
+  | "manageableSkills"
   | "updateOwnedSkill"
   | "restoreOwnedSkill"
   | "listSkillPacks"
@@ -254,7 +260,19 @@ export function createSkillMethods(
   | "createOwnedSkill"
   | "deleteOwnedSkill"
 > {
-  const { canManageSkill, republishIfShared } = h;
+  const { canManageSkill, manageableSkills, republishIfShared } = h;
+  const managesSkillById = async (
+    skill: Skill,
+    principalId: string,
+    opts?: { botActor?: boolean; liveActor?: boolean },
+  ) =>
+    (await canManageSkill(skill, principalId, opts?.botActor === true)) ||
+    asOrgAdmin(deps, {
+      actorId: principalId,
+      botActor: opts?.botActor,
+      liveActor: opts?.liveActor,
+      scopeId: skill.scopeId,
+    });
   return {
     listSkills() {
       return deps.skills.list();
@@ -278,9 +296,10 @@ export function createSkillMethods(
     canManageSkill(skill, principalId, botWork) {
       return canManageSkill(skill, principalId, botWork);
     },
+    manageableSkills,
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
+      if (!skill || !(await managesSkillById(skill, principalId, opts))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -304,8 +323,7 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
-        return null;
+      if (!skill || skill.status !== "archived" || !(await managesSkillById(skill, principalId, opts))) return null;
       if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
@@ -339,11 +357,12 @@ export function createSkillMethods(
         const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
         return await packs.update(pack.id, { available: plan.counts.eligible });
       } catch (e) {
+        console.error("%s", `[skills] pack ${pack.id} import failed:`, errMessage(e));
         await packs.recordImport(pack.id, {
           at: Date.now(),
           commit: pack.ref,
           status: "error",
-          error: e instanceof Error ? e.message : String(e),
+          error: errText(e),
         });
         return (await packs.get(pack.id)) ?? pack;
       }
@@ -449,7 +468,7 @@ export function createSkillMethods(
     async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
+      if (!(await managesSkillById(skill, principalId, { botActor, liveActor }))) return "forbidden";
       if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
       await deps.skills.archive(id);
       h.recordAudit({

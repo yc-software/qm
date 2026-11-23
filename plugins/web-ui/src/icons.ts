@@ -16,8 +16,12 @@ const MARK_KEYS: Record<string, "claude" | "gemini" | "openai"> = {
   openai: "openai",
 };
 
+export function modelBrand(key: string): "claude" | "gemini" | "openai" | undefined {
+  return MARK_KEYS[key.toLocaleLowerCase()];
+}
+
 export function modelMark(key: string, size = 16): TemplateResult | null {
-  const mark = MARK_KEYS[key.toLocaleLowerCase()];
+  const mark = modelBrand(key);
   if (!mark) return null;
   if (mark === "openai")
     return html`<svg

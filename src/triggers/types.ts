@@ -1,5 +1,5 @@
 import type { RuntimeChoice } from "../agent/agent.ts";
-import type { Destination, ScopeId, TurnResult } from "../types.ts";
+import type { Destination, ScopeId, TurnResult, WornPersona } from "../types.ts";
 
 export interface TriggerBase {
   id: string;
@@ -60,8 +60,16 @@ export interface Cron extends TriggerBase {
   createdAt: number;
   sessionRef?: string;
   script?: CronScript;
+  sharedFrom?: string;
+  forkedAt?: number;
 
   lastFireNote?: CronFireNote;
+}
+
+export interface CronOrigin {
+  personaId?: string;
+  persona?: WornPersona;
+  project?: { id: string; name: string };
 }
 
 interface WebhookVerification {
@@ -75,6 +83,7 @@ interface WebhookFilter {
 }
 
 export interface Webhook extends TriggerBase {
+  title?: string;
   action: string;
   verification: WebhookVerification;
   filters?: WebhookFilter[];

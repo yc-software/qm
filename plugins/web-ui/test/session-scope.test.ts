@@ -124,4 +124,5 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   const host = document.createElement("div");
   render(sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
+  assert.ok(host.querySelector(".session-tools-more")?.classList.contains("menu-control"));
 });

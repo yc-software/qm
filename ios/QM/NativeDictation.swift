@@ -173,9 +173,17 @@ final class NativeDictationModel {
   private(set) var level = 0.0
   private(set) var liveText = ""
   private(set) var completedText: String?
+  /// Whether the finished text should be sent straight away rather than left in the draft.
+  private(set) var sendsWhenDone = false
+  private var silentRecording = false
+
+  /// Whether retrying should listen again. When nothing was heard, reading the same audio
+  /// again can only fail the same way.
+  var retryRecordsAgain: Bool { liveText.isEmpty || silentRecording }
   private(set) var permissionError: NativeAudioPermissionError?
   var error: String?
   var busy: Bool { state != .idle }
+  var canFinish: Bool { state == .recording || state == .ready }
   private let provider: any SpeechToTextProvider
   private let microphonePermission: @MainActor () async -> Bool
   private var audioEngine: AVAudioEngine?
@@ -201,6 +209,8 @@ final class NativeDictationModel {
   func start() {
     guard state == .idle else { return }
     completedText = nil
+    sendsWhenDone = false
+    silentRecording = false
     error = nil
     permissionError = nil
     elapsed = 0
@@ -291,8 +301,9 @@ final class NativeDictationModel {
     }
   }
 
-  func finish() {
+  func finish(sending: Bool = false) {
     guard state == .recording || state == .ready else { return }
+    sendsWhenDone = sending
     state = .transcribing
     stopRecording()
     transcribe()
@@ -305,7 +316,12 @@ final class NativeDictationModel {
   }
 
   func retry() {
-    guard state == .retry, file != nil else { return }
+    guard state == .retry else { return }
+    if retryRecordsAgain || file == nil {
+      cancel()
+      start()
+      return
+    }
     state = .transcribing
     error = nil
     permissionError = nil
@@ -326,6 +342,7 @@ final class NativeDictationModel {
           in: .whitespacesAndNewlines)
         guard current == revision, !Task.isCancelled else { return }
         guard !text.isEmpty else {
+          silentRecording = true
           throw QMError.message("No speech was detected. Try recording again.")
         }
         cancel()

@@ -88,6 +88,7 @@ export interface CapabilityClaims {
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
+  ephemeral?: true;
   runId?: string;
   sessionId?: string;
   origin?: SessionOrigin;
@@ -218,4 +219,13 @@ export async function verifyBlobTransferCapability(
   if (grant.id !== undefined && (typeof grant.id !== "string" || !BLOB_ID.test(grant.id))) return null;
   if (expected.dir === "read" ? grant.id !== expected.id : grant.id !== undefined) return null;
   return claims as BlobTransferClaims;
+}
+
+export async function asOrgAdmin(
+  admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
+  actor: { actorId: string; botActor?: boolean; liveActor?: boolean; liveAuthor?: boolean; scopeId?: string },
+): Promise<boolean> {
+  if (actor.botActor === true) return false;
+  if (actor.scopeId !== undefined && actor.liveActor !== true && actor.liveAuthor !== true) return false;
+  return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }

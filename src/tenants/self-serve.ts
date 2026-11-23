@@ -12,6 +12,7 @@ export const externalOrgSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().trim().min(1),
+    partnerChatAccount: z.string().min(1).optional(),
   })
   .strip();
 

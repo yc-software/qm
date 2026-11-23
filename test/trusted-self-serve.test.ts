@@ -263,7 +263,7 @@ test("a deployment with a boot tenant never self-serves another workspace", asyn
 test("a deployment's provisioner sets up each new workspace before anyone can use it, and a failure leaves it switched off", async (t) => {
   const { db, s, directory, isAdmin, provision } = await shared(t);
   provision.state.failing = true;
-  const org = { id: "55", name: "Gated Co" };
+  const org = { id: "55", name: "Gated Co", partnerChatAccount: "5555" };
   const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
   await assert.rejects(signIn("g1"), /HTTP 502/);
   const [row] = await db.owner.q("SELECT tenant::text AS tenant FROM tenant_external_orgs WHERE org_id = '55'");

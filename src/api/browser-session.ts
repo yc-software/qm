@@ -108,6 +108,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
   ["POST /api/turn", "/v1/web/turn"],
+  ["DELETE /api/ephemeral", "/v1/web/ephemeral"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
   ["GET /api/deliveries/events", "/v1/web/events"],
@@ -150,6 +151,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/apps/:id/archive", "/v1/apps/:id/archive"],
   ["POST /api/apps/:id/restore", "/v1/apps/:id/restore"],
   ["POST /api/webhooks", "/v1/webhooks"],
+  ["POST /api/webhooks/:id/update", "/v1/webhooks/:id/update"],
   ["POST /api/webhooks/:id/disable", "/v1/webhooks/:id/disable"],
   ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
   ["POST /api/blobs", "/v1/web/blobs"],
@@ -256,7 +258,8 @@ function misconfiguration(deps: BrowserLaneDeps): string | null {
 async function isAdmin(deps: ServerDeps, tenant: Tenant | undefined, principalId: string): Promise<boolean> {
   if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
   if (!tenant) throw new Error("No tenant is bound to this request");
-  return (await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" })).isAdmin;
+  const status = await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" });
+  return status.isAdmin && status.role !== "owner";
 }
 
 export async function browserIdentity(

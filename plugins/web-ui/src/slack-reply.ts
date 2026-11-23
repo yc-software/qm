@@ -139,6 +139,7 @@ export class SlackReply extends LitElement {
   private async send(event: Event): Promise<void> {
     event.preventDefault();
     if (this.connected === false || this.sending || !this.text.trim()) return;
+    const refocus = this.contains(document.activeElement);
     this.sending = true;
     this.error = "";
     try {
@@ -159,6 +160,8 @@ export class SlackReply extends LitElement {
       this.error = "The send outcome is unknown. Check Slack before trying again.";
     } finally {
       this.sending = false;
+      if (refocus)
+        void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>(".composer-input")?.focus());
     }
   }
   protected render() {

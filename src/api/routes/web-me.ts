@@ -51,12 +51,13 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, slack, auth, branding, starters] = await Promise.all([
+  const [permissions, slack, auth, branding, starters, teammate] = await Promise.all([
     permissionsOf(ctx, user),
     app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
+    deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
@@ -76,6 +77,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     ),
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
+    ...(teammate ? { teammate } : {}),
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(starters.welcome ? { welcome: starters.welcome } : {}),

@@ -8,13 +8,10 @@ import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.t
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
-import { personKey } from "../../directory/person.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
-const memberIds = (m: { principalId: string; slackId?: string }): string =>
-  [m.principalId, m.slackId].filter(Boolean).join(", ");
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
-  `${m.displayName} (${memberIds(m)})`;
+  `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
 
 export function renderSandboxProviders(
   names: readonly string[],
@@ -29,7 +26,7 @@ export function renderSandboxProviders(
   ];
   const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
   const network = behindProxy.length
-    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node with NODE_USE_ENV_PROXY=1.`
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node's fetch.`
     : "";
   return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
@@ -39,31 +36,23 @@ interface RosterSnapshot {
   sessionId: string;
 }
 
-export function previousRoster(history: readonly Item[]): RosterSnapshot["roster"] | undefined {
-  return retainedSnapshot(history, rosterOf).previous?.roster;
-}
-
 export function membershipEvent(
   current: ReadonlyArray<{ principalId: string; displayName: string; slackId?: string }> | undefined,
   history: readonly Item[],
   sessionId: string,
-  names: ReadonlyMap<string, string>,
 ): { text: string; record?: RosterSnapshot } {
   if (!current) return { text: "" };
   const roster = current
     .map((m) => ({ id: m.principalId, name: m.displayName }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const previous = previousRoster(history);
+  const { previous } = retainedSnapshot(history, rosterOf);
   if (!previous) return { text: "", record: { roster, sessionId } };
   const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
   const joined = current
-    .filter((m) => absentFrom(previous, m.principalId))
+    .filter((m) => absentFrom(previous.roster, m.principalId))
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map((m) => {
-      const displayName = names.get(personKey(m.principalId));
-      return displayName ? memberLabel({ ...m, displayName }) : memberIds(m);
-    });
-  const left = previous.filter((m) => absentFrom(roster, m.id)).map((m) => names.get(personKey(m.id)) ?? m.id);
+    .map(memberLabel);
+  const left = previous.roster.filter((m) => absentFrom(roster, m.id)).map((m) => m.name);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",
@@ -134,11 +123,6 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
   return typeof snapshot?.version === "number" && typeof snapshot.sessionId === "string"
     ? (snapshot as GuidanceSnapshot)
     : undefined;
-}
-
-export function webSurfaceLabel(botName: string, relayed: boolean): string {
-  if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
 }
 
 function trimmedEntries(record: Record<string, string> | undefined) {
@@ -238,8 +222,11 @@ function shortCron(expression: string): string {
   const pattern = new CronPattern(expression);
   const [minute, ...moreMinutes] = setIndexes(pattern.minute);
   const weekdays = setIndexes(pattern.dayOfWeek);
+  const hours = setIndexes(pattern.hour);
+  const listedHours = expression.trim().split(" ")[1]?.split(",").length;
   const plain =
     minute !== undefined &&
+    hours.length === listedHours &&
     !moreMinutes.length &&
     setIndexes(pattern.second).join() === "0" &&
     pattern.starDOM &&
@@ -250,9 +237,7 @@ function shortCron(expression: string): string {
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
   if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
-  return `${setIndexes(pattern.hour)
-    .map((hour) => clockTime(hour, minute))
-    .join(", ")} ${days}`;
+  return `${hours.map((hour) => clockTime(hour, minute)).join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {
@@ -296,11 +281,11 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
   const schedules = crons
     .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map((c) => ({ title: c.title || "Untitled scheduled task", ...scheduleLabel(c) }));
+    .map((c) => ({ title: summary(c.title || "Untitled scheduled task"), ...scheduleLabel(c) }));
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
     ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.title || w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
@@ -312,12 +297,9 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
 }
 
 const ROSTER_CAP = 20;
-export const rosterShown = <T extends { principalId: string }>(members: readonly T[]): T[] =>
-  members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = rosterShown(members);
+  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
   const lines = shown.map((m) => `- ${memberLabel(m)}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
@@ -336,6 +318,7 @@ export function currentTimeBlock(timezone: string, nowMs: number): string {
 
 const SYSTEM_CONTEXT_ORDER = [
   "Where you are",
+  "Ephemeral session",
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",

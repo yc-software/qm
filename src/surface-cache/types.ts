@@ -29,6 +29,7 @@ export interface CachedMessage extends SurfaceKey {
   deleted?: boolean;
   deletedAt?: number;
   handled?: boolean;
+  ambientClaimed?: boolean;
   createdAt: number;
 }
 
@@ -110,6 +111,7 @@ export type LiveFallback = (container: string, opts: ReadMessagesOpts) => Promis
 export interface SurfaceCache {
   ingest(events: IngestEvent[]): Promise<{ upserted: number }>;
   markHandled(container: string, ts: string, key?: SurfaceKey): Promise<void>;
+  claimForAmbient(container: string, timestamps: string[], key?: SurfaceKey): Promise<string[]>;
   readMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   revisedSince(container: string, since: number, opts?: RevisedSinceOpts): Promise<CachedMessage[]>;
   search(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;

@@ -29,11 +29,6 @@ export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: nu
 type Disposition = "deliver" | "record" | "settle";
 
 function classify(d: Delivery): Disposition {
-  if (d.destination.type === "webhook") {
-    const recorded =
-      d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined;
-    return d.text.trim() && !recorded ? "record" : "deliver";
-  }
   if (d.destination.type !== "web") return "deliver";
   if (d.destination.webTranscript && d.text.trim()) return "record";
   if (!d.provenance) return "deliver";
@@ -42,7 +37,13 @@ function classify(d: Delivery): Disposition {
   return "settle";
 }
 
-const transcribed = (type: string): boolean => type === "web" || type === "webhook";
+const transcribed = (type: string): boolean => type === "web";
+
+function viaBody(d: Delivery, via: string): Record<string, unknown> {
+  const sourceTitle = d.provenance?.sourceTitle?.trim();
+  const sourceId = d.provenance?.sourceId;
+  return { via, ...(sourceTitle ? { sourceTitle } : {}), ...(sourceId ? { sourceId } : {}) };
+}
 
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,
@@ -82,7 +83,14 @@ export function withWebTranscriptDeliveries(
     } else if (failure) {
       item = turnFailureItem(d.text, failure.runId);
     } else {
-      item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
+      item = {
+        kind: "AgentMessage",
+        text: d.text,
+        body: {
+          ...(via ? viaBody(d, via) : {}),
+          ...(d.destination.persona ? { personaId: d.destination.persona.id } : {}),
+        },
+      };
     }
     const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
     if (!inserted) return true;

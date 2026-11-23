@@ -167,12 +167,12 @@ test("the app handle saves only a well-formed handle and shows the server's refu
   });
   await admin.settle();
   assert.equal(admin.document.querySelector<HTMLInputElement>("#app-handle")!.value, "nitroduck");
-  type(admin, "#app-handle", "nitro-duck");
+  type(admin, "#app-handle", "nitro-duck-");
   click(admin, '[data-save="app-handle"]');
   await admin.settle();
   assert.equal(
     admin.document.getElementById("st-app-handle")!.textContent,
-    "Use 2–61 lowercase letters or digits, with no hyphens.",
+    "Use 2–61 lowercase letters, digits or hyphens, not starting or ending with a hyphen.",
   );
   assert.deepEqual(saves, []);
   type(admin, "#app-handle", "taken1");
@@ -182,10 +182,10 @@ test("the app handle saves only a well-formed handle and shows the server's refu
     admin.document.getElementById("st-app-handle")!.textContent,
     "another workspace already uses that handle",
   );
-  type(admin, "#app-handle", " duck2 ");
+  type(admin, "#app-handle", " nitro-duck2 ");
   click(admin, '[data-save="app-handle"]');
   await admin.settle();
-  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "duck2" }]);
+  assert.deepEqual(saves, [{ handle: "taken1" }, { handle: "nitro-duck2" }]);
   admin.close();
 });
 
@@ -259,13 +259,21 @@ test("credential usage fills in when it arrives, survives failure, and ignores r
     });
     await admin.settle();
     const list = () => admin.document.getElementById("sc-list")?.textContent ?? "";
-    assert.match(list(), /Loading usage…/);
+    assert.doesNotMatch(list(), /\buses?\b|Usage unavailable/);
     if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
-      outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
+      outcome === "failed"
+        ? { status: 500, body: {} }
+        : { summaries: [{ slug: "example", usageCount: 7, usageSince: Date.UTC(2026, 10, 12, 12) }] },
     );
     await admin.settle();
-    if (outcome === "current") assert.match(list(), /7 successful uses/);
+    if (outcome === "current") {
+      assert.match(list(), /7 uses since Nov 12/);
+      const links = [...admin.document.querySelectorAll<HTMLAnchorElement>("#app-view a.viewlink")].map(
+        (a) => a.textContent,
+      );
+      assert.deepEqual(links, ["View usage ›", "View users ›"]);
+    }
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
     if (outcome === "view") assert.equal(list(), "");
     admin.close();
@@ -300,7 +308,8 @@ test("credentials save from the dialog and delete after review", async () => {
   await admin.settle();
   assert.equal(dialog.open, false);
   assert.match(admin.document.getElementById("sc-list")!.textContent!, /Service/);
-  click(admin, '#sc-list [aria-label="Delete Service"]');
+  click(admin, '#sc-list [aria-label="Edit Service"]');
+  click(admin, "#sc-delete");
   await admin.settle();
   assert.match(admin.document.getElementById("governance-review-title")!.textContent!, /Delete “Service”/);
   click(admin, "#governance-review-confirm");
