@@ -7,6 +7,7 @@ struct NativeDictationComposer: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var transcriptHeight: CGFloat = 28
   @State private var appeared = false
+  @State private var reveal = NativeWordQueue()
 
   var body: some View {
     VStack(spacing: 8) {
@@ -57,24 +58,24 @@ struct NativeDictationComposer: View {
   private var transcriptArea: some View {
     ScrollViewReader { scrollProxy in
       ScrollView {
-        transcript
-          .font(.title3)
-          // Each new word rises a few points and comes into focus as it lands.
-          .keyframeAnimator(initialValue: 1.0, trigger: wordCount) { content, progress in
-            content.textRenderer(NativeWordReveal(progress: reduceMotion ? 1 : progress))
-          } keyframes: { _ in
-            MoveKeyframe(0)
-            CubicKeyframe(1, duration: 0.38)
-          }
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: .infinity)
-          .fixedSize(horizontal: false, vertical: true)
-          .id("dictationTranscript")
-          .onGeometryChange(for: CGFloat.self) {
-            $0.size.height
-          } action: {
-            transcriptHeight = $0
-          }
+        // Each word eases up into place and into focus on its own clock, so a fast
+        // talker never cuts off the word before. Left-aligned while words arrive so
+        // the line grows rightward instead of re-centering on every word.
+        TimelineView(.animation(paused: reduceMotion || !reveal.isAnimating)) { timeline in
+          transcript
+            .font(.title3)
+            .textRenderer(
+              NativeWordReveal(now: timeline.date.timeIntervalSinceReferenceDate, instant: reduceMotion))
+        }
+        .multilineTextAlignment(reveal.words.isEmpty ? .center : .leading)
+        .frame(maxWidth: .infinity, alignment: reveal.words.isEmpty ? .center : .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .id("dictationTranscript")
+        .onGeometryChange(for: CGFloat.self) {
+          $0.size.height
+        } action: {
+          transcriptHeight = $0
+        }
       }
       .frame(height: min(transcriptHeight, maximumTranscriptHeight))
       .scrollIndicators(.hidden)
@@ -87,21 +88,28 @@ struct NativeDictationComposer: View {
     }
     .contentShape(Rectangle())
     .onTapGesture { if canFinish { model.finish() } }
+    .onAppear { reveal.update(to: model.liveText, flush: reduceMotion) }
+    .onChange(of: model.liveText) { _, text in
+      reveal.update(to: text, flush: reduceMotion || model.state != .recording)
+    }
+    .onChange(of: model.state) { _, state in
+      if state != .recording { reveal.update(to: model.liveText, flush: true) }
+    }
     .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
     .accessibilityHint(canFinish ? "Stops recording and puts the text in the message field" : "")
     .accessibilityAddTraits(canFinish ? .isButton : [])
   }
 
   private var transcript: Text {
-    guard !model.liveText.isEmpty else {
+    guard !reveal.words.isEmpty else {
       return Text(placeholder).foregroundColor(QMTheme.ink.opacity(0.58))
     }
-    let latest = model.liveText.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
-    let preceding = String(model.liveText.dropLast(latest.count))
-    return Text(preceding) + Text(latest).fontWeight(.semibold).customAttribute(NativeNewestWord())
+    return reveal.words.enumerated().reduce(Text("")) { text, item in
+      let (index, word) = item
+      return text + Text(index == 0 ? word.text : " " + word.text)
+        .customAttribute(NativeWordBirth(time: word.born))
+    }
   }
-
-  private var wordCount: Int { model.liveText.split(whereSeparator: \.isWhitespace).count }
 
   private var maximumTranscriptHeight: CGFloat {
     verticalSizeClass == .compact ? 120 : 220
@@ -162,25 +170,91 @@ struct NativeDictationComposer: View {
   }
 }
 
-private struct NativeNewestWord: TextAttribute {}
+private struct NativeWordBirth: TextAttribute {
+  var time: TimeInterval
+}
 
-/// Draws the dictation transcript, easing the newest word up into place and into focus.
+/// How long each word takes to land.
+private let wordRevealDuration: TimeInterval = 0.38
+
+/// Draws the dictation transcript, easing each word up into place and into focus
+/// from the moment it was shown.
 private struct NativeWordReveal: TextRenderer {
-  var progress: Double
+  var now: TimeInterval
+  var instant: Bool
 
   func draw(layout: Text.Layout, in context: inout GraphicsContext) {
     for line in layout {
       for run in line {
-        guard run[NativeNewestWord.self] != nil, progress < 1 else {
+        guard !instant, let born = run[NativeWordBirth.self]?.time else {
           context.draw(run)
           continue
         }
+        let linear = min(max((now - born) / wordRevealDuration, 0), 1)
+        guard linear < 1 else {
+          context.draw(run)
+          continue
+        }
+        let progress = 1 - pow(1 - linear, 3)  // ease out cubic
         var landing = context
         landing.opacity = progress
         landing.addFilter(.blur(radius: (1 - progress) * 4))
         landing.translateBy(x: 0, y: (1 - progress) * 6)
         landing.draw(run)
       }
+    }
+  }
+}
+
+/// Paces recognizer updates into a steady trickle of words. The recognizer reports
+/// in bursts of two or three words; showing them one by one, a beat apart, gives
+/// each its own entrance. Corrections to words already shown swap in place.
+@MainActor @Observable
+final class NativeWordQueue {
+  struct Word: Equatable {
+    var text: String
+    var born: TimeInterval
+  }
+
+  private(set) var words: [Word] = []
+  private var pending: [String] = []
+  private var drain: Task<Void, Never>?
+
+  var isAnimating: Bool {
+    guard !pending.isEmpty || drain != nil else {
+      let now = Date.timeIntervalSinceReferenceDate
+      return words.contains { now - $0.born < wordRevealDuration }
+    }
+    return true
+  }
+
+  func update(to text: String, flush: Bool) {
+    let target = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    let now = Date.timeIntervalSinceReferenceDate
+    // Words already on screen take the recognizer's latest spelling but keep their clock.
+    let shown = min(words.count, target.count)
+    for index in 0..<shown where words[index].text != target[index] {
+      words[index].text = target[index]
+    }
+    if words.count > target.count { words.removeLast(words.count - target.count) }
+    pending = Array(target.dropFirst(words.count))
+    if flush {
+      drain?.cancel()
+      drain = nil
+      // Keep words already landing animating; anything still queued lands now, unanimated.
+      words += pending.map { Word(text: $0, born: now - wordRevealDuration) }
+      pending = []
+      return
+    }
+    guard drain == nil, !pending.isEmpty else { return }
+    drain = Task { [weak self] in
+      while let self, !Task.isCancelled, !self.pending.isEmpty {
+        self.words.append(Word(text: self.pending.removeFirst(), born: Date.timeIntervalSinceReferenceDate))
+        // Catch up when the queue backs up so the text never trails speech by much.
+        let gap = self.pending.count > 3 ? 25 : 55
+        try? await Task.sleep(for: .milliseconds(gap))
+      }
+      self?.drain = nil
     }
   }
 }
