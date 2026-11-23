@@ -196,13 +196,22 @@ export function planCompaction(
 
   const keptCount = recentItemCountWithinBudget(afterSummary, keepRecentTokens);
   let overflowCount = Math.max(0, afterSummary.length - keptCount);
-  while (overflowCount > 0) {
-    const last = afterSummary[overflowCount - 1]!;
-    if (last.kind !== "ToolCall" || !last.callId) break;
-    const cid = last.callId;
-    const pairedInBatch = afterSummary.slice(0, overflowCount).some((e) => e.kind === "ToolResult" && e.callId === cid);
-    if (pairedInBatch) break;
-    overflowCount -= 1;
+  if (overflowCount > 0) {
+    const callStart = new Map<string, number>();
+    const stepStart = new Map<string, number>();
+    for (let i = 0; i < overflowCount; i++) {
+      const item = afterSummary[i]!;
+      if (item.kind === "ToolCall" && item.callId && !callStart.has(item.callId)) callStart.set(item.callId, i);
+      const sid = stepId(item);
+      if (sid && !stepStart.has(sid)) stepStart.set(sid, i);
+    }
+    for (let i = afterSummary.length - 1; i >= overflowCount; i--) {
+      const item = afterSummary[i]!;
+      if (item.kind === "ToolResult" && item.callId)
+        overflowCount = Math.min(overflowCount, callStart.get(item.callId) ?? overflowCount);
+      const sid = stepId(item);
+      if (sid) overflowCount = Math.min(overflowCount, stepStart.get(sid) ?? overflowCount);
+    }
   }
   const overflow = afterSummary.slice(0, overflowCount);
   const toSummarize = latestSummary ? [latestSummary, ...overflow] : overflow;
