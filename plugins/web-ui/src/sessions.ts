@@ -1388,7 +1388,7 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
 
 registerSessionMoveHost({
   sessions: () => sessionsState.list,
-  isProject: (scopeId) => projectOf(scopeId) !== null,
+  movableFrom: (scopeId) => scopeId === `personal:${appState.me?.user}` || projectOf(scopeId) !== null,
   move: moveSessionsToProject,
 });
 

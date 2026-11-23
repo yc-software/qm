@@ -21,8 +21,9 @@ const sessions = [
   { id: "child", scopeId: "personal:me", surface: "web", parentSessionId: "a" },
   { id: "channel", scopeId: "channel:C1", surface: "web" },
   { id: "other", scopeId: "group:project:other", surface: "web" },
+  { id: "shared", scopeId: "personal:someone-else", surface: "web" },
 ] as CoreSession[];
-const isProject = (scopeId: string) => scopeId.startsWith("group:project:");
+const movableFrom = (scopeId: string) => scopeId === "personal:me" || scopeId.startsWith("group:project:");
 
 test("dragging a selected row carries the whole selection; other rows move alone", () => {
   assert.deepEqual(sessionsToMove(new Set(["a", "b"]), "b"), ["a", "b"]);
@@ -31,10 +32,14 @@ test("dragging a selected row carries the whole selection; other rows move alone
   assert.deepEqual(sessionsToMove(new Set(), "a"), ["a"]);
 });
 
-test("only idle top-level web chats from a personal scope or another project are movable", () => {
+test("only idle top-level web chats from your own personal scope or another project are movable", () => {
   const all = sessions.map((s) => s.id);
-  assert.deepEqual(movableInto(sessions, [...all, "missing"], "group:project:launch", isProject), ["a", "b", "other"]);
-  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", isProject), []);
+  assert.deepEqual(movableInto(sessions, [...all, "missing"], "group:project:launch", movableFrom), [
+    "a",
+    "b",
+    "other",
+  ]);
+  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", movableFrom), []);
 });
 
 function fixture() {
@@ -47,7 +52,7 @@ function fixture() {
   const moves: Array<{ ids: readonly string[]; scopeId: string }> = [];
   registerSessionMoveHost({
     sessions: () => sessions,
-    isProject,
+    movableFrom,
     move: async (ids, scopeId) => {
       moves.push({ ids, scopeId });
     },

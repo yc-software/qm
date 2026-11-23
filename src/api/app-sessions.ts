@@ -11,7 +11,7 @@ import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.t
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId, personalScope, scopeId } from "../types.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -1207,7 +1207,7 @@ export function createSessionMethods(
       const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref) !== null;
       const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
       if (
-        (from.kind !== "personal" && !fromProject) ||
+        (source.scopeId !== personalScope(principalId) && !fromProject) ||
         !topLevelWebChat ||
         !(await mayWriteSession(principalId, source))
       )
