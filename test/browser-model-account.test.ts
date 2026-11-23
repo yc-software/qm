@@ -114,7 +114,7 @@ test("browser requests run on the person's own Claude key, as their session does
   );
   assert.equal(calls[0]?.host, "api.anthropic.com");
   assert.equal(calls[0]?.headers.get("x-api-key"), "personal-claude-key");
-  assert.deepEqual(calls[0]?.body.tool_choice, { type: "tool", name: "structured_result" });
+  assert.deepEqual(calls[0]?.body.tool_choice, { type: "auto" });
   assert.match(JSON.stringify(calls[0]?.body.system), /Browse safely/);
   assert.match(JSON.stringify(calls[0]?.body.messages), /"media_type":"image\/png"/);
 
@@ -145,7 +145,7 @@ test("a failed browser request names the model and the account it billed", async
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-claude-key");
   const failed = await post({ browserAccount: "anthropic", browserModel: "claude-opus-5" }, structuredRequest);
-  assert.equal(failed.status, 502);
+  assert.equal(failed.status, 429);
   const { error } = (await failed.json()) as { error: string };
   assert.match(error, /Claude Opus 5 \(billed to the person's own account\) could not complete the browser request/);
   assert.match(error, /slow down/);
@@ -173,7 +173,7 @@ test("a ChatGPT login serves the browser on the person's subscription", async (t
     { browserAccount: "openai", browserModel: "codex/gpt-6.1-sol" },
     { ...structuredRequest, model: "codex/gpt-6.1-sol" },
   );
-  assert.equal(response.status, 502);
+  assert.equal(response.status, 400);
   assert.match(await response.text(), /billed to the person's own account/);
   assert.equal(calls[0]?.host, "chatgpt.com");
   assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);
@@ -192,7 +192,7 @@ test("a company ChatGPT subscription serves company browsing without an API-key 
     { browserAccount: "company", browserModel: "gpt-5.6-sol" },
     { ...structuredRequest, model: "gpt-5.6-sol" },
   );
-  assert.equal(response.status, 502);
+  assert.equal(response.status, 400);
   assert.match(await response.text(), /billed to the organization's own provider key/);
   assert.equal(calls[0]?.host, "chatgpt.com");
   assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);

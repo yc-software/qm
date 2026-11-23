@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
-import type { Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { buildModelRuntime, zeroUsage } from "./model-runtime.ts";
 import { routeLabel, type ModelRoute } from "./model-route.ts";
+import { providerTurnError } from "./provider-error.ts";
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -14,6 +15,16 @@ export class ChatCompletionError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+function failureStatus(result: AssistantMessage, signal: AbortSignal, responseStatus?: number): number {
+  if (result.stopReason === "aborted") {
+    return (signal.reason as { name?: unknown } | undefined)?.name === "TimeoutError" ? 504 : 502;
+  }
+  const status = result.providerError?.status ?? responseStatus;
+  if (typeof status === "number" && status >= 400 && status < 500 && status !== 401 && status !== 403) return status;
+  if (providerTurnError(result).code === "refusal") return 422;
+  return 502;
 }
 
 export async function completeChatRequest(
@@ -87,30 +98,34 @@ export async function completeChatRequest(
     throw new ChatCompletionError("max_tokens must be a positive integer");
   const runtime = await buildModelRuntime(route.keys, route.gateway, purpose);
   const modelApi = model.api;
+  let responseStatus: number | undefined;
   const result = await runtime.completeSimple(model, context, {
     signal,
     maxTokens: Math.min(limit, model.maxTokens),
     maxRetries: 0,
+    onResponse: (response) => {
+      responseStatus = response.status;
+    },
     onPayload: schema
       ? (raw) => {
           const payload = object(raw);
           if (!payload) throw new ChatCompletionError("Invalid model request");
           let toolChoice: object = { type: "function", name: "structured_result" };
-          if (modelApi === "anthropic-messages") toolChoice = { type: "tool", name: "structured_result" };
+          if (modelApi === "anthropic-messages") toolChoice = { type: "auto" };
           if (modelApi === "openai-completions")
             toolChoice = { type: "function", function: { name: "structured_result" } };
           return { ...payload, tool_choice: toolChoice };
         }
       : undefined,
   });
-  if (result.stopReason === "error" || result.stopReason === "aborted" || result.stopReason === "length")
+  if (result.stopReason === "error" || result.stopReason === "aborted")
     throw new ChatCompletionError(
       `${routeLabel(route)} could not complete the ${purpose} request: ${result.errorMessage ?? result.stopReason}`,
-      502,
+      failureStatus(result, signal, responseStatus),
     );
+  if (schema && result.stopReason === "length")
+    throw new ChatCompletionError(`${routeLabel(route)} reached max_tokens before returning a structured result`, 422);
   const structured = result.content.find((part) => part.type === "toolCall" && part.name === "structured_result");
-  if (schema && !structured)
-    throw new ChatCompletionError(`${routeLabel(route)} did not return a structured result`, 502);
   const text =
     structured?.type === "toolCall"
       ? JSON.stringify(structured.arguments)
@@ -118,12 +133,25 @@ export async function completeChatRequest(
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("");
+  if (schema && !structured) {
+    const preview = text.trim();
+    throw new ChatCompletionError(
+      `${routeLabel(route)} did not return a structured result (stopReason=${result.stopReason}${preview ? `, text=${JSON.stringify(preview)}` : ""})`,
+      502,
+    );
+  }
   return {
     id: `${purpose}-${randomUUID()}`,
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model: route.modelId,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: result.stopReason === "length" ? "length" : "stop",
+      },
+    ],
     usage: {
       prompt_tokens: result.usage.input + result.usage.cacheRead + result.usage.cacheWrite,
       completion_tokens: result.usage.output,
