@@ -1,6 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { Archive, Ellipsis, Pause, Pencil, Play, Plus, RotateCcw, Sparkles, Trash2 } from "lucide";
-import { live } from "lit/directives/live.js";
 import { openShare, shareButton } from "./share-dialog";
 import { cronDeliveryList } from "./cron-delivery";
 import { friendlyPrincipal } from "./app-view";
@@ -25,6 +24,7 @@ import {
   timezoneLabel,
 } from "./cron-format";
 import { tip } from "./tooltip";
+import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 
 export interface CronView {
   id: string;
@@ -92,7 +92,7 @@ let cronMutationInFlight = false;
 let cronsSearch = "";
 const cronRuns = new Map<string, CronRunView[]>();
 const cronRunsLoading = new Set<string>();
-let cronDialog: { kind: "delete"; cron: CronView } | null = null;
+let cronDialog: { kind: "delete"; cron: CronView; opener: HTMLElement | null } | null = null;
 type CronEditField = "title" | "task" | "schedule";
 let cronEdit: { id: string; field: CronEditField } | null = null;
 let scheduleDraft: ScheduleDraft | null = null;
@@ -102,6 +102,11 @@ let pendingCronId: string | null = null;
 
 export function resetActiveCron(): void {
   cronsScope = null;
+  activeCronId = null;
+  cronDialog = null;
+  cronEdit = null;
+  scheduleDraft = null;
+  cronActionNotice = "";
 }
 
 export function openCronById(id: string): void {
@@ -218,6 +223,9 @@ export async function renderCronsPage(): Promise<void> {
 function drawCronsPage(): void {
   if (appState.currentView !== "crons" || !appState.mainEl) return;
   activeCronId = null;
+  cronDialog = null;
+  cronEdit = null;
+  scheduleDraft = null;
   syncCronUrl(null);
   if (!cronsPageHost || cronsPageHost.parentElement !== appState.mainEl) {
     cronsPageHost = document.createElement("div");
@@ -453,6 +461,8 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
   if (switching) {
     cronEdit = null;
     scheduleDraft = null;
+    cronDialog = null;
+    cronActionNotice = "";
   }
   activeCronId = c.id;
   syncCronUrl(c.id, opts.push);
@@ -461,7 +471,6 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
   const mine = cronList.some((x) => x.id === c.id);
   const manageable = canManageCron(c, mine);
   const notice = cronActionNotice;
-  cronActionNotice = "";
   render(
     html`
       <div class="resource-detail cron-detail">
@@ -542,6 +551,7 @@ function editing(c: CronView, field: CronEditField): boolean {
 }
 
 function startEdit(c: CronView, field: CronEditField): void {
+  cronActionNotice = "";
   cronEdit = { id: c.id, field };
   if (field === "schedule") scheduleDraft = draftFromSchedule(c.schedule);
   openCron(c);
@@ -551,6 +561,7 @@ function startEdit(c: CronView, field: CronEditField): void {
 }
 
 function cancelEdit(c: CronView): void {
+  cronActionNotice = "";
   cronEdit = null;
   scheduleDraft = null;
   openCron(c);
@@ -568,7 +579,7 @@ function cronTitleTpl(c: CronView, manageable: boolean): TemplateResult {
         maxlength="80"
         aria-label="Title"
         data-autofocus="title"
-        .value=${live(c.title ?? cronTitle(c))}
+        .value=${c.title ?? cronTitle(c)}
         required
       />
       <button class="btn" type="button" @click=${() => cancelEdit(c)}>Cancel</button>
@@ -625,7 +636,7 @@ function cronMenu(c: CronView): TemplateResult {
       ${icon(glyph, 16)}<span class="menu-option-copy"><span class="menu-option-label">${label}</span></span>
     </button>
   `;
-  return html`<div class="form-menu-control cron-more" data-align="right" data-drop="down">
+  return html`<div class="menu-control form-menu-control cron-more" data-align="right" data-drop="down">
     <button
       class="icon-btn menu-button"
       type="button"
@@ -678,13 +689,7 @@ function cronInstructions(c: CronView, manageable: boolean): TemplateResult {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.currentTarget as HTMLFormElement).requestSubmit();
         }}
       >
-        <textarea
-          name="task"
-          rows="8"
-          aria-label="Instructions"
-          data-autofocus="task"
-          .value=${live(cronText(c))}
-        ></textarea>
+        <textarea name="task" rows="8" aria-label="Instructions" data-autofocus="task" .value=${cronText(c)}></textarea>
         <div class="cron-card-actions">
           <button class="btn" type="button" @click=${() => cancelEdit(c)}>Cancel</button>
           <button class="btn primary" type="submit">Save</button>
@@ -823,8 +828,14 @@ async function loadCronRuns(id: string): Promise<void> {
   if (current) openCron(current);
 }
 
-async function reopenCron(id: string): Promise<void> {
+async function reopenCron(id: string, target: "detail" | "list"): Promise<void> {
   await refreshCrons();
+  if (appState.currentView !== "crons") return;
+  if (target === "list") {
+    if (activeCronId === null) drawCronsPage();
+    return;
+  }
+  if (activeCronId !== id) return;
   const c = cronList.find((x) => x.id === id) ?? visibleCronList.find((x) => x.id === id);
   if (c) openCron(c, { refreshRuns: true });
   else drawCronsPage();
@@ -841,14 +852,16 @@ async function cronMutate<T>(fn: () => Promise<T>, busyValue: T): Promise<T> {
 }
 
 function runCronNow(id: string): Promise<void> {
+  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
+    cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}/run`, { method: "POST" });
       cronActionNotice = "Run started. Refresh recent runs after it completes.";
     } catch (e) {
       cronActionNotice = errMessage(e, "run failed");
     }
-    await reopenCron(id);
+    await reopenCron(id, target);
   }, undefined);
 }
 
@@ -857,35 +870,48 @@ function patchCron(
   patch: { title?: string; task?: string; schedule?: CronView["schedule"]; enabled?: boolean; archived?: boolean },
   errorLabel: string,
 ): Promise<boolean> {
+  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
+    cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       return true;
     } catch (e) {
       cronActionNotice = errMessage(e, errorLabel);
-      await reopenCron(id);
+      await reopenCron(id, target);
       return false;
     }
   }, false);
 }
 
 function showCronDialog(kind: "delete", cron: CronView): void {
-  cronDialog = { kind, cron };
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  cronDialog = { kind, cron, opener };
   openCron(cron);
+  const host = appState.mainEl?.querySelector<HTMLElement>(":scope > .cron-detail-pane");
+  if (host) focusDialogCancel(host);
 }
 
 function closeCronDialog(c: CronView): void {
+  const opener = cronDialog?.opener ?? null;
   cronDialog = null;
   openCron(c);
+  restoreDialogFocus(opener, () => appState.mainEl?.querySelector<HTMLElement>(".cron-more .menu-button"));
 }
 
-function cronDialogTpl(dialog: { kind: "delete"; cron: CronView }): TemplateResult {
+function cronDialogTpl(dialog: { kind: "delete"; cron: CronView; opener: HTMLElement | null }): TemplateResult {
   const c = dialog.cron;
   return html` <div
     class="project-dialog-backdrop"
     @click=${(event: MouseEvent) => event.target === event.currentTarget && closeCronDialog(c)}
   >
-    <div class="project-dialog cron-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="cron-delete-title">
+    <div
+      class="project-dialog cron-edit-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cron-delete-title"
+      @keydown=${(event: KeyboardEvent) => trapDialogFocus(event, () => closeCronDialog(c))}
+    >
       <div class="project-dialog-head">
         <div>
           <h2 id="cron-delete-title">Delete <bdi>${cronTitle(c)}</bdi>?</h2>
@@ -895,7 +921,7 @@ function cronDialogTpl(dialog: { kind: "delete"; cron: CronView }): TemplateResu
         This permanently removes the schedule and its retained run history. Archive it instead if you may need it later.
       </p>
       <div class="project-dialog-actions">
-        <button class="btn" type="button" @click=${() => closeCronDialog(c)}>Cancel</button>
+        <button class="btn" type="button" data-dialog-cancel @click=${() => closeCronDialog(c)}>Cancel</button>
         <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
           Delete permanently
         </button>
@@ -913,7 +939,7 @@ async function saveCronField(event: SubmitEvent, c: CronView, field: "title" | "
   const ok = await patchCron(c.id, { [field]: value }, `${field} update failed`);
   if (!ok) return;
   cronEdit = null;
-  await reopenCron(c.id);
+  await reopenCron(c.id, "detail");
 }
 
 async function saveSchedule(c: CronView, schedule: { cron: string; timezone: string }): Promise<void> {
@@ -921,7 +947,7 @@ async function saveSchedule(c: CronView, schedule: { cron: string; timezone: str
   if (!ok) return;
   cronEdit = null;
   scheduleDraft = null;
-  await reopenCron(c.id);
+  await reopenCron(c.id, "detail");
 }
 
 function editCronWithAgent(c: CronView): void {
@@ -935,21 +961,25 @@ function editCronWithAgent(c: CronView): void {
 }
 
 async function archiveCron(id: string, archived: boolean): Promise<void> {
+  const target = activeCronId === id ? "detail" : "list";
   const ok = await patchCron(id, { archived }, archived ? "archive failed" : "unarchive failed");
   if (!ok) return;
   await refreshCrons();
+  if (appState.currentView !== "crons") return;
   if (archived) {
     cronTab = "yours";
-    drawCronsPage();
+    if (target === "list" ? activeCronId === null : activeCronId === id) drawCronsPage();
     return;
   }
   cronTab = "yours";
   showDisabledCrons = true;
-  await reopenCron(id);
+  await reopenCron(id, target);
 }
 
 function setCronEnabled(id: string, enabled: boolean): Promise<void> {
+  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
+    cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, { method: "POST" });
       cronTab = "yours";
@@ -957,19 +987,21 @@ function setCronEnabled(id: string, enabled: boolean): Promise<void> {
     } catch (e) {
       cronActionNotice = errMessage(e, enabled ? "enable failed" : "disable failed");
     }
-    await reopenCron(id);
+    await reopenCron(id, target);
   }, undefined);
 }
 
 async function confirmDeleteCron(id: string): Promise<void> {
+  const target = activeCronId === id ? "detail" : "list";
   await cronMutate(async () => {
     cronDialog = null;
+    cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch (e) {
       cronActionNotice = errMessage(e, "delete failed");
     }
-    await reopenCron(id);
+    await reopenCron(id, target);
   }, undefined);
 }
 

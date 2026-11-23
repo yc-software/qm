@@ -716,6 +716,25 @@ test("the conversation shows its persona", async () => {
   assert.equal(host.textContent?.trim(), "🧮Ada");
 });
 
+test("opening a persona from the list pushes browser history", async () => {
+  const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+  const { renderPersonasPage } = await vite.ssrLoadModule("/src/personas.ts");
+  appState.currentView = "personas";
+  appState.mainEl = document.querySelector("main")!;
+  appState.me = { user: "tester", org: "test" };
+  const pushed: string[] = [];
+  const origPush = window.history.pushState.bind(window.history);
+  window.history.pushState = (s, t, url) => (pushed.push(String(url)), origPush(s, t, url));
+  try {
+    await renderPersonasPage();
+    document.querySelector<HTMLButtonElement>('.persona-row-main[aria-label="Open Ada"]')!.click();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(pushed, ["/personas/p-ada"]);
+  } finally {
+    window.history.pushState = origPush;
+  }
+});
+
 test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {
   const { main } = await mountPage("p-bo");
   await settle();
