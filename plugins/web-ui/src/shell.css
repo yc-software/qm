@@ -707,17 +707,20 @@ a.chat-row-open {
   pointer-events: none;
 }
 .session-drop-over {
-  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  transition:
+    background-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 .split-toast-layer.floating .split-toast {
   position: fixed;
 }
 .context-detail.session-drop-over {
-  outline-offset: 6px;
-  border-radius: var(--radius-md);
+  --session-drop-tint: color-mix(in srgb, var(--foreground) 4%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--session-drop-tint);
+  box-shadow: 0 0 0 12px var(--session-drop-tint);
 }
 .recent-project-children .session,
 .archived-children .session {
@@ -6623,6 +6626,11 @@ a.connector-widget:focus-visible {
 }
 .context-row:hover {
   background: color-mix(in srgb, var(--background) 88%, var(--secondary));
+}
+.context-row.session-drop-over {
+  border-bottom-color: transparent;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
 }
 .context-row-title {
   overflow: hidden;
