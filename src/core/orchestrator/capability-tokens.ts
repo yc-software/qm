@@ -10,6 +10,7 @@ import {
   mintCapabilityToken,
   type CapabilityClaims,
 } from "../../auth/capability-token.ts";
+import type { AdminRole } from "../../admin/admin-grant-store.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
 import type { EgressPolicy, ScopeId, Session } from "../../types.ts";
@@ -82,7 +83,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(actAsActor ? { actAsActor: true } : {}),
   };
   const tenant = ambientTenant();
-  const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
+  const { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
     tenant,
     turn,
     scopeAttestation,
@@ -105,6 +106,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
   };
   return {
     actorIsOrgAdmin,
+    actorAdminRole,
     orgMemoryWritable,
     tenant,
     controlClaims,
@@ -150,6 +152,7 @@ async function mintControlPlaneTokens(
   } = turn;
   const securityPolicy = resolution.securityPolicy;
   let actorIsOrgAdmin = false;
+  let actorAdminRole: AdminRole | undefined;
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
@@ -165,7 +168,9 @@ async function mintControlPlaneTokens(
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
     if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
       try {
-        actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
+        const status = await deps.admin.adminStatusOf(tenant, actor);
+        actorIsOrgAdmin = status.isAdmin;
+        actorAdminRole = status.role;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
@@ -243,5 +248,5 @@ async function mintControlPlaneTokens(
       deps.capabilityTokenCompression,
     );
   }
-  return { actorIsOrgAdmin, orgMemoryWritable, controlClaims };
+  return { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims };
 }

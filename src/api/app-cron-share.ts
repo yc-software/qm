@@ -156,7 +156,7 @@ export function createCronShareMethods(
       const linkedTo = source.sharedFrom && !source.forkedAt ? source.sharedFrom : id;
       const existing = (await deps.crons.copiesOf(linkedTo)).find((c) => samePerson(c.owner, recipient));
       if (existing) return { copy: existing, existed: true };
-      const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.isAdmin === true;
+      const started = (await deps.admin?.adminStatusOf(tenant, { id: by, type: "internal" }))?.role === "org_admin";
       const ownerScopeId = scopeId("personal", recipient);
       const title = source.title ?? "Shared cron";
       const onChat = (await app.directoryMember(recipient)) !== null;

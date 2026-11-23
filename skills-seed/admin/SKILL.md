@@ -61,6 +61,7 @@ Limits the API enforces (don't offer what it will refuse):
   DM or an Open conversation. Mutations work anywhere, including from the admin's own
   fires; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
+- **`owner` vs `org_admin`**: an `owner` can manage org-wide configuration, org memory, org memory-brain registry config, models, connectors, spend, retention, the user roster/external invites, and access-only member removal/reactivation (cannot remove an `org_admin` or the last owner), but cannot access other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, user detail/reset, persona/cron handovers, principal links, or impersonation).
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 
 All calls share one shape — only method/path/body vary:
@@ -72,7 +73,7 @@ curl -fsS -H "x-agent-capability: $AGENT_API_TOKEN" "$AGENT_API_URL/v1/admin/...
 Anyone can check admin status (this is also how you answer "am I an admin?"):
 
 ```bash
-GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
+GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin"|"owner","scopeId":"org:…"} or {"isAdmin":false}
 ```
 
 ## Check connector sources

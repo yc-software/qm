@@ -35,6 +35,7 @@ export async function appendTurnGuidance(turn: {
   conversation: OrchestratorInput["conversation"];
   tenant: TurnCapabilities["tenant"];
   actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
+  actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
   automatedTurn: boolean;
   childWake: boolean;
@@ -51,6 +52,7 @@ export async function appendTurnGuidance(turn: {
     conversation,
     tenant,
     actorIsOrgAdmin,
+    actorAdminRole,
     orgMemoryWritable,
     automatedTurn,
     childWake,
@@ -63,7 +65,18 @@ export async function appendTurnGuidance(turn: {
     deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
       ? await deps.admin.listGrants(tenant).catch(swallowAs("orchestrator: admin grants", []))
       : [];
-  if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
+  const hasOrgAdmin = conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).role === "org_admin");
+  const hasOwner =
+    !hasOrgAdmin && conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).role === "owner");
+  if (hasOwner) {
+    systemPrompt +=
+      "\n\n## Acting for an org owner\n" +
+      "When a turn's context says the sender is an org owner, your token inherits that for that turn: you can inspect or configure org-wide settings, models, connectors, org memory, org memory registry, spend, and the user roster/external invites through the admin tool and API" +
+      (orgMemoryWritable
+        ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
+        : "") +
+      ". Confirm before any mutation, and say exactly what you changed. Owners cannot read other people's private content (sessions, transcripts, personal memory, files, logs, keychain, sandboxes, or impersonation) — those require org_admin. Role changes and teammate invitations are portal-only.";
+  } else if (hasOrgAdmin) {
     systemPrompt +=
       "\n\n## Acting for an org admin\n" +
       "When a turn's context says the sender is an org admin, your token inherits that for that turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
@@ -99,7 +112,8 @@ export async function appendTurnGuidance(turn: {
       obligations ??
       "## Crons scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
   }
-  if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
+  if (actorAdminRole === "owner") turnEvents.push("The sender is an org owner.");
+  else if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger with a platform-managed destination. " +

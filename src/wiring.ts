@@ -1873,6 +1873,7 @@ export function buildApp(
   const directory = withSignInMembers(createPostgresDirectoryStore(databaseUrl), signInSources);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    ...(config.trustedOidcAdminRole ? { trustedOidcAdminRole: config.trustedOidcAdminRole } : {}),
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
@@ -1924,7 +1925,7 @@ export function buildApp(
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
   const isOrgAdmin = async (principalId: string): Promise<boolean> =>
-    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).isAdmin;
+    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).role === "org_admin";
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
     { managedGroups: projects, directory, identity, teams, personas },

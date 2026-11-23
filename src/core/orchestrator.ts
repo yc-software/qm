@@ -1233,6 +1233,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const {
         actorIsOrgAdmin,
+        actorAdminRole,
         orgMemoryWritable,
         controlClaims,
         sandboxTokenExpiry,
@@ -1469,6 +1470,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnContextBlocks,
           appConnections,
           actorIsOrgAdmin,
+          actorAdminRole,
           turnEvents,
           external,
           strictReadOnly,
@@ -1773,6 +1775,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
                   operationsAvailable: actorIsOrgAdmin,
+                  ...(actorAdminRole ? { role: actorAdminRole } : {}),
                 },
               }
             : {}),
