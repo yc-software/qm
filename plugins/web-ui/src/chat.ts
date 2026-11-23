@@ -1526,6 +1526,13 @@ export function createChatSurface(
                 ? slackBar(s, chatSurface?.label, shownMessages)
                 : chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)
             }
+            ${
+              slackReply
+                ? nothing
+                : html`<div class="readonly-banner">
+                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                  </div>`
+            }
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
               ${pinnedStrip()}
