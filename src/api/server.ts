@@ -205,6 +205,8 @@ async function verifyCapability(
     : capability;
 }
 
+const EPHEMERAL_READ_POST_PATHS = new Set(["/v1/search", "/v1/memory/search"]);
+
 async function gate(
   req: IncomingMessage,
   res: ServerResponse,
@@ -272,6 +274,16 @@ async function gate(
       });
       return null;
     }
+  }
+  if (
+    capability?.ephemeral &&
+    !requiredAud &&
+    method !== "GET" &&
+    method !== "HEAD" &&
+    !(method === "POST" && EPHEMERAL_READ_POST_PATHS.has(pathname))
+  ) {
+    sendJson(res, 403, { error: "ephemeral_read_only", message: "Ephemeral sessions cannot write durable state" });
+    return null;
   }
   if (
     capability &&

@@ -332,6 +332,7 @@ export function createTurnMethods(
               readOnly: true,
             }
           : {}),
+        ...(req.ephemeral ? { ephemeral: true } : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),

@@ -12,7 +12,9 @@ import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { reportFailure } from "../util/errors.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -117,6 +119,8 @@ export function createSessionMethods(
   | "suggestNextPrompt"
   | "spawnSession"
   | "discardSession"
+  | "deleteEphemeralSession"
+  | "purgeExpiredEphemeralSessions"
   | "forkSession"
   | "grant"
   | "revokeGrant"
@@ -397,6 +401,13 @@ export function createSessionMethods(
       ...workingChildren.get(s.id),
       ...(subagents.has(s.id) ? { subagents: subagents.get(s.id)! } : {}),
     }));
+  }
+
+  async function purgeEphemeralRow(tenant: Tenant, sessionId: string, threadRef: string): Promise<void> {
+    await deps.promptSnapshots?.delete(sessionId);
+    const deletedRuns = await deps.runs.deleteByThread(tenant, threadRef);
+    if (deletedRuns.length) await deps.runActivity?.deleteForRuns(tenant, deletedRuns);
+    await deps.sessions.deleteSession(sessionId);
   }
 
   return {
@@ -1107,7 +1118,7 @@ export function createSessionMethods(
     async forkSession(sessionId, principalId, opts) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
-      if (!source) return null;
+      if (!source || source.ephemeral) return null;
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
         const visible = (await transcripts.forViewer(sessionId, principalId)).items;
@@ -1206,6 +1217,56 @@ export function createSessionMethods(
       }
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
       return create();
+    },
+
+    async deleteEphemeralSession(tenant, threadRef, principalId) {
+      const session = await deps.sessions.getByThread(threadRef);
+      if (!session?.ephemeral) return { deleted: false, reason: "not_found" };
+      const visible = await sessionForViewer(session.id, principalId);
+      if (!visible) return { deleted: false, reason: "not_found" };
+      await deps.sessions.markEphemeralExpired(tenant, session.id);
+      const active = await deps.runs.inFlightForThread(threadRef);
+      for (const run of active) {
+        if (run.status === "pending") await deps.runs.withdraw(run.id);
+        else if (deps.signals) await deps.signals.send(run.id, { kind: "abort" });
+      }
+      if (active.some((r) => r.status === "running")) {
+        await waitForNoRunningRun(deps.runs, threadRef, 5_000).catch((err: unknown) =>
+          reportFailure("ephemeral.delete.wait", err),
+        );
+      }
+      if ((await deps.runs.inFlightForThread(threadRef)).length) return { deleted: false, reason: "in_flight" };
+      await purgeEphemeralRow(tenant, session.id, threadRef);
+      return { deleted: true };
+    },
+
+    async purgeExpiredEphemeralSessions(cutoffMs, opts) {
+      const deadline = opts?.deadline ?? Infinity;
+      const batchSize = 100;
+      let afterId = "";
+      let purged = 0;
+      while (Date.now() < deadline && !opts?.stop?.()) {
+        let count = 0;
+        let lastId = afterId;
+        await claimThenBind(
+          async () => {
+            const batch = await deps.sessions.claimExpiredEphemeral(cutoffMs, batchSize, afterId);
+            count = batch.length;
+            if (batch.length) lastId = batch[batch.length - 1]!.id;
+            return batch;
+          },
+          async (id: string, tenant: Tenant) => {
+            const session = await deps.sessions.get(id);
+            if (!session?.ephemeral) return;
+            if ((await deps.runs.inFlightForThread(session.threadRef)).length) return;
+            await purgeEphemeralRow(tenant, session.id, session.threadRef);
+            purged++;
+          },
+        );
+        if (count < batchSize || lastId === afterId) break;
+        afterId = lastId;
+      }
+      return purged;
     },
 
     async discardSession(sessionId, principalId) {

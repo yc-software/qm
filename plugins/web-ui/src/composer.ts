@@ -233,6 +233,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function persistDraft(): void {
     if (!ctx.chat.state.threadRef) return;
+    if (ctx.chat.state.ephemeral) return;
     saveDraft(ctx.chat.state.threadRef, composerState.draft);
     if (isUnsentNewChat()) saveDraft(newChatDraftKey(appState.me?.user), composerState.draft);
   }
@@ -1733,7 +1734,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       { role?: string; sendBlocked?: string; errorMessage?: string } | undefined;
     if (last?.role !== "assistant" || last.sendBlocked !== "pending_approval") return;
     if (agent !== ctx.chat.state.agent) {
-      if (sentFromThread) saveDraft(sentFromThread, text);
+      if (sentFromThread && !ctx.chat.state.ephemeral) saveDraft(sentFromThread, text);
       return;
     }
     messages.pop();

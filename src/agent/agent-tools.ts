@@ -95,6 +95,7 @@ export interface AgentToolsOptions {
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
   readOnly?: boolean;
+  ephemeral?: boolean;
   botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
@@ -107,6 +108,7 @@ export interface AgentToolsOptions {
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
   | "readOnly"
+  | "ephemeral"
   | "botActor"
   | "memoryNotebookOnly"
   | "surfaceTools"
@@ -147,6 +149,19 @@ export function pauseStampAfterToolCall(
 }
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
+const EPHEMERAL_OMITTED_TOOLS = new Set([
+  "apps",
+  "app_files",
+  "background",
+  "subagents",
+  "sessions",
+  "sandbox",
+  "cron",
+  "webhook",
+  "admin",
+  "guidance",
+  "goal",
+]);
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
@@ -171,13 +186,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
-      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
-      ...(controlTools ? { share: sharingTool("skill") } : {}),
+      ...(!opts?.ephemeral && controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
+      ...(!opts?.ephemeral && controlTools ? { share: sharingTool("skill") } : {}),
     }),
     resourceTool("files", {
       read,
-      write,
-      ...(controlTools ? { share: sharingTool("file") } : {}),
+      ...(!opts?.ephemeral ? { write } : {}),
+      ...(!opts?.ephemeral && controlTools ? { share: sharingTool("file") } : {}),
     }),
     resourceTool("apps", {
       publish,
@@ -217,6 +232,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const active = tools.filter(
     (t) =>
       (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
+      (!opts?.ephemeral || !EPHEMERAL_OMITTED_TOOLS.has(t.name)) &&
       (opts?.readOnly
         ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
         : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),

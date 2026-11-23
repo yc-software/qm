@@ -173,27 +173,34 @@ export function computerTools(kit: ToolKit) {
       credentials?: string[];
     },
   ) => {
-    const scratch = (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
+    const scratch = opts?.ephemeral === true || (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
     return runExecute(callId, params, { scratch });
   };
 
   const runCommand = (
     callId: string,
     params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
-  ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
+  ) =>
+    params.background && !opts?.ephemeral ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params);
 
+  const { background: _bg, sandbox_id: _sb, ...ephemeralExecParams } = executeBaseParams;
   const execute = defineTool({
     name: "execute",
     label: "execute",
-    description: scopeDescription,
-    parameters: Type.Object({
-      ...executeBaseParams,
-      scope: Type.Optional(
-        Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-          description: "Which computer runs this; see the tool description.",
+    description: opts?.ephemeral
+      ? "Run a shell command in a blank per-turn scratch computer discarded after this turn. " +
+        EXECUTE_TIMEOUT_GUIDANCE
+      : scopeDescription,
+    parameters: opts?.ephemeral
+      ? Type.Object(ephemeralExecParams)
+      : Type.Object({
+          ...executeBaseParams,
+          scope: Type.Optional(
+            Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+              description: "Which computer runs this; see the tool description.",
+            }),
+          ),
         }),
-      ),
-    }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
   });
 

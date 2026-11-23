@@ -102,6 +102,7 @@ export interface AgentTurnInput {
   runtimeControl?: RuntimeControl;
   runtimeActorId?: string;
   readOnly?: boolean;
+  ephemeral?: boolean;
   botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;

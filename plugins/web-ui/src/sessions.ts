@@ -610,6 +610,18 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
+export function startTemporaryChat(): Conversation {
+  closeSidebarOnNarrowView();
+  const navigation = beginNavigation();
+  try {
+    const conv = mainConversation();
+    conv.newTemporaryChat();
+    return conv;
+  } finally {
+    if (endNavigation(navigation)) syncUrlFromState(null, "replace");
+  }
+}
+
 export function startNewChat(
   scopeId: string | null = null,
   name: string | null = null,

@@ -108,6 +108,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
   ["POST /api/turn", "/v1/web/turn"],
+  ["DELETE /api/ephemeral", "/v1/web/ephemeral"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
   ["GET /api/deliveries/events", "/v1/web/events"],

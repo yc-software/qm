@@ -737,6 +737,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           conversation.channelName,
           input.surface,
           desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+          input.ephemeral ? { ephemeral: true } : undefined,
         );
         screenSession.id = session.id;
         if (!input.sessionParticipantIds?.length && !automatedTurn)
@@ -1067,6 +1068,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownsSessionContext(conversation.threadRef, input)
             ? { context: sessionContextOf({ ...input, botActor: botRequest }) }
             : {}),
+          ...(input.ephemeral ? { ephemeral: true as const } : {}),
         },
       );
       const session =
@@ -1079,9 +1081,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
+      const ephemeral = Boolean(session.ephemeral);
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
         try {
-          await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId });
+          await deps.sessions.recordLlmRequest(session.id, {
+            ...rec,
+            ...(ephemeral ? { promptEnvelope: undefined } : {}),
+            scopeLabel: scopeId,
+          });
         } catch (err) {
           reportFailure("orchestrator: persist LLM request snapshot", err);
         }
@@ -1106,7 +1113,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const titleText = input.displayText?.trim() || input.text;
       let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
-        if (!session.title && !syntheticInput && !input.approval)
+        if (!ephemeral && !session.title && !syntheticInput && !input.approval)
           firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText);
       };
 
@@ -1479,6 +1486,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgMemoryWritable,
           automatedTurn,
           childWake,
+          ephemeral,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,
@@ -2088,6 +2096,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         if (
           !strictReadOnly &&
+          !ephemeral &&
           sessionUsedTools &&
           !isPollFire &&
           (boundSandboxId || (await deps.sandboxResources?.resolve(memoryScopeId)) !== null)
@@ -2414,6 +2423,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(ephemeral ? { ephemeral: true } : {}),
             ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
@@ -2613,7 +2623,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const pausing = outcome.paused;
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
-        const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
+        const onTurnEnd = ephemeral ? undefined : memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         startMemoryCapture({
           tenant,
           deps,
@@ -2639,6 +2649,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const tail = async (): Promise<void> => {
           try {
             if (
+              !ephemeral &&
               !pausing &&
               turnCompleted &&
               !session.title &&
