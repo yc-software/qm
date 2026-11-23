@@ -5,7 +5,6 @@ import { live } from "lit/directives/live.js";
 import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, type IconNode } from "lucide";
 import { icon, iconElement } from "./icons.ts";
-export { browserRenderableImage } from "./media-layout.ts";
 
 export function brandName(): string {
   if (typeof document === "undefined") return "QM";

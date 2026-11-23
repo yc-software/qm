@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Download, ExternalLink, Maximize2, Pause, Pl
 import "./media.css";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
+import { reportHandledError } from "./browser-errors";
 import { formatBytes } from "./ui";
 import { formatDuration, justifyRows, layoutRatio, MEDIA_GAP, type MediaItem } from "./media-layout";
 
@@ -24,8 +25,13 @@ const playing: { player: MediaPlayer | null } = { player: null };
 
 const Base = (typeof HTMLElement === "undefined" ? class {} : HTMLElement) as typeof HTMLElement;
 
-export function frameSrc(src: string, at = 0.001): string {
+function frameSrc(src: string, at = 0.001): string {
   return src.startsWith("data:") ? src : `${src}#t=${at}`;
+}
+
+export function videoThumb(src: string, badge = "file-video-play", onError?: (event: Event) => void): TemplateResult {
+  return html`<video src=${frameSrc(src)} preload="metadata" muted playsinline tabindex="-1" @error=${onError}></video
+    ><span class=${badge}>${icon(Play, 14)}</span>`;
 }
 
 function learn(src: string, width: number, height: number): boolean {
@@ -101,7 +107,9 @@ class MediaPlayer extends Base {
     if (!media.paused) return media.pause();
     if (playing.player !== this) playing.player?.pause();
     playing.player = this;
-    void media.play().catch(() => undefined);
+    void media.play().catch((error: unknown) => {
+      if (!(error instanceof DOMException && error.name === "AbortError")) reportHandledError("web:media_play", error);
+    });
   };
 
   private videoTemplate(): TemplateResult {
@@ -263,7 +271,10 @@ class MediaPlayer extends Base {
   };
 
   private onError = (): void => {
-    if (this.media?.error) this.setState("error");
+    const failure = this.media?.error;
+    if (!failure) return;
+    this.setState("error");
+    reportHandledError("web:media_error", new Error(`MediaError ${failure.code}: ${failure.message}`));
   };
 
   private onVolume = (): void => {
@@ -290,7 +301,7 @@ class MediaPlayer extends Base {
     const media = this.media!;
     if (this.mode === "viewer") {
       if (document.fullscreenElement) void document.exitFullscreen();
-      else void this.requestFullscreen().catch(() => undefined);
+      else void this.requestFullscreen().catch((error: unknown) => reportHandledError("web:media_fullscreen", error));
       return;
     }
     const detail = { startAt: media.currentTime, autoplay: !media.paused || this.dataset.state === "idle" };
@@ -606,7 +617,7 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
                       href=${item.download}
                       download=${item.name}
                       aria-label="Download ${item.name}"
-                      title="Download"
+                      ${tip("Download")}
                       >${icon(Download, 18)}</a
                     ><a
                       class="mv-btn"
@@ -614,12 +625,12 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
                       target="_blank"
                       rel="noreferrer"
                       aria-label="Open ${item.name} in a new tab"
-                      title="Open in new tab"
+                      ${tip("Open in new tab")}
                       >${icon(ExternalLink, 18)}</a
                     >`
                 : nothing
             }
-            <button type="button" class="mv-btn" aria-label="Close" title="Close" @click=${close}>
+            <button type="button" class="mv-btn" aria-label="Close" ${tip("Close")} @click=${close}>
               ${icon(X, 18)}
             </button>
           </div>
@@ -667,14 +678,7 @@ export function openMediaViewer(all: readonly MediaItem[], start = 0, options: V
                     >
                       ${
                         entry.kind === "video"
-                          ? html`<video
-                                src=${frameSrc(entry.src)}
-                                preload="metadata"
-                                muted
-                                playsinline
-                                tabindex="-1"
-                              ></video
-                              ><span class="mv-thumb-play">${icon(Play, 14)}</span>`
+                          ? videoThumb(entry.src, "mv-thumb-play")
                           : html`<img src=${entry.src} alt="" loading="lazy" />`
                       }
                     </button>`,

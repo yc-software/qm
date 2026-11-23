@@ -184,7 +184,7 @@ import {
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
 import { htmlPreviewCard } from "./html-preview";
-import { audioPlayer, dataUrl, frameSrc, mediaFeed, mediaKind, openMediaViewer, type MediaItem } from "./media";
+import { audioPlayer, dataUrl, mediaFeed, mediaKind, openMediaViewer, videoThumb, type MediaItem } from "./media";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
@@ -3914,8 +3914,7 @@ export function createChatSurface(
         @blur=${unpeekAttachment}
         >${
           media.kind === "video"
-            ? html`<video src=${frameSrc(media.src)} preload="metadata" muted playsinline tabindex="-1"></video
-                ><span class="file-video-play">${icon(Play, 14)}</span>`
+            ? videoThumb(media.src)
             : html`<img src=${media.src} alt=${a.fileName} loading="lazy" />`
         }<span class="file-image-name" dir="auto">${a.fileName}</span
         >${typeof a.size === "number" ? html`<small class="file-image-size">${formatBytes(a.size)}</small>` : nothing}</a

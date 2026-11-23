@@ -12,7 +12,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Play, Square, X, type IconNode } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
 import {
   api,
   ApiError,
@@ -51,7 +51,7 @@ import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToBytes, base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
-import { dataUrl, frameSrc, mediaKind, openMediaViewer, type MediaItem } from "./media";
+import { dataUrl, mediaKind, openMediaViewer, videoThumb, type MediaItem } from "./media";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isCompactLayout } from "./viewport";
@@ -1952,8 +1952,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     >
       ${
         media.kind === "video"
-          ? html`<video src=${frameSrc(media.src)} preload="metadata" muted playsinline @error=${hide}></video
-              ><span class="file-video-play">${icon(Play, 14)}</span>`
+          ? videoThumb(media.src, "file-video-play", hide)
           : html`<img src=${media.src} alt=${attachment.fileName} @error=${hide} />`
       }
     </button>`;
