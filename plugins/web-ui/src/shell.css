@@ -4479,75 +4479,6 @@ qm-draft .draft-card-body {
   background: var(--secondary);
   color: var(--foreground);
 }
-.slash-popover {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  z-index: 30;
-  width: min(460px, calc(100vw - 36px));
-  padding: 6px;
-  max-height: min(320px, 52vh);
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--background);
-}
-.slash-empty {
-  padding: 7px 8px;
-  color: var(--muted-foreground);
-  font-size: var(--font-13);
-}
-.slash-option {
-  width: 100%;
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--foreground);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--font-13);
-  text-align: left;
-}
-.slash-option:hover,
-.slash-option.active {
-  background: var(--secondary);
-}
-.slash-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-}
-.slash-name {
-  flex: 0 0 auto;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-  font-weight: 500;
-}
-.slash-name b {
-  color: var(--foreground);
-  font-weight: 700;
-}
-.slash-desc {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-}
-.slash-scope {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-  font-size: var(--font-13);
-}
 .send-btn {
   width: 34px;
   height: 34px;
@@ -10708,10 +10639,18 @@ h3.ambient-field-label {
   background: color-mix(in srgb, var(--secondary) 76%, var(--background));
 }
 .slack-mention {
-  padding: 0 3px;
+  padding: 1px 3px;
   border-radius: 4px;
   color: var(--cta);
   background: color-mix(in srgb, var(--cta) 10%, transparent);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.slack-mention.pending,
+.slack-mention.unknown {
+  color: var(--muted-foreground);
+  background: var(--secondary);
+  font-weight: 400;
 }
 .inbox-text-link {
   color: var(--cta);
@@ -10723,18 +10662,27 @@ h3.ambient-field-label {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.slack-mention.self {
+.slack-mention.self,
+.slack-mention.broadcast {
   color: var(--foreground);
   background: color-mix(in srgb, oklch(0.85 0.16 90) 45%, transparent);
-  font-weight: 500;
 }
 :root.dark .slack-mention,
 .dark .slack-mention {
   color: oklch(0.8 0.07 250);
   background: color-mix(in srgb, oklch(0.8 0.07 250) 16%, transparent);
 }
+:root.dark .slack-mention.pending,
+.dark .slack-mention.pending,
+:root.dark .slack-mention.unknown,
+.dark .slack-mention.unknown {
+  color: var(--muted-foreground);
+  background: var(--secondary);
+}
 :root.dark .slack-mention.self,
-.dark .slack-mention.self {
+.dark .slack-mention.self,
+:root.dark .slack-mention.broadcast,
+.dark .slack-mention.broadcast {
   color: var(--foreground);
   background: color-mix(in srgb, oklch(0.85 0.16 90) 28%, transparent);
 }
@@ -11757,7 +11705,7 @@ h3.ambient-field-label {
   display: none;
 }
 @media (max-width: 860px) {
-  :where(html:not(.desktop-embed)) .slash-option {
+  :where(html:not(.desktop-embed)) .completion-row {
     min-height: 44px;
     font-size: 15px;
   }

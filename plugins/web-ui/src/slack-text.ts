@@ -1,5 +1,7 @@
+export type SlackMention = { kind: "mention"; handle: string; user?: string; group?: string; broadcast?: boolean };
+
 export type SlackWireSegment =
-  { kind: "text"; text: string } | { kind: "mention"; handle: string } | { kind: "link"; href: string; label: string };
+  { kind: "text"; text: string } | SlackMention | { kind: "link"; href: string; label: string };
 
 export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -17,11 +19,13 @@ export function splitOnce(s: string, sep: string): [string, string | undefined] 
 
 const WIRE_TOKEN = /<([^<>\n]+)>/g;
 const BROADCASTS = new Set(["here", "channel", "everyone"]);
+export const SLACK_USER_ID = /^[UW][A-Z0-9]{6,}$/;
 
 function segmentForToken(inner: string): SlackWireSegment {
   if (inner.startsWith("@")) {
     const [id, label] = splitOnce(inner.slice(1), "|");
-    return { kind: "mention", handle: decodeSlackEntities(((label ?? "").trim() || id.trim()).replace(/^@+/, "")) };
+    const handle = decodeSlackEntities(((label ?? "").trim() || id.trim()).replace(/^@+/, ""));
+    return SLACK_USER_ID.test(id.trim()) ? { kind: "mention", handle, user: id.trim() } : { kind: "mention", handle };
   }
   if (inner.startsWith("#")) {
     const [id, label] = splitOnce(inner.slice(1), "|");
@@ -29,10 +33,11 @@ function segmentForToken(inner: string): SlackWireSegment {
   }
   if (inner.startsWith("!")) {
     const [command, label] = splitOnce(inner.slice(1), "|");
-    if (BROADCASTS.has(command.toLowerCase())) return { kind: "mention", handle: command.toLowerCase() };
+    if (BROADCASTS.has(command.toLowerCase()))
+      return { kind: "mention", handle: command.toLowerCase(), broadcast: true };
     const subteam = command.startsWith("subteam^");
     const fallback = decodeSlackEntities((label ?? "").trim());
-    if (subteam && fallback) return { kind: "mention", handle: fallback.replace(/^@/, "") };
+    if (subteam) return { kind: "mention", handle: fallback.replace(/^@/, "") || "group", group: command.slice(8) };
     return { kind: "text", text: fallback || `<${decodeSlackEntities(inner)}>` };
   }
   const [href, label] = splitOnce(inner, "|");

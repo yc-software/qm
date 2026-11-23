@@ -16,10 +16,10 @@ test("slack entities decode in order (&lt; &gt; last-wins &amp;)", () => {
   assert.equal(decodeSlackEntities("&amp;lt;"), "&lt;");
 });
 
-test("bare user mentions render as @id chips", () => {
+test("bare user mentions carry the Slack id so a name can be looked up", () => {
   assert.deepEqual(splitSlackWire("hey <@U0AGENT01> hi"), [
     { kind: "text", text: "hey " },
-    { kind: "mention", handle: "U0AGENT01" },
+    { kind: "mention", handle: "U0AGENT01", user: "U0AGENT01" },
     { kind: "text", text: " hi" },
   ]);
 });
@@ -48,9 +48,9 @@ test("channel refs, broadcasts, and subteams decode readably", () => {
   assert.deepEqual(splitSlackWire("<#C1|general> <!here> <!subteam^S1|@eng>"), [
     { kind: "text", text: "#general" },
     { kind: "text", text: " " },
-    { kind: "mention", handle: "here" },
+    { kind: "mention", handle: "here", broadcast: true },
     { kind: "text", text: " " },
-    { kind: "mention", handle: "eng" },
+    { kind: "mention", handle: "eng", group: "S1" },
   ]);
 });
 

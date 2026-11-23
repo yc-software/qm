@@ -217,11 +217,11 @@ function avatarHue(key: string): number {
   return hash;
 }
 
-export function avatarTpl(person: { key: string; name: string; avatarUrl?: string }): TemplateResult {
+export function avatarTpl(person: { key: string; name: string; avatarUrl?: string; quiet?: boolean }): TemplateResult {
   return html`<span
     class="inbox-avatar"
     style=${`--avatar-hue:${avatarHue(person.key)}`}
-    ${tip(person.name)}
+    ${tip(person.quiet ? "" : person.name)}
     aria-hidden="true"
   >
     ${initials(person.name)} ${photoTpl(person.avatarUrl)}

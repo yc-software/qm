@@ -44,6 +44,7 @@ import { appState, can } from "./shell-state";
 import { renderSidebarTop, switchView } from "./shell";
 import { openSession, sessionsState } from "./sessions";
 import { splitMentions } from "./linkify";
+import { mentionPill } from "./slack-mention";
 import { splitSlackWire } from "./slack-text";
 import { openLoop } from "./loops";
 import { listBackLink } from "./list-page";
@@ -1179,20 +1180,12 @@ export function participantsTpl(item: InboxItem): TemplateResult | typeof nothin
   </span>`;
 }
 
-function selfHandle(): string {
-  const me = appState.me?.user ?? "";
-  return (me.split("@")[0] || me).trim().toLowerCase();
-}
-
 export function slackTextTpl(item: InboxItem, text: string, opts: { links?: boolean } = {}): TemplateResult {
   if (item.source !== "slack") return html`${text}`;
-  const self = selfHandle();
-  const mentionChip = (handle: string): TemplateResult =>
-    html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
   const withMentions = (str: string): Array<TemplateResult | string> =>
-    splitMentions(str).map((m) => (m.kind === "text" ? m.text : mentionChip(m.handle)));
+    splitMentions(str).map((m) => (m.kind === "text" ? m.text : mentionPill({ kind: "mention", handle: m.handle })));
   return html`${splitSlackWire(text).map((seg) => {
-    if (seg.kind === "mention") return mentionChip(seg.handle);
+    if (seg.kind === "mention") return mentionPill(seg);
     if (seg.kind === "link") {
       if (opts.links === false) return html`<span ${tip(seg.href)}>${withMentions(seg.label)}</span>`;
       return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"

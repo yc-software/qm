@@ -5,6 +5,7 @@ import { charForName } from "./emoji-picker";
 import { icon } from "./icons";
 import { projectIconTpl } from "./project-icon";
 import { slackMark } from "./slack-mark";
+import { mentionPill } from "./slack-mention";
 import { FORWARD_PREFIX, splitOnce, splitSlackWire, withEmoji } from "./slack-text";
 import { tip } from "./tooltip";
 
@@ -37,17 +38,17 @@ export function openInSurface(href: string | null, surface: string | undefined):
   >`;
 }
 
-export function slackWireBubble(text: string, self: string): TemplateResult {
+export function slackWireBubble(text: string): TemplateResult {
   const at = text.indexOf(FORWARD_PREFIX);
-  if (at < 0) return slackWireText(text, self);
+  if (at < 0) return slackWireText(text);
   const rest = text.slice(at + FORWARD_PREFIX.length);
   const close = rest.indexOf("] ");
   const [author, where] = splitOnce(close < 0 ? rest : rest.slice(0, close), " in ");
   const lead = text.slice(0, at).trim();
-  return html`${lead ? slackWireText(lead, self) : nothing}
+  return html`${lead ? slackWireText(lead) : nothing}
     <div class="slack-forward">
       <div class="slack-forward-head"><b>${author}</b>${where ? html`<span>${where}</span>` : nothing}</div>
-      ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2), self)}
+      ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2))}
     </div>`;
 }
 
@@ -55,10 +56,9 @@ function textLink(href: string, label: string): TemplateResult {
   return html`<a class="inbox-text-link" href=${href} target="_blank" rel="noreferrer noopener">${label}</a>`;
 }
 
-function slackWireText(text: string, self: string): TemplateResult {
+function slackWireText(text: string): TemplateResult {
   const segments = splitSlackWire(text).map((seg) => {
-    if (seg.kind === "mention")
-      return html`<span class="slack-mention ${seg.handle.toLowerCase() === self ? "self" : ""}">@${seg.handle}</span>`;
+    if (seg.kind === "mention") return mentionPill(seg);
     if (seg.kind === "link") return textLink(seg.href, seg.label);
     return splitLinks(seg.text).map((part) =>
       part.kind === "link" ? textLink(part.href, part.href) : withEmoji(part.text, charForName),

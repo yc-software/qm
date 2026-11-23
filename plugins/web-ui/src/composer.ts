@@ -1,5 +1,6 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
-import { emojiCompletion } from "./emoji-completion";
+import { completion, completionRows, type CompletionRow } from "./completion";
+import { MentionBook } from "./mentions";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
@@ -327,6 +328,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   });
   let skillsLoading = false;
   let slashActiveIndex = 0;
+  const composerMentions = new MentionBook();
   function effectiveFastMode(): boolean {
     return composerState.fastMode === true;
   }
@@ -684,6 +686,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           onInput: (e) => onDraftInput(e, agent),
           onKeydown: (e) => onComposerKeydown(e, agent),
           onPaste: (e) => void onComposerPaste(e, agent),
+          mentions: { book: composerMentions, viewer: appState.me?.user },
         })}
         <div class="composer-toolbar">
           <div class="composer-left">
@@ -870,7 +873,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
-                  ${emojiCompletion(queuedEdit.text)}
+                  ${completion(queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
                   .value=${live(queuedEdit.text)}
@@ -1229,43 +1232,37 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const slash = currentSlashMenu();
     if (!slash.open) return nothing;
     if (slash.loading && slash.matches.length === 0) {
-      return html`<div class="slash-popover">
-        <div class="menu-title">Skills</div>
-        <div class="slash-empty">Loading skills…</div>
+      return html`<div class="completion-popover skills-completion slash-popover">
+        <div class="completion-title">Skills</div>
+        <div class="completion-empty">Loading skills…</div>
       </div>`;
     }
     const active = clampedActive(slash.matches.length);
+    const rows = slash.matches.map((m): CompletionRow & { skill: SkillItem } => ({
+      key: m.skill.name,
+      skill: m.skill,
+      lead: html`<span class="completion-glyph">${icon(Box, 14)}</span>`,
+      name: `/${m.skill.name}`,
+      match: m.start < 0 ? [0, 0] : [m.start + 1, m.end + 1],
+      detail: m.skill.description,
+      hint: m.skill.description,
+      tag: scopeBadge(m.skill.scope),
+    }));
     return html`
-      <div class="slash-popover" role="listbox" aria-label="Skills">
-        <div class="menu-title">Skills</div>
-        ${slash.matches.map((m, i) => slashRow(m, i === active, agent))}
+      <div class="completion-popover skills-completion slash-popover" role="listbox" aria-label="Skills">
+        ${completionRows({
+          id: "slash-skill",
+          sections: [{ title: "Skills", rows }],
+          active,
+          pick: (row) => acceptSkill(row.skill, agent),
+          point: (index) => {
+            if (index === active) return;
+            slashActiveIndex = index;
+            ctx.chat.drawActiveChat(agent);
+          },
+        })}
       </div>
     `;
-  }
-
-  function slashRow(m: SkillMatch, active: boolean, agent: Agent): TemplateResult {
-    return html`
-      <button
-        type="button"
-        role="option"
-        aria-selected=${active ? "true" : "false"}
-        class="slash-option ${active ? "active" : ""}"
-        ${tip(m.skill.description)}
-        @mousedown=${(e: Event) => e.preventDefault()}
-        @click=${() => acceptSkill(m.skill, agent)}
-      >
-        <span class="slash-icon">${icon(Box, 16)}</span>
-        <span class="slash-name">${highlightName(m)}</span>
-        <span class="slash-desc">${m.skill.description}</span>
-        <span class="slash-scope">${scopeBadge(m.skill.scope)}</span>
-      </button>
-    `;
-  }
-
-  function highlightName(m: SkillMatch): TemplateResult {
-    const { name } = m.skill;
-    if (m.start < 0 || m.end <= m.start) return html`${name}`;
-    return html`${name.slice(0, m.start)}<b>${name.slice(m.start, m.end)}</b>${name.slice(m.end)}`;
   }
 
   function scopeBadge(scope: string): string {
@@ -1399,7 +1396,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   async function queueDraft(agent: Agent, flipSteer = false): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
-    const text = composerState.draft.trim();
+    const typed = composerState.draft.trim();
+    const text = composerMentions.toWire(typed);
     const staged = composerState.attachments;
     if ((!text && !staged.length) || !threadRef) return;
     clearActiveDraft();
@@ -1415,12 +1413,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const transientIds = new Set(skipped.filter((s) => !s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const sendable = staged.filter((a) => !droppedIds.has(a.id));
     if ((!text && !uploaded.length) || transientIds.size) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
+      if (stillHere()) restoreStagedOnFailure(typed, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
     const steer = willSteer(agent, flipSteer);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer, sendable))) {
-      if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
+      if (stillHere()) restoreStagedOnFailure(typed, sendable, composerState.error);
     }
     ctx.chat.drawActiveChat(agent);
   }
@@ -1622,14 +1620,15 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (agent.state.isStreaming) return queueDraft(agent, flipSteer);
     const draft = composerState.draft.trim();
     if (!draft && composerState.attachments.length === 0) return;
+    const wire = composerMentions.toWire(draft);
     const sideChat = ctx.chat.state.forkSession?.sideChat;
     const text =
       sideChat?.quote &&
       !sideChat.expanded &&
       !agent.state.messages.length &&
       (options.includeSideChatExcerpt?.() ?? true)
-        ? sideChatExcerpt(sideChat.quote) + draft
-        : draft;
+        ? sideChatExcerpt(sideChat.quote) + wire
+        : wire;
     const submit = options.prepareSubmit?.();
     if (submit) {
       const selected = currentModelOption()!;

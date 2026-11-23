@@ -10,6 +10,8 @@ import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { avatarTpl } from "./ui";
 import "./slack-reply.css";
 import type { SlackSending } from "./slack-outbox";
+import type { Mentionable } from "./completion";
+import { MentionBook } from "./mentions";
 
 const FOCUS_REFRESH_MS = 60_000;
 const KNOWN_KEY = "qm-slack-reply-known";
@@ -43,6 +45,10 @@ export class SlackReply extends LitElement {
   };
   sessionId = "";
   user = "";
+  app = "";
+  broadcasts = false;
+  participants: () => readonly Mentionable[] = () => [];
+  private mentions = new MentionBook();
   private connected: boolean | null = null;
   private linkAvailable = false;
   private checkedAt = 0;
@@ -137,8 +143,9 @@ export class SlackReply extends LitElement {
   }
   private async send(event: Event): Promise<void> {
     event.preventDefault();
-    const text = this.text;
-    if (this.connected === false || !text.trim()) return;
+    const draft = this.text;
+    if (this.connected === false || !draft.trim()) return;
+    const text = this.mentions.toWire(draft);
     const id = crypto.randomUUID();
     this.text = "";
     this.error = "";
@@ -159,13 +166,13 @@ export class SlackReply extends LitElement {
           this.linkAvailable = true;
           remember({ user: this.user, connected: false, label: this.label });
         }
-        this.fail(id, text, result.message ?? "Could not send your Slack message.");
+        this.fail(id, draft, result.message ?? "Could not send your Slack message.");
         return;
       }
       this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true, detail: { id, ts: result.ts } }));
     } catch (error) {
       reportHandledError("web:slack_reply_send", error);
-      this.fail(id, text, "The send outcome is unknown. Check Slack before trying again.");
+      this.fail(id, draft, "The send outcome is unknown. Check Slack before trying again.");
     }
   }
   private fail(id: string, text: string, message: string): void {
@@ -184,6 +191,13 @@ export class SlackReply extends LitElement {
           disabled: false,
           label: `Reply in Slack as ${this.label || "yourself"}`,
           maxLength: 4000,
+          mentions: {
+            book: this.mentions,
+            viewer: this.user,
+            participants: () => this.participants(),
+            broadcasts: this.broadcasts,
+            app: this.app,
+          },
           onInput: (e) => {
             this.text = (e.target as HTMLTextAreaElement).value;
           },

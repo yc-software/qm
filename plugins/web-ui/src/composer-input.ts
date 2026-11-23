@@ -1,4 +1,4 @@
-import { emojiCompletion } from "./emoji-completion";
+import { completion, type MentionOptions } from "./completion";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 
@@ -11,10 +11,11 @@ export function composerInput(options: {
   onInput: (event: InputEvent) => void;
   onKeydown: (event: KeyboardEvent) => void;
   onPaste?: (event: ClipboardEvent) => void;
+  mentions?: MentionOptions;
 }): TemplateResult {
   return html`<textarea
     class="composer-input"
-    ${emojiCompletion(options.value)}
+    ${completion(options.value, options.mentions)}
     dir="auto"
     rows="1"
     aria-label=${options.label ?? nothing}
