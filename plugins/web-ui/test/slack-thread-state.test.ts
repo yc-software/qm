@@ -5,7 +5,7 @@ import { SlackOutbox } from "../src/slack-outbox.ts";
 import { collectReactions } from "../src/slack-view.ts";
 
 const said = (speaker: string, content: string, ts?: string) =>
-  ({ role: "user", speaker, content, ts }) as AgentMessage;
+  ({ role: "user", speaker, content, ts, timestamp: 0 }) as AgentMessage;
 const text = (m: AgentMessage) => (m as { content: string }).content;
 
 test("a pending Slack reply clears only when its own Slack message arrives", () => {
