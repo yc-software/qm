@@ -17,12 +17,9 @@ export function continuedSpeakers(agents: boolean, rows: readonly AgentMessage[]
       speakerId?: string;
       personaId?: string;
     };
-    const human = role === "user" || role === "user-with-attachments";
-    const key = human
-      ? speakerId || speaker
-      : agents && role === "assistant"
-        ? `assistant:${personaId ?? ""}`
-        : undefined;
+    let key: string | undefined;
+    if (role === "user" || role === "user-with-attachments") key = speakerId || speaker;
+    else if (agents && role === "assistant") key = `assistant:${personaId ?? ""}`;
     if (key && key === previous) continued.add(message);
     previous = key;
   }
@@ -43,7 +40,7 @@ export function fromSomeoneElse(message: AgentMessage, viewer: string | undefine
   return speakerId ? Boolean(viewer) && speakerId !== viewer : Boolean(overheard);
 }
 
-export interface SlackReaction {
+interface SlackReaction {
   who: string;
   emoji: string;
   added: boolean;
@@ -52,7 +49,7 @@ export interface SlackReaction {
   quote: string;
 }
 
-export function parseSlackReaction(text: string): SlackReaction | null {
+function parseSlackReaction(text: string): SlackReaction | null {
   if (!text.startsWith(REACTION_PREFIX)) return null;
   const rest = text.slice(REACTION_PREFIX.length);
   const added = rest.includes(" reacted with :");
