@@ -171,6 +171,7 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
           recipient_user_id: encodeTeamsUser(ada.id),
         });
         await client.react(TID, { chat_id, message_id: "1700000000099", name: "eyes" }, { on: true, emoji: "👀" });
+        await client.post(TID, { client_message_id: "k4", chat_id, body: "line\n".repeat(4_000) });
         return reply;
       });
       assert.deepEqual(posted, { message_id: "1700000000099" });
@@ -190,5 +191,8 @@ describeTwoTenants("Microsoft Teams as a generic chat host", (db) => {
     assert.deepEqual(targeted!.body.recipient, { id: ada.id, name: "", role: "user", isTargeted: true });
     assert.equal(reacted!.method, "PUT");
     assert.ok(reacted!.url.includes("1700000000099") && reacted!.url.includes("1f440_eyes"));
+    const long = seen.slice(4).map((r) => r.body.text as string);
+    assert.equal(long.join(""), "line\n".repeat(4_000));
+    assert.ok(long.length > 1 && long.every((t) => t.length <= 9_000));
   });
 });

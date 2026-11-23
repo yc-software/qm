@@ -57,6 +57,7 @@ export interface GenericChatClient {
   readonly surface: string;
   readonly tenantKey: TenantKey;
   readonly reactions?: readonly string[];
+  readonly files?: false;
   post(account: string, message: GenericChatPost): Reply;
   update(account: string, message: GenericChatUpdate): Reply;
   delete(account: string, message: { chat_id: string; message_id: string }): Reply;

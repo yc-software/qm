@@ -449,6 +449,7 @@ test("generic-chat deliveries are signed posts mirrored as the agent's own", asy
       label: "Chat",
       deliveries,
       surfaceCache: { readMessages: async () => [] },
+      files: true,
     });
     assert.ok(surface.promptHints.linkSyntax.includes(NON_WEB_PATHS));
     assert.match(surface.promptHints.linkSyntax, /tables break/);
@@ -540,6 +541,7 @@ test("generic-chat principals are internal only when vouched for, otherwise exte
     kind: "partner-chat",
     label: "Chat",
     deliveries: createDeliveryStore(),
+    files: true,
     surfaceCache: {
       readMessages: async (container, opts) =>
         container === "partner-chat:7001:group:42" && opts?.timestamps?.[0] === reply

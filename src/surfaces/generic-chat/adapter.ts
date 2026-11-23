@@ -40,6 +40,7 @@ export function createGenericChatSurface(deps: {
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   label: string;
   mark?: string;
+  files: boolean;
 }): Surface<null> {
   const { kind } = deps;
   return {
@@ -52,6 +53,7 @@ export function createGenericChatSurface(deps: {
       nativeActor: true,
       externalParticipants: false,
       textOnly: true,
+      files: deps.files,
     },
     promptHints: promptHints(kind),
     async post(ref, message, idempotencyKey) {

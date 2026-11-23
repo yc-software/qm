@@ -8,6 +8,7 @@ import {
   type TeamsChannelAccount,
 } from "@microsoft/teams.api";
 import { EMOJI_CHAR_BY_NAME } from "../../slack/emoji-map.ts";
+import { safeChunks, safeClip } from "../../slack/safe-cut.ts";
 import { tenantSettings } from "../../tenants/settings.ts";
 import { GenericChatHttpError, type GenericChatClient } from "../generic-chat/client.ts";
 import type { GenericChatAction } from "../generic-chat/protocol.ts";
@@ -15,6 +16,7 @@ import { UnknownGenericChatReaction } from "../generic-chat/reactions.ts";
 import { decodeTeamsChat, decodeTeamsUser, TEAMS, TEAMS_ACTION_KEY, type TeamsBot } from "./ids.ts";
 
 const SERVICE_URL = "https://smba.trafficmanager.net/teams/";
+const MESSAGE_CHARS = 9_000;
 
 const REACTIONS: Record<string, string> = {
   "👍": "like",
@@ -132,28 +134,35 @@ export function createTeamsClient(deps: { networkClient?: INetworkModule; servic
     surface: TEAMS,
     tenantKey: "teams_tenant",
     reactions: REACTION_NAMES,
+    files: false,
     members,
     member,
     async post(_account, m) {
       const chat = decodeTeamsChat(m.chat_id);
-      const activity = message(m.body, m.actions);
       const conversations = api().conversations;
-      if (m.recipient_user_id) {
-        const res = await conversations
-          .activities(chat.id)
-          .createTargeted(
-            activity.withRecipient({ id: decodeTeamsUser(m.recipient_user_id), name: "", role: "user" }, true),
-          )
-          .catch(failure);
-        return { message_id: res.id };
-      }
       const target = m.thread_id && chat.type === "channel" ? `${chat.id};messageid=${m.thread_id}` : chat.id;
-      const res = await conversations.activities(target).create(activity).catch(failure);
-      return { message_id: res.id };
+      const parts = safeChunks(m.body, MESSAGE_CHARS);
+      let messageId = "";
+      for (const [i, part] of parts.entries()) {
+        const activity = message(part, i === parts.length - 1 ? m.actions : undefined);
+        const res = m.recipient_user_id
+          ? await conversations
+              .activities(chat.id)
+              .createTargeted(
+                activity.withRecipient({ id: decodeTeamsUser(m.recipient_user_id), name: "", role: "user" }, true),
+              )
+              .catch(failure)
+          : await conversations.activities(target).create(activity).catch(failure);
+        messageId = res.id;
+      }
+      return { message_id: messageId };
     },
     async update(_account, m) {
       const chat = decodeTeamsChat(m.chat_id);
-      await api().conversations.activities(chat.id).update(m.message_id, message(m.body, m.actions)).catch(failure);
+      await api()
+        .conversations.activities(chat.id)
+        .update(m.message_id, message(safeClip(m.body, MESSAGE_CHARS), m.actions))
+        .catch(failure);
       return {};
     },
     async delete(_account, m) {

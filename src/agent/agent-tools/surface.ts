@@ -13,6 +13,10 @@ export function surfaceTool(kit: ToolKit) {
   const surfaceLabel = opts?.surfacePrompt?.label ?? surfaceName;
   const mentionSyntax = opts?.surfacePrompt?.mentionSyntax;
   const textOnly = opts?.surfacePrompt?.textOnly === true;
+  const noFiles = textOnly || opts?.surfacePrompt?.noFiles === true;
+  let limits = ".";
+  if (textOnly) limits = ". This conversation takes text messages only.";
+  else if (noFiles) limits = ". This conversation can't carry file attachments.";
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
@@ -21,7 +25,7 @@ export function surfaceTool(kit: ToolKit) {
       "reach people; end the turn without a post and you stay silent), " +
       (textOnly ? "" : "reacting, editing/deleting your own messages, ") +
       "reading threads, checking what's new, searching" +
-      (textOnly ? ". This conversation takes text messages only." : ".") +
+      limits +
       " Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
@@ -412,6 +416,10 @@ export function surfaceTool(kit: ToolKit) {
     },
   });
 
+  if (noFiles && !textOnly) {
+    const { sandbox_id: _s, files: _f, ...kept } = surface.parameters.properties;
+    surface.parameters = Type.Object(kept) as unknown as typeof surface.parameters;
+  }
   if (textOnly) {
     const {
       sandbox_id: _s,

@@ -70,6 +70,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
       nativeActor: true,
       externalParticipants: true,
       textOnly: false,
+      files: true,
     },
     promptHints: SLACK_PROMPT_HINTS,
     async post(ref, message, idempotencyKey) {

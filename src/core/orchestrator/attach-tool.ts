@@ -12,6 +12,9 @@ import {
   type ArtifactRegistration,
 } from "../attachments.ts";
 
+export const NO_FILES =
+  "This conversation can't carry file attachments; nothing was attached. Put the content in the message, or point to where the file lives.";
+
 export interface AttachToolsContext {
   sandbox: Sandbox;
   provision: (sandboxId?: string) => Promise<SandboxHandle>;
@@ -19,6 +22,7 @@ export interface AttachToolsContext {
   fileRegistration: ArtifactRegistration;
   openStored?: OpenStoredFile;
   textOnly?: boolean;
+  noFiles?: boolean;
 }
 
 export interface StagedAttachments {
@@ -37,6 +41,7 @@ export function createAttachStaging(ctx: AttachToolsContext): StagedAttachments 
   const attach = async (files: readonly OutboundFile[], sandboxId?: string): Promise<AttachResult> => {
     if (ctx.textOnly)
       return { ok: false, message: "This conversation takes text messages only; nothing was attached." };
+    if (ctx.noFiles) return { ok: false, message: NO_FILES };
     const parsed = parseOutboundFiles(files);
     if (!parsed.ok) return { ok: false, message: parsed.message };
     const keyed = new Map(

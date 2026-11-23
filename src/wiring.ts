@@ -2274,6 +2274,7 @@ export function buildApp(
           deliveries,
           surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
           label,
+          files: client.files !== false,
           ...(mark ? { mark } : {}),
         }),
       ),
