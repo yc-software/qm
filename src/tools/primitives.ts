@@ -10,7 +10,6 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -520,7 +519,6 @@ export interface ToolContextDeps {
   config?: ScopedConfigStore;
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
-  memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
@@ -1188,7 +1186,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         facts,
         turnAuthority(deps.createdBy, deps.memoryAccess),
         {
-          ...deps.memoryCaptureMetadata?.(),
+          ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
           mode: "explicit",
           ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
           conversationScopeId: writableScopeId,
@@ -1201,7 +1199,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
-        ...deps.memoryCaptureMetadata?.(),
+        ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
         conversationScopeId: writableScopeId,
       });
       return true;

@@ -25,6 +25,7 @@
         "scripts/dev/twin-instance.ts",
         "scripts/dev/twin-multiws-check.ts",
         "scripts/dev/twin-pump.ts",
+        "scripts/backfill-memory-sensitivity.ts",
         "scripts/migrate-principals-to-email.mjs",
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
