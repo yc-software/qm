@@ -6,7 +6,7 @@ import { overheardItem, selectOverheardToImport } from "../src/agent/replay.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import type { SlackHistoryMessage } from "../src/slack/payloads.ts";
 
-const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity;
+const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm", botDisplayName: "Assistant" } as BotIdentity;
 const actors: Record<string, { externalId: string; displayName: string; isBot?: true }> = {
   UALICE: { externalId: "alice@example.com", displayName: "Alice" },
   UGH: { externalId: "UGH", displayName: "github", isBot: true },
@@ -40,6 +40,7 @@ test("Slack messages copied into a session keep the person who wrote them, even 
   const raw: SlackHistoryMessage[] = [
     { ts: "1.0", user: "UALICE", text: "<@UBOT> why didn't you respond here" },
     { ts: "2.0", user: "UBOT", bot_id: "BBOT", bot_profile: assistantApp, text: "On it." },
+    { ts: "2.2", user: "UBOT", bot_id: "BBOT", username: "Assistant", text: "Mirrored default." },
     { ts: "2.5", user: "UBOT", bot_id: "BBOT", bot_profile: assistantApp, username: "Ada", text: "Morning." },
     { ts: "3.0", user: "UALICE", bot_id: "BAPP", bot_profile: assistantApp, text: "sent from the web" },
     { ts: "4.0", user: "UGH", bot_id: "BGH", bot_profile: { name: "GitHub" }, text: "PR merged" },
@@ -51,6 +52,7 @@ test("Slack messages copied into a session keep the person who wrote them, even 
     [
       ["@qm why didn't you respond here", "Alice", "alice@example.com", undefined],
       ["On it.", undefined, undefined, "agent"],
+      ["Mirrored default.", undefined, undefined, "agent"],
       ["Morning.", "Ada", undefined, "agent"],
       ["sent from the web", "Alice", "alice@example.com", "bot"],
       ["PR merged", "GitHub", undefined, "bot"],

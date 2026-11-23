@@ -8,6 +8,7 @@ import {
   type RecentMessage,
   type SlackFile,
   MAX_RECENT_MESSAGES,
+  botIdentityArgs,
   decodeSlackEntities,
   recentWindow,
 } from "./lib.ts";
@@ -146,7 +147,9 @@ export function createConversationSerializer(deps: {
       const principalId = m.user ? people.principals.get(m.user) : undefined;
       return {
         ts: m.ts,
-        name: self ? (slackCustomBotName(m, ids.botHandle) ?? "") : messageAuthorName(m, people, botNameById),
+        name: self
+          ? (slackCustomBotName(m, [ids.botHandle, ids.botDisplayName, botIdentityArgs().username]) ?? "")
+          : messageAuthorName(m, people, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         ...(principalId ? { principalId } : {}),
         text: decodeSlackEntities(content.text.trim()),

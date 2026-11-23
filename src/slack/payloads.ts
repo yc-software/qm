@@ -158,13 +158,14 @@ export function slackBotName(m: { username?: unknown; bot_profile?: unknown }): 
 
 export function slackCustomBotName(
   m: { username?: unknown; bot_profile?: unknown },
-  defaultHandle?: string,
+  defaultNames?: readonly (string | undefined)[],
 ): string | undefined {
   const username = typeof m.username === "string" ? m.username.trim() : "";
   if (!username) return undefined;
+  const lower = username.toLowerCase();
   const profile = slackBotProfileName(m);
-  if (profile && username.toLowerCase() === profile.toLowerCase()) return undefined;
-  if (defaultHandle && username.toLowerCase() === defaultHandle.trim().toLowerCase()) return undefined;
+  if (profile && lower === profile.toLowerCase()) return undefined;
+  if (defaultNames?.some((n) => n && lower === n.trim().toLowerCase())) return undefined;
   return username;
 }
 

@@ -27,6 +27,7 @@ export interface BotIdentity {
   botUserId: string;
   ownBotId: string;
   botHandle: string;
+  botDisplayName?: string;
   ownWorkspaceUrl: string;
   identityMode: SlackIdentityMode;
 }
