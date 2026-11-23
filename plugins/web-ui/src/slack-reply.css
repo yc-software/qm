@@ -33,7 +33,7 @@ qm-slack-reply {
   height: 26px;
   margin-bottom: 2px;
   border-radius: 50%;
-  font-size: 10px;
+  font-size: calc(var(--chat-font-size) * 0.67);
 }
 .slack-reply-pill > .composer-input {
   grid-area: 1 / 2;
@@ -41,7 +41,7 @@ qm-slack-reply {
   min-height: 30px;
   max-height: 136px;
   padding: 4px 0;
-  font-size: 14.5px;
+  font-size: var(--chat-font-size);
   line-height: 22px;
 }
 .slack-reply-pill > .composer-toolbar {

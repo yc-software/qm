@@ -27,7 +27,8 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { outgoingSlackMessage, unconfirmedSlackMessages, type SlackOutgoing, type SlackSending } from "./slack-outbox";
+import { SlackOutbox } from "./slack-outbox";
+import { slackBar, slackRow, slackWireBubble } from "./slack-thread-view";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
@@ -73,7 +74,6 @@ import {
   Wrench,
   X,
   type IconNode,
-  ExternalLink,
 } from "lucide";
 import {
   APPROVAL_GONE_MESSAGE,
@@ -166,18 +166,9 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
-import {
-  FORWARD_PREFIX,
-  slackPreviewText,
-  slackWireToPlain,
-  splitOnce,
-  splitSlackWire,
-  stripSlackDirectives,
-  withEmoji,
-} from "./slack-text";
+import { slackPreviewText, slackWireToPlain, stripSlackDirectives } from "./slack-text";
 import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
-import { slackMark } from "./slack-mark";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -247,7 +238,6 @@ import { sessionPersonaChip } from "./personas";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
-import { projectIconTpl } from "./project-icon";
 import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
@@ -370,6 +360,7 @@ export function createChatSurface(
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
   let slackReactions = collectReactions([], messageText);
+  const slackOutbox = new SlackOutbox();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -450,51 +441,28 @@ export function createChatSurface(
       : nothing;
   }
 
-  function slackRow(message: AgentMessage, index: number, body: TemplateResult): TemplateResult {
+  function slackRowFor(message: AgentMessage, index: number, body: TemplateResult): TemplateResult {
     const agent = (message as { role?: string }).role === "assistant";
     const name = agent
       ? chatState.assistantSpeakerLabel || brandName()
       : speakerLabelFor(message) || appState.me?.displayName || "You";
     const member = agent ? undefined : speakerMember(message);
-    const avatar = agent
-      ? brandMark(slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl))
-      : avatarTpl({ key: member?.principalId ?? name, name, avatarUrl: member?.avatarUrl });
-    const ts = (message as { timestamp?: number }).timestamp;
-    const continued = continuedSpeakerRows.has(message);
-    return html`<article
-      class="message-row slack-m ${continued ? "slack-m-continued" : ""} ${slackOutbox.some((o) => o.message === message) ? "slack-m-sending" : ""}"
-      data-index=${index}
-      data-entry-seqs=${messageEntrySeqs(message)
+    return slackRow({
+      index,
+      entrySeqs: messageEntrySeqs(message)
         .filter((seq) => !inlineSteers.has(seq))
-        .join(" ")}
-    >
-      <div class="slack-m-avatar">${continued ? nothing : avatar}</div>
-      <div class="slack-m-main">
-        ${
-          continued
-            ? nothing
-            : html`<div class="slack-m-head">
-                <b>${name}</b>${agent ? html`<span class="slack-app-tag">APP</span>` : nothing}${
-                  ts === undefined ? nothing : html`<time>${formatMessageTime(ts)}</time>`
-                }
-              </div>`
-        }
-        <div class="slack-m-body">${body}</div>
-        ${reactionChips(slackReactions.onMessage.get(message))}
-      </div>
-    </article>`;
-  }
-
-  function reactionChips(tally: Map<string, string[]> | undefined): TemplateResult | typeof nothing {
-    if (!tally?.size) return nothing;
-    return html`<div class="slack-reactions">
-      ${[...tally].map(
-        ([emoji, people]) =>
-          html`<span class="slack-reaction" ${tip(`${people.join(", ")} reacted with :${emoji}:`)}
-            >${charForName(emoji) ?? projectIconTpl({ kind: "custom", name: emoji }, 16)}<b>${people.length}</b></span
-          >`,
-      )}
-    </div>`;
+        .join(" "),
+      name,
+      app: agent,
+      avatar: agent
+        ? brandMark(slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl))
+        : avatarTpl({ key: member?.principalId ?? name, name, avatarUrl: member?.avatarUrl }),
+      timestamp: (message as { timestamp?: number }).timestamp,
+      continued: continuedSpeakerRows.has(message),
+      sending: slackOutbox.sending(message),
+      reactions: slackReactions.onMessage.get(message),
+      body,
+    });
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -570,8 +538,6 @@ export function createChatSurface(
   let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
   let followReadOnlySend = false;
-  let slackOutbox: SlackOutgoing[] = [];
-  let readOnlyMessages: AgentMessage[] = [];
 
   function teardownActiveChat(): void {
     cleanupEphemeral();
@@ -1486,36 +1452,27 @@ export function createChatSurface(
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
       if (!priorReply) {
-        slackReply.addEventListener("slack-sending", (e) => {
-          slackOutbox = [
-            ...slackOutbox,
-            outgoingSlackMessage((e as CustomEvent<SlackSending>).detail, s.id, readOnlyMessages),
-          ];
-          readonlyRedraw?.();
-          scrollToBottom();
-        });
-        slackReply.addEventListener("slack-sent", (e) => {
-          const entry = slackOutbox.find((o) => o.id === (e as CustomEvent<{ id: string }>).detail?.id);
-          if (entry) entry.sent = true;
-          followReadOnlySend = true;
-          onDelivery(s.threadRef);
-        });
-        slackReply.addEventListener("slack-failed", (e) => {
-          slackOutbox = slackOutbox.filter((o) => o.id !== (e as CustomEvent<{ id: string }>).detail.id);
-          readonlyRedraw?.();
+        slackOutbox.listen(slackReply, {
+          queued: () => {
+            readonlyRedraw?.();
+            scrollToBottom();
+          },
+          sent: () => {
+            followReadOnlySend = true;
+            onDelivery(s.threadRef);
+          },
+          dropped: () => readonlyRedraw?.(),
         });
       }
     }
-    slackOutbox = unconfirmedSlackMessages(slackOutbox, s.id, messages);
-    readOnlyMessages = messages;
+    slackOutbox.confirm(s.id, messages);
     let approvals: PendingApproval[] = [];
     const draw = () => {
       approvals = unresolvedApprovals(approvals);
-      const outgoing = slackOutbox.filter((o) => o.sessionId === s.id).map((o) => o.message);
       const shownMessages = [
         ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
         ...messages,
-        ...outgoing,
+        ...slackOutbox.pending(s.id),
       ];
       prepareMessageRows(shownMessages);
       render(
@@ -1523,7 +1480,7 @@ export function createChatSurface(
           <div class="custom-chat-shell">
             ${
               s.surface === "slack"
-                ? slackBar(s, chatSurface?.label, shownMessages)
+                ? slackBarFor(s, chatSurface?.label, shownMessages)
                 : chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)
             }
             ${
@@ -2124,38 +2081,17 @@ export function createChatSurface(
     `;
   }
 
-  function slackBar(s: CoreSession, label: string | undefined, messages: AgentMessage[]): TemplateResult {
+  function slackBarFor(s: CoreSession, label: string | undefined, messages: AgentMessage[]): TemplateResult {
     const people = conversationParticipants(messages);
-    const viewer = appState.me?.user;
-    const names = people.slice(0, 3).map((person) => (person.key === viewer ? "you" : person.name));
-    const leaf = s.title?.trim();
-    return html`<header class="chat-topbar slack-bar">
-      <div class="slack-where">
-        <span class="slack-where-chan">${defaultSessionTitle(s)}</span>${
-          leaf
-            ? html`<span class="slack-where-slash">/</span><span class="slack-where-leaf" dir="auto">${leaf}</span>`
-            : nothing
-        }
-      </div>
-      ${
-        people.length
-          ? html`<div class="slack-people">
-              ${people.slice(0, 3).map((person) => avatarTpl(person))}<span
-                >${names.join(", ")}${people.length > 3 ? ` +${people.length - 3}` : ""}</span
-              >
-            </div>`
-          : nothing
-      }
-      ${openInSurface(s, label)}
-    </header>`;
-  }
-
-  function openInSurface(s: CoreSession, label: string | undefined): TemplateResult | typeof nothing {
-    const href = sessionSlackUrl(s);
-    if (!href || !label) return nothing;
-    return html`<a class="open-in-surface" href=${href} target="_blank" rel="noreferrer"
-      >${slackMark(12)}Open in ${label}${icon(ExternalLink, 12)}</a
-    >`;
+    const named = people.slice(0, 3).map((person) => (person.key === appState.me?.user ? "you" : person.name));
+    return slackBar({
+      channel: defaultSessionTitle(s),
+      leaf: s.title?.trim(),
+      participants: participantStack(people),
+      people: `${named.join(", ")}${people.length > 3 ? ` +${people.length - 3}` : ""}`,
+      href: sessionSlackUrl(s),
+      surface: label,
+    });
   }
 
   async function retryFailedSend(message: AgentMessage, index: number): Promise<void> {
@@ -2304,11 +2240,11 @@ export function createChatSurface(
           meta: messageMeta(message, index),
         });
       if (isReadOnlySlackView())
-        return slackRow(
+        return slackRowFor(
           message,
           index,
           html`${attachmentGallery(attachments, (attachment) => browserRenderableImage(attachment.mimeType), userAttachmentBadge)}
-          ${slackWireBubble(displayText)}
+          ${slackWireBubble(displayText, slackSelf())}
           ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}`,
         );
       return html`
@@ -2324,7 +2260,7 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
+              ${markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2445,7 +2381,7 @@ export function createChatSurface(
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
       if (isReadOnlySlackView())
-        return slackRow(
+        return slackRowFor(
           message,
           index,
           html`${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
@@ -2622,6 +2558,10 @@ export function createChatSurface(
     </section>`;
   }
 
+  function slackSelf(): string {
+    return (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
+  }
+
   function isReadOnlySlackView(): boolean {
     return !chatState.agent && chatState.forkSession?.surface === "slack";
   }
@@ -2637,35 +2577,6 @@ export function createChatSurface(
 
   function assistantDisplayText(text: string): string {
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
-  }
-
-  function slackWireBubble(text: string): TemplateResult {
-    const at = text.indexOf(FORWARD_PREFIX);
-    if (at < 0) return slackWireText(text);
-    const rest = text.slice(at + FORWARD_PREFIX.length);
-    const close = rest.indexOf("] ");
-    const origin = close < 0 ? rest : rest.slice(0, close);
-    const [author, where] = splitOnce(origin, " in ");
-    return html`${text.slice(0, at).trim() ? slackWireText(text.slice(0, at).trim()) : nothing}
-      <div class="slack-forward">
-        <div class="slack-forward-head"><b>${author}</b>${where ? html`<span>${where}</span>` : nothing}</div>
-        ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2))}
-      </div>`;
-  }
-
-  function slackWireText(text: string): TemplateResult {
-    const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
-    const chip = (handle: string): TemplateResult =>
-      html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-    const segments = splitSlackWire(text).map((seg) => {
-      if (seg.kind === "mention") return chip(seg.handle);
-      if (seg.kind === "link")
-        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-          >${seg.label}</a
-        >`;
-      return withEmoji(seg.text, charForName);
-    });
-    return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
 
   function assistantText(

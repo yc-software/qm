@@ -30,32 +30,23 @@ export function rowForName(name: string): EmojiRow | null {
   return names.get(normalizeName(name)) ?? null;
 }
 
-function matchesQuery(row: EmojiRow, needle: string): boolean {
-  return [row.n, ...row.a].some((name) => normalizeName(name).includes(normalizeName(needle)));
+function needleOf(query: string): string {
+  return normalizeName(query.trim().replace(/^:+/, "").replace(/:+$/, ""));
+}
+
+function matchesNeedle(row: EmojiRow, needle: string): boolean {
+  return [row.n, ...row.a].some((name) => normalizeName(name).includes(needle));
 }
 
 export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[] {
-  const needle = query.trim().toLowerCase().replace(/^:+/, "").replace(/:+$/, "");
-  if (!needle) return [...rows];
-  return rows.filter((row) => matchesQuery(row, needle));
+  const needle = needleOf(query);
+  return needle ? rows.filter((row) => matchesNeedle(row, needle)) : [...rows];
 }
 
-const searchIndex = EMOJI_ROWS.map((row) => ({ row, terms: [row.n, ...row.a].map(normalizeName) }));
-const searchCache = new Map<string, EmojiRow[]>();
-
 export function emojiMatches(query: string, limit: number): EmojiRow[] {
-  const key = normalizeName(query);
-  const cached = searchCache.get(key);
-  if (cached) return cached;
-  const exact = rowForName(key);
-  const found = exact ? [exact] : [];
-  for (const { row, terms } of searchIndex) {
-    if (found.length === limit) break;
-    if (row !== exact && terms.some((term) => term.includes(key))) found.push(row);
-  }
-  if (searchCache.size >= 256) searchCache.delete(searchCache.keys().next().value!);
-  searchCache.set(key, found);
-  return found;
+  const exact = rowForName(needleOf(query));
+  const rest = filterEmoji(EMOJI_ROWS, query).filter((row) => row !== exact);
+  return (exact ? [exact, ...rest] : rest).slice(0, limit);
 }
 
 export function charForName(name: string): string | null {

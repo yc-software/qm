@@ -1,48 +1,41 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { messageText } from "./core-bridge";
 
-export type SlackOutgoing = {
-  id: string;
-  sessionId: string;
-  text: string;
-  posted: number;
-  sent: boolean;
-  message: AgentMessage;
-};
+export type SlackSending = { id: string; sessionId: string; text: string; speaker: string; speakerId: string };
 
-export type SlackSending = { id: string; text: string; speaker: string; speakerId: string };
+type Outgoing = { id: string; sessionId: string; ts?: string; message: AgentMessage };
 
-function postedCount(messages: AgentMessage[], text: string): number {
-  return messages.filter((m) => m.role === "user" && messageText(m) === text).length;
-}
+export class SlackOutbox {
+  private entries: Outgoing[] = [];
 
-export function outgoingSlackMessage(
-  sending: SlackSending,
-  sessionId: string,
-  messages: AgentMessage[],
-): SlackOutgoing {
-  return {
-    id: sending.id,
-    sessionId,
-    text: sending.text,
-    posted: postedCount(messages, sending.text),
-    sent: false,
-    message: {
-      role: "user",
-      content: sending.text,
-      timestamp: Date.now(),
-      speaker: sending.speaker,
-      speakerId: sending.speakerId,
-    } as AgentMessage,
-  };
-}
+  listen(reply: EventTarget, on: { queued: () => void; sent: () => void; dropped: () => void }): void {
+    reply.addEventListener("slack-sending", (e) => {
+      const { id, sessionId, text, speaker, speakerId } = (e as CustomEvent<SlackSending>).detail;
+      const message = { role: "user", content: text, timestamp: Date.now(), speaker, speakerId } as AgentMessage;
+      this.entries = [...this.entries, { id, sessionId, message }];
+      on.queued();
+    });
+    reply.addEventListener("slack-sent", (e) => {
+      const { id, ts } = (e as CustomEvent<{ id: string; ts: string }>).detail;
+      this.entries = this.entries.map((entry) => (entry.id === id ? { ...entry, ts } : entry));
+      on.sent();
+    });
+    reply.addEventListener("slack-failed", (e) => {
+      const { id } = (e as CustomEvent<{ id: string }>).detail;
+      this.entries = this.entries.filter((entry) => entry.id !== id);
+      on.dropped();
+    });
+  }
 
-export function unconfirmedSlackMessages(
-  outbox: SlackOutgoing[],
-  sessionId: string,
-  messages: AgentMessage[],
-): SlackOutgoing[] {
-  return outbox.filter(
-    (entry) => entry.sessionId !== sessionId || !entry.sent || postedCount(messages, entry.text) <= entry.posted,
-  );
+  confirm(sessionId: string, messages: readonly AgentMessage[]): void {
+    const posted = new Set(messages.map((message) => (message as { ts?: string }).ts));
+    this.entries = this.entries.filter((entry) => entry.sessionId !== sessionId || !entry.ts || !posted.has(entry.ts));
+  }
+
+  pending(sessionId: string): AgentMessage[] {
+    return this.entries.filter((entry) => entry.sessionId === sessionId).map((entry) => entry.message);
+  }
+
+  sending(message: AgentMessage): boolean {
+    return this.entries.some((entry) => entry.message === message);
+  }
 }

@@ -142,7 +142,13 @@ export class SlackReply extends LitElement {
     const id = crypto.randomUUID();
     this.text = "";
     this.error = "";
-    const sending: SlackSending = { id, text, speaker: this.label || this.user, speakerId: this.user };
+    const sending: SlackSending = {
+      id,
+      sessionId: this.sessionId,
+      text,
+      speaker: this.label || this.user,
+      speakerId: this.user,
+    };
     this.dispatchEvent(new CustomEvent("slack-sending", { bubbles: true, detail: sending }));
     try {
       const response = await this.request("reply", { text, clientMessageId: id });
@@ -156,8 +162,9 @@ export class SlackReply extends LitElement {
         this.fail(id, text, result.message ?? "Could not send your Slack message.");
         return;
       }
-      this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true, detail: { id } }));
-    } catch {
+      this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true, detail: { id, ts: result.ts } }));
+    } catch (error) {
+      reportHandledError("web:slack_reply_send", error);
       this.fail(id, text, "The send outcome is unknown. Check Slack before trying again.");
     }
   }

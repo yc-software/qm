@@ -4692,7 +4692,7 @@ summary.stopped-head:focus-visible {
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: var(--font-14);
   font-weight: 650;
   color: var(--foreground);
 }
@@ -4711,16 +4711,8 @@ summary.stopped-head:focus-visible {
   align-items: center;
   flex: none;
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   white-space: nowrap;
-}
-.slack-people > .inbox-avatar {
-  margin-left: -5px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--background);
-}
-.slack-people > .inbox-avatar:first-child {
-  margin-left: 0;
 }
 .slack-people > span {
   margin-left: 8px;
@@ -4734,7 +4726,7 @@ summary.stopped-head:focus-visible {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: var(--font-12-5);
   font-weight: 500;
   white-space: nowrap;
   text-decoration: none;
@@ -4755,7 +4747,7 @@ summary.stopped-head:focus-visible {
   gap: 0;
 }
 .slack-thread-chat .slack-m-body :is(.markdown-content, .markdown-content p) {
-  font-size: 14.5px;
+  font-size: var(--chat-font-size);
   line-height: 1.55;
 }
 .message-row.slack-m {
@@ -4777,7 +4769,7 @@ summary.stopped-head:focus-visible {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 .slack-m-head {
   display: flex;
@@ -4788,12 +4780,12 @@ summary.stopped-head:focus-visible {
 }
 .slack-m-head b {
   color: var(--foreground);
-  font-size: 14px;
+  font-size: var(--chat-font-size);
   font-weight: 650;
 }
 .slack-m-head time {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: calc(var(--chat-font-size) * 0.8);
   font-variant-numeric: tabular-nums;
 }
 .slack-app-tag {
@@ -4803,14 +4795,14 @@ summary.stopped-head:focus-visible {
   border-radius: 3px;
   background: var(--secondary);
   color: var(--muted-foreground);
-  font-size: 9.5px;
+  font-size: calc(var(--chat-font-size) * 0.64);
   font-weight: 700;
   letter-spacing: 0.05em;
 }
 .slack-m-body {
   min-width: 0;
   color: color-mix(in srgb, var(--foreground) 86%, var(--muted-foreground));
-  font-size: 14.5px;
+  font-size: var(--chat-font-size);
   line-height: 1.55;
 }
 .slack-m-body .streaming-text {
@@ -4825,7 +4817,7 @@ summary.stopped-head:focus-visible {
   padding: 1px 0 1px 12px;
   border-left: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--font-13);
 }
 .slack-reactions {
   display: flex;
@@ -4842,11 +4834,11 @@ summary.stopped-head:focus-visible {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--secondary) 40%, transparent);
-  font-size: 14px;
+  font-size: var(--font-14);
 }
 .slack-reaction b {
   color: var(--muted-foreground);
-  font-size: 11.5px;
+  font-size: calc(var(--chat-font-size) * 0.77);
   font-weight: 600;
 }
 .slack-forward {
@@ -4862,7 +4854,7 @@ summary.stopped-head:focus-visible {
   gap: 8px;
   margin-bottom: 4px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: calc(var(--chat-font-size) * 0.8);
 }
 .slack-forward-head b {
   color: var(--foreground);

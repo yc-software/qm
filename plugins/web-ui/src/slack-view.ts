@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CoreSession } from "./core-bridge";
-import { REACTION_PREFIX, splitOnce } from "./slack-text";
+import { REACTION_PREFIX, splitOnce } from "./slack-text.ts";
 
 export function hiddenMessage(message: AgentMessage): boolean {
   const { opener, resumeAnchor } = message as { opener?: boolean; resumeAnchor?: boolean };
@@ -70,10 +70,6 @@ export function parseSlackReaction(text: string): SlackReaction | null {
   };
 }
 
-function gist(text: string): string {
-  return text.trim().slice(0, 40);
-}
-
 export function collectReactions(
   messages: readonly AgentMessage[],
   textOf: (message: AgentMessage) => string,
@@ -90,8 +86,8 @@ export function collectReactions(
         ? (m as { role?: string }).role === "assistant"
         : !reactionRows.has(m) && (m as { speaker?: string }).speaker === reaction.author,
     );
-    const quoted = gist(reaction.quote);
-    const target = (quoted && byOwner.find((m) => gist(textOf(m)).startsWith(quoted))) || byOwner[0];
+    const quote = reaction.quote.trim();
+    const target = (quote && byOwner.find((m) => textOf(m).trim().startsWith(quote))) || byOwner[0];
     if (!target) return;
     reactionRows.add(message);
     const tally = onMessage.get(target) ?? new Map<string, string[]>();
