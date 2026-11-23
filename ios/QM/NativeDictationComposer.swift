@@ -114,7 +114,7 @@ struct NativeDictationComposer: View {
     case .recording: "Listening…"
     case .ready: "Recording stopped"
     case .transcribing: "Transcribing…"
-    case .retry: "Recording saved for retry"
+    case .retry: model.retryRecordsAgain ? "Nothing was heard" : "Recording saved for retry"
     }
   }
 
@@ -147,7 +147,7 @@ struct NativeDictationComposer: View {
           .background(QMTheme.ink, in: Circle())
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("Retry transcription")
+      .accessibilityLabel(model.retryRecordsAgain ? "Record again" : "Retry transcription")
     } else {
       Button {
         model.finish(sending: true)
