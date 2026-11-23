@@ -26,6 +26,7 @@ class EmojiCompletion extends AsyncDirective {
   private token: ReturnType<typeof emojiToken> = null;
   private matches: EmojiRow[] = [];
   private active = 0;
+  private browsed = false;
   private id = `emoji-${crypto.randomUUID()}`;
 
   render(_value: string) {
@@ -79,6 +80,7 @@ class EmojiCompletion extends AsyncDirective {
     }
     this.matches = emojiMatches(this.token.query, 8);
     this.active = 0;
+    this.browsed = false;
     if (this.matches.length) this.draw();
   };
 
@@ -151,6 +153,10 @@ class EmojiCompletion extends AsyncDirective {
       event.stopImmediatePropagation();
       this.close();
     } else if (!event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key === "Enter" || event.key === "Tab")) {
+      if (!this.token?.query && !this.browsed) {
+        this.close();
+        return;
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       this.insert(this.matches[this.active]!);
@@ -158,6 +164,7 @@ class EmojiCompletion extends AsyncDirective {
       event.preventDefault();
       event.stopImmediatePropagation();
       this.active = (this.active + (event.key === "ArrowDown" ? 1 : this.matches.length - 1)) % this.matches.length;
+      this.browsed = true;
       this.draw();
     } else if (["ArrowLeft", "ArrowRight", "Home", "End", "Tab"].includes(event.key)) this.close();
   };
