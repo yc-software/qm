@@ -456,6 +456,17 @@ test("conversations with a persona you can use group under that persona instead 
   assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
 });
 
+test("sorting by activity drops persona groups so persona chats sit in the flat list", () => {
+  const personas = [{ scopeId: "persona:ada", name: "Ada", kind: "persona" as const }];
+  const withAda = { ...saved("1", "web:alice:ada"), scopeId: "personal:alice", personaId: "ada", lastActivityAt: 20 };
+  const plain = { ...saved("2", "web:alice:plain"), scopeId: "personal:alice", lastActivityAt: 10 };
+  assert.equal(groupProjectSessions([withAda, plain], sidebarProjectSeeds([], false, personas))[0]?.kind, "project");
+  assert.deepEqual(groupProjectSessions([withAda, plain], sidebarProjectSeeds([], true, personas)), [
+    { kind: "session", session: withAda },
+    { kind: "session", session: plain },
+  ]);
+});
+
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
   const seeds = [{ scopeId: "group:web-project-p1", name: "P1" }];
   const fresh = { ...pending("web:alice:new"), type: "group" as const, scopeId: seeds[0]!.scopeId };
