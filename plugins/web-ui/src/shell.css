@@ -2416,11 +2416,11 @@ qm-markdown .tok-in {
   }
 }
 .assistant-body :is(markdown-block, qm-markdown) > *:first-child,
-.user-bubble :is(markdown-block, qm-markdown) > *:first-child {
+.user-bubble :is(markdown-block, qm-markdown) > div > :first-child {
   margin-top: 0;
 }
 .assistant-body :is(markdown-block, qm-markdown) > *:last-child,
-.user-bubble :is(markdown-block, qm-markdown) > *:last-child {
+.user-bubble :is(markdown-block, qm-markdown) > div > :last-child {
   margin-bottom: 0;
 }
 .assistant-body .streaming-text :is(markdown-block, qm-markdown) + :is(markdown-block, qm-markdown) {
