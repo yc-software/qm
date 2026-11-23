@@ -148,7 +148,7 @@ export function createConversationSerializer(deps: {
       return {
         ts: m.ts,
         name: self
-          ? (slackCustomBotName(m, [ids.botHandle, ids.botDisplayName, botIdentityArgs().username]) ?? "")
+          ? (slackCustomBotName(m, botIdentityArgs().username) ?? "")
           : messageAuthorName(m, people, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         ...(principalId ? { principalId } : {}),

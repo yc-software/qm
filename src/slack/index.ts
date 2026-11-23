@@ -490,9 +490,7 @@ export async function startSlackPlugin(
         );
       }
     }
-    const snap = await directory.getUserSnapshot(app.client);
-    const botDisplayName = snap?.byId.get(ids.botUserId)?.actor.displayName?.trim();
-    if (botDisplayName) ids.botDisplayName = botDisplayName;
+    await directory.getUserSnapshot(app.client);
     if (accounts.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
     accounts.set(ACCOUNT_LABEL, {
       client: app.client,
