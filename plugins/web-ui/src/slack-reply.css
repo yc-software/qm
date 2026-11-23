@@ -56,6 +56,10 @@ qm-slack-reply {
   min-height: 30px;
   border-radius: 9px;
 }
+
+.slack-reply-pill .send-btn:disabled {
+  cursor: default;
+}
 .slack-reply-pill > .composer-error {
   grid-area: 2 / 1 / 3 / -1;
 }

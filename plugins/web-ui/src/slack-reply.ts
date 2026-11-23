@@ -9,6 +9,7 @@ import "./slack-account";
 import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { avatarTpl } from "./ui";
 import "./slack-reply.css";
+import type { SlackSending } from "./slack-outbox";
 
 const FOCUS_REFRESH_MS = 60_000;
 const KNOWN_KEY = "qm-slack-reply-known";
@@ -36,7 +37,6 @@ export class SlackReply extends LitElement {
     user: {},
     connected: { state: true },
     linkAvailable: { state: true },
-    sending: { state: true },
     error: { state: true },
     text: { state: true },
     label: { state: true },
@@ -46,7 +46,6 @@ export class SlackReply extends LitElement {
   private connected: boolean | null = null;
   private linkAvailable = false;
   private checkedAt = 0;
-  private sending = false;
   private error = "";
   private text = "";
   private label = "";
@@ -138,12 +137,15 @@ export class SlackReply extends LitElement {
   }
   private async send(event: Event): Promise<void> {
     event.preventDefault();
-    if (this.connected === false || this.sending || !this.text.trim()) return;
-    const refocus = this.contains(document.activeElement);
-    this.sending = true;
+    const text = this.text;
+    if (this.connected === false || !text.trim()) return;
+    const id = crypto.randomUUID();
+    this.text = "";
     this.error = "";
+    const sending: SlackSending = { id, text, speaker: this.label || this.user, speakerId: this.user };
+    this.dispatchEvent(new CustomEvent("slack-sending", { bubbles: true, detail: sending }));
     try {
-      const response = await this.request("reply", { text: this.text, clientMessageId: crypto.randomUUID() });
+      const response = await this.request("reply", { text, clientMessageId: id });
       const result = await response.json();
       if (!response.ok || !result.sent) {
         if (result.connected === false) {
@@ -151,19 +153,20 @@ export class SlackReply extends LitElement {
           this.linkAvailable = true;
           remember({ user: this.user, connected: false, label: this.label });
         }
-        this.error = result.message ?? "Could not send your Slack message.";
+        this.fail(id, text, result.message ?? "Could not send your Slack message.");
         return;
       }
-      this.text = "";
-      this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true }));
+      this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true, detail: { id } }));
     } catch {
-      this.error = "The send outcome is unknown. Check Slack before trying again.";
-    } finally {
-      this.sending = false;
-      if (refocus)
-        void this.updateComplete.then(() => this.querySelector<HTMLTextAreaElement>(".composer-input")?.focus());
+      this.fail(id, text, "The send outcome is unknown. Check Slack before trying again.");
     }
   }
+  private fail(id: string, text: string, message: string): void {
+    if (!this.text) this.text = text;
+    this.error = message;
+    this.dispatchEvent(new CustomEvent("slack-failed", { bubbles: true, detail: { id } }));
+  }
+
   protected render() {
     if (this.connected !== false)
       return html`<form class="composer-wrap slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
@@ -171,8 +174,8 @@ export class SlackReply extends LitElement {
         ${composerInput({
           value: this.text,
           placeholder: "Reply in thread…",
+          disabled: false,
           label: `Reply in Slack as ${this.label || "yourself"}`,
-          disabled: this.sending,
           maxLength: 4000,
           onInput: (e) => {
             this.text = (e.target as HTMLTextAreaElement).value;
@@ -189,7 +192,7 @@ export class SlackReply extends LitElement {
               type="submit"
               aria-label="Send to Slack"
               ${tip("Send to Slack")}
-              ?disabled=${this.sending || !this.text.trim()}
+              ?disabled=${!this.text.trim()}
             >
               ${icon(ArrowUp, 16)}
             </button>

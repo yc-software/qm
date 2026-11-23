@@ -27,6 +27,7 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { outgoingSlackMessage, unconfirmedSlackMessages, type SlackOutgoing, type SlackSending } from "./slack-outbox";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
@@ -461,7 +462,7 @@ export function createChatSurface(
     const ts = (message as { timestamp?: number }).timestamp;
     const continued = continuedSpeakerRows.has(message);
     return html`<article
-      class="message-row slack-m ${continued ? "slack-m-continued" : ""}"
+      class="message-row slack-m ${continued ? "slack-m-continued" : ""} ${slackOutbox.some((o) => o.message === message) ? "slack-m-sending" : ""}"
       data-index=${index}
       data-entry-seqs=${messageEntrySeqs(message)
         .filter((seq) => !inlineSteers.has(seq))
@@ -569,6 +570,8 @@ export function createChatSurface(
   let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
   let followReadOnlySend = false;
+  let slackOutbox: SlackOutgoing[] = [];
+  let readOnlyMessages: AgentMessage[] = [];
 
   function teardownActiveChat(): void {
     cleanupEphemeral();
@@ -1482,16 +1485,38 @@ export function createChatSurface(
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
-      if (!priorReply)
-        slackReply.addEventListener("slack-sent", () => {
+      if (!priorReply) {
+        slackReply.addEventListener("slack-sending", (e) => {
+          slackOutbox = [
+            ...slackOutbox,
+            outgoingSlackMessage((e as CustomEvent<SlackSending>).detail, s.id, readOnlyMessages),
+          ];
+          readonlyRedraw?.();
+          scrollToBottom();
+        });
+        slackReply.addEventListener("slack-sent", (e) => {
+          const entry = slackOutbox.find((o) => o.id === (e as CustomEvent<{ id: string }>).detail?.id);
+          if (entry) entry.sent = true;
           followReadOnlySend = true;
           onDelivery(s.threadRef);
         });
+        slackReply.addEventListener("slack-failed", (e) => {
+          slackOutbox = slackOutbox.filter((o) => o.id !== (e as CustomEvent<{ id: string }>).detail.id);
+          readonlyRedraw?.();
+        });
+      }
     }
+    slackOutbox = unconfirmedSlackMessages(slackOutbox, s.id, messages);
+    readOnlyMessages = messages;
     let approvals: PendingApproval[] = [];
     const draw = () => {
       approvals = unresolvedApprovals(approvals);
-      const shownMessages = chatState.inheritedExpanded ? [...chatState.inheritedMessages, ...messages] : messages;
+      const outgoing = slackOutbox.filter((o) => o.sessionId === s.id).map((o) => o.message);
+      const shownMessages = [
+        ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
+        ...messages,
+        ...outgoing,
+      ];
       prepareMessageRows(shownMessages);
       render(
         html`

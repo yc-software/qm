@@ -4760,10 +4760,15 @@ summary.stopped-head:focus-visible {
 }
 .message-row.slack-m {
   padding-bottom: 0;
+  transition: opacity 0.2s ease;
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   column-gap: 12px;
   margin: 0 0 20px;
+}
+
+.message-row.slack-m-sending {
+  opacity: 0.5;
 }
 .message-row.slack-m-continued {
   margin-top: -14px;
