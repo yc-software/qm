@@ -251,19 +251,23 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     }
   }
 
-  async function ensureBody(scope: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
+  async function ensureBody(
+    scope: string,
+    held?: () => Promise<boolean>,
+  ): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
     return withScopeLock(scope, async () => {
       const stored = await store.get(scope);
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
+        const stale = Date.now() - stored.createdAtMs > rotateAfterMs && !(await held?.());
         if (alive && stored.provisioning)
           throw new Error(`AWS sandbox ${stored.microvmId} has incomplete provisioning; retire it before retrying`);
         if (alive && !stale) {
           endpointById.set(stored.microvmId, stored.endpoint);
           scopeByMicrovm.set(stored.microvmId, scope);
           await ensureRunning(stored.microvmId, desc);
+          await store.merge(scope, { lastActivityMs: Date.now() });
           return { id: stored.microvmId, endpoint: stored.endpoint, coldStart: false };
         }
         if (alive && stale) {
@@ -295,6 +299,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
         endpoint: body.endpoint,
         ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
         createdAtMs: Date.now(),
+        lastActivityMs: Date.now(),
         ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
         orgId: configOrgId(),
       });
@@ -422,7 +427,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
-      const body = scratch ? await ensureScratch(scratch.key) : await ensureBody(scope);
+      const body = scratch ? await ensureScratch(scratch.key) : await ensureBody(scope, provOpts?.held);
       const id = body.id;
       endpointById.set(id, body.endpoint);
       const coldStart = body.coldStart;
@@ -534,21 +539,18 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
       }
     },
 
-    async reapDeepIdle(idleMs): Promise<{ reaped: number }> {
+    async reapDeepIdle(idleMs, _devIdleMs, held): Promise<{ reaped: number }> {
       if (!(idleMs > 0)) return { reaped: 0 };
       const cutoff = Date.now() - idleMs;
       let reaped = 0;
       const idle = (rec: StoredMicrovm): boolean =>
-        !(rec.orgId && rec.orgId !== configOrgId()) &&
-        !!rec.lastActivityMs &&
-        rec.lastActivityMs <= cutoff &&
-        !activeByMicrovm.has(rec.microvmId);
+        !(rec.orgId && rec.orgId !== configOrgId()) && !!rec.lastActivityMs && rec.lastActivityMs <= cutoff;
       await claimThenBind(store.claimTenants, async () => {
         for (const [scope, listed] of await store.entries())
           if (idle(listed))
             await withScopeLock(scope, async () => {
               const rec = await store.get(scope);
-              if (!rec || !idle(rec)) return;
+              if (!rec || !idle(rec) || (await held?.(scope))) return;
               const desc = await api.tryGetMicrovm(rec.microvmId);
               if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
                 await store.delete(scope).catch(() => {});

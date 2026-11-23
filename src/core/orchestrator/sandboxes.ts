@@ -17,7 +17,6 @@ import {
 } from "../../sandbox/sandbox-resources.ts";
 import { ensureChildSandbox, prepareChildWorkdir } from "../../sessions/child-isolation.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
-import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { createTurnSkills } from "../../skills/turn-skills.ts";
@@ -100,12 +99,8 @@ async function releasePool(t: TurnPool): Promise<void> {
   const { tenant, deps, input, session, scopeId } = t.ctx;
   const { pool, scopedUsed, audit } = t;
   const releaseHold = async (handle: SandboxHandle): Promise<boolean> => {
-    const runs = deps.runs;
-    if (!handle.resourceId || !runs || !deps.sandboxResources) return false;
-    return deps.sandboxResources.release(handle.resourceId, input.runId, async (runId) => {
-      const run = await runs.get(runId);
-      return run?.status === "running" && !leaseLapsed(run, Date.now());
-    });
+    if (!handle.resourceId || !deps.sandboxResources) return false;
+    return deps.sandboxResources.release(handle.resourceId, input.runId);
   };
   const releaseHandle = async (
     { handle, unchanged }: Release,
