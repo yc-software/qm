@@ -184,7 +184,7 @@ import {
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
 import { htmlPreviewCard } from "./html-preview";
-import { audioPlayer, frameSrc, mediaFeed, mediaKind, openMediaViewer, type MediaItem } from "./media";
+import { audioPlayer, dataUrl, frameSrc, mediaFeed, mediaKind, openMediaViewer, type MediaItem } from "./media";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
@@ -3864,12 +3864,7 @@ export function createChatSurface(
     const kind = mediaKind(a.fileName, a.mimeType);
     if (!kind) return null;
     const download = a.artifactId ? fileContentUrl(a.artifactId, a.fileName) : undefined;
-    const inline =
-      kind === "image" && a.content
-        ? a.content.startsWith("data:")
-          ? a.content
-          : `data:${a.mimeType};base64,${a.content}`
-        : undefined;
+    const inline = kind === "image" && a.content ? dataUrl(a.content, a.mimeType) : undefined;
     const src = download ?? localContentUrl(a) ?? inline;
     if (!src) return null;
     return {
@@ -3931,7 +3926,7 @@ export function createChatSurface(
     if (inlineHtmlName(a.fileName, a.mimeType)) {
       let src = artifactHref;
       if (!src && a.content) {
-        src = a.content.startsWith("data:") ? a.content : `data:text/html;base64,${a.content}`;
+        src = dataUrl(a.content, "text/html");
       }
       if (src) return htmlPreviewCard(a.fileName, src, a.size, artifactHref);
     }

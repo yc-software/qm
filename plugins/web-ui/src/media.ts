@@ -8,7 +8,7 @@ import { tip } from "./tooltip";
 import { formatBytes } from "./ui";
 import { formatDuration, justifyRows, layoutRatio, MEDIA_GAP, type MediaItem } from "./media-layout";
 
-export { mediaKind, type MediaItem } from "./media-layout";
+export { dataUrl, mediaKind, type MediaItem } from "./media-layout";
 
 const MAX_TILES = 6;
 const MAX_HEIGHT = 460;
@@ -20,12 +20,12 @@ const EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 const ratios = new Map<string, number>();
 const naturalWidths = new Map<string, number>();
 let speed = 1;
-let nowPlaying: MediaPlayer | null = null;
+const playing: { player: MediaPlayer | null } = { player: null };
 
 const Base = (typeof HTMLElement === "undefined" ? class {} : HTMLElement) as typeof HTMLElement;
 
-export function frameSrc(src: string): string {
-  return src.startsWith("data:") ? src : `${src}#t=0.001`;
+export function frameSrc(src: string, at = 0.001): string {
+  return src.startsWith("data:") ? src : `${src}#t=${at}`;
 }
 
 function learn(src: string, width: number, height: number): boolean {
@@ -79,7 +79,7 @@ class MediaPlayer extends Base {
     cancelAnimationFrame(this.frame);
     clearTimeout(this.quietTimer);
     this.media?.pause();
-    if (nowPlaying === this) nowPlaying = null;
+    if (playing.player === this) playing.player = null;
   }
 
   get time(): number {
@@ -98,15 +98,17 @@ class MediaPlayer extends Base {
   toggle = (): void => {
     const media = this.media;
     if (!media) return;
-    if (media.paused) void media.play().catch(() => undefined);
-    else media.pause();
+    if (!media.paused) return media.pause();
+    if (playing.player !== this) playing.player?.pause();
+    playing.player = this;
+    void media.play().catch(() => undefined);
   };
 
   private videoTemplate(): TemplateResult {
     const { name, src, download } = this.item;
     const viewer = this.mode === "viewer";
     return html`<video
-        src=${frameSrc(src)}
+        src=${frameSrc(src, this.startAt || 0.001)}
         preload=${this.autoplay ? "auto" : "metadata"}
         playsinline
         @loadedmetadata=${this.onMetadata}
@@ -241,22 +243,20 @@ class MediaPlayer extends Base {
     const length = this.querySelector(".mp-length");
     if (length) length.textContent = formatDuration(media.duration);
     this.querySelector(".mp-track")!.setAttribute("aria-valuemax", String(Math.round(media.duration || 0)));
-    if (this.startAt) {
-      media.currentTime = this.startAt;
-      if (media.paused) this.setState("paused");
-    }
+    if (this.startAt && media.paused) this.setState("paused");
     this.paint();
   };
 
   private onPlay = (): void => {
-    if (nowPlaying !== this) nowPlaying?.pause();
-    nowPlaying = this;
+    if (playing.player && playing.player !== this) return this.media!.pause();
+    playing.player = this;
     this.setState("playing");
     this.wake();
     this.tick();
   };
 
   private onPause = (): void => {
+    if (playing.player === this) playing.player = null;
     cancelAnimationFrame(this.frame);
     this.setState(this.media!.ended ? "ended" : "paused");
     this.paint();

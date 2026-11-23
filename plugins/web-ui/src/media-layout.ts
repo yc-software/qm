@@ -23,6 +23,10 @@ const RENDERABLE_IMAGE_TYPES = new Set([
   "image/x-ms-bmp",
 ]);
 
+export function dataUrl(content: string, mimeType = "application/octet-stream"): string {
+  return content.startsWith("data:") ? content : `data:${mimeType};base64,${content}`;
+}
+
 export function browserRenderableImage(mimeType?: string): boolean {
   return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
@@ -30,7 +34,7 @@ export function browserRenderableImage(mimeType?: string): boolean {
 const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "mov", "webm", "ogv"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "aac", "wav", "oga", "ogg", "opus", "flac"]);
 
-export function playableKind(name = "", mimetype = ""): "video" | "audio" | null {
+function playableKind(name = "", mimetype = ""): "video" | "audio" | null {
   const mime = mimetype.split(";", 1)[0]!.trim().toLowerCase();
   if (mime.startsWith("video/")) return "video";
   if (mime.startsWith("audio/")) return "audio";
@@ -61,7 +65,7 @@ export function layoutRatio(ratio: number | undefined, fallback: number): number
   return Math.min(3.2, Math.max(0.42, ratio && Number.isFinite(ratio) ? ratio : fallback));
 }
 
-export function rowHeight(ratios: readonly number[], width: number): number {
+function rowHeight(ratios: readonly number[], width: number): number {
   return (width - MEDIA_GAP * (ratios.length - 1)) / ratios.reduce((sum, ratio) => sum + ratio, 0);
 }
 

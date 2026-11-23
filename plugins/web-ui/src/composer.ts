@@ -9,7 +9,7 @@ import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Play, Square, X, type IconNode } from "lucide";
@@ -51,7 +51,7 @@ import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
 import { base64ToBytes, base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
-import { frameSrc, mediaKind, openMediaViewer, type MediaItem } from "./media";
+import { dataUrl, frameSrc, mediaKind, openMediaViewer, type MediaItem } from "./media";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isCompactLayout } from "./viewport";
@@ -1927,9 +1927,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           ? URL.createObjectURL(
               new Blob([base64ToBytes(attachment.content) as BlobPart], { type: attachment.mimeType }),
             )
-          : attachment.content.startsWith("data:")
-            ? attachment.content
-            : `data:${attachment.mimeType};base64,${attachment.content}`;
+          : dataUrl(attachment.content, attachment.mimeType);
       stagedSources.set(attachment.id, src);
     }
     return { kind, name: attachment.fileName, src, size: attachment.size };

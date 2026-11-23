@@ -659,6 +659,28 @@ img.mv-frame.zoomable {
 .user-row .attachment-documents:has(> .mp-audio) {
   align-items: flex-end;
 }
+.message-stack .user-row.stuck .attachment-documents:has(> .mp-audio) {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: safe flex-end;
+  overflow-x: auto;
+}
+.message-stack .user-row.stuck .mp-audio {
+  flex: none;
+  width: auto;
+  min-height: 28px;
+  gap: 6px;
+  padding: 3px 8px 3px 3px;
+  border-radius: 8px;
+}
+.message-stack .user-row.stuck .mp-audio .mp-round {
+  width: 22px;
+  height: 22px;
+}
+.message-stack .user-row.stuck .mp-audio :is(.mp-line, > .mp-btn) {
+  display: none;
+}
 .composer-image .chip-x {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent);
 }
