@@ -15,7 +15,6 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { RECALL_CHECKED } from "../memory/cross-scope.ts";
-import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
@@ -1431,18 +1430,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         void earlyRecall?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
-        const captureDependencies = () => [
-          ...memoryView.facts,
-          ...(!memoryView.complete ||
-          memoryWindow.items.length > 0 ||
-          toolCalls > 0 ||
-          input.priorTurns?.length ||
-          input.overheard?.length ||
-          input.attachments?.length ||
-          input.inboundNotes
-            ? [UNTRACKED_PROVENANCE]
-            : []),
-        ];
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
         const turnWindow = async () => (historyAppended ? historyWindow() : memoryWindow);
         const approvalTurn: ApprovalDecisionTurn = {
@@ -1796,7 +1783,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
-          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
@@ -2640,7 +2626,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           cancelStopped,
           personConversationTurn,
           useMemory,
-          captureDependencies,
           turnInput,
           reply,
           spine,

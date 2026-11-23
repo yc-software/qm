@@ -113,8 +113,6 @@ export async function resolveTurnContext(input: ContextInput) {
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
-        facts: notebooks.flatMap(({ facts }) => facts ?? []),
-        complete: notebooks.every(({ facts }) => !!facts),
       };
     },
     recallMemory: (
