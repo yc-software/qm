@@ -79,6 +79,45 @@ describeTwoTenants("per-tenant sandbox shape", (db) => {
     }
   });
 
+  test("only a tenant with its own egress proxy is forced through it, and removing it reopens its sprite", async () => {
+    const [a, b] = db.tenants;
+    const switchA = async (settings: object) => {
+      await db.owner.q("UPDATE tenants SET settings = $2::jsonb WHERE id = $1", [a, JSON.stringify(settings)]);
+      await withTenant(a, () => loadTenantSettings(db.app));
+    };
+    const fake = installFakeSprites();
+    try {
+      const sandbox = createSpritesSandbox({
+        initializationStore: createPostgresMapFactory(db.ownerDatabaseUrl).map<StoredSprite>("sprites_egress_init"),
+        advisoryLock: testAdvisoryLock(),
+        token: FAKE_SPRITES_TOKEN,
+        namePrefix: "qme",
+        baseUrl: fake.baseUrl,
+      });
+      await switchA({ ...moved, egressProxyUrl: "https://proxy.example.com" });
+      const ha = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      const hb = await withTenant(b, () => sandbox.provision(scope, { egressToken: "t" }));
+      assert.equal(new URL(ha.env!.HTTPS_PROXY!).hostname, "proxy.example.com");
+      assert.deepEqual(fake.policy(ha.id), [{ domain: "proxy.example.com", action: "allow" }]);
+      assert.equal(
+        withTenant(a, () => sandbox.profile.egressEnforcement),
+        "domain",
+      );
+      assert.equal(hb.env?.HTTPS_PROXY, undefined);
+      assert.equal(fake.policy(hb.id), null);
+      assert.equal(
+        withTenant(b, () => sandbox.profile.egressEnforcement),
+        "none",
+      );
+      await switchA(moved);
+      const reopened = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      assert.equal(reopened.env?.HTTPS_PROXY, undefined);
+      assert.deepEqual(fake.policy(ha.id), []);
+    } finally {
+      fake.cleanup();
+    }
+  });
+
   test("Modal lookups use the tenant's own app, environment and name prefix", async () => {
     const [a, b] = db.tenants;
     const made: ModalShape[] = [];

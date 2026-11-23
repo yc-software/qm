@@ -2,6 +2,7 @@ import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
+import { tenantEgressProxyUrl } from "./tenant-sandbox-shape.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
@@ -170,6 +171,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const resource = await resourceFor(scope, provOpts?.sandboxId);
       const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
+      if ((await tenantEgressProxyUrl()) && sandbox.profile.egressEnforcement !== "domain")
+        throw new Error(
+          `sandbox backend ${backend} can't send this organization's sandbox traffic through its egress proxy; use a backend that can`,
+        );
       const provision = async (target: ScopeId, options = provOpts) => {
         try {
           return await sandbox.provision(target, options);

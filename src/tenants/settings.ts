@@ -39,6 +39,9 @@ export const tenantSettingsSchema = z
     superserveNamePrefix: namePrefix,
     sandboxBackend,
     sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
+    egressProxyUrl: z
+      .url()
+      .refine((url) => ["http:", "https:"].includes(new URL(url).protocol), "expected an http(s) URL"),
     serving: z.boolean(),
     deploymentModelKey: z.boolean(),
   })

@@ -18,7 +18,7 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
-import { tenantSpritesShape } from "./tenant-sandbox-shape.ts";
+import { loadedTenantEgressProxyUrl, tenantSpritesShape } from "./tenant-sandbox-shape.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
@@ -100,6 +100,7 @@ export function processKeepaliveScript(processId: string): string {
 
 export interface StoredSprite extends SnapshotBookkeeping {
   pending?: boolean;
+  egressHosts?: string[];
 }
 
 export interface SpritesSandboxOptions extends BlobStagingOptions {
@@ -132,15 +133,22 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const prefix = opts.namePrefix ?? "qm";
   const clients = new Map<string, SpritesClient>();
   const clientByName = new Map<string, SpritesClient>();
+  const egressProxyByName = new Map<string, string>();
   const clientFor = (token: string): SpritesClient => {
     let found = clients.get(token);
     if (!found) clients.set(token, (found = new SpritesClient(token, opts.baseUrl ? { baseURL: opts.baseUrl } : {})));
     return found;
   };
   const nameFor = async (scope: string, scratch = false): Promise<string> => {
-    const shape = await tenantSpritesShape({ token: deploymentToken, namePrefix: prefix });
+    const shape = await tenantSpritesShape({
+      token: deploymentToken,
+      namePrefix: prefix,
+      ...(opts.egressProxyUrl ? { egressProxyUrl: opts.egressProxyUrl } : {}),
+    });
     const name = sandboxScopeName(scratch ? `${shape.namePrefix}-scratch` : shape.namePrefix, scope);
     clientByName.set(name, clientFor(shape.token));
+    if (shape.egressProxyUrl) egressProxyByName.set(name, shape.egressProxyUrl);
+    else egressProxyByName.delete(name);
     return name;
   };
   const client = (name: string): SpritesClient => {
@@ -163,7 +171,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const ensured = new Set<string>();
   const sizeByName = new Map<string, number>();
   const appliedSize = new Map<string, number>();
-  const egressPolicyByName = new Map<string, string>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -280,25 +287,25 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   }
 
   const norm = (domain?: string): string => (domain ?? "").toLowerCase().replace(/\.$/, "");
-  const egressProxyHosts = opts.egressProxyUrl
-    ? [
-        ...new Set(
-          [opts.egressProxyUrl, ...(opts.egressProxyAdditionalUrls ?? [])].map((value) => {
-            const url = new URL(value);
-            if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
-              throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
-            return norm(url.hostname);
-          }),
-        ),
-      ].sort()
-    : [];
+  const proxyHosts = (primary: string): string[] =>
+    [
+      ...new Set(
+        [primary, ...(opts.egressProxyAdditionalUrls ?? [])].map((value) => {
+          const url = new URL(value);
+          if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
+            throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
+          return norm(url.hostname);
+        }),
+      ),
+    ].sort();
+  if (opts.egressProxyUrl) proxyHosts(opts.egressProxyUrl);
   if (!opts.egressProxyUrl && opts.egressProxyAdditionalUrls?.length)
     throw new Error("sprites additional egress proxy URLs require a primary proxy URL");
 
-  async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = egressProxyHosts.map((domain) => ({ domain, action: "allow" as const }));
-    const want = JSON.stringify(rules);
-    if (egressPolicyByName.get(name) === want) return;
+  async function applyEgressPolicy(name: string, hosts: string[]): Promise<void> {
+    const want = JSON.stringify(hosts);
+    if (JSON.stringify((await initializationStore.get(name))?.egressHosts ?? []) === want) return;
+    const rules = hosts.map((domain) => ({ domain, action: "allow" as const }));
     const s = sprite(name);
     await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
     const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
@@ -306,10 +313,18 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     const bound =
       actual.length === rules.length &&
       actual.every((rule) => rule.action?.toLowerCase() === "allow") &&
-      JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === JSON.stringify(egressProxyHosts);
+      JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === want;
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
-    egressPolicyByName.set(name, want);
+    if (hosts.length)
+      await initializationStore.mutateMany([{ id: name, apply: (stored) => ({ ...stored, egressHosts: hosts }) }]);
+    else await initializationStore.merge(name, { egressHosts: undefined });
+  }
+
+  async function enforceEgress(name: string): Promise<string | undefined> {
+    const proxy = egressProxyByName.get(name);
+    await applyEgressPolicy(name, proxy ? proxyHosts(proxy) : []);
+    return proxy;
   }
 
   async function applyResources(name: string): Promise<void> {
@@ -414,7 +429,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const forget = (name: string): void => {
     ensured.delete(name);
     appliedSize.delete(name);
-    egressPolicyByName.delete(name);
   };
 
   const base = createExecSandboxBase({
@@ -430,7 +444,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       opts.connectorSdk,
     ),
     combineLayerToolPrep: true,
-    egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "sprite_delete_failed",
     onError: opts.onError,
     exec: execRaw,
@@ -476,7 +489,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     },
     deleteInstance: deleteSprite,
     forgetInstance: forget,
-    ensureEgress: ensureEgressPolicy,
+    enforceEgress,
   });
 
   const profile: AgentComputerProfile = {
@@ -484,7 +497,9 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    get egressEnforcement() {
+      return (loadedTenantEgressProxyUrl() ?? opts.egressProxyUrl) ? ("domain" as const) : ("none" as const);
+    },
     spec: {
       os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",
       runtimes: ["Node 24", "Python 3"],

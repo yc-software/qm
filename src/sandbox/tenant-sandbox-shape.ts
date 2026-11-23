@@ -13,14 +13,19 @@ interface TenantSandboxSettings {
   settings: TenantSettings;
 }
 
-async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefined> {
+function sandboxTenant(): string | undefined {
   const tenant = boundTenant();
   const boot = bootTenant();
   if (tenant === undefined) {
     if (boot === undefined && tenancyBooted()) throw new Error("sandbox work needs a bound tenant");
     return undefined;
   }
-  if (tenant === boot) return undefined;
+  return tenant === boot ? undefined : tenant;
+}
+
+async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefined> {
+  const tenant = sandboxTenant();
+  if (tenant === undefined) return undefined;
   await loadTenant();
   const settings = loadedTenantSettings();
   if (!settings) throw new Error("tenant settings are not loaded");
@@ -34,16 +39,27 @@ export function tenantNamePrefix(prefix: string, tenant: string): string {
 export interface SpritesShape {
   token: string;
   namePrefix: string;
+  egressProxyUrl?: string;
 }
 
 export async function tenantSpritesShape(base: SpritesShape): Promise<SpritesShape> {
   const bound = await tenantSandboxSettings();
   if (!bound) return base;
   const { tenant, settings } = bound;
+  const egressProxyUrl = settings.egressProxyUrl ?? base.egressProxyUrl;
   return {
     token: settings.spritesToken ?? base.token,
     namePrefix: settings.spritesNamePrefix ?? tenantNamePrefix(base.namePrefix, tenant),
+    ...(egressProxyUrl ? { egressProxyUrl } : {}),
   };
+}
+
+export async function tenantEgressProxyUrl(): Promise<string | undefined> {
+  return (await tenantSandboxSettings())?.settings.egressProxyUrl;
+}
+
+export function loadedTenantEgressProxyUrl(): string | undefined {
+  return sandboxTenant() === undefined ? undefined : loadedTenantSettings()?.egressProxyUrl;
 }
 
 export interface ModalShape {

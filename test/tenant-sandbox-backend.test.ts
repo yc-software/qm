@@ -49,6 +49,7 @@ test("tenant sandbox settings accept backend names and scope kinds only", () => 
   assert.throws(() => tenantSettingsSchema.parse({ sandboxBackend: "vm" }));
   assert.throws(() => tenantSettingsSchema.parse({ sandboxScopeBackends: { personal: "vm" } }));
   assert.throws(() => tenantSettingsSchema.parse({ sandboxScopeBackends: { desk: "sprites" } }));
+  assert.throws(() => tenantSettingsSchema.parse({ egressProxyUrl: "file:///proxy" }));
 });
 
 describeTwoTenants("per-tenant sandbox backend", (db) => {
@@ -117,6 +118,16 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
     assert.deepEqual(provisioned, ["superserve", "sprites"]);
     const record = await withTenant(a, () => resources.create("u", scope, "superserve"));
     assert.equal(record.backend, "superserve");
+    const moved = { sandboxBackend: "superserve", superserveApiKey: "moved-key", superserveTemplate: "moved-tpl" };
+    await set(a, { ...moved, egressProxyUrl: "https://proxy.example.com" });
+    try {
+      await assert.rejects(
+        withTenant(a, () => router.provision(scope, { scratch: { key: "k" } })),
+        /sandbox backend superserve can't send this organization's sandbox traffic through its egress proxy/,
+      );
+    } finally {
+      await set(a, moved);
+    }
     await set(b, { sandboxBackend: "modal" });
     try {
       await assert.rejects(

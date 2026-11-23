@@ -40,7 +40,6 @@ export interface ExecSandboxBaseDeps {
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
-  egressProxyUrl?: string;
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
   exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
@@ -51,7 +50,7 @@ export interface ExecSandboxBaseDeps {
   recreateScratch(name: string): Promise<void>;
   deleteInstance(name: string): Promise<void>;
   forgetInstance?(name: string): void;
-  ensureEgress?(name: string): Promise<void>;
+  enforceEgress?(name: string): Promise<string | undefined>;
   installLayerTools?: LayerToolInstaller;
   combineLayerToolPrep?: boolean;
 }
@@ -71,9 +70,6 @@ export interface ExecSandboxBase {
 
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
   const { label, prefix, homeDir, defaultTimeoutSec } = deps;
-  if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
-    throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
-  }
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const instanceName =
     deps.instanceName ??
@@ -174,12 +170,12 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     };
 
     try {
-      const forceEgress = !!deps.egressProxyUrl && !!provOpts?.egressToken;
-      if (forceEgress) await deps.ensureEgress?.(name);
+      const egressToken = provOpts?.egressToken;
+      const proxy = egressToken ? await deps.enforceEgress?.(name) : undefined;
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
+      const env = proxy && egressToken ? forceThroughProxyEnv(proxy, egressToken, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
       const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
       const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
