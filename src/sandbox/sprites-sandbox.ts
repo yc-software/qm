@@ -18,6 +18,7 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { egressProxyHost } from "../tenants/settings.ts";
 import { tenantEgressProxyUrl, tenantSpritesShape } from "./tenant-sandbox-shape.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
@@ -291,10 +292,9 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     [
       ...new Set(
         [primary, ...(primary === opts.egressProxyUrl ? (opts.egressProxyAdditionalUrls ?? []) : [])].map((value) => {
-          const url = new URL(value);
-          if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
-            throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
-          return norm(url.hostname);
+          const host = egressProxyHost(value);
+          if (!host) throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
+          return host;
         }),
       ),
     ].sort();

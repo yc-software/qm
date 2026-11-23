@@ -19,6 +19,12 @@ const emailOrDomain = z
   .max(254)
   .regex(/^[^@\s,;<>"]*@[^@\s,;<>"]+\.[^@\s,;<>"]+$/, "expected an email address or @domain");
 
+export function egressProxyHost(value: string): string | undefined {
+  const url = URL.parse(value);
+  if (!url || !["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password) return;
+  return url.hostname.toLowerCase().replace(/\.$/, "");
+}
+
 export const tenantSettingsSchema = z
   .object({
     oidcClient: z.object({ clientId: text, clientSecret: text.optional() }).strict(),
@@ -39,9 +45,7 @@ export const tenantSettingsSchema = z
     superserveNamePrefix: namePrefix,
     sandboxBackend,
     sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
-    egressProxyUrl: z
-      .url()
-      .refine((url) => ["http:", "https:"].includes(new URL(url).protocol), "expected an http(s) URL"),
+    egressProxyUrl: z.url().refine((url) => !!egressProxyHost(url), "expected an http(s) URL without credentials"),
     serving: z.boolean(),
     deploymentModelKey: z.boolean(),
   })
