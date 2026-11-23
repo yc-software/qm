@@ -763,6 +763,13 @@ struct ChatView: View {
         .id(model.conversation.id)
       }
     }
+    // The composer grows into the dictation panel on one spring applied to the whole bar, so
+    // the chrome, the rows above it that hide while dictating, and the buttons all move in
+    // one transaction; animating only the composer let the bar snap and the buttons jump.
+    // Closing settles without bounce.
+    .animation(
+      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
+      value: dictation.busy)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -775,30 +782,50 @@ struct ChatView: View {
 
   private func composer(_ proxy: ScrollViewProxy) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      if dictation.busy {
-        NativeDictationComposer(model: dictation)
-          .transition(
-            reduceMotion
-              ? .opacity
-              : .asymmetric(
-                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom)),
-                removal: .opacity))
-      } else {
-        composerTextField
-        if let error = dictation.error {
-          NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
-            .padding(.horizontal, 8)
+      // Only the content above the button row swaps; bottom-aligned so the outgoing view
+      // stays on the row while the chrome resizes.
+      ZStack(alignment: .bottom) {
+        if dictation.busy {
+          NativeDictationComposer(model: dictation)
+            .transition(
+              .asymmetric(
+                insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
+        } else {
+          VStack(alignment: .leading, spacing: 6) {
+            composerTextField
+            if let error = dictation.error {
+              NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
+                .padding(.horizontal, 8)
+            }
+            if model.uploading, let uploadingName = model.uploadingName {
+              NativeChatUploadStatus(filename: uploadingName)
+                .padding(.horizontal, 8)
+            }
+          }
+          .transition(.opacity)
         }
-        if model.uploading, let uploadingName = model.uploadingName {
-          NativeChatUploadStatus(filename: uploadingName)
-            .padding(.horizontal, 8)
-        }
-        HStack(spacing: 6) {
+      }
+      // One button row for both states, so the plus becomes ✕ and send stays send in exactly
+      // the same spots instead of two rows crossfading while the chrome resizes.
+      HStack(spacing: 6) {
+        if dictation.busy {
+          NativeDictationDiscardButton(model: dictation)
+            .transition(.opacity)
+        } else {
           AttachmentPicker(
             uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
-          ).disabled(model.sending)
-          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
-          Spacer(minLength: 0)
+          )
+          .disabled(model.sending)
+          .transition(.opacity)
+          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
+            modelSelector.transition(.opacity)
+          }
+        }
+        Spacer(minLength: 0)
+        if dictation.busy {
+          NativeDictationSendButton(model: dictation)
+            .transition(.opacity)
+        } else {
           Button {
             composerFocused = false
             dictation.start()
@@ -809,6 +836,7 @@ struct ChatView: View {
           }
           .accessibilityLabel("Dictate message")
           .disabled(model.sending)
+          .transition(.opacity)
           if model.activeRunID != nil,
             model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             model.attachments.isEmpty
@@ -822,8 +850,10 @@ struct ChatView: View {
                 .foregroundStyle(QMTheme.paper)
                 .frame(width: 44, height: 44)
                 .background(QMTheme.ink, in: Circle())
-            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
-              .disabled(stopping)
+            }
+            .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+            .disabled(stopping)
+            .transition(.opacity)
           } else {
             Button {
               send(proxy)
@@ -833,9 +863,12 @@ struct ChatView: View {
             }
             .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
             .disabled(!canSend)
+            .transition(.opacity)
           }
         }
-        if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
+      }
+      if !dictation.busy, dynamicTypeSize.isAccessibilitySize, verticalSizeClass != .compact {
+        modelSelector
       }
     }
     .padding(8)
@@ -845,9 +878,6 @@ struct ChatView: View {
       if dictation.busy { NativeDictationGlow(model: dictation) }
     }
     .composerChrome()
-    // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
-    // field and the incoming orb move together instead of snapping.
-    .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)
     // A soft tap as the panel opens, matching the drawer's haptic.
     .sensoryFeedback(trigger: dictation.busy) { _, open in
       open ? .impact(flexibility: .soft, intensity: 0.7) : nil

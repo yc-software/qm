@@ -7,6 +7,7 @@ struct NativeDictationComposer: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var transcriptHeight: CGFloat = 28
   @State private var appeared = false
+  @State private var reveal = NativeWordQueue()
 
   var body: some View {
     VStack(spacing: 8) {
@@ -28,19 +29,10 @@ struct NativeDictationComposer: View {
       if let error = model.error {
         NativeAudioPermissionNotice(message: error, permission: model.permissionError)
       }
-
-      // The same corners as the composer row: the plus becomes discard, send stays send.
-      // Both are full 44pt circles so the pair reads as equals.
-      HStack {
-        discardButton
-        Spacer(minLength: 8)
-        sendButton
-      }
-      .padding(.horizontal, -4)
-      .entrance(appeared, delay: 0.18, reduceMotion: reduceMotion)
     }
+    // The ✕ and ↑ live in the composer's own button row (ChatView), so they never move.
     .padding(.horizontal, 4)
-    .padding(.vertical, 8)
+    .padding(.top, 8)
     .accessibilityIdentifier("dictationComposer")
     .onAppear { appeared = true }
     // A light tap when the microphone goes live, a firmer one when recording ends,
@@ -57,24 +49,25 @@ struct NativeDictationComposer: View {
   private var transcriptArea: some View {
     ScrollViewReader { scrollProxy in
       ScrollView {
-        transcript
-          .font(.title3)
-          // Each new word rises a few points and comes into focus as it lands.
-          .keyframeAnimator(initialValue: 1.0, trigger: wordCount) { content, progress in
-            content.textRenderer(NativeWordReveal(progress: reduceMotion ? 1 : progress))
-          } keyframes: { _ in
-            MoveKeyframe(0)
-            CubicKeyframe(1, duration: 0.38)
-          }
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: .infinity)
-          .fixedSize(horizontal: false, vertical: true)
-          .id("dictationTranscript")
-          .onGeometryChange(for: CGFloat.self) {
-            $0.size.height
-          } action: {
-            transcriptHeight = $0
-          }
+        // Each word eases up into place and into focus on its own clock, so a fast
+        // talker never cuts off the word before. Left-aligned while words arrive so
+        // the line grows rightward instead of re-centering on every word.
+        TimelineView(.animation(paused: reduceMotion || !reveal.animating)) { timeline in
+          transcript
+            .font(.title3)
+            .textRenderer(
+              NativeWordReveal(
+                now: timeline.date.timeIntervalSinceReferenceDate, instant: reduceMotion))
+        }
+        .multilineTextAlignment(reveal.words.isEmpty ? .center : .leading)
+        .frame(maxWidth: .infinity, alignment: reveal.words.isEmpty ? .center : .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .id("dictationTranscript")
+        .onGeometryChange(for: CGFloat.self) {
+          $0.size.height
+        } action: {
+          transcriptHeight = $0
+        }
       }
       .frame(height: min(transcriptHeight, maximumTranscriptHeight))
       .scrollIndicators(.hidden)
@@ -86,22 +79,32 @@ struct NativeDictationComposer: View {
       }
     }
     .contentShape(Rectangle())
-    .onTapGesture { if canFinish { model.finish() } }
+    .onTapGesture { if model.canFinish { model.finish() } }
+    .onAppear { reveal.update(to: model.liveText, flush: reduceMotion) }
+    .onChange(of: model.liveText) { _, text in
+      reveal.update(to: text, flush: reduceMotion || model.state != .recording)
+    }
+    .onChange(of: model.state) { _, state in
+      if state != .recording { reveal.update(to: model.liveText, flush: true) }
+    }
     .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
-    .accessibilityHint(canFinish ? "Stops recording and puts the text in the message field" : "")
-    .accessibilityAddTraits(canFinish ? .isButton : [])
+    .accessibilityHint(
+      model.canFinish ? "Stops recording and puts the text in the message field" : ""
+    )
+    .accessibilityAddTraits(model.canFinish ? .isButton : [])
   }
 
   private var transcript: Text {
-    guard !model.liveText.isEmpty else {
+    guard !reveal.words.isEmpty else {
       return Text(placeholder).foregroundColor(QMTheme.ink.opacity(0.58))
     }
-    let latest = model.liveText.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
-    let preceding = String(model.liveText.dropLast(latest.count))
-    return Text(preceding) + Text(latest).fontWeight(.semibold).customAttribute(NativeNewestWord())
+    return reveal.words.enumerated().reduce(Text("")) { text, item in
+      let (index, word) = item
+      let piece = Text(index == 0 ? word.text : " " + word.text)
+        .customAttribute(NativeWordBirth(time: word.born))
+      return text + piece
+    }
   }
-
-  private var wordCount: Int { model.liveText.split(whereSeparator: \.isWhitespace).count }
 
   private var maximumTranscriptHeight: CGFloat {
     verticalSizeClass == .compact ? 120 : 220
@@ -118,9 +121,13 @@ struct NativeDictationComposer: View {
     }
   }
 
-  private var canFinish: Bool { model.state == .recording || model.state == .ready }
+}
 
-  private var discardButton: some View {
+/// The dictation panel's discard button, shown in the composer row where the plus sits.
+struct NativeDictationDiscardButton: View {
+  let model: NativeDictationModel
+
+  var body: some View {
     Button {
       model.cancel()
     } label: {
@@ -134,8 +141,14 @@ struct NativeDictationComposer: View {
     .buttonStyle(.plain)
     .accessibilityLabel("Discard recording")
   }
+}
 
-  @ViewBuilder private var sendButton: some View {
+/// The dictation panel's send (or retry) button, shown in the composer row where send sits.
+struct NativeDictationSendButton: View {
+  let model: NativeDictationModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
     if model.state == .retry {
       Button {
         model.retry()
@@ -152,35 +165,89 @@ struct NativeDictationComposer: View {
       Button {
         model.finish(sending: true)
       } label: {
-        ComposerSendLabel(enabled: canFinish, sending: model.state == .transcribing)
+        ComposerSendLabel(enabled: model.canFinish, sending: model.state == .transcribing)
           .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.state)
       }
       .buttonStyle(.plain)
-      .disabled(!canFinish)
+      .disabled(!model.canFinish)
       .accessibilityLabel(model.state == .transcribing ? "Sending dictation" : "Send dictation")
     }
   }
 }
 
-private struct NativeNewestWord: TextAttribute {}
+private struct NativeWordBirth: TextAttribute {
+  var time: TimeInterval
+}
 
-/// Draws the dictation transcript, easing the newest word up into place and into focus.
+/// How long each word takes to land.
+private let wordRevealDuration: TimeInterval = 0.38
+
+/// Draws the dictation transcript, easing each word up into place and into focus
+/// from the moment it was shown.
 private struct NativeWordReveal: TextRenderer {
-  var progress: Double
+  var now: TimeInterval
+  var instant: Bool
 
   func draw(layout: Text.Layout, in context: inout GraphicsContext) {
     for line in layout {
       for run in line {
-        guard run[NativeNewestWord.self] != nil, progress < 1 else {
+        guard !instant, let born = run[NativeWordBirth.self]?.time else {
           context.draw(run)
           continue
         }
+        let linear = min(max((now - born) / wordRevealDuration, 0), 1)
+        guard linear < 1 else {
+          context.draw(run)
+          continue
+        }
+        let progress = 1 - pow(1 - linear, 3)  // ease out cubic
         var landing = context
         landing.opacity = progress
         landing.addFilter(.blur(radius: (1 - progress) * 4))
         landing.translateBy(x: 0, y: (1 - progress) * 6)
         landing.draw(run)
       }
+    }
+  }
+}
+
+/// Paces recognizer updates into a steady trickle of words. The recognizer reports in
+/// bursts of two or three words; each new word is scheduled to start landing a beat after
+/// the previous one, so every word gets its own entrance. Corrections swap in place.
+@MainActor @Observable
+final class NativeWordQueue {
+  struct Word: Equatable {
+    var text: String
+    var born: TimeInterval
+  }
+
+  private(set) var words: [Word] = []
+  /// True while a word is still landing; the reveal timeline idles otherwise.
+  private(set) var animating = false
+  private var settle: Task<Void, Never>?
+
+  func update(to text: String, flush: Bool) {
+    let target = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    let now = Date.timeIntervalSinceReferenceDate
+    // Words already on screen take the recognizer's latest spelling but keep their clock.
+    for index in 0..<min(words.count, target.count) where words[index].text != target[index] {
+      words[index].text = target[index]
+    }
+    if words.count > target.count { words.removeLast(words.count - target.count) }
+    for word in target.dropFirst(words.count) {
+      let last = words.last?.born ?? now
+      // 55ms apart, tightening to 25ms once the schedule runs more than ~3 words ahead.
+      let gap = last - now > 0.15 ? 0.025 : 0.055
+      let born = flush ? now - wordRevealDuration : max(now, last + gap)
+      words.append(Word(text: word, born: born))
+    }
+    let end = (words.map(\.born).max() ?? now) + wordRevealDuration
+    settle?.cancel()
+    animating = end > now
+    guard animating else { return }
+    settle = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(end - now))
+      if !Task.isCancelled { self?.animating = false }
     }
   }
 }
