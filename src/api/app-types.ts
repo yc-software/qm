@@ -28,6 +28,7 @@ import type {
 import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
+import type { ByteRange } from "../files/durable-byte-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
@@ -487,6 +488,7 @@ export interface App {
     id: string,
     principalId: string,
     ownScopeBotWork: boolean,
+    range?: (sizeBytes: number) => ByteRange | undefined,
   ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
@@ -869,6 +871,7 @@ interface OpenedFile {
   mimetype: string;
   sizeBytes: number;
   stream: Readable;
+  range?: ByteRange;
 }
 
 export interface ScopeApp {
