@@ -2,18 +2,19 @@ import type { ModelUtilities } from "../../agent/agent.ts";
 import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
-import { bullets } from "../notebook.ts";
 import { SENSITIVITY_PROMPT } from "../classification.ts";
-import type { MemoryCaptureMetadata, MemorySensitivity } from "../facts.ts";
+import { isMemorySensitivity, type MemoryCaptureMetadata, type MemorySensitivity } from "../facts.ts";
+import { fencedCodeBlocks } from "../../util/markdown.ts";
+import { swallow } from "../../util/errors.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
 const DEFAULT_CAPTURE_MAX_TURNS = 10;
 
 export const MEMORY_EXTRACTION_PROMPT = [
   "You extract durable facts worth remembering about the user across FUTURE conversations.",
-  "Given one or more consecutive exchanges (user message + assistant reply), output a markdown bullet list",
-  "(`- [ordinary] fact` or `- [sensitive] fact`), one concise standalone fact per line, written in the third person",
-  "(e.g. `- [ordinary] Prefers terse replies`, `- [ordinary] Owns the billing service`, `- [sensitive] Salary band is L5`).",
+  "Given one or more consecutive exchanges (user message + assistant reply), output ONLY a JSON array of objects",
+  '(`[{"text": "...", "sensitivity": "ordinary" | "sensitive"}]`), one concise standalone fact per item, written in the third person',
+  '(e.g. `[{"text": "Prefers terse replies", "sensitivity": "ordinary"}, {"text": "Salary band is L5", "sensitivity": "sensitive"}]`).',
   "Include preferences, identifiers, ongoing projects, and how they like to work.",
   "PROVENANCE: a preference, intent, or instruction is a valid fact ONLY when the user's own",
   "message in these exchanges states it. Never derive one from the assistant's reply — an",
@@ -28,18 +29,10 @@ export const MEMORY_EXTRACTION_PROMPT = [
   'tokens") is a preference and belongs in memory; how the broker works does not.',
   "When the user's own message states an instruction, rule, or directive to the assistant about",
   "how future work should be done, record it VERBATIM as a quoted fact",
-  '(e.g. `- [ordinary] Directive (user\'s words): "always run the linter before pushing"`), not a paraphrase.',
-  "If nothing is worth remembering, output exactly: NONE",
+  '(e.g. `Directive (user\'s words): "always run the linter before pushing"`), not a paraphrase.',
+  "If nothing is worth remembering, output: []",
   SENSITIVITY_PROMPT,
-  "Prefix every bullet with `[ordinary]` or `[sensitive]`.",
 ].join("\n");
-
-const SENSITIVITY_TAGS: ReadonlyArray<readonly [string, MemorySensitivity]> = [
-  ["[ordinary]", "ordinary"],
-  ["[sensitive]", "sensitive"],
-  ["[restricted]", "restricted"],
-  ["[unknown]", "unknown"],
-];
 
 interface ExtractedFact {
   text: string;
@@ -49,16 +42,25 @@ interface ExtractedFact {
 function parseExtractedFacts(out: string): ExtractedFact[] {
   const trimmed = out.trim();
   if (!trimmed || trimmed.toLowerCase() === "none") return [];
-  return bullets(trimmed).flatMap((line) => {
-    const lower = line.toLowerCase();
-    for (const [prefix, sensitivity] of SENSITIVITY_TAGS) {
-      if (lower.startsWith(prefix) && line.length > prefix.length && line[prefix.length]!.trim() === "") {
-        const text = line.slice(prefix.length).trim();
-        return text ? [{ text, sensitivity }] : [];
-      }
+  const body = (fencedCodeBlocks(trimmed)[0]?.body ?? trimmed).trim();
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (!Array.isArray(parsed)) {
+      swallow("memory extraction", new Error(`expected JSON array, got ${typeof parsed}: ${body.slice(0, 200)}`));
+      return [];
     }
-    return line ? [{ text: line, sensitivity: "unknown" as const }] : [];
-  });
+    return parsed.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const record = entry as Record<string, unknown>;
+      const text = typeof record.text === "string" ? record.text.trim() : "";
+      if (!text) return [];
+      const raw = typeof record.sensitivity === "string" ? record.sensitivity.trim().toLowerCase() : undefined;
+      return [{ text, sensitivity: isMemorySensitivity(raw) ? raw : "unknown" }];
+    });
+  } catch (e) {
+    swallow("memory extraction", new Error(`invalid JSON output: ${body.slice(0, 200)}`, { cause: e }));
+    return [];
+  }
 }
 
 export function parseFacts(out: string): string[] {
@@ -74,7 +76,8 @@ async function extractFacts(
     const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
     const out = await agent.oneShot(MEMORY_EXTRACTION_PROMPT, transcript, "memory_capture");
     return parseExtractedFacts(out ?? "");
-  } catch {
+  } catch (e) {
+    swallow("memory extraction", e);
     return [];
   }
 }

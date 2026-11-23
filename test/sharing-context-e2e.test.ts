@@ -182,7 +182,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   );
   await b.memory.capture("channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
     mode: "automatic",
-    sensitivity: "ordinary",
+    sensitivities: ["ordinary"],
     conversationScopeId: "personal:U1",
   });
   assert.match(await b.turn("!memorysearch ROOM_FROM_U1", true), /ROOM_FROM_U1/);

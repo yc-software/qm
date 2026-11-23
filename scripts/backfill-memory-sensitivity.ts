@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import pg from "pg";
+import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
 import { configRouteOptions, createModelRoutes } from "../src/model/model-route.ts";
 import { loadConfig } from "../src/config.ts";
@@ -11,15 +12,21 @@ interface FactRow {
   tenant_id: string;
   id: string;
   scope_id: string;
+  session_scope_id: string | null;
   text: string;
   sensitivity: string;
   sources: string[];
   source_unknown: boolean;
 }
 
-function isLegacyCrossScope(text: string): boolean {
-  const lower = text.toLowerCase();
-  return lower.includes("(said in ") || lower.includes("[claimed source:");
+function isCrossScopeRow(row: FactRow): boolean {
+  if (row.session_scope_id && row.session_scope_id !== row.scope_id) return true;
+  if (row.sources.some((source) => source !== row.scope_id)) return true;
+  if (row.sources.length === 0) {
+    const lower = row.text.toLowerCase();
+    if (lower.includes("(said in ") || lower.includes("[claimed source:")) return true;
+  }
+  return false;
 }
 
 function needsUpdate(row: FactRow, sensitivity: MemorySensitivity): boolean {
@@ -46,12 +53,12 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
 const config = loadConfig();
-const agent = createAgent({
+const baseAgent = createAgent({
   ...agentConfigOptions(config),
   routes: createModelRoutes(configRouteOptions(config)),
   tempDirPrefix: "membackfill",
 });
-if (!agent.oneShot) throw new Error("model agent has no oneShot configured");
+if (!baseAgent.oneShot) throw new Error("model agent has no oneShot configured");
 
 const client = new pg.Client({ connectionString: databaseUrl });
 await client.connect();
@@ -59,11 +66,13 @@ try {
   const params: unknown[] = [values.scope ?? null];
   const limitClause = limit !== undefined ? ` LIMIT ${limit}` : "";
   const { rows } = await client.query<FactRow>(
-    `SELECT tenant_id, id, scope_id, text, sensitivity, sources, source_unknown
-       FROM memory_facts
-      WHERE deleted_at IS NULL
-        AND (($1::text IS NULL AND scope_id LIKE 'personal:%') OR scope_id = $1)
-      ORDER BY scope_id, id${limitClause}`,
+    `SELECT f.tenant_id, f.id, f.scope_id, s.scope_id AS session_scope_id,
+            f.text, f.sensitivity, f.sources, f.source_unknown
+       FROM memory_facts f
+       LEFT JOIN sessions s ON s.tenant_id = f.tenant_id AND s.id = f.session_id
+      WHERE f.deleted_at IS NULL
+        AND (($1::text IS NULL AND f.scope_id LIKE 'personal:%') OR f.scope_id = $1)
+      ORDER BY f.scope_id, f.id${limitClause}`,
     params,
   );
 
@@ -78,6 +87,7 @@ try {
   const transitions: Record<string, number> = {};
   const samples: Record<string, string[]> = { ordinary: [], sensitive: [] };
   let skippedCrossScope = 0;
+  let skippedModelErrors = 0;
   let skippedUnknown = 0;
   let unchanged = 0;
   let changed = 0;
@@ -87,7 +97,7 @@ try {
     const { tenant_id: tenantId, scope_id: scopeId } = scopeRows[0]!;
     const eligible: FactRow[] = [];
     for (const row of scopeRows) {
-      if (isLegacyCrossScope(row.text)) {
+      if (isCrossScopeRow(row)) {
         skippedCrossScope++;
         continue;
       }
@@ -95,6 +105,19 @@ try {
     }
     for (let i = 0; i < eligible.length; i += batchSize) {
       const slice = eligible.slice(i, i + batchSize);
+      let batchFailed = false;
+      const agent: ModelUtilities = {
+        async oneShot(systemPrompt, prompt, purpose) {
+          try {
+            const out = await baseAgent.oneShot!(systemPrompt, prompt, purpose);
+            if (!out?.trim()) batchFailed = true;
+            return out;
+          } catch (e) {
+            batchFailed = true;
+            throw e;
+          }
+        },
+      };
       const labels = await withTenant(tenantId, () =>
         classifyFacts(
           agent,
@@ -103,6 +126,10 @@ try {
           undefined,
         ),
       );
+      if (batchFailed) {
+        skippedModelErrors += slice.length;
+        continue;
+      }
       const updates: Array<{ tenantId: string; id: string; scopeId: string; sensitivity: MemorySensitivity }> = [];
       for (const [index, row] of slice.entries()) {
         const label = labels[index]!;
@@ -152,6 +179,7 @@ try {
         changed,
         unchanged,
         skippedCrossScope,
+        skippedModelErrors,
         skippedUnknown,
         transitions,
         samples,

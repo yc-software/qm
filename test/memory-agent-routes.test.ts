@@ -137,7 +137,6 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
           scope: "org",
           conversationScopeId: "group:forged",
           sessionId: "forged",
-          sensitivity: "ordinary",
           sensitivities: ["ordinary"],
         },
         { "x-agent-capability": cap },
@@ -145,7 +144,6 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       assert.equal(res.status, 200);
       assert.equal(context?.conversationScopeId, source);
       assert.equal(context?.sessionId, "trusted-session");
-      assert.equal(context?.sensitivity, undefined);
       assert.equal(context?.sensitivities, undefined);
     } finally {
       built.memory.capture = capture;

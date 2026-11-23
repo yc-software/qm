@@ -19,7 +19,12 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   const agent: ModelUtilities = {
     oneShot(system, prompt) {
       calls.push({ system, prompt });
-      return Promise.resolve("- Prefers terse replies\n* Working on the Q3 launch\nnot a bullet");
+      return Promise.resolve(
+        JSON.stringify([
+          { text: "Prefers terse replies", sensitivity: "ordinary" },
+          { text: "Working on the Q3 launch", sensitivity: "ordinary" },
+        ]),
+      );
     },
   };
   const { memory } = freshMemory();
@@ -35,12 +40,15 @@ test("per-turn via oneShot sends the extraction prompt + the exact user/reply fr
   assert.doesNotMatch(body, /not a bullet/);
 });
 
-test("parseFacts: bullets in, NONE/empty/prose out", () => {
-  assert.deepEqual(parseFacts("- a\n* b\n  - c \nplain"), ["a", "b", "c"]);
+test("parseFacts: JSON array in, empty/malformed/NONE out", () => {
+  assert.deepEqual(parseFacts(JSON.stringify([{ text: "a", sensitivity: "ordinary" }, { text: "b" }, { text: "" }])), [
+    "a",
+    "b",
+  ]);
+  assert.deepEqual(parseFacts("[]"), []);
   assert.deepEqual(parseFacts("NONE"), []);
-  assert.deepEqual(parseFacts("none"), []);
   assert.deepEqual(parseFacts(""), []);
-  assert.deepEqual(parseFacts("-"), []);
+  assert.deepEqual(parseFacts("not json"), []);
 });
 
 test("per-turn swallows extraction failures and captures nothing", async () => {
@@ -86,7 +94,7 @@ test("automatic capture carries the full turn and delivery context", async () =>
     },
   };
   const strategy = createPerTurnStrategy({
-    agent: { oneShot: () => Promise.resolve("- Durable fact") },
+    agent: { oneShot: () => Promise.resolve(JSON.stringify([{ text: "Durable fact" }])) },
     memory: wrapped,
   });
   await strategy.onTurnEnd!({
@@ -120,7 +128,7 @@ test("turns of one session answered to different audiences are captured apart, e
     },
   };
   const strategy = createPerTurnStrategy({
-    agent: { oneShot: () => Promise.resolve("- Durable fact") },
+    agent: { oneShot: () => Promise.resolve(JSON.stringify([{ text: "Durable fact" }])) },
     memory: wrapped,
     captureQuietMs: 30,
   });

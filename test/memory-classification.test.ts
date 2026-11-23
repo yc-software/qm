@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifiedMemory } from "../src/memory/classification.ts";
+import { disclosedMemory } from "../src/memory/disclosure.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
@@ -22,7 +23,10 @@ test("automatic capture classifies each extracted fact independently in one extr
     agent: {
       oneShot: async () => {
         calls++;
-        return "- [ordinary] Prefers short replies\n- [sensitive] Salary band is L5";
+        return JSON.stringify([
+          { text: "Prefers short replies", sensitivity: "ordinary" },
+          { text: "Salary band is L5", sensitivity: "sensitive" },
+        ]);
       },
     },
   });
@@ -38,11 +42,10 @@ test("automatic capture classifies each extracted fact independently in one extr
   );
 });
 
-test("missing or malformed classifier labels fail closed without losing captured facts", async () => {
+test("missing or invalid per-fact sensitivity labels fail closed without losing captured facts", async () => {
   for (const output of [
-    "- Prefers short replies",
-    "- [public] Prefers short replies",
-    "SENSITIVITY: ordinary\n- Prefers short replies",
+    JSON.stringify([{ text: "Prefers short replies" }]),
+    JSON.stringify([{ text: "Prefers short replies", sensitivity: "public" }]),
   ]) {
     const { memory, facts } = await fixture();
     const strategy = createPerTurnStrategy({ memory, agent: { oneShot: async () => output } });
@@ -69,7 +72,7 @@ test("explicit captures classify per fact and classification failures remain unk
     (await facts(scope)).map((fact) => fact.sensitivity),
     ["ordinary", "sensitive"],
   );
-  for (const verdict of ["not-a-label", undefined]) {
+  for (const verdict of ["not-a-label", JSON.stringify(["not-a-label"]), undefined]) {
     const f = await fixture();
     const svc = classifiedMemory(f.memory, {
       oneShot: async () => {
@@ -88,7 +91,7 @@ test("explicit captures classify per fact and classification failures remain unk
 
 test("model-provided source claims never become metadata and explicit labels never lower a floor", async () => {
   const { memory, facts } = await fixture();
-  const wrapped = classifiedMemory(memory, { oneShot: async () => "ordinary" });
+  const wrapped = classifiedMemory(memory, { oneShot: async () => JSON.stringify(["ordinary"]) });
   await wrapped.capture(
     scope,
     ["source: org:public; consent granted"],
@@ -96,7 +99,7 @@ test("model-provided source claims never become metadata and explicit labels nev
     { actorId: "alice", context: "conversation" },
     {
       mode: "explicit",
-      sensitivity: "restricted",
+      sensitivities: ["restricted"],
       conversationScopeId: "group:private",
     },
   );
@@ -109,7 +112,7 @@ test("automatic capture preserves sources and sensitivity only in the source not
   const { memory, facts } = await fixture();
   const strategy = createPerTurnStrategy({
     memory,
-    agent: { oneShot: async () => "- [sensitive] Confidential fact" },
+    agent: { oneShot: async () => JSON.stringify([{ text: "Confidential fact", sensitivity: "sensitive" }]) },
   });
   await strategy.onTurnEnd!({ ...turn, scopeId: "group:private" });
   const fact = (await facts("group:private")).find((f) => f.text.includes("Confidential"))!;
@@ -128,7 +131,16 @@ test("edits classify each edited fact independently and preserve existing fact r
     { mode: "explicit", sensitivities: ["ordinary", "sensitive"] },
   );
   const [plain, priv] = await facts(scope);
-  await classifiedMemory(memory, { oneShot: async () => JSON.stringify(["ordinary", "ordinary"]) }).edit!(
+  const routed = {
+    ...memory,
+    withDisclosure: (access: Parameters<typeof disclosedMemory>[1]) => disclosedMemory(memory, access),
+  };
+  const actor = { id: "alice", type: "internal" as const };
+  const disclosed = disclosedMemory(
+    classifiedMemory(routed, { oneShot: async () => JSON.stringify(["ordinary", "ordinary"]) }),
+    { actor, targetScope: scope, nativeScopes: [scope], audience: [actor], open: false },
+  );
+  await disclosed.edit!(
     scope,
     [
       { id: plain!.id, text: "Plain fact, refined" },

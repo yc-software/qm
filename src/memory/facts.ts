@@ -22,7 +22,6 @@ export interface MemoryFact extends MemoryProvenance {
 export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
   sessionId?: string;
-  sensitivity?: MemorySensitivity;
   sensitivities?: readonly MemorySensitivity[];
 }
 
@@ -44,14 +43,17 @@ export function isMemorySensitivity(value: unknown): value is MemorySensitivity 
   return sensitivityOrder.includes(value as MemorySensitivity);
 }
 
+export function stricterSensitivity(a: MemorySensitivity | undefined, b: MemorySensitivity): MemorySensitivity {
+  return sensitivityOrder[Math.max(sensitivityOrder.indexOf(a ?? "ordinary"), sensitivityOrder.indexOf(b))]!;
+}
+
 export function mergeProvenance(
   items: readonly MemoryProvenance[],
   sensitivity: MemorySensitivity = "ordinary",
 ): MemoryProvenance {
   const sources = new Set<ScopeId>();
   for (const item of items) {
-    if (sensitivityOrder.indexOf(item.sensitivity) > sensitivityOrder.indexOf(sensitivity))
-      sensitivity = item.sensitivity;
+    sensitivity = stricterSensitivity(sensitivity, item.sensitivity);
     for (const source of item.sources) sources.add(source);
   }
   return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
@@ -60,13 +62,11 @@ export function mergeProvenance(
 export function captureProvenance(
   scope: ScopeId,
   context: MemoryCaptureMetadata | undefined,
-  index?: number,
+  index: number,
 ): MemoryProvenance {
   const source = parseScopeId(scope).kind === "persona" ? scope : (context?.conversationScopeId ?? scope);
-  const sensitivity =
-    (index !== undefined ? context?.sensitivities?.[index] : undefined) ?? context?.sensitivity ?? "unknown";
   return {
-    sensitivity,
+    sensitivity: context?.sensitivities?.[index] ?? "unknown",
     sources: [source],
     sourceUnknown: false,
   };

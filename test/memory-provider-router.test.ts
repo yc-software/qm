@@ -168,7 +168,7 @@ test("cross-origin capture only reaches providers that preserve structured prove
       {
         mode: "automatic",
         conversationScopeId: "group:private",
-        sensitivity: "sensitive",
+        sensitivities: ["sensitive"],
       },
     ),
     1,
