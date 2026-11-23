@@ -145,12 +145,27 @@ export function parseBlockAction<T extends string>(
   return actionId === undefined ? undefined : { actionId, value: String(a.value ?? "") };
 }
 
+function slackBotProfileName(m: { bot_profile?: unknown }): string | undefined {
+  const name =
+    m.bot_profile && typeof m.bot_profile === "object" ? (m.bot_profile as { name?: unknown }).name : undefined;
+  return typeof name === "string" && name.trim() ? name.trim() : undefined;
+}
+
 export function slackBotName(m: { username?: unknown; bot_profile?: unknown }): string | undefined {
   const username = typeof m.username === "string" ? m.username.trim() : "";
-  if (username) return username;
-  const profile =
-    m.bot_profile && typeof m.bot_profile === "object" ? (m.bot_profile as { name?: unknown }).name : undefined;
-  return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
+  return username || slackBotProfileName(m);
+}
+
+export function slackCustomBotName(
+  m: { username?: unknown; bot_profile?: unknown },
+  defaultHandle?: string,
+): string | undefined {
+  const username = typeof m.username === "string" ? m.username.trim() : "";
+  if (!username) return undefined;
+  const profile = slackBotProfileName(m);
+  if (profile && username.toLowerCase() === profile.toLowerCase()) return undefined;
+  if (defaultHandle && username.toLowerCase() === defaultHandle.trim().toLowerCase()) return undefined;
+  return username;
 }
 
 export interface SlackHistoryMessage {

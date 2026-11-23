@@ -117,7 +117,7 @@ test("slackMessageContent renders legacy attachment fields and falls back only w
   );
 });
 
-test("slackMessageContent keeps context blocks when text is set and skips duplicates", () => {
+test("slackMessageContent prefers rendered blocks over fallback text and falls back for rich_text", () => {
   const blocks = [
     { type: "header", text: { type: "plain_text", text: "Deploy report" } },
     {
@@ -135,9 +135,10 @@ test("slackMessageContent keeps context blocks when text is set and skips duplic
     { type: "rich_text", elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "shipped" }] }] },
   ];
 
-  assert.equal(slackMessageContent({ text: "", blocks }).text, "Deploy report\nshipped by <@U1>\n*env* prod\nvia CI");
-  assert.equal(slackMessageContent({ text: "shipped", blocks }).text, "shipped\nvia CI");
-  assert.equal(slackMessageContent({ text: "via CI", blocks: [blocks[2]] }).text, "via CI");
+  const expected = "Deploy report\nshipped by <@U1>\n*env* prod\nvia CI";
+  assert.equal(slackMessageContent({ text: "", blocks }).text, expected);
+  assert.equal(slackMessageContent({ text: "shipped", blocks }).text, expected);
+  assert.equal(slackMessageContent({ text: "hello", blocks: [{ type: "rich_text", elements: [] }] }).text, "hello");
 });
 
 test("slackMessageContent leaves link previews out of the text", () => {

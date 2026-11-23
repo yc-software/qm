@@ -25,6 +25,15 @@ export interface MessageTagAttrs {
   mentions?: Record<string, string>;
 }
 
+export function speakerAttrs(
+  name: string | undefined,
+  from?: MessageTagAttrs["from"],
+): Pick<MessageTagAttrs, "author" | "via"> {
+  const trimmed = name?.trim();
+  if (!trimmed) return {};
+  return from === "agent" ? { via: trimmed } : { author: trimmed };
+}
+
 export function messageTag(attrs: MessageTagAttrs, body: string, files?: readonly string[]): string {
   const parts = [
     attrs.overheard ? `overheard="true"` : "",

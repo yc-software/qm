@@ -13,7 +13,7 @@ import {
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
-import { slackBotName, type SlackHistoryMessage } from "./payloads.ts";
+import { slackBotName, slackCustomBotName, type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import { isBotAuthored, isOwnSlackMessage, slackFileName } from "./message-gating.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
@@ -142,16 +142,17 @@ export function createConversationSerializer(deps: {
     await resolveMissingPeople(client, kept, people, botNameById);
     return kept.map((m) => {
       const content = slackMessageContent(m);
+      const self = isSelfMessage(m);
       const principalId = m.user ? people.principals.get(m.user) : undefined;
       return {
         ts: m.ts,
-        name: messageAuthorName(m, people, botNameById),
+        name: self ? (slackCustomBotName(m, ids.botHandle) ?? "") : messageAuthorName(m, people, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         ...(principalId ? { principalId } : {}),
         text: decodeSlackEntities(content.text.trim()),
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
         ...(isBotAuthored(m) ? { isBot: true } : {}),
-        ...(isSelfMessage(m) ? { isSelf: true } : {}),
+        ...(self ? { isSelf: true } : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
         ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
