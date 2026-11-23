@@ -176,7 +176,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
     try {
       const egressToken = provOpts?.egressToken;
-      if (egressToken) await deps.ensureEgress?.(name);
+      if (egressToken && (deps.egressProxyFor || deps.egressProxyUrl)) await deps.ensureEgress?.(name);
       const proxy = egressToken ? (deps.egressProxyFor?.(name) ?? deps.egressProxyUrl) : undefined;
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
