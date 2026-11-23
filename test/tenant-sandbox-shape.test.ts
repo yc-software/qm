@@ -109,6 +109,16 @@ describeTwoTenants("per-tenant sandbox shape", (db) => {
         withTenant(b, () => sandbox.profile.egressEnforcement),
         "none",
       );
+      const deploymentWide = createSpritesSandbox({
+        initializationStore: createPostgresMapFactory(db.ownerDatabaseUrl).map<StoredSprite>("sprites_egress_init"),
+        advisoryLock: testAdvisoryLock(),
+        token: FAKE_SPRITES_TOKEN,
+        namePrefix: "qmd",
+        baseUrl: fake.baseUrl,
+        egressProxyUrl: "https://deployment-proxy.example.com",
+      });
+      const kept = await withTenant(b, () => deploymentWide.provision(scope, { egressToken: "t" }));
+      assert.equal(new URL(kept.env!.HTTPS_PROXY!).hostname, "deployment-proxy.example.com");
       await switchA(moved);
       const reopened = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
       assert.equal(reopened.env?.HTTPS_PROXY, undefined);

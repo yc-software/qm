@@ -13,18 +13,16 @@ interface TenantSandboxSettings {
   settings: TenantSettings;
 }
 
-function sandboxTenant(): string | undefined {
+function sandboxTenant(): string | null | undefined {
   const tenant = boundTenant();
   const boot = bootTenant();
-  if (tenant === undefined) {
-    if (boot === undefined && tenancyBooted()) throw new Error("sandbox work needs a bound tenant");
-    return undefined;
-  }
+  if (tenant === undefined) return boot === undefined && tenancyBooted() ? null : undefined;
   return tenant === boot ? undefined : tenant;
 }
 
 async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefined> {
   const tenant = sandboxTenant();
+  if (tenant === null) throw new Error("sandbox work needs a bound tenant");
   if (tenant === undefined) return undefined;
   await loadTenant();
   const settings = loadedTenantSettings();
@@ -59,7 +57,7 @@ export async function tenantEgressProxyUrl(): Promise<string | undefined> {
 }
 
 export function loadedTenantEgressProxyUrl(): string | undefined {
-  return sandboxTenant() === undefined ? undefined : loadedTenantSettings()?.egressProxyUrl;
+  return sandboxTenant() ? loadedTenantSettings()?.egressProxyUrl : undefined;
 }
 
 export interface ModalShape {
