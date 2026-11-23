@@ -38,7 +38,9 @@ struct NativeDictationComposer: View {
         sendButton
       }
       .padding(.horizontal, -4)
-      .entrance(appeared, delay: 0.18, reduceMotion: reduceMotion)
+      // The buttons sit where the composer's plus and send already were, so they only
+      // fade in place; rising would make them look like they jump.
+      .entrance(appeared, delay: 0.18, rise: 0, reduceMotion: reduceMotion)
     }
     .padding(.horizontal, 4)
     .padding(.vertical, 8)
@@ -261,9 +263,11 @@ final class NativeWordQueue {
 
 extension View {
   /// Fades and lifts a dictation row in after the panel opens, staggered by `delay`.
-  fileprivate func entrance(_ appeared: Bool, delay: Double, reduceMotion: Bool) -> some View {
+  fileprivate func entrance(
+    _ appeared: Bool, delay: Double, rise: CGFloat = 6, reduceMotion: Bool
+  ) -> some View {
     opacity(appeared || reduceMotion ? 1 : 0)
-      .offset(y: appeared || reduceMotion ? 0 : 6)
+      .offset(y: appeared || reduceMotion ? 0 : rise)
       .animation(reduceMotion ? nil : .easeOut(duration: 0.28).delay(delay), value: appeared)
   }
 }
