@@ -18,7 +18,7 @@ import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
-import { loadedTenantEgressProxyUrl, tenantSpritesShape } from "./tenant-sandbox-shape.ts";
+import { tenantEgressProxyUrl, tenantSpritesShape } from "./tenant-sandbox-shape.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
@@ -290,7 +290,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const proxyHosts = (primary: string): string[] =>
     [
       ...new Set(
-        [primary, ...(opts.egressProxyAdditionalUrls ?? [])].map((value) => {
+        [primary, ...(primary === opts.egressProxyUrl ? (opts.egressProxyAdditionalUrls ?? []) : [])].map((value) => {
           const url = new URL(value);
           if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
             throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
@@ -498,7 +498,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     writablePersistence: "resident_disk",
     processSessions: true,
     get egressEnforcement() {
-      return (loadedTenantEgressProxyUrl() ?? opts.egressProxyUrl) ? ("domain" as const) : ("none" as const);
+      return tenantEgressProxyUrl(opts.egressProxyUrl) ? ("domain" as const) : ("none" as const);
     },
     spec: {
       os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",

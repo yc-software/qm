@@ -44,7 +44,7 @@ export async function tenantSpritesShape(base: SpritesShape): Promise<SpritesSha
   const bound = await tenantSandboxSettings();
   if (!bound) return base;
   const { tenant, settings } = bound;
-  const egressProxyUrl = settings.egressProxyUrl ?? base.egressProxyUrl;
+  const egressProxyUrl = tenantEgressProxyUrl(base.egressProxyUrl);
   return {
     token: settings.spritesToken ?? base.token,
     namePrefix: settings.spritesNamePrefix ?? tenantNamePrefix(base.namePrefix, tenant),
@@ -52,12 +52,12 @@ export async function tenantSpritesShape(base: SpritesShape): Promise<SpritesSha
   };
 }
 
-export async function tenantEgressProxyUrl(): Promise<string | undefined> {
+export async function tenantOwnEgressProxyUrl(): Promise<string | undefined> {
   return (await tenantSandboxSettings())?.settings.egressProxyUrl;
 }
 
-export function loadedTenantEgressProxyUrl(): string | undefined {
-  return sandboxTenant() ? loadedTenantSettings()?.egressProxyUrl : undefined;
+export function tenantEgressProxyUrl(deploymentProxyUrl?: string): string | undefined {
+  return (sandboxTenant() ? loadedTenantSettings()?.egressProxyUrl : undefined) ?? deploymentProxyUrl;
 }
 
 export interface ModalShape {
