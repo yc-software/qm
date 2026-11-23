@@ -814,7 +814,9 @@ async function loadCronRuns(id: string): Promise<void> {
     const result = await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs?limit=20`);
     cronRuns.set(id, result.runs ?? []);
   } catch (error) {
-    setCronNoticeFor(id, errMessage(error, "Couldn't load run history."));
+    if (appState.currentView === "crons" && activeCronId === id) {
+      cronActionNotice = { cronId: id, text: errMessage(error, "Couldn't load run history.") };
+    }
     cronRuns.set(id, []);
   } finally {
     cronRunsLoading.delete(id);
