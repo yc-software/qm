@@ -12,9 +12,10 @@ struct NativeDictationComposer: View {
     VStack(spacing: 8) {
       NativeDictationWaves(
         model: model,
-        height: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 44 : 64
+        height: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 48 : 80
       )
-      .padding(.vertical, 2)
+      .padding(.top, 10)
+      .padding(.bottom, 4)
       // The lines rise out of a flat stroke a beat after the panel opens.
       .scaleEffect(x: 1, y: appeared || reduceMotion ? 1 : 0.1)
       .opacity(appeared || reduceMotion ? 1 : 0)
@@ -49,7 +50,7 @@ struct NativeDictationComposer: View {
       .entrance(appeared, delay: 0.18, reduceMotion: reduceMotion)
     }
     .padding(.horizontal, 4)
-    .padding(.vertical, 4)
+    .padding(.vertical, 8)
     .accessibilityIdentifier("dictationComposer")
     .onAppear { appeared = true }
     // A light tap when the microphone goes live, a firmer one when recording ends,
