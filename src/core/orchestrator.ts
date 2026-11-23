@@ -933,7 +933,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         orgName,
         web: isWeb,
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
-        sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
+        sessions: Boolean(sessionSyscalls) && !input.swarm,
       });
       const personaBlock = persona ? personaPrompt(persona, memoryAccess?.write === persona.scope) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");

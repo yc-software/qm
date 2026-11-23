@@ -157,7 +157,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { execute, sandboxManagement, background } = computerTools(kit);
   const { discoverSkills, skill, saveSkill, editSkill, read, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
-  const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
+  const { subagentTool, sessionTool } = sessionTools(kit);
   const { cron } = cronTools(kit);
   const { webhook, guidance, sharingTool, admin } = controlPlaneTools(kit);
   const { surface } = surfaceTool(kit);
@@ -187,7 +187,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     memory,
     history,
     ...(!delegateWork ? [background] : []),
-    ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),
+    ...(opts?.sessionTools === false ? [] : [subagentTool, sessionTool]),
     sandboxManagement,
     ...(controlTools
       ? [

@@ -217,7 +217,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
-const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const HIDDEN_PARENT =
   "your parent conversation is hidden from bot work, so you can't read it; you can still write to it.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
@@ -742,7 +741,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       function sidebarRefusal(): string | null {
-        if (binding.request.surface !== "web") return WEB_ONLY;
         if (binding.request.swarm) return "swarm workers coordinate through the swarm API.";
         return null;
       }
