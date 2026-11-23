@@ -321,10 +321,9 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     else await initializationStore.merge(name, { egressHosts: undefined });
   }
 
-  async function enforceEgress(name: string): Promise<string | undefined> {
+  async function ensureEgressPolicy(name: string): Promise<void> {
     const proxy = egressProxyByName.get(name);
     await applyEgressPolicy(name, proxy ? proxyHosts(proxy) : []);
-    return proxy;
   }
 
   async function applyResources(name: string): Promise<void> {
@@ -489,7 +488,8 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     },
     deleteInstance: deleteSprite,
     forgetInstance: forget,
-    enforceEgress,
+    egressProxyFor: (name) => egressProxyByName.get(name),
+    ensureEgress: ensureEgressPolicy,
   });
 
   const profile: AgentComputerProfile = {

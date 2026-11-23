@@ -40,6 +40,8 @@ export interface ExecSandboxBaseDeps {
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
+  egressProxyUrl?: string;
+  egressProxyFor?(name: string): string | undefined;
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
   exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
@@ -50,7 +52,7 @@ export interface ExecSandboxBaseDeps {
   recreateScratch(name: string): Promise<void>;
   deleteInstance(name: string): Promise<void>;
   forgetInstance?(name: string): void;
-  enforceEgress?(name: string): Promise<string | undefined>;
+  ensureEgress?(name: string): Promise<void>;
   installLayerTools?: LayerToolInstaller;
   combineLayerToolPrep?: boolean;
 }
@@ -70,6 +72,9 @@ export interface ExecSandboxBase {
 
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
   const { label, prefix, homeDir, defaultTimeoutSec } = deps;
+  if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
+    throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
+  }
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const instanceName =
     deps.instanceName ??
@@ -171,7 +176,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
     try {
       const egressToken = provOpts?.egressToken;
-      const proxy = egressToken ? await deps.enforceEgress?.(name) : undefined;
+      if (egressToken) await deps.ensureEgress?.(name);
+      const proxy = egressToken ? (deps.egressProxyFor?.(name) ?? deps.egressProxyUrl) : undefined;
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );

@@ -575,7 +575,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     homeDir,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
-    ...(opts.egressProxyUrl ? { enforceEgress: async () => opts.egressProxyUrl } : {}),
+    ...(opts.egressProxyUrl ? { egressProxyUrl: opts.egressProxyUrl } : {}),
     deleteFailureCode: "render_destroy_failed",
     onError: opts.onError,
     exec,

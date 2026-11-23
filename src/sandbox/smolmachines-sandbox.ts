@@ -108,8 +108,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
   const advisoryLock = opts.advisoryLock;
   const lifecycleKey = (scope: string): string => `smolmachines-provision:${prefix}:${scope}`;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
-  if (opts.egressProxyUrl && !egressProxyHost)
-    throw new Error(`smolmachines-sandbox: egress proxy url has no hostname: ${opts.egressProxyUrl}`);
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
   const idByName = new Map<string, string>();
@@ -443,6 +441,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
     ...(opts.layerToolFiles ? { installLayerTools: createLayerToolInstaller(opts.layerToolFiles) } : {}),
+    egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "machine_delete_failed",
     onError: opts.onError,
     exec: execRaw,
@@ -457,14 +456,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     },
     deleteInstance: (name) =>
       advisoryLock.withLock(lifecycleKey(base.scopeFor(name) ?? name), () => deleteMachine(name)),
-    ...(egressProxyHost
-      ? {
-          async enforceEgress(name: string) {
-            await ensureEgress(name);
-            return opts.egressProxyUrl;
-          },
-        }
-      : {}),
+    ...(egressProxyHost ? { ensureEgress } : {}),
   });
 
   const idleNote = opts.autoStopSec ? `; stops after ${opts.autoStopSec}s idle and restarts on the next command` : "";

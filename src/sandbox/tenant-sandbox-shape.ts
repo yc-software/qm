@@ -53,7 +53,8 @@ export async function tenantSpritesShape(base: SpritesShape): Promise<SpritesSha
 }
 
 export async function tenantOwnEgressProxyUrl(): Promise<string | undefined> {
-  return (await tenantSandboxSettings())?.settings.egressProxyUrl;
+  await tenantSandboxSettings();
+  return tenantEgressProxyUrl();
 }
 
 export function tenantEgressProxyUrl(deploymentProxyUrl?: string): string | undefined {
