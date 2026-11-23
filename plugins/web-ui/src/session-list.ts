@@ -90,8 +90,9 @@ export function recentProjectSeeds(contexts: readonly ProjectAwareContext[]): Re
 export function sidebarProjectSeeds(
   contexts: readonly ProjectAwareContext[],
   groupByActivity: boolean,
+  personaSeeds: readonly RecentProjectSeed[] = [],
 ): RecentProjectSeed[] {
-  return groupByActivity ? [] : recentProjectSeeds(contexts);
+  return groupByActivity ? [] : [...recentProjectSeeds(contexts), ...personaSeeds];
 }
 
 export function groupProjectSessions(

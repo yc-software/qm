@@ -89,7 +89,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
-import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
+import { chatWithPersonaId, personaEditable, personaGlyph, personaName, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
@@ -278,7 +278,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return [...sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity), ...personaSeeds()];
+  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity, personaSeeds());
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -1140,6 +1140,11 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   return chatSurfaceMark(s, 12, "surface-glyph");
 }
 
+function personaRowGlyph(s: CoreSession): TemplateResult | typeof nothing {
+  if (!sessionsState.groupByActivity || !s.personaId) return nothing;
+  return html`<span class="surface-glyph" ${tip(personaName(s.personaId))}>${personaGlyph(s.personaId, 12)}</span>`;
+}
+
 function rowContext(s: CoreSession): string | null {
   let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "chat") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
@@ -1241,7 +1246,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
+          ${statusMarks(ind)}${surfaceGlyph(s)}${personaRowGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
           >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
