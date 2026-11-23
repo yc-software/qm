@@ -18,7 +18,8 @@ import {
 } from "lucide";
 import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, formatBytes, relTime } from "./ui";
+import { formatBytes, relTime } from "./ui";
+import { browserRenderableImage } from "./media-layout";
 import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";

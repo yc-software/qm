@@ -261,21 +261,6 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const RENDERABLE_IMAGE_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/pjpeg",
-  "image/gif",
-  "image/webp",
-  "image/avif",
-  "image/bmp",
-  "image/apng",
-  "image/x-icon",
-  "image/vnd.microsoft.icon",
-  "image/x-ms-bmp",
-]);
-
 export function attachmentGallery<T>(
   attachments: readonly T[],
   isImage: (attachment: T) => boolean,
@@ -288,10 +273,6 @@ export function attachmentGallery<T>(
     ${images.length ? html`<div class="attachment-images">${images.map(renderAttachment)}</div>` : nothing}
     ${documents.length ? html`<div class="attachment-documents">${documents.map(renderAttachment)}</div>` : nothing}
   </div>`;
-}
-
-export function browserRenderableImage(mimeType?: string): boolean {
-  return RENDERABLE_IMAGE_TYPES.has((mimeType ?? "").split(";")[0]!.trim().toLowerCase());
 }
 
 const copyFeedback = new WeakMap<HTMLButtonElement, ReturnType<typeof setTimeout>>();

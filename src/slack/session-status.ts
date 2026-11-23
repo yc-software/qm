@@ -189,7 +189,7 @@ function renderCard(
   card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
   const [title, phrase] = headlineOf(work);
-  const details = richText(card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase, card.followUrl);
+  const details = richText(phrase, card.elapsed >= 60_000 ? ` · ${minutes(card.elapsed)}` : "", card.followUrl);
   const blocks: Record<string, unknown>[] = [
     {
       type: "task_card",
@@ -207,10 +207,12 @@ function minutes(ms: number): string {
   return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
 }
 
-function richText(text: string, url?: string) {
-  if (!text) return undefined;
-  const element = url ? { type: "link", url, text } : { type: "text", text };
-  return { type: "rich_text", elements: [{ type: "rich_text_section", elements: [element] }] };
+function richText(phrase: string, elapsed: string, url?: string) {
+  if (!phrase) return undefined;
+  const elements = url
+    ? [{ type: "link", url, text: "Open in QM" }, ...(elapsed ? [{ type: "text", text: elapsed }] : [])]
+    : [{ type: "text", text: `${phrase}${elapsed}` }];
+  return { type: "rich_text", elements: [{ type: "rich_text_section", elements }] };
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;
