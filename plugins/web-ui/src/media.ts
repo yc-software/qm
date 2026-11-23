@@ -413,7 +413,8 @@ class MediaFeed extends Base {
 
   private tile(item: MediaItem, index: number, ratio: number, more: number): TemplateResult {
     const style = `flex:${Math.round(ratio * 100)} 1 0;aspect-ratio:${ratio}`;
-    if (item.kind === "video") return html`<qm-player class="media-tile" style=${style} .item=${item}></qm-player>`;
+    if (item.kind === "video" && !more)
+      return html`<qm-player class="media-tile" style=${style} .item=${item}></qm-player>`;
     return html`<button
       type="button"
       class="media-tile"
@@ -422,16 +423,20 @@ class MediaFeed extends Base {
       ${tip(more ? `${more} more` : item.name)}
       @click=${() => this.open(index)}
     >
-      <img
-        src=${item.src}
-        alt=${item.name}
-        loading="lazy"
-        decoding="async"
-        @load=${(event: Event) => {
-          const image = event.currentTarget as HTMLImageElement;
-          if (learn(item.src, image.naturalWidth, image.naturalHeight)) this.draw();
-        }}
-      />${more ? html`<span class="media-more">+${more}</span>` : nothing}
+      ${
+        item.kind === "video"
+          ? html`<video src=${frameSrc(item.src)} preload="metadata" muted playsinline tabindex="-1"></video>`
+          : html`<img
+              src=${item.src}
+              alt=${item.name}
+              loading="lazy"
+              decoding="async"
+              @load=${(event: Event) => {
+                const image = event.currentTarget as HTMLImageElement;
+                if (learn(item.src, image.naturalWidth, image.naturalHeight)) this.draw();
+              }}
+            />`
+      }${more ? html`<span class="media-more">+${more}</span>` : nothing}
     </button>`;
   }
 
