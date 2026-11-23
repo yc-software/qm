@@ -1578,7 +1578,8 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
+  const want = ["finish_silently", "history", "memory", "runtime", "sessions", "subagents"];
+  assert.deepEqual([...names(readOnly)].sort(), want);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
@@ -4302,12 +4303,13 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   );
 });
 
-test("sessions is a web UI tool: Slack turns get subagents only", () => {
-  const slack = createAgentTools({ current: fakeToolContext() }, { surfaceName: "slack" });
-  assert.ok(slack.some((tool) => tool.name === "subagents"));
-  assert.ok(!slack.some((tool) => tool.name === "sessions"));
-  assert.doesNotMatch(slack.find((tool) => tool.name === "subagents")!.description, /use sessions/);
-  assert.ok(!createAgentTools({ current: fakeToolContext() }).some((tool) => tool.name === "sessions"));
+test("sessions is available across surfaces unless sessionTools is disabled", () => {
+  for (const surfaceName of ["web", "slack", "cron", undefined]) {
+    const tools = createAgentTools({ current: fakeToolContext() }, surfaceName ? { surfaceName } : undefined);
+    assert.ok(tools.some((tool) => tool.name === "subagents"));
+    assert.ok(tools.some((tool) => tool.name === "sessions"));
+    assert.match(tools.find((tool) => tool.name === "subagents")!.description, /use sessions/);
+  }
 });
 
 test("background process guidance reflects the configured sandbox token lifetime", () => {

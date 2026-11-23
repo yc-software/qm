@@ -362,7 +362,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations",
         summary:
-          "list the asking person's own conversations (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
+          "list the asking person's own conversations/sessions (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
       },
       {
         method: "GET",

@@ -3532,18 +3532,22 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
     assert.equal(out.ok, true, JSON.stringify(out));
+  const cron = forTurn(false, { surface: "cron" });
+  assert.equal((await cron.list!()).ok, true);
+  assert.equal((await cron.read({ peer: true, target: peer.id })).ok, true);
+  assert.equal((await cron.start!({ fork: true })).ok, false);
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),
     await slack.start!({ fork: true }),
     await slack.read({ peer: true, target: peer.id }),
   ])
-    assert.deepEqual(out, { ok: false, message: "sessions are a web UI feature and aren't available here." });
+    assert.equal(out.ok, true, JSON.stringify(out));
   for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 3);
+  assert.equal(started.length, 4);
 });
 
 test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
