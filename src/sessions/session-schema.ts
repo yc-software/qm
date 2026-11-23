@@ -652,6 +652,28 @@ const TOOL_CALL_ID_CONSTRAINT: PgMigrationDefinition = {
   ],
 };
 
+const SESSION_EPHEMERAL: PgMigrationDefinition = {
+  id: "sessions/store/0067-ephemeral",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ephemeral BOOLEAN NOT NULL DEFAULT false`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_ephemeral_created ON sessions (id) WHERE ephemeral = true`,
+  ],
+};
+
+const SESSION_EPHEMERAL_CLAIM: PgMigrationDefinition = {
+  id: "sessions/store/0068-ephemeral-claim",
+  statements: [
+    claimFunction(
+      "claim_expired_ephemeral_sessions",
+      "cutoff bigint, lim integer, after_id text DEFAULT ''",
+      `SELECT tenant_id, id FROM sessions
+        WHERE ephemeral = true AND COALESCE(last_activity, created_at) < $1 AND id > $3
+        ORDER BY id LIMIT $2`,
+    ),
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -676,6 +698,8 @@ export const SESSION_MIGRATIONS = [
   BOT_WORK_COLUMN,
   BACKFILL_NULL_CALL_IDS,
   TOOL_CALL_ID_CONSTRAINT,
+  SESSION_EPHEMERAL,
+  SESSION_EPHEMERAL_CLAIM,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

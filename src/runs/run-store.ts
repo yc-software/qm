@@ -181,6 +181,8 @@ export interface RunStore {
 
   waitFor(runId: string, timeoutMs?: number): Promise<Run>;
 
+  deleteByThread(tenant: Tenant, threadRef: string): Promise<string[]>;
+
   close?(): Promise<void>;
 }
 

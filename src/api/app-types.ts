@@ -447,6 +447,12 @@ export interface App {
   ): Promise<{ resumed: true; goal: GoalView } | { resumed: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
+  deleteEphemeralSession(
+    tenant: Tenant,
+    threadRef: string,
+    principalId: string,
+  ): Promise<{ deleted: true } | { deleted: false; reason: "not_found" | "in_flight" }>;
+  purgeExpiredEphemeralSessions(cutoffMs: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
   forkSession(
     sessionId: string,
     principalId: string,
@@ -779,6 +785,7 @@ export interface AppDeps {
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
+  promptSnapshots?: { delete(id: string): Promise<void> };
   signals?: RunSignalStore;
   settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;

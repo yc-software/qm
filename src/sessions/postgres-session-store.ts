@@ -13,6 +13,7 @@ import type {
   SessionStore,
   StoreOptions,
 } from "./session-store.ts";
+import { claimRows } from "../tenants/claim.ts";
 import { ancestry, SESSION_MIGRATIONS } from "./session-schema.ts";
 import { createSessionSpend } from "./session-spend.ts";
 import { createLlmCaptures } from "./llm-captures.ts";
@@ -118,7 +119,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools, ephemeral) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb,$11) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -130,6 +131,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
           clientTools?.length ? JSON.stringify(clientTools) : null,
+          facts?.ephemeral === true,
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
@@ -254,6 +256,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
+    async claimExpiredEphemeral(cutoff, limit = 100, afterId = "") {
+      return claimRows(db, "claim_expired_ephemeral_sessions", [cutoff, limit, afterId]);
+    },
+
+    async markEphemeralExpired(tenant, sessionId) {
+      await db
+        .forTenant(tenant)
+        .q("UPDATE sessions SET created_at = 0, last_activity = 0 WHERE id = $1 AND ephemeral = true", [sessionId]);
+    },
+
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
@@ -348,12 +360,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async listByScope(scope): Promise<Session[]> {
-      const rows = await q("SELECT * FROM sessions WHERE scope_id = $1 ORDER BY created_at DESC, id DESC", [scope]);
+      const rows = await q(
+        "SELECT * FROM sessions WHERE scope_id = $1 AND NOT ephemeral ORDER BY created_at DESC, id DESC",
+        [scope],
+      );
       return rows.map(rowToSession);
     },
 
     async scopeHasSessions(scope): Promise<boolean> {
-      const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1 AND NOT ephemeral) AS present", [
+        scope,
+      ]);
       return Boolean(rows[0]?.present);
     },
 

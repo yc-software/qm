@@ -130,6 +130,7 @@ import {
   type TurnOptions,
   type TurnRuntime,
   type WorkBlock,
+  deleteEphemeralSession,
   fileContentUrl,
   onChatPrefsChange,
   pinLatestPrompt,
@@ -228,6 +229,7 @@ import {
 import { ackKey, subagentRows, subagentSummary, visibleSubagents, type SubagentRow } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
+import { ephemeralEmptyTpl, ephemeralTopbarTpl } from "./ephemeral-chat";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { sessionPersonaChip } from "./personas";
 import { base64ToBytes } from "./paste-text";
@@ -324,6 +326,7 @@ export function createChatSurface(
     agent: null as Agent | null,
     host: null as HTMLElement | null,
     threadRef: null as string | null,
+    ephemeral: false,
     sessionId: null as string | null,
     scopeId: null as string | null,
     contextName: null as string | null,
@@ -486,7 +489,7 @@ export function createChatSurface(
   const openThinking = new Set<string>();
 
   function notePendingSessionOnSend(): void {
-    if (!chatState.threadRef || chatState.sessionId !== null) return;
+    if (chatState.ephemeral || !chatState.threadRef || chatState.sessionId !== null) return;
     const existing = sessionsState.list.find((s) => s.id && s.threadRef === chatState.threadRef);
     if (existing) {
       if (chatState.agent) adoptActiveSessionFromList(chatState.agent);
@@ -499,6 +502,8 @@ export function createChatSurface(
   let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
 
   function teardownActiveChat(): void {
+    cleanupEphemeral();
+    chatState.ephemeral = false;
     sideChats.dispose();
     transcriptViewport.dispose();
     transcriptRefreshGeneration++;
@@ -531,6 +536,24 @@ export function createChatSurface(
     chatState.rememberedScopeId = null;
     chatState.rememberedContextName = null;
     connectedConnectors.clear();
+  }
+
+  function cleanupEphemeral(keepalive = false): void {
+    if (!chatState.ephemeral || !chatState.threadRef) return;
+    const hasSent = (chatState.agent?.state.messages.length ?? 0) > 0 || chatState.sessionId !== null;
+    if (hasSent) void deleteEphemeralSession(chatState.threadRef, keepalive);
+  }
+
+  function newTemporaryChat(): string {
+    appState.currentView = "chats";
+    renderSidebarTop();
+    const threadRef = `web:${appState.me?.user ?? "anon"}:${crypto.randomUUID()}`;
+    ctx.composer.resetComposer();
+    forkOriginController.reset();
+    mountContinuable(threadRef, null, null, [], null, undefined, [], true);
+    renderList();
+    ctx.composer.focusComposerEnd();
+    return threadRef;
   }
 
   function newChat(
@@ -591,9 +614,11 @@ export function createChatSurface(
     contextName: string | null = null,
     session?: CoreSession,
     inheritedMessages: ReturnType<typeof itemsToMessages> = [],
+    ephemeral = false,
   ): void {
     const container = ctx.claimContainer();
     if (!container) return;
+    if (chatState.ephemeral && chatState.threadRef !== threadRef) cleanupEphemeral();
     readOnlyView = null;
     readonlyApprove = null;
     preserveOutgoingWorkingDot(threadRef);
@@ -601,6 +626,7 @@ export function createChatSurface(
     detachActiveChat();
     ctx.composer.resetComposer();
     forkOriginController.reset();
+    chatState.ephemeral = ephemeral;
     chatState.threadRef = threadRef;
     chatState.sessionId = sessionId;
     chatState.scopeId = scopeId;
@@ -609,11 +635,11 @@ export function createChatSurface(
     chatState.inheritedMessages = inheritedMessages;
     chatState.inheritedExpanded = false;
     chatState.inheritedLoaded = !session?.forkedFrom;
-    chatState.rememberedThreadRef = threadRef;
-    chatState.rememberedSessionId = sessionId;
-    chatState.rememberedScopeId = scopeId;
-    chatState.rememberedContextName = contextName;
-    ctx.composer.state.draft = storedDraft(threadRef);
+    chatState.rememberedThreadRef = ephemeral ? null : threadRef;
+    chatState.rememberedSessionId = ephemeral ? null : sessionId;
+    chatState.rememberedScopeId = ephemeral ? null : scopeId;
+    chatState.rememberedContextName = ephemeral ? null : contextName;
+    ctx.composer.state.draft = ephemeral ? "" : storedDraft(threadRef);
     syncLocation();
     chatState.transcriptAnchorSeq = null;
     chatState.earlierCount = 0;
@@ -760,7 +786,11 @@ export function createChatSurface(
   function currentTurnOptions(): TurnOptions {
     const selected = ctx.composer.currentModelOption();
     if (!selected) throw new Error("No model is available");
-    const target = { scopeId: chatState.scopeId, channelName: chatState.contextName };
+    const target = {
+      scopeId: chatState.scopeId,
+      channelName: chatState.contextName,
+      ...(chatState.ephemeral ? { ephemeral: true } : {}),
+    };
     if (ctx.composer.followsDefault()) return target;
     return {
       effortLevel: ctx.composer.state.effortLevel,
@@ -854,7 +884,7 @@ export function createChatSurface(
   }
 
   function syncLocation(): void {
-    if (ctx.ownsUrl) syncUrlFromState();
+    if (ctx.ownsUrl) syncUrlFromState(chatState.ephemeral ? null : undefined);
     else postCurrentPaneState();
   }
 
@@ -866,8 +896,11 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
     else readonlyRedraw?.();
   });
+  const onPageHide = () => cleanupEphemeral(true);
+  window.addEventListener("pagehide", onPageHide);
 
   function dispose(): void {
+    window.removeEventListener("pagehide", onPageHide);
     syncSubagentRowsRefresh(null);
     redrawHooks.delete(redrawForConnector);
     stopAvatarWatch();
@@ -1775,7 +1808,7 @@ export function createChatSurface(
       empty: !messages.length,
       draft: Boolean(ctx.composer.state.draft),
     });
-    const showWelcome = !ctx.inbox && !editingApp && welcome.show;
+    const showWelcome = !chatState.ephemeral && !ctx.inbox && !editingApp && welcome.show;
     let messageContent: Array<TemplateResult | typeof nothing> | TemplateResult | typeof nothing = nothing;
     const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
     if (messages.length) {
@@ -1856,16 +1889,16 @@ export function createChatSurface(
                   </div>`
                 : nothing
             }
-            ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar()}
+            ${uiCanvasPanel(ctx)} ${glanceTier || ctx.pane || editingApp ? nothing : sessionTopbar(emptyChat)}
             ${glanceTier ? paneGlance(agent, messages, glanceTier) : nothing}
             <section
               class="chat-scroll"
               tabindex="0"
               aria-label="Conversation"
-              @mouseup=${sideChats.select}
-              @mousemove=${sideChats.hover}
-              @mouseleave=${sideChats.leave}
-              @keyup=${sideChats.select}
+              @mouseup=${chatState.ephemeral ? nothing : sideChats.select}
+              @mousemove=${chatState.ephemeral ? nothing : sideChats.hover}
+              @mouseleave=${chatState.ephemeral ? nothing : sideChats.leave}
+              @keyup=${chatState.ephemeral ? nothing : sideChats.select}
               @scroll=${sideChats.onScroll}
             >
               ${pinnedStrip()}
@@ -1875,7 +1908,12 @@ export function createChatSurface(
                 ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
                 ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
                 ${glanceTier ? nothing : liveWorkStatus(agent)}
-                ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
+                ${emptyChat && chatState.ephemeral ? ephemeralEmptyTpl() : nothing}
+                ${
+                  emptyChat && !chatState.ephemeral && !isNewUser && !editingApp && !showWelcome
+                    ? html`<h1 class="chat-cta">${chatCta()}</h1>`
+                    : nothing
+                }
                 ${ctx.pane ? suggestions : nothing}
                 ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}
               </div>
@@ -1903,7 +1941,8 @@ export function createChatSurface(
     postCurrentPaneState();
   }
 
-  function sessionTopbar(): TemplateResult {
+  function sessionTopbar(emptyChat = false): TemplateResult | typeof nothing {
+    if (chatState.ephemeral) return ephemeralTopbarTpl(emptyChat, () => newTemporaryChat());
     const scope = chatState.scopeId;
     const session = sessionsState.list.find((s) =>
       chatState.sessionId
@@ -3928,6 +3967,7 @@ export function createChatSurface(
     currentTurnOptions,
     turnRuntime,
     newChat,
+    newTemporaryChat,
     teardown: teardownActiveChat,
     resetChatState,
     mountContinuable,

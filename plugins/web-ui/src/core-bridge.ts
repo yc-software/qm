@@ -624,6 +624,18 @@ export interface TurnOptions {
   fastMode?: boolean;
   scopeId?: string | null;
   channelName?: string | null;
+  ephemeral?: boolean;
+}
+
+export async function deleteEphemeralSession(threadRef: string, keepalive = false): Promise<void> {
+  const path = `/api/ephemeral?threadRef=${encodeURIComponent(threadRef)}`;
+  if (keepalive) {
+    void webFetch(withBase(path), { method: "DELETE", keepalive: true }).catch(() => {});
+    return;
+  }
+  await api<{ deleted?: boolean }>(path, { method: "DELETE" }).catch((e) =>
+    swallow("web-ui: delete ephemeral session", e),
+  );
 }
 
 export interface ActiveRun {
@@ -1338,6 +1350,7 @@ function turnRequestBody(
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(turnOptions.ephemeral ? { ephemeral: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };

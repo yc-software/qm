@@ -318,6 +318,7 @@ export function currentTimeBlock(timezone: string, nowMs: number): string {
 
 const SYSTEM_CONTEXT_ORDER = [
   "Where you are",
+  "Ephemeral session",
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",

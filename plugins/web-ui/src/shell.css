@@ -363,7 +363,78 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   border-bottom: 1px solid var(--border);
 }
 .new-chat-nav {
+  position: relative;
   margin-top: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+.new-chat-nav .navrow:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.new-chat-nav .new-chat-menu-btn {
+  width: 28px;
+  height: 33px;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted-foreground);
+}
+.new-chat-nav .menu-option {
+  align-items: center;
+  gap: 8px;
+}
+.new-chat-nav .menu-option-copy {
+  flex: 1;
+}
+.new-chat-nav .new-chat-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+.new-chat-nav .new-chat-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+.new-chat-nav .new-chat-menu-head {
+  padding: 3px 8px 2px;
+  font-size: var(--font-12);
+  color: var(--muted-foreground);
+}
+.layout.sidebar-closed .new-chat-nav .new-chat-menu-btn,
+.layout.sidebar-closed .new-chat-nav .menu-popover {
+  display: none;
+}
+.ephemeral-topbar .ephemeral-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ephemeral-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+.ephemeral-empty .chat-cta {
+  margin-bottom: 0;
+}
+.ephemeral-empty-icon {
+  color: var(--muted-foreground);
+}
+.ephemeral-subtitle {
+  margin: 0;
+  max-width: 420px;
+  font-size: var(--font-12-5);
+  color: var(--muted-foreground);
 }
 a.navrow,
 a.session,
@@ -5731,7 +5802,8 @@ a.connector-widget:focus-visible {
   }
   :where(html:not(.desktop-embed)) .sidebar .icon-btn,
   :where(html:not(.desktop-embed)) .session-menu-btn,
-  :where(html:not(.desktop-embed)) .recent-project-new-chat {
+  :where(html:not(.desktop-embed)) .recent-project-new-chat,
+  :where(html:not(.desktop-embed)) .new-chat-nav .new-chat-menu-btn {
     width: 44px;
     height: 44px;
   }

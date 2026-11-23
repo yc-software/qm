@@ -1,4 +1,5 @@
 import type { Item } from "../sessions/items.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export type RunActivityEntry =
   { item: Item } | { marker: "text_start"; seq: number; createdAt: number; phase?: string; streamOffset?: number };
@@ -6,6 +7,7 @@ export type RunActivityEntry =
 export interface RunActivityStore {
   append(runId: string, entry: RunActivityEntry): Promise<void>;
   list(runId: string): Promise<RunActivityEntry[]>;
+  deleteForRuns(tenant: Tenant, runIds: readonly string[]): Promise<void>;
   close?(): Promise<void>;
 }
 

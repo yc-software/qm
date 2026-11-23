@@ -31,7 +31,7 @@ import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";
-import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
+import { appState, renderSidebarTop, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, renderList, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
@@ -131,6 +131,7 @@ async function fetchContexts(): Promise<CoreContext[]> {
   contextsState.list = result.contexts ?? [];
   contextsState.loaded = true;
   contextsState.loadedAt = Date.now();
+  renderSidebarTop();
   return contextsState.list;
 }
 
@@ -1199,6 +1200,7 @@ function upsertProject(project: CoreProject): CoreContext {
   contextsState.list = [next, ...contextsState.list.filter((context) => context.scopeId !== scopeId)];
   contextsState.loaded = loaded;
   if (loaded) contextsState.loadedAt = Date.now();
+  renderSidebarTop();
   return next;
 }
 

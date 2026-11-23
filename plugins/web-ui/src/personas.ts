@@ -26,7 +26,7 @@ import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./conte
 import { openSession, renderList, replacePendingSession, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
-import { switchView } from "./shell";
+import { renderSidebarTop, switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { rememberThreadPick } from "./composer";
@@ -104,6 +104,7 @@ function groupPersonasByRole(
 
 function setPersonaList(list: PersonaView[]): void {
   personasState.list = list;
+  renderSidebarTop();
   renderList();
 }
 

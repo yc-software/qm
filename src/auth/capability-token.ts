@@ -88,6 +88,7 @@ export interface CapabilityClaims {
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   liveActor?: boolean;
+  ephemeral?: true;
   runId?: string;
   sessionId?: string;
   origin?: SessionOrigin;

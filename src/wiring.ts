@@ -336,7 +336,7 @@ import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
-import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { EPHEMERAL_SESSION_TTL_MS, LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
 import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
@@ -2254,6 +2254,7 @@ export function buildApp(
         : []),
     ],
   });
+  const promptSnapshots = artifactMap<PromptSnapshot>("prompt_snapshots");
   const orchestratorDeps: OrchestratorDeps = {
     advisoryLock,
     admittedWork,
@@ -2322,7 +2323,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
-    promptSnapshots: artifactMap<PromptSnapshot>("prompt_snapshots"),
+    promptSnapshots,
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2469,6 +2470,7 @@ export function buildApp(
     turnStream,
     runStreamEvents,
     runActivity,
+    promptSnapshots,
     signals: runSignals,
     modelCredentials,
     userModelCredentials,
@@ -3007,6 +3009,17 @@ export function buildApp(
         immediate: true,
       })
     : null;
+  const ephemeralSessionSweeper = createSweeper(
+    () =>
+      leaderLease.hold("ephemeral-sessions:retention", async () => {
+        const purged = await app.purgeExpiredEphemeralSessions(Date.now() - EPHEMERAL_SESSION_TTL_MS, {
+          deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
+        });
+        if (purged) console.log(`[ephemeral] purged ${purged} expired ephemeral session(s)`);
+      }),
+    LLM_CAPTURE_SWEEP_MS,
+    { label: "ephemeral-session-retention" },
+  );
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? createSweeper(
         () =>
@@ -3110,6 +3123,7 @@ export function buildApp(
       monitorRetentionSweeper.start();
       personaOwnerSweeper.start();
       spendSweeper?.start();
+      ephemeralSessionSweeper.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
@@ -3147,6 +3161,7 @@ export function buildApp(
       monitorRetentionSweeper.stop(),
       personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
+      ephemeralSessionSweeper.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
