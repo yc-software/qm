@@ -245,7 +245,7 @@ test("background lifecycle survives restart, links to the web conversation from 
   const run = f.add("r1");
   await f.start(run.id);
   assert.equal(f.card().length, 1);
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   const job = f.background();
   run.status = "done";
   await f.reconcile();
@@ -268,7 +268,7 @@ test("background lifecycle survives restart, links to the web conversation from 
   assert.ok(!JSON.stringify(f.cards).includes("secret-"));
 });
 
-const WEB = "https://qm.example.test/web-ui/s/canonical-uuid";
+const OPEN = { type: "link", url: "https://qm.example.test/web-ui/s/canonical-uuid", text: "Open in QM" };
 const line = (block: Record<string, unknown> | undefined) =>
   (block?.details as { elements: Array<{ elements: unknown[] }> } | undefined)?.elements[0]?.elements;
 
@@ -281,12 +281,12 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   f.advance(30_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: thinking it through");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.purposes.set("r1", "Reading status implementation");
   f.advance(51_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: reading status implementation");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN, { type: "text", text: " · 1m" }]);
   const posts = f.cards.length;
   await f.reconcile();
   assert.equal(f.cards.length, posts);
@@ -295,7 +295,7 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   run.status = "done";
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Waiting on CI");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Running in the background · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN, { type: "text", text: " · 1m" }]);
   job.status = "exited";
   f.outbox.push({ provenance: { sourceThreadRef: "ch:C1:1.0" } }, { provenance: { sourceThreadRef: "ch:C1:9.0" } });
   const shown = f.cards.length;
@@ -308,12 +308,13 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   assert.deepEqual(await f.store.all(), []);
 });
 
-test("without a web URL the details line is plain text and offers nothing to open", async () => {
+test("without a web URL the details line is the plain-text state", async () => {
   const f = fixture();
   await f.enable();
   await f.start(f.add("r1").id);
+  f.advance(60_000);
   await f.manager(f.store, "").reconcile(f.client, "T1:B1");
-  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it · 1m" }]);
 });
 
 test("work that ends before the card is due posts nothing", async () => {
@@ -342,7 +343,7 @@ test("running subagents keep one flat card titled with their latest step", async
   assert.equal(f.card().length, 1);
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Still working: reading Slack docs");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Open in QM" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.purposes.set(child.id, "PR checks for the card");
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: PR checks for the card");

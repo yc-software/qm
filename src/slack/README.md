@@ -50,8 +50,9 @@ After QM has been working for thirty seconds, one flat task card is posted in th
 reply thread and updated in place. Its title is **Still working:**
 followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
 step is used instead. Background jobs and watches show their own purpose. The card's details
-line (for example "Open in QM · 2m") links to the exact web conversation with normal
-authorization; without a configured web URL, it is plain text ("Working on it · 2m").
+line is an "Open in QM" link to the exact web conversation with normal authorization,
+followed by the elapsed time after the first minute ("Open in QM · 2m"); without a
+configured web URL, it is the state in plain text (for example "Working on it · 2m").
 Quiet ambient turns, unthreaded DMs and turns that finish within thirty seconds do not create
 cards. Cards are visible to everyone in their thread; own status cards and edits are
 excluded from conversation history.

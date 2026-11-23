@@ -169,17 +169,16 @@ function stillWorking(step: string): string {
   return `Still working: ${lower}`;
 }
 
-function headlineOf(work: SessionWork | undefined, linked: boolean): [string, string] {
-  const working = linked ? "Open in QM" : "Working on it";
-  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), working];
+function headlineOf(work: SessionWork | undefined): [string, string] {
+  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), "Working on it"];
   if (work?.queued) return [work.queued.purpose ?? "Queued", "Picking back up shortly"];
   const branch = work?.branches.find((b) => b.step) ?? work?.branches[0];
   if (branch)
     return [
       stillWorking(branch.step ?? (branch.background ? BACKGROUND_STEP[branch.background] : "Thinking it through")),
-      working,
+      "Working on it",
     ];
-  if (work?.returning) return [stillWorking("Wrapping up"), working];
+  if (work?.returning) return [stillWorking("Wrapping up"), "Working on it"];
   if (work?.background?.kind === "watch") return [work.background.purpose ?? BACKGROUND_STEP.watch, "Keeping watch"];
   if (work?.background) return [work.background.purpose ?? BACKGROUND_STEP.job, "Running in the background"];
   return ["", ""];
@@ -189,8 +188,8 @@ function renderCard(
   work: SessionWork | undefined,
   card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
-  const [title, phrase] = headlineOf(work, !!card.followUrl);
-  const details = richText(card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase, card.followUrl);
+  const [title, phrase] = headlineOf(work);
+  const details = richText(phrase, card.elapsed >= 60_000 ? ` · ${minutes(card.elapsed)}` : "", card.followUrl);
   const blocks: Record<string, unknown>[] = [
     {
       type: "task_card",
@@ -208,10 +207,12 @@ function minutes(ms: number): string {
   return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
 }
 
-function richText(text: string, url?: string) {
-  if (!text) return undefined;
-  const element = url ? { type: "link", url, text } : { type: "text", text };
-  return { type: "rich_text", elements: [{ type: "rich_text_section", elements: [element] }] };
+function richText(phrase: string, elapsed: string, url?: string) {
+  if (!phrase) return undefined;
+  const elements = url
+    ? [{ type: "link", url, text: "Open in QM" }, ...(elapsed ? [{ type: "text", text: elapsed }] : [])]
+    : [{ type: "text", text: `${phrase}${elapsed}` }];
+  return { type: "rich_text", elements: [{ type: "rich_text_section", elements }] };
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;
