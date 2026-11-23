@@ -100,13 +100,17 @@ const cronShares = new Map<string, Array<{ scope: string; permission: "read" | "
 let activeCronId: string | null = null;
 let pendingCronId: string | null = null;
 
-export function resetActiveCron(): void {
-  cronsScope = null;
-  activeCronId = null;
+function clearCronDetailState(clearNotice = true): void {
   cronDialog = null;
   cronEdit = null;
   scheduleDraft = null;
-  cronActionNotice = "";
+  if (clearNotice) cronActionNotice = "";
+}
+
+export function resetActiveCron(): void {
+  cronsScope = null;
+  activeCronId = null;
+  clearCronDetailState();
 }
 
 export function openCronById(id: string): void {
@@ -223,9 +227,7 @@ export async function renderCronsPage(): Promise<void> {
 function drawCronsPage(): void {
   if (appState.currentView !== "crons" || !appState.mainEl) return;
   activeCronId = null;
-  cronDialog = null;
-  cronEdit = null;
-  scheduleDraft = null;
+  clearCronDetailState(false);
   syncCronUrl(null);
   if (!cronsPageHost || cronsPageHost.parentElement !== appState.mainEl) {
     cronsPageHost = document.createElement("div");
@@ -458,12 +460,7 @@ function cronPaneHost(): HTMLElement | null {
 function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } = {}): void {
   const switching = activeCronId !== c.id;
   const shouldRefreshRuns = opts.refreshRuns || switching;
-  if (switching) {
-    cronEdit = null;
-    scheduleDraft = null;
-    cronDialog = null;
-    cronActionNotice = "";
-  }
+  if (switching) clearCronDetailState();
   activeCronId = c.id;
   syncCronUrl(c.id, opts.push);
   const host = cronPaneHost();
@@ -828,11 +825,15 @@ async function loadCronRuns(id: string): Promise<void> {
   if (current) openCron(current);
 }
 
-async function reopenCron(id: string, target: "detail" | "list"): Promise<void> {
-  await refreshCrons();
+function setCronNoticeFor(id: string, message: string): void {
+  if (appState.currentView === "crons" && (activeCronId === id || activeCronId === null)) cronActionNotice = message;
+}
+
+async function reopenCron(id: string, opts: { refresh?: boolean } = {}): Promise<void> {
+  if (opts.refresh !== false) await refreshCrons();
   if (appState.currentView !== "crons") return;
-  if (target === "list") {
-    if (activeCronId === null) drawCronsPage();
+  if (activeCronId === null) {
+    if (cronsPageHost?.isConnected) drawCronsPage();
     return;
   }
   if (activeCronId !== id) return;
@@ -852,16 +853,15 @@ async function cronMutate<T>(fn: () => Promise<T>, busyValue: T): Promise<T> {
 }
 
 function runCronNow(id: string): Promise<void> {
-  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
     cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}/run`, { method: "POST" });
-      cronActionNotice = "Run started. Refresh recent runs after it completes.";
+      setCronNoticeFor(id, "Run started. Refresh recent runs after it completes.");
     } catch (e) {
-      cronActionNotice = errMessage(e, "run failed");
+      setCronNoticeFor(id, errMessage(e, "run failed"));
     }
-    await reopenCron(id, target);
+    await reopenCron(id);
   }, undefined);
 }
 
@@ -870,22 +870,22 @@ function patchCron(
   patch: { title?: string; task?: string; schedule?: CronView["schedule"]; enabled?: boolean; archived?: boolean },
   errorLabel: string,
 ): Promise<boolean> {
-  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
     cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       return true;
     } catch (e) {
-      cronActionNotice = errMessage(e, errorLabel);
-      await reopenCron(id, target);
+      setCronNoticeFor(id, errMessage(e, errorLabel));
+      await reopenCron(id);
       return false;
     }
   }, false);
 }
 
 function showCronDialog(kind: "delete", cron: CronView): void {
-  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const opener = active && active !== document.body && !active.closest("[hidden]") ? active : null;
   cronDialog = { kind, cron, opener };
   openCron(cron);
   const host = appState.mainEl?.querySelector<HTMLElement>(":scope > .cron-detail-pane");
@@ -939,7 +939,7 @@ async function saveCronField(event: SubmitEvent, c: CronView, field: "title" | "
   const ok = await patchCron(c.id, { [field]: value }, `${field} update failed`);
   if (!ok) return;
   cronEdit = null;
-  await reopenCron(c.id, "detail");
+  await reopenCron(c.id);
 }
 
 async function saveSchedule(c: CronView, schedule: { cron: string; timezone: string }): Promise<void> {
@@ -947,7 +947,7 @@ async function saveSchedule(c: CronView, schedule: { cron: string; timezone: str
   if (!ok) return;
   cronEdit = null;
   scheduleDraft = null;
-  await reopenCron(c.id, "detail");
+  await reopenCron(c.id);
 }
 
 function editCronWithAgent(c: CronView): void {
@@ -961,23 +961,20 @@ function editCronWithAgent(c: CronView): void {
 }
 
 async function archiveCron(id: string, archived: boolean): Promise<void> {
-  const target = activeCronId === id ? "detail" : "list";
   const ok = await patchCron(id, { archived }, archived ? "archive failed" : "unarchive failed");
   if (!ok) return;
   await refreshCrons();
   if (appState.currentView !== "crons") return;
+  cronTab = "yours";
   if (archived) {
-    cronTab = "yours";
-    if (target === "list" ? activeCronId === null : activeCronId === id) drawCronsPage();
+    if (activeCronId === null ? cronsPageHost?.isConnected : activeCronId === id) drawCronsPage();
     return;
   }
-  cronTab = "yours";
   showDisabledCrons = true;
-  await reopenCron(id, target);
+  await reopenCron(id, { refresh: false });
 }
 
 function setCronEnabled(id: string, enabled: boolean): Promise<void> {
-  const target = activeCronId === id ? "detail" : "list";
   return cronMutate(async () => {
     cronActionNotice = "";
     try {
@@ -985,23 +982,22 @@ function setCronEnabled(id: string, enabled: boolean): Promise<void> {
       cronTab = "yours";
       if (!enabled) showDisabledCrons = true;
     } catch (e) {
-      cronActionNotice = errMessage(e, enabled ? "enable failed" : "disable failed");
+      setCronNoticeFor(id, errMessage(e, enabled ? "enable failed" : "disable failed"));
     }
-    await reopenCron(id, target);
+    await reopenCron(id);
   }, undefined);
 }
 
 async function confirmDeleteCron(id: string): Promise<void> {
-  const target = activeCronId === id ? "detail" : "list";
   await cronMutate(async () => {
     cronDialog = null;
     cronActionNotice = "";
     try {
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch (e) {
-      cronActionNotice = errMessage(e, "delete failed");
+      setCronNoticeFor(id, errMessage(e, "delete failed"));
     }
-    await reopenCron(id, target);
+    await reopenCron(id);
   }, undefined);
 }
 
@@ -1032,6 +1028,7 @@ function cronForm() {
 function showNewCron(): void {
   if (!appState.mainEl) return;
   activeCronId = null;
+  clearCronDetailState();
   const host = document.createElement("div");
   host.className = "resource-pane cron-pane";
   render(cronForm(), host);

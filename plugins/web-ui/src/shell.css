@@ -5829,7 +5829,7 @@ a.connector-widget:focus-visible {
   .menu-button {
     max-width: 150px;
   }
-  .menu-control[data-align="right"] .menu-popover {
+  :is(.menu-control, .form-menu-control)[data-align="right"] .menu-popover {
     width: min(286px, calc(100vw - 30px));
   }
   .menu-popover {
