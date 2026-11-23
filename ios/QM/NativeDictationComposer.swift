@@ -59,6 +59,9 @@ struct NativeDictationComposer: View {
       ScrollView {
         transcript
           .font(.title3)
+          // New words and the bold on the latest one ease in instead of popping.
+          .contentTransition(reduceMotion ? .identity : .interpolate)
+          .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: model.liveText)
           .multilineTextAlignment(.center)
           .frame(maxWidth: .infinity)
           .fixedSize(horizontal: false, vertical: true)
