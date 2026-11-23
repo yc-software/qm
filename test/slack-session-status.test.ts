@@ -228,7 +228,7 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   assert.equal(f.cards.length, 1);
   run.leaseExpiresAt = 0;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Queued");
+  assert.deepEqual([f.card()[0]?.title, line(f.card()[0])], ["Queued", [OPEN]]);
   run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
