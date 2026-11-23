@@ -89,7 +89,8 @@ struct NativeDictationComposer: View {
     }
     .accessibilityLabel(model.liveText.isEmpty ? placeholder : model.liveText)
     .accessibilityHint(
-      model.canFinish ? "Stops recording and puts the text in the message field" : "")
+      model.canFinish ? "Stops recording and puts the text in the message field" : ""
+    )
     .accessibilityAddTraits(model.canFinish ? .isButton : [])
   }
 
