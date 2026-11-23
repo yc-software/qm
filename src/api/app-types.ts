@@ -651,7 +651,11 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  listVisibleSkills(
+    principalId: string,
+    ownScopeBotWork: boolean,
+    onlyScope?: ScopeId | null,
+  ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   manageableSkills(
     tenant: Tenant,

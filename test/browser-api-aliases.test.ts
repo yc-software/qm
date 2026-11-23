@@ -93,7 +93,8 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
     else
       assert.ok(viaAlias.status < 500 && ![401, 403].includes(viaAlias.status), `${path} answered ${viaAlias.status}`);
     assert.equal(viaAlias.status, direct.status, path);
-    assert.deepEqual(answered, await direct.json(), path);
+    const stable = (v: unknown) => (v && typeof v === "object" && "asOf" in v ? { ...v, asOf: 0 } : v);
+    assert.deepEqual(stable(answered), stable(await direct.json()), path);
     const actor = findRoute(apiRoutes, "GET", concrete(target))?.route.actor ?? "";
     const field = actor.startsWith("query.") ? actor.slice("query.".length) : "principalId";
     const other = await fetch(`${base}${concrete(path)}?${query}&${field}=bob`, { headers: { cookie } });
