@@ -6,6 +6,7 @@ struct NativeDictationComposer: View {
   @Environment(\.verticalSizeClass) private var verticalSizeClass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var transcriptHeight: CGFloat = 28
+  @State private var appeared = false
 
   var body: some View {
     VStack(spacing: 8) {
@@ -22,14 +23,21 @@ struct NativeDictationComposer: View {
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity)
       .accessibilityElement(children: .combine)
+      .entrance(appeared, delay: 0.1, reduceMotion: reduceMotion)
 
       NativeDictationOrb(
         model: model,
         size: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 58 : 82
       )
       .padding(.vertical, 2)
+      // The orb blooms in a beat after the panel opens.
+      .scaleEffect(appeared || reduceMotion ? 1 : 0.5)
+      .opacity(appeared || reduceMotion ? 1 : 0)
+      .animation(
+        reduceMotion ? nil : .spring(duration: 0.5, bounce: 0.32).delay(0.04), value: appeared)
 
       transcriptArea
+        .entrance(appeared, delay: 0.14, reduceMotion: reduceMotion)
 
       if let error = model.error {
         NativeAudioPermissionNotice(message: error, permission: model.permissionError)
@@ -53,10 +61,21 @@ struct NativeDictationComposer: View {
           }
         }
       }
+      .entrance(appeared, delay: 0.18, reduceMotion: reduceMotion)
     }
     .padding(.horizontal, 4)
     .padding(.vertical, 4)
     .accessibilityIdentifier("dictationComposer")
+    .onAppear { appeared = true }
+    // A light tap when the microphone goes live, a firmer one when recording ends,
+    // and a warning when audio is saved for retry.
+    .sensoryFeedback(trigger: model.state) { old, new in
+      if old == .preparing, new == .recording { return .impact(weight: .light, intensity: 0.9) }
+      if old == .recording, new == .transcribing || new == .ready {
+        return .impact(flexibility: .rigid, intensity: 0.55)
+      }
+      return new == .retry ? .warning : nil
+    }
   }
 
   private var transcriptArea: some View {
@@ -173,6 +192,15 @@ struct NativeDictationComposer: View {
 
   private var primaryEnabled: Bool {
     model.state == .recording || model.state == .ready || model.state == .retry
+  }
+}
+
+extension View {
+  /// Fades and lifts a dictation row in after the panel opens, staggered by `delay`.
+  fileprivate func entrance(_ appeared: Bool, delay: Double, reduceMotion: Bool) -> some View {
+    opacity(appeared || reduceMotion ? 1 : 0)
+      .offset(y: appeared || reduceMotion ? 0 : 6)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.28).delay(delay), value: appeared)
   }
 }
 

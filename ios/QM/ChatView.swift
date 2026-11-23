@@ -784,6 +784,12 @@ struct ChatView: View {
     VStack(alignment: .leading, spacing: 6) {
       if dictation.busy {
         NativeDictationComposer(model: dictation)
+          .transition(
+            reduceMotion
+              ? .opacity
+              : .asymmetric(
+                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom)),
+                removal: .opacity))
       } else {
         composerTextField
         if let error = dictation.error {
@@ -841,6 +847,13 @@ struct ChatView: View {
     }
     .padding(8)
     .composerChrome()
+    // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
+    // field and the incoming orb move together instead of snapping.
+    .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)
+    // A soft tap as the panel opens, matching the drawer's haptic.
+    .sensoryFeedback(trigger: dictation.busy) { _, open in
+      open ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
   }
 
   private var composerTextField: some View {
