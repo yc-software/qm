@@ -172,6 +172,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const ensured = new Set<string>();
   const sizeByName = new Map<string, number>();
   const appliedSize = new Map<string, number>();
+  const egressChecked = new Set<string>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -304,7 +305,8 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
 
   async function applyEgressPolicy(name: string, hosts: string[]): Promise<void> {
     const want = JSON.stringify(hosts);
-    if (JSON.stringify((await initializationStore.get(name))?.egressHosts ?? []) === want) return;
+    const stored = JSON.stringify((await initializationStore.get(name))?.egressHosts ?? []);
+    if (stored === want && (!hosts.length || egressChecked.has(name))) return;
     const rules = hosts.map((domain) => ({ domain, action: "allow" as const }));
     const s = sprite(name);
     await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
@@ -316,6 +318,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
       JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === want;
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
+    egressChecked.add(name);
     if (hosts.length)
       await initializationStore.mutateMany([{ id: name, apply: (stored) => ({ ...stored, egressHosts: hosts }) }]);
     else await initializationStore.merge(name, { egressHosts: undefined });
@@ -428,6 +431,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const forget = (name: string): void => {
     ensured.delete(name);
     appliedSize.delete(name);
+    egressChecked.delete(name);
   };
 
   const base = createExecSandboxBase({

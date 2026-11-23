@@ -318,6 +318,39 @@ test("a scratch sprite removed outside core gets the egress policy again on its 
   assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
 });
 
+test("a policy changed outside core is put back the first time a fresh core instance uses the sprite", async () => {
+  const store = testMap<StoredSprite>();
+  const s = make({ egressProxyUrl: "https://proxy.example.com", initializationStore: store });
+  const token = await proxyToken();
+  const a = await s.provision(scope, { egressToken: token });
+  assert.deepEqual(fake.policy(a.id), [{ domain: "proxy.example.com", action: "allow" }]);
+  const res = await fetch(`${fake.baseUrl}/v1/sprites/${a.id}/policy/network`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${FAKE_SPRITES_TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({ rules: [] }),
+  });
+  assert.ok(res.ok);
+  assert.deepEqual(fake.policy(a.id), []);
+  const restarted = make({ egressProxyUrl: "https://proxy.example.com", initializationStore: store });
+  const b = await restarted.provision(scope, { egressToken: token });
+  assert.equal(b.id, a.id);
+  assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
+  const before = fake.calls.filter((c) => c.path.endsWith("/policy/network")).length;
+  await restarted.provision(scope, { egressToken: token });
+  assert.equal(fake.calls.filter((c) => c.path.endsWith("/policy/network")).length, before);
+});
+
+test("a sprite with no egress enforcement makes no policy calls, even from a fresh core instance", async () => {
+  const store = testMap<StoredSprite>();
+  const token = await proxyToken();
+  await make({ initializationStore: store }).provision(scope, { egressToken: token });
+  await make({ initializationStore: store }).provision(scope, { egressToken: token });
+  assert.deepEqual(
+    fake.calls.filter((c) => c.path.includes("/policy/network")),
+    [],
+  );
+});
+
 test("a failed egress setup releases the scratch lease instead of wedging the key", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt-scratch", "job-egress"));
