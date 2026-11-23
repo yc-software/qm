@@ -29,6 +29,7 @@ export function createSessionParticipants(
 ): Pick<
   SessionStore,
   | "addParticipant"
+  | "addParticipants"
   | "removeParticipant"
   | "listByParticipant"
   | "participantScopes"
@@ -131,6 +132,15 @@ export function createSessionParticipants(
         `INSERT INTO participants(session_id, principal_id, title) VALUES ($1, $2, $3)
          ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
         [sessionId, principalId, title ?? null],
+      );
+    },
+
+    async addParticipants(sessionId, principalIds): Promise<void> {
+      await q(
+        `INSERT INTO participants(session_id, principal_id)
+         SELECT $1, principal_id FROM unnest($2::text[]) AS principal_id
+         ON CONFLICT (tenant_id, session_id, principal_id) DO NOTHING`,
+        [sessionId, [...principalIds]],
       );
     },
 

@@ -450,6 +450,7 @@ export interface SessionStore {
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
+  addParticipants(sessionId: string, principalIds: readonly string[]): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit?: number; botActor?: boolean }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
