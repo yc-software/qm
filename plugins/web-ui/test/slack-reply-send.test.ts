@@ -26,7 +26,7 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
       if (path.endsWith("/slack/reply")) {
         messages.push(JSON.parse(String(init?.body)));
         return succeed
-          ? Response.json({ sent: true })
+          ? Response.json({ sent: true, ts: "1.2" })
           : Response.json({ message: "Slack denied this message." }, { status: 403 });
       }
       return undefined;
@@ -61,6 +61,7 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
     succeed = true;
     field.focus();
     widget.querySelector("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+    assert.match(document.querySelector(".sending-row")?.textContent ?? "", /Hello Slack/);
     await until(() => field.value === "");
     await until(() => transcriptReads() > beforeSend);
     await until(() => document.activeElement === widget.querySelector("textarea"));

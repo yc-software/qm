@@ -4656,11 +4656,180 @@ summary.stopped-head:focus-visible {
   background: var(--secondary);
   box-sizing: border-box;
 }
-.readonly-banner-link {
-  color: var(--foreground);
+.slack-thread-chat .chat-title {
+  display: flex;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.slack-thread-chat {
+  --content-w: 696px;
+  --composer-inset: 0px;
+}
+.slack-thread-chat .chat-scroll {
+  scrollbar-gutter: stable both-edges;
+}
+.slack-thread-chat .chat-topbar {
+  height: 48px;
+  gap: 14px;
+  padding: 0 20px;
+}
+.chat-participant-names {
+  flex: none;
+  margin-left: -6px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  white-space: nowrap;
+}
+.slack-work {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 1px 0 1px 12px;
+  border-left: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.slack-where-slash {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.slack-where-leaf {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground);
   font-weight: 500;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+}
+.open-in-surface {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  font-size: var(--font-12-5);
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.open-in-surface:hover {
+  background: var(--secondary);
+}
+.slack-thread-chat .message-stack > :is(.user-row, .assistant-row) {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0 0 20px;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  padding: 0 0 0 48px;
+  transition: opacity 0.2s ease;
+}
+.slack-thread-chat .message-stack > :is(.user-row, .assistant-row).continued-row {
+  margin-top: -14px;
+}
+.slack-thread-chat .message-stack > .user-row > .message-meta {
+  left: 48px;
+  right: auto;
+  padding: 0;
+}
+.slack-thread-chat .message-stack > .sending-row {
+  opacity: 0.5;
+}
+.slack-thread-chat .message-stack > :is(.user-row, .assistant-row) > .speaker-label {
+  align-items: baseline;
+  gap: 8px;
+  max-width: none;
+  min-height: 0;
+  margin: 0 0 3px;
+  color: var(--foreground);
+  font-size: var(--chat-font-size);
+  font-weight: 650;
+  line-height: 1.25;
+}
+.slack-thread-chat .message-stack > :is(.user-row, .assistant-row) > .speaker-label > :is(.inbox-avatar, .brand-mark) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: var(--font-13);
+}
+.slack-thread-chat .speaker-label > .speaker-time {
+  color: var(--muted-foreground);
+  font-size: calc(var(--chat-font-size) * 0.8);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.slack-thread-chat .message-stack > .user-row > .user-bubble {
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+.slack-thread-chat .message-stack > :is(.user-row, .assistant-row) :is(.user-bubble, .assistant-body) {
+  color: color-mix(in srgb, var(--foreground) 86%, var(--muted-foreground));
+  font-size: var(--chat-font-size);
+  line-height: 1.55;
+}
+.slack-app-tag {
+  position: relative;
+  top: -1px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  font-size: calc(var(--chat-font-size) * 0.64);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.slack-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.slack-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
+  font-size: var(--font-14);
+}
+.slack-reaction b {
+  color: var(--muted-foreground);
+  font-size: calc(var(--chat-font-size) * 0.77);
+  font-weight: 600;
+}
+.slack-forward {
+  max-width: 620px;
+  margin-top: 8px;
+  padding: 9px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--secondary) 35%, transparent);
+}
+.slack-forward-head {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: calc(var(--chat-font-size) * 0.8);
+}
+.slack-forward-head b {
+  color: var(--foreground);
+  font-weight: 650;
 }
 .readonly-scroll {
   --chat-scroll-pad-top: 8px;

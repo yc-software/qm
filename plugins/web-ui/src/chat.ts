@@ -27,6 +27,8 @@ import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playgr
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SlackOutbox } from "./slack-outbox";
+import { appTag, openInSurface, reactionChips, slackTitle, slackWireBubble } from "./slack-thread-view";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
@@ -164,8 +166,8 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { splitLinks } from "./linkify";
-import { slackPreviewText, slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
-import { continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
+import { slackPreviewText, slackWireToPlain, stripSlackDirectives } from "./slack-text";
+import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
@@ -203,6 +205,7 @@ import {
   renderList,
   sessionsState,
   sessionSlackUrl,
+  defaultSessionTitle,
   openSession,
   syncWorkingPulse,
 } from "./sessions";
@@ -356,6 +359,8 @@ export function createChatSurface(
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
+  let slackReactions = collectReactions([], messageText);
+  const slackOutbox = new SlackOutbox();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
@@ -385,7 +390,13 @@ export function createChatSurface(
       }
     }
     updateSpeakerLabels([...messages, ...[...inlineSteers.values()].map((steer) => steer.message)]);
-    continuedSpeakerRows = continuedSpeakers(messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m)));
+    slackReactions = collectReactions(isReadOnlySlackView() ? messages : [], (message) =>
+      message.role === "assistant" ? assistantDisplayText(messageText(message)) : messageText(message),
+    );
+    continuedSpeakerRows = continuedSpeakers(
+      isReadOnlySlackView(),
+      messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m) && !slackReactions.reactionRows.has(m)),
+    );
   }
 
   function isSideChatSurface(): boolean {
@@ -401,7 +412,10 @@ export function createChatSurface(
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
     chatState.labelSpeakers =
-      isSideChatSurface() || names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+      isSideChatSurface() ||
+      isReadOnlySlackView() ||
+      names.size > 1 ||
+      (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
@@ -423,7 +437,7 @@ export function createChatSurface(
 
   function speakerTime(message: AgentMessage): TemplateResult | typeof nothing {
     const ts = (message as { timestamp?: number }).timestamp;
-    return isSideChatSurface() && ts !== undefined
+    return (isSideChatSurface() || isReadOnlySlackView()) && ts !== undefined
       ? html`<time class="speaker-time">${formatMessageTime(ts)}</time>`
       : nothing;
   }
@@ -434,7 +448,7 @@ export function createChatSurface(
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
         title=${speaker}
-        >${isSideChatSurface() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
+        >${isSideChatSurface() || isReadOnlySlackView() ? speaker : speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
       >${speakerTime(message)}
     </div>`;
   }
@@ -1405,7 +1419,7 @@ export function createChatSurface(
     const priorHost = sameSession ? container.querySelector<HTMLElement>(":scope > .readonly-chat") : null;
     const restoreScroll = priorHost ? preserveTranscriptScroll(priorHost) : null;
     const host = priorHost ?? document.createElement("div");
-    host.className = "custom-chat readonly-chat";
+    host.className = `custom-chat readonly-chat ${s.surface === "slack" ? "slack-thread-chat" : ""}`;
     const chatSurface = chatSurfaceOf(s);
     const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
     const slackReply = repliesAsViewer(s)
@@ -1414,39 +1428,54 @@ export function createChatSurface(
     if (slackReply) {
       slackReply.sessionId = s.id;
       slackReply.user = appState.me?.user ?? "";
-      if (!priorReply)
-        slackReply.addEventListener("slack-sent", () => {
-          followReadOnlySend = true;
-          onDelivery(s.threadRef);
+      if (!priorReply) {
+        slackOutbox.listen(slackReply, {
+          queued: () => {
+            readonlyRedraw?.();
+            scrollToBottom();
+          },
+          sent: () => {
+            followReadOnlySend = true;
+            onDelivery(s.threadRef);
+          },
+          dropped: () => readonlyRedraw?.(),
         });
+      }
     }
+    slackOutbox.confirm(s.id, messages);
     let approvals: PendingApproval[] = [];
     const draw = () => {
       approvals = unresolvedApprovals(approvals);
-      const shownMessages = chatState.inheritedExpanded ? [...chatState.inheritedMessages, ...messages] : messages;
+      const shownMessages = [
+        ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
+        ...messages,
+        ...slackOutbox.pending(s.id),
+      ];
       prepareMessageRows(shownMessages);
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)}
-            <div class="readonly-banner">
-              ${
-                slackReply
-                  ? html`Replies are sent to this Slack conversation as
-                    you.${
-                      sessionSlackUrl(s)
-                        ? html` <a
-                            class="readonly-banner-link"
-                            href=${sessionSlackUrl(s)!}
-                            target="_blank"
-                            rel="noreferrer"
-                            >Open in Slack</a
-                          >`
-                        : nothing
-                    }`
-                  : `This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}`
-              }
-            </div>
+            ${
+              s.surface === "slack"
+                ? chatHeader(
+                    s.type === "channel" ? slackTitle(defaultSessionTitle(s), s.title?.trim()) : groupDmTitle(s),
+                    null,
+                    shownMessages,
+                    { shown: 3, named: true },
+                    openInSurface(sessionSlackUrl(s), chatSurface?.label),
+                  )
+                : chatHeader(groupDmTitle(s), chatSurface ? chatSurface.label : "Read-only", shownMessages, {
+                    shown: 5,
+                    named: false,
+                  })
+            }
+            ${
+              slackReply
+                ? nothing
+                : html`<div class="readonly-banner">
+                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                  </div>`
+            }
             ${backgroundActivityStrip()} ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
             <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
               ${pinnedStrip()}
@@ -2011,29 +2040,38 @@ export function createChatSurface(
     return [...seen.values()];
   }
 
-  function participantStack(people: Participant[]): TemplateResult | typeof nothing {
+  function participantStack(people: Participant[], max: number): TemplateResult | typeof nothing {
     if (!people.length) return nothing;
-    const shown = people.slice(0, 5);
-    const rest = people.slice(5);
+    const shown = people.slice(0, max);
+    const rest = people.slice(max);
     return html`<div class="chat-participants" role="list" aria-label=${`${people.length} participants`}>
       ${shown.map((person) => html`<span role="listitem" class="chat-participant">${avatarTpl(person)}</span>`)}
       ${rest.length ? html`<span class="chat-participant-more" ${tip(rest.map((p) => p.name).join(", "))}>+${rest.length}</span>` : nothing}
     </div>`;
   }
 
+  function peopleNames(people: Participant[], shown: number): string {
+    const named = people.slice(0, shown).map((person) => (person.key === appState.me?.user ? "you" : person.name));
+    return `${named.join(", ")}${people.length > shown ? ` +${people.length - shown}` : ""}`;
+  }
+
   function chatHeader(
     title: string | TemplateResult,
-    detail: string,
-    readOnly: boolean,
-    messages: AgentMessage[] = [],
+    subtitle: string | null,
+    messages: AgentMessage[],
+    people: { shown: number; named: boolean },
+    action: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
+    const participants = conversationParticipants(messages);
     return html`
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title" dir="auto">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+          ${subtitle === null ? nothing : html`<div class="chat-subtitle">${subtitle}</div>`}
         </div>
-        ${participantStack(conversationParticipants(messages))}
+        ${participantStack(people.named ? participants.slice(0, people.shown) : participants, people.shown)}
+        ${people.named && participants.length ? html`<span class="chat-participant-names">${peopleNames(participants, people.shown)}</span>` : nothing}
+        ${action}
       </header>
     `;
   }
@@ -2139,7 +2177,7 @@ export function createChatSurface(
     isStreaming = false,
     inline = false,
   ): TemplateResult | typeof nothing {
-    if (hiddenMessage(message)) return nothing;
+    if (hiddenMessage(message) || slackReactions.reactionRows.has(message)) return nothing;
     const role = (message as { role?: string }).role;
     if (!inline && rendersInsideWork(message)) return nothing;
     if (role === "user" || role === "user-with-attachments") {
@@ -2185,7 +2223,7 @@ export function createChatSurface(
         });
       return html`
         <article
-          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
+          class="message-row user-row ${speaker ? "named-user-row" : ""} ${inline ? "steered-row" : ""} ${fromSomeoneElse(message, appState.me?.user) ? "others-row" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""} ${slackOutbox.sending(message) ? "sending-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message).join(" ")}
         >
@@ -2196,13 +2234,14 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText, slackSelf()) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
               <span class="pin-toggle-label">Show more</span>${icon(ChevronDown, 14)}
             </button>
           </div>
+          ${reactionChips(slackReactions.onMessage.get(message))}
           ${
             sendFailure
               ? html`<div class="send-failure">
@@ -2317,26 +2356,29 @@ export function createChatSurface(
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
       const labeled = chatState.labelSpeakers;
+      const workBelow = isReadOnlySlackView();
       return html`
         <article
-          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""}"
+          class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
           data-index=${index}
           data-entry-seqs=${messageEntrySeqs(message)
             .filter((seq) => !inlineSteers.has(seq))
             .join(" ")}
         >
           ${
-            labeled
+            labeled && !continuedSpeakerRows.has(message)
               ? html`<div class="speaker-label">
-                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${speakerTime(msg)}
+                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${isReadOnlySlackView() ? appTag() : nothing}${speakerTime(msg)}
                 </div>`
               : nothing
           }
           ${viaLine(msg as AssistantWork)}
           <div class="assistant-body">
-            ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+            ${workBelow ? nothing : workView} ${assistantContent(msg, isStreaming, showWork)}
+            ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
-            ${isStreaming ? nothing : messageMeta(msg, index)}
+            ${workBelow && workView !== nothing ? html`<div class="slack-work">${workView}</div>` : nothing}
+            ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>
         </article>
       `;
@@ -2486,6 +2528,10 @@ export function createChatSurface(
     </section>`;
   }
 
+  function slackSelf(): string {
+    return (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
+  }
+
   function isReadOnlySlackView(): boolean {
     return !chatState.agent && chatState.forkSession?.surface === "slack";
   }
@@ -2501,21 +2547,6 @@ export function createChatSurface(
 
   function assistantDisplayText(text: string): string {
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
-  }
-
-  function slackWireBubble(text: string): TemplateResult {
-    const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
-    const chip = (handle: string): TemplateResult =>
-      html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-    const segments = splitSlackWire(text).map((seg) => {
-      if (seg.kind === "mention") return chip(seg.handle);
-      if (seg.kind === "link")
-        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-          >${seg.label}</a
-        >`;
-      return seg.text;
-    });
-    return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
 
   function assistantText(
