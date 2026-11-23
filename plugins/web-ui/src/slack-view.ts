@@ -17,7 +17,12 @@ export function continuedSpeakers(agents: boolean, rows: readonly AgentMessage[]
       speakerId?: string;
       personaId?: string;
     };
-    const key = role === "user" ? speakerId || speaker : agents ? `${role}:${personaId ?? ""}` : undefined;
+    const human = role === "user" || role === "user-with-attachments";
+    const key = human
+      ? speakerId || speaker
+      : agents && role === "assistant"
+        ? `assistant:${personaId ?? ""}`
+        : undefined;
     if (key && key === previous) continued.add(message);
     previous = key;
   }

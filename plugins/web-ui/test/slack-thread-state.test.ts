@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SlackOutbox } from "../src/slack-outbox.ts";
-import { collectReactions } from "../src/slack-view.ts";
+import { collectReactions, continuedSpeakers } from "../src/slack-view.ts";
 
 const said = (speaker: string, content: string, ts?: string) =>
   ({ role: "user", speaker, content, ts, timestamp: 0 }) as AgentMessage;
@@ -29,4 +29,13 @@ test("a reaction lands on the message its full quote names", () => {
   const { onMessage } = collectReactions([first, second, reaction], text);
   assert.deepEqual([...(onMessage.get(first) ?? [])], [["eyes", ["Ann"]]]);
   assert.equal(onMessage.get(second), undefined);
+});
+
+test("attachment rows from different people stay separate speakers", () => {
+  const rows = [
+    { role: "user-with-attachments", speakerId: "U1", content: "a" },
+    { role: "user-with-attachments", speakerId: "U2", content: "b" },
+    { role: "user-with-attachments", speakerId: "U2", content: "c" },
+  ] as unknown as AgentMessage[];
+  assert.deepEqual([...continuedSpeakers(true, rows)], [rows[2]]);
 });
