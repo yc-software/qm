@@ -763,6 +763,13 @@ struct ChatView: View {
         .id(model.conversation.id)
       }
     }
+    // The composer grows into the dictation panel on one spring applied to the whole bar, so
+    // the chrome, the rows above it that hide while dictating, and the buttons all move in
+    // one transaction; animating only the composer let the bar snap and the buttons jump.
+    // Closing settles without bounce.
+    .animation(
+      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
+      value: dictation.busy)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -849,12 +856,6 @@ struct ChatView: View {
       if dictation.busy { NativeDictationGlow(model: dictation) }
     }
     .composerChrome()
-    // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
-    // field and the incoming orb move together instead of snapping.
-    // Closing settles without bounce: an overshoot reads as the buttons jumping.
-    .animation(
-      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
-      value: dictation.busy)
     // A soft tap as the panel opens, matching the drawer's haptic.
     .sensoryFeedback(trigger: dictation.busy) { _, open in
       open ? .impact(flexibility: .soft, intensity: 0.7) : nil
