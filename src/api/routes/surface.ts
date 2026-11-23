@@ -208,6 +208,24 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
+const MOVE_REFUSALS = {
+  not_found: { status: 404, message: "That conversation isn't available." },
+  same_scope: { status: 409, message: "That conversation is already in this project." },
+  unsupported_source: { status: 409, message: "Only your own chats and project chats can be moved." },
+  forbidden: { status: 403, message: "You're not a member of that project." },
+  busy: { status: 409, message: "Wait for the agent to finish before moving this chat." },
+} as const;
+
+async function moveSession(ctx: ApiCtx): Promise<void> {
+  const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
+  const out = await ctx.app.moveSession(ctx.params.id!, b.principalId, b.scopeId as ScopeId);
+  if (out.moved) return sendJson(ctx.res, 200, { session: out.session });
+  const refusal = MOVE_REFUSALS[out.reason];
+  return sendJson(ctx.res, refusal.status, { error: out.reason, message: refusal.message });
+}
+
 function agentConversation(session: Session) {
   return {
     id: session.id,
@@ -1526,6 +1544,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
+    { method: "POST", path: "/v1/sessions/:id/move", browser: true, auth: "source", handle: moveSession },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
     { method: "POST", path: "/v1/sessions/:id/goal/resume", browser: true, auth: "source", handle: resumeSessionGoal },

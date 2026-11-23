@@ -122,6 +122,7 @@ export function createSessionMethods(
   | "deleteEphemeralSession"
   | "purgeExpiredEphemeralSessions"
   | "forkSession"
+  | "moveSession"
   | "grant"
   | "revokeGrant"
   | "grantees"
@@ -409,6 +410,30 @@ export function createSessionMethods(
     if (deletedRuns.length) await deps.runActivity?.deleteForRuns(tenant, deletedRuns);
     await deps.sessions.deleteSession(sessionId);
   }
+
+  const copyToFreshWebSession = async (
+    principalId: string,
+    target: Pick<Session, "type" | "scopeId" | "channelName">,
+    copied: readonly Item[],
+    members?: readonly string[],
+  ): Promise<{ session: Session; lastSeq: number | null }> => {
+    const threadRef = `web:${principalId}:${randomUUID()}`;
+    const session = await deps.sessions.getOrCreateByThread(
+      threadRef,
+      target.type,
+      target.scopeId,
+      target.channelName,
+      "web",
+    );
+    const copiedItems = await deps.sessions.appendMany(
+      { sessionId: session.id },
+      copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
+    );
+    await Promise.all(
+      (members ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)),
+    );
+    return { session, lastSeq: copiedItems.at(-1)?.seq ?? null };
+  };
 
   return {
     async getSession(sessionId, window) {
@@ -1136,19 +1161,12 @@ export function createSessionMethods(
           (!isSideChatAnchor(opts.sideChat) || !copied.some((item) => item.seq === opts.sideChat!.entrySeq))
         )
           throw new SideChatAnchorError();
-        const threadRef = `web:${principalId}:${randomUUID()}`;
-        const forked = await deps.sessions.getOrCreateByThread(
-          threadRef,
-          source.type,
-          source.scopeId,
-          source.channelName,
-          "web",
+        const { session: forked, lastSeq: forkBoundarySeq } = await copyToFreshWebSession(
+          principalId,
+          { type: source.type, scopeId: source.scopeId, channelName: source.channelName },
+          copied,
+          projectMembers,
         );
-        const copiedItems = await deps.sessions.appendMany(
-          { sessionId: forked.id },
-          copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
-        );
-        const forkBoundarySeq = copiedItems.at(-1)?.seq ?? null;
         if (forkBoundarySeq !== null) {
           await deps.sessions.updateForkProvenance(forked.id, {
             forkedFrom: { sessionId, title: source.title ?? null },
@@ -1156,9 +1174,6 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
-        await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
-        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
@@ -1183,6 +1198,56 @@ export function createSessionMethods(
         if (!members?.includes(principalId)) return null;
         return fork(members);
       });
+    },
+
+    async moveSession(sessionId, principalId, targetScopeId) {
+      const viewed = await sessionForViewer(sessionId, principalId);
+      const source = viewed && (await deps.sessions.get(sessionId));
+      if (!viewed || !source || source.ephemeral) return { moved: false, reason: "not_found" };
+      if (source.scopeId === targetScopeId) return { moved: false, reason: "same_scope" };
+      const from = parseScopeId(source.scopeId);
+      const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref) !== null;
+      if ((from.kind !== "personal" && !fromProject) || !(await mayWriteSession(principalId, source)))
+        return { moved: false, reason: "unsupported_source" };
+      const target = parseScopeId(targetScopeId);
+      const projectId = target.kind === "group" ? projectIdFromGroupRef(target.ref) : null;
+      const projects = deps.projects;
+      if (!projectId || !projects) return { moved: false, reason: "forbidden" };
+      const result = await projects.withRosterLock(projectId, async (project) => {
+        if (project.orgId !== orgIdOf()) return { moved: false as const, reason: "forbidden" as const };
+        const members = await projects.members(target.ref);
+        if (!members?.includes(principalId)) return { moved: false as const, reason: "forbidden" as const };
+        if ((await deps.runs.inFlightForThread(source.threadRef)).length)
+          return { moved: false as const, reason: "busy" as const };
+        const items = (await transcripts.forViewer(sessionId, principalId)).items;
+        const { session: moved } = await copyToFreshWebSession(
+          principalId,
+          { type: "group", scopeId: targetScopeId, channelName: project.name },
+          items,
+          members,
+        );
+        const title = viewed.title?.trim();
+        if (title) await deps.sessions.updateTitle(moved.id, title);
+        if (viewed.pinned || viewed.color)
+          await deps.sessions.updateParticipantView(moved.id, principalId, {
+            ...(viewed.pinned ? { pinned: true } : {}),
+            ...(viewed.color ? { color: viewed.color } : {}),
+          });
+        await deps.sessions.updateParticipantView(sessionId, principalId, { archived: true });
+        return { moved: true as const, sessionId: moved.id };
+      });
+      if (!result) return { moved: false, reason: "forbidden" };
+      if (!result.moved) return result;
+      h.recordAudit({
+        at: Date.now(),
+        principalId,
+        action: "session.move",
+        resource: sessionId,
+        scopeLabel: targetScopeId,
+        detail: JSON.stringify({ from: source.scopeId, to: targetScopeId, session: result.sessionId }),
+      });
+      const stored = (await sessionForViewer(result.sessionId, principalId))!;
+      return { moved: true, session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
     },
 
     async spawnSession(principalId, opts) {

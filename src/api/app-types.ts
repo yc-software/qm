@@ -460,6 +460,7 @@ export interface App {
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; items: Item[] } | null>;
+  moveSession(sessionId: string, principalId: string, targetScopeId: ScopeId): Promise<MoveSessionResult>;
   listFilesForViewer(
     tenant: Tenant,
     principalId: string,
@@ -962,3 +963,7 @@ interface SessionPageResult {
   next: { activity: number; id: string } | null;
   hasArchived?: boolean;
 }
+
+export type MoveSessionResult =
+  | { moved: true; session: Session }
+  | { moved: false; reason: "not_found" | "same_scope" | "unsupported_source" | "forbidden" | "busy" };

@@ -706,6 +706,16 @@ a.chat-row-open {
 #sidebar-body.detach-drop-target .detach-drop-zone * {
   pointer-events: none;
 }
+.session-drop-over {
+  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.context-detail.session-drop-over {
+  outline-offset: 6px;
+  border-radius: var(--radius-md);
+}
 .recent-project-children .session,
 .archived-children .session {
   padding-left: 6px;

@@ -387,6 +387,13 @@ export async function forkSession(
   );
 }
 
+export async function moveSession(id: string, scopeId: string): Promise<{ session: CoreSession }> {
+  return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}/move`, {
+    method: "POST",
+    body: JSON.stringify({ scopeId }),
+  });
+}
+
 export function forkCutSeq(
   items: Item[],
   messages: readonly unknown[],
