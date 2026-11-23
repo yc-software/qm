@@ -117,7 +117,7 @@ test("slackMessageContent renders legacy attachment fields and falls back only w
   );
 });
 
-test("slackMessageContent renders top-level blocks only when the message has no text", () => {
+test("slackMessageContent keeps context blocks when text is set and skips duplicates", () => {
   const blocks = [
     { type: "header", text: { type: "plain_text", text: "Deploy report" } },
     {
@@ -136,7 +136,8 @@ test("slackMessageContent renders top-level blocks only when the message has no 
   ];
 
   assert.equal(slackMessageContent({ text: "", blocks }).text, "Deploy report\nshipped by <@U1>\n*env* prod\nvia CI");
-  assert.equal(slackMessageContent({ text: "shipped", blocks }).text, "shipped");
+  assert.equal(slackMessageContent({ text: "shipped", blocks }).text, "shipped\nvia CI");
+  assert.equal(slackMessageContent({ text: "via CI", blocks: [blocks[2]] }).text, "via CI");
 });
 
 test("slackMessageContent leaves link previews out of the text", () => {

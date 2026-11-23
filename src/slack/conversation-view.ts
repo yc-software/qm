@@ -13,7 +13,7 @@ import {
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
-import { type SlackHistoryMessage } from "./payloads.ts";
+import { slackBotName, type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import { isBotAuthored, isOwnSlackMessage, slackFileName } from "./message-gating.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
@@ -86,8 +86,8 @@ export function createConversationSerializer(deps: {
 
   function messageAuthorName(m: SlackHistoryMessage, people: SlackPeople, botNameById: Map<string, string>): string {
     if (m.user && people.principals.has(m.user)) return people.names.get(m.user) ?? m.user;
-    if (m.bot_profile?.name) return String(m.bot_profile.name);
-    if (m.username) return String(m.username);
+    const botName = slackBotName(m);
+    if (botName) return botName;
     if (m.user) return people.names.get(m.user) ?? m.user;
     if (m.bot_id) return botNameById.get(m.bot_id) ?? "someone";
     return "someone";

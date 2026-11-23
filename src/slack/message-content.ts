@@ -30,6 +30,12 @@ const blocksText = (blocks: unknown): string[] =>
     .map((block) => blockText(block).trim())
     .filter(Boolean);
 
+const contextBlocksText = (blocks: unknown): string[] =>
+  nodes(blocks)
+    .filter((block) => block.type === "context")
+    .map((block) => blockText(block).trim())
+    .filter(Boolean);
+
 function attachmentText(attachment: SlackNode): string {
   const parts = [
     str(attachment.pretext),
@@ -87,7 +93,10 @@ export function slackMessageContent(message: object): { text: string; files: Sla
   for (const file of nodes(root.files)) addFile(file);
   visit(root, false);
 
-  const base = String(root.text ?? "") || blocksText(root.blocks).join("\n");
+  const rootText = String(root.text ?? "");
+  const base = rootText
+    ? [rootText, ...contextBlocksText(root.blocks).filter((line) => !rootText.includes(line))].join("\n")
+    : blocksText(root.blocks).join("\n");
   const text = rendered.length ? [base, ...rendered].filter(Boolean).join("\n") : base;
   return { text, files };
 }

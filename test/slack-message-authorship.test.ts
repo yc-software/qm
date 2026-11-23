@@ -40,6 +40,7 @@ test("Slack messages copied into a session keep the person who wrote them, even 
   const raw: SlackHistoryMessage[] = [
     { ts: "1.0", user: "UALICE", text: "<@UBOT> why didn't you respond here" },
     { ts: "2.0", user: "UBOT", bot_id: "BBOT", bot_profile: assistantApp, text: "On it." },
+    { ts: "2.5", user: "UBOT", bot_id: "BBOT", bot_profile: assistantApp, username: "Ada", text: "Morning." },
     { ts: "3.0", user: "UALICE", bot_id: "BAPP", bot_profile: assistantApp, text: "sent from the web" },
     { ts: "4.0", user: "UGH", bot_id: "BGH", bot_profile: { name: "GitHub" }, text: "PR merged" },
     { ts: "9.0", user: "UALICE", text: "<@UBOT> look me up" },
@@ -49,7 +50,8 @@ test("Slack messages copied into a session keep the person who wrote them, even 
     items.map((item) => [item.text, item.body?.name, item.body?.speakerId, item.body?.sourceRole]),
     [
       ["@qm why didn't you respond here", "Alice", "alice@example.com", undefined],
-      ["On it.", undefined, undefined, "agent"],
+      ["On it.", "Assistant", undefined, "agent"],
+      ["Morning.", "Ada", undefined, "agent"],
       ["sent from the web", "Alice", "alice@example.com", "bot"],
       ["PR merged", "GitHub", undefined, "bot"],
     ],

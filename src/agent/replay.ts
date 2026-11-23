@@ -158,12 +158,14 @@ export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
 
 export function renderOverheard(p: OverheardEntryPayload): string {
   const body = p.text || (p.files?.length ? "(shared file)" : "");
+  const name = p.name?.trim();
+  const speaker = name ? { [p.sourceRole === "agent" ? "via" : "author"]: name } : {};
   return messageTag(
     {
       overheard: true,
       from: p.sourceRole ?? "human",
       ...(p.ts ? { id: p.ts, sentAt: isoFromTs(p.ts) } : {}),
-      ...(p.name?.trim() ? { author: p.name.trim() } : {}),
+      ...speaker,
       ...(p.mentions && Object.keys(p.mentions).length ? { mentions: p.mentions } : {}),
     },
     body,
