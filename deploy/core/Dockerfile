@@ -1,15 +1,15 @@
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS wireproxy-build
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS wireproxy-build
 
 RUN apk add --no-cache go \
   && CGO_ENABLED=0 GOBIN=/out go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2
 
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS connector-sdk-build
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS connector-sdk-build
 WORKDIR /app
 COPY deploy/connector-sdk ./deploy/connector-sdk
 RUN npm ci --prefix deploy/connector-sdk --ignore-scripts --no-audit --no-fund \
   && node deploy/connector-sdk/build.mjs
 
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS web-ui-build
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS web-ui-build
 WORKDIR /app/plugins/web-ui
 ARG WEB_UI_BASE=/
 ENV WEB_UI_BASE=$WEB_UI_BASE
@@ -23,7 +23,7 @@ COPY plugins/chassis/src /app/plugins/chassis/src
 COPY docs/images/slack-app-config-token-setup.gif /app/docs/images/slack-app-config-token-setup.gif
 RUN npm run build
 
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
 
 RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli
 
