@@ -120,7 +120,6 @@ struct NativeDictationComposer: View {
     }
   }
 
-
 }
 
 /// The dictation panel's discard button, shown in the composer row where the plus sits.
@@ -147,7 +146,6 @@ struct NativeDictationDiscardButton: View {
 struct NativeDictationSendButton: View {
   let model: NativeDictationModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
 
   var body: some View {
     if model.state == .retry {
