@@ -10,31 +10,16 @@ struct NativeDictationComposer: View {
 
   var body: some View {
     VStack(spacing: 8) {
-      HStack(spacing: 6) {
-        Text(headerTitle)
-          .font(.caption2.weight(.semibold))
-          .tracking(1.4)
-        if model.state == .recording || model.state == .ready {
-          Text("·")
-          Text(String(format: "%01d:%02d", Int(model.elapsed) / 60, Int(model.elapsed) % 60))
-            .font(.caption.monospacedDigit())
-        }
-      }
-      .foregroundStyle(.secondary)
-      .frame(maxWidth: .infinity)
-      .accessibilityElement(children: .combine)
-      .entrance(appeared, delay: 0.1, reduceMotion: reduceMotion)
-
-      NativeDictationOrb(
+      NativeDictationWaves(
         model: model,
-        size: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 58 : 82
+        height: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 44 : 64
       )
       .padding(.vertical, 2)
-      // The orb blooms in a beat after the panel opens.
-      .scaleEffect(appeared || reduceMotion ? 1 : 0.5)
+      // The lines rise out of a flat stroke a beat after the panel opens.
+      .scaleEffect(x: 1, y: appeared || reduceMotion ? 1 : 0.1)
       .opacity(appeared || reduceMotion ? 1 : 0)
       .animation(
-        reduceMotion ? nil : .spring(duration: 0.5, bounce: 0.32).delay(0.04), value: appeared)
+        reduceMotion ? nil : .spring(duration: 0.5, bounce: 0.28).delay(0.04), value: appeared)
 
       transcriptArea
         .entrance(appeared, delay: 0.14, reduceMotion: reduceMotion)
@@ -136,17 +121,6 @@ struct NativeDictationComposer: View {
       .lineLimit(1)
   }
 
-  private var headerTitle: String {
-    switch model.state {
-    case .idle: "DICTATION"
-    case .preparing: "PREPARING"
-    case .recording: "LISTENING"
-    case .ready: "READY"
-    case .transcribing: "FINISHING"
-    case .retry: "SAVED AUDIO"
-    }
-  }
-
   private var footerTitle: String {
     switch model.state {
     case .idle: ""
@@ -204,48 +178,85 @@ extension View {
   }
 }
 
-private struct NativeDictationOrb: View {
+/// Thin blue lines that lie almost flat while quiet and rise and drift as the speaker's
+/// voice gets louder.
+private struct NativeDictationWaves: View {
   let model: NativeDictationModel
-  let size: CGFloat
+  let height: CGFloat
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var smoother = NativeWaveSmoother()
 
-  private let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
-  private let paleBlue = Color(red: 0.82, green: 0.88, blue: 1.0)
+  private struct Line {
+    let frequency: Double
+    let speed: Double
+    let phase: Double
+    let weight: Double
+    let color: Color
+    let width: CGFloat
+  }
+
+  private static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
+  private static let mid = Color(red: 0.43, green: 0.61, blue: 0.97)
+  private static let sky = Color(red: 0.29, green: 0.52, blue: 0.96)
+  private static let lines = [
+    Line(frequency: 1.5, speed: 2.1, phase: 0.0, weight: 1.0, color: blue, width: 2),
+    Line(frequency: 2.2, speed: -2.6, phase: 1.1, weight: 0.84, color: mid, width: 1.5),
+    Line(frequency: 1.1, speed: 1.4, phase: 2.3, weight: 0.72, color: sky, width: 1.25),
+    Line(frequency: 2.8, speed: 3.1, phase: 0.6, weight: 0.6, color: blue, width: 1),
+    Line(frequency: 1.8, speed: -1.7, phase: 3.4, weight: 0.5, color: mid, width: 1),
+    Line(frequency: 3.3, speed: 3.6, phase: 4.2, weight: 0.4, color: sky, width: 1),
+    Line(frequency: 1.3, speed: -3.0, phase: 5.1, weight: 0.32, color: blue, width: 1),
+  ]
 
   var body: some View {
     let active = model.state == .recording
-    let level = model.level
-    TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !active || reduceMotion)) {
-      timeline in
+    TimelineView(.animation(paused: !active || reduceMotion)) { timeline in
       let time = timeline.date.timeIntervalSinceReferenceDate
-      let drift = active && !reduceMotion ? sin(time * 0.9) : 0
-      ZStack {
-        Circle()
-          .fill(
-            LinearGradient(
-              colors: [blue.opacity(0.76), Color(red: 0.43, green: 0.61, blue: 0.97), paleBlue],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            ))
-        Ellipse()
-          .fill(.white.opacity(0.66))
-          .frame(width: size * 1.38, height: size * 0.40)
-          .blur(radius: size * 0.11)
-          .rotationEffect(.degrees(-24 + drift * 3))
-          .offset(x: -size * 0.02, y: size * (0.13 + drift * 0.03))
-        Ellipse()
-          .fill(blue.opacity(0.18))
-          .frame(width: size * 0.92, height: size * 0.28)
-          .blur(radius: size * 0.12)
-          .rotationEffect(.degrees(-24))
-          .offset(x: size * 0.20, y: size * (-0.23 + drift * 0.02))
+      Canvas { context, size in
+        let level = smoother.step(toward: active ? model.level : 0, at: time)
+        draw(in: &context, size: size, time: reduceMotion ? 0 : time, level: level)
       }
-      .frame(width: size, height: size)
-      .clipShape(Circle())
-      .overlay { Circle().strokeBorder(blue.opacity(0.09), lineWidth: 0.5) }
-      .scaleEffect(active ? 1 + level * 0.025 : 1)
-      .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: level)
-      .accessibilityHidden(true)
     }
+    .frame(height: height)
+    .frame(maxWidth: .infinity)
+    .accessibilityHidden(true)
+  }
+
+  private func draw(in context: inout GraphicsContext, size: CGSize, time: Double, level: Double) {
+    let middle = size.height / 2
+    // A faint ripple stays visible in silence; speech lifts the lines toward the edges.
+    let energy = 0.06 + 0.94 * pow(level, 0.8)
+    let steps = max(Int(size.width / 3), 2)
+    for line in Self.lines {
+      let sway = 0.75 + 0.25 * sin(time * 0.8 + line.phase)
+      let amplitude = energy * line.weight * sway * Double(size.height) * 0.46
+      var path = Path()
+      for step in 0...steps {
+        let progress = Double(step) / Double(steps)
+        let envelope = pow(sin(progress * .pi), 2)
+        let wave = sin(progress * line.frequency * 2 * .pi + time * line.speed + line.phase)
+        let point = CGPoint(
+          x: CGFloat(progress) * size.width, y: middle + CGFloat(wave * envelope * amplitude))
+        if step == 0 { path.move(to: point) } else { path.addLine(to: point) }
+      }
+      context.stroke(
+        path, with: .color(line.color.opacity(0.3 + 0.7 * line.weight)),
+        style: StrokeStyle(lineWidth: line.width, lineCap: .round, lineJoin: .round))
+    }
+  }
+}
+
+/// Eases the microphone level, which arrives ten times a second, into per-frame motion:
+/// quick to rise with the voice and slower to settle.
+private final class NativeWaveSmoother {
+  private var value = 0.0
+  private var last: Double?
+
+  func step(toward target: Double, at time: Double) -> Double {
+    let elapsed = last.map { min(max(time - $0, 0), 0.1) } ?? 0
+    last = time
+    let rate = target > value ? 14.0 : 5.0
+    value += (target - value) * (1 - exp(-rate * elapsed))
+    return value
   }
 }
