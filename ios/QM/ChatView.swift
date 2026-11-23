@@ -846,10 +846,12 @@ struct ChatView: View {
       }
     }
     .padding(8)
-    .composerChrome()
-    .overlay {
+    // Behind the content but above the composer fill, so the glow tints the panel from its
+    // edges inward without covering the text.
+    .background {
       if dictation.busy { NativeDictationGlow(model: dictation) }
     }
+    .composerChrome()
     // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
     // field and the incoming orb move together instead of snapping.
     .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)

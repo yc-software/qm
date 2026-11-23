@@ -249,8 +249,8 @@ private struct NativeDictationWaves: View {
   }
 }
 
-/// A gradient rim around the dictation panel that brightens, thickens and turns as the
-/// speaker's voice gets louder, and fades once recording stops.
+/// A gradient that glows inward from the dictation panel's edge while the speaker is talking.
+/// It stays hidden in silence and grows brighter and deeper as the voice gets louder.
 struct NativeDictationGlow: View {
   let model: NativeDictationModel
   var cornerRadius: CGFloat = 24
@@ -273,13 +273,16 @@ struct NativeDictationGlow: View {
       let gradient = AngularGradient(
         colors: Self.colors, center: .center, angle: .degrees(reduceMotion ? 0 : time * 40))
       let shape = RoundedRectangle(cornerRadius: cornerRadius)
+      // Room noise sits below the threshold, so nothing shows until the person speaks.
+      let presence = min(1, max(0, (level - 0.12) / 0.3))
       ZStack {
-        shape.strokeBorder(gradient, lineWidth: 6 + 10 * level)
-          .blur(radius: 10 + 8 * level)
-          .opacity(0.2 + 0.6 * level)
-        shape.strokeBorder(gradient, lineWidth: 1.5 + 1.5 * level)
-          .opacity(0.4 + 0.6 * level)
+        shape.strokeBorder(gradient, lineWidth: 14 + 14 * level)
+          .blur(radius: 12 + 8 * level)
+          .opacity(0.8 * presence)
+        shape.strokeBorder(gradient, lineWidth: 1.5 + level)
+          .opacity(presence)
       }
+      .clipShape(shape)
     }
     .opacity(active ? 1 : 0)
     .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: active)
