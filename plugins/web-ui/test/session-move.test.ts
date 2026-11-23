@@ -18,10 +18,13 @@ const sessions = [
   { id: "c", scopeId: "group:project:launch", surface: "web" },
   { id: "busy", scopeId: "personal:me", surface: "web", working: true },
   { id: "slack", scopeId: "personal:me", surface: "slack" },
-  { id: "child", scopeId: "personal:me", surface: "web", parentSessionId: "a" },
+  { id: "parent", scopeId: "personal:me", surface: "web" },
+  { id: "child", scopeId: "personal:me", surface: "web", parentSessionId: "parent" },
   { id: "channel", scopeId: "channel:C1", surface: "web" },
   { id: "other", scopeId: "group:project:other", surface: "web" },
   { id: "shared", scopeId: "personal:someone-else", surface: "web" },
+  { id: "goal", scopeId: "personal:me", surface: "web", goal: { objective: "ship", activeMs: 0 } },
+  { id: "cron", scopeId: "personal:me", surface: "web", crons: 1 },
 ] as CoreSession[];
 const movableFrom = (scopeId: string) => scopeId === "personal:me" || scopeId.startsWith("group:project:");
 

@@ -213,6 +213,7 @@ const MOVE_REFUSALS = {
   same_scope: { status: 409, message: "That conversation is already in this project." },
   unsupported_source: { status: 409, message: "Only your own web chats and project chats can be moved." },
   not_project: { status: 404, message: "That project isn't available." },
+  anchored: { status: 409, message: "Chats with subagents, goals or scheduled jobs can't be moved." },
   forbidden: { status: 403, message: "You're not a member of that project." },
   busy: { status: 409, message: "Wait for the agent to finish before moving this chat." },
 } as const;

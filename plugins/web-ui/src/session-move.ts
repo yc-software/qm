@@ -9,7 +9,6 @@ export interface SessionMoveHost {
 }
 
 let host: SessionMoveHost | null = null;
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let dragIds: readonly string[] | null = null;
 const movableByTarget = new Map<string, string[]>();
 
@@ -28,6 +27,7 @@ export function movableInto(
   movableFrom: (scopeId: string) => boolean,
 ): string[] {
   const byId = new Map(sessions.map((s) => [s.id, s]));
+  const parents = new Set(sessions.flatMap((s) => (s.parentSessionId ? [s.parentSessionId] : [])));
   return ids.filter((id) => {
     const s = byId.get(id);
     return Boolean(
@@ -37,6 +37,11 @@ export function movableInto(
       !s.working &&
       !s.parentSessionId &&
       !s.sideChat &&
+      !parents.has(s.id) &&
+      !s.goal &&
+      !s.crons &&
+      !s.watches &&
+      !s.backgroundJobs &&
       movableFrom(s.scopeId),
     );
   });
@@ -101,20 +106,4 @@ export function projectDropHandlers(scopeId: string): ProjectDropHandlers {
       void target.move(ids, scopeId);
     },
   };
-}
-
-export function sessionMoveToast(message: string): void {
-  let el = document.querySelector<HTMLElement>(".session-move-toast");
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "split-toast session-move-toast";
-    el.setAttribute("role", "status");
-    document.body.appendChild(el);
-  }
-  el.textContent = message;
-  if (toastTimer !== null) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastTimer = null;
-    document.querySelector(".session-move-toast")?.remove();
-  }, 2500);
 }

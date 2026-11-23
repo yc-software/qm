@@ -67,7 +67,7 @@ test("moving a personal chat into a project copies it there, keeps its title, an
   assert.equal(audits[0]!.scopeLabel, scope);
 });
 
-test("moves are refused for non-members, busy chats, strangers, and non-project targets", async () => {
+test("moves are refused for non-members, busy or delegating chats, strangers, and non-project targets", async () => {
   const { built, scope, personal } = await setup();
   const outsiders = await personal("outsider", "web:outsider:move", "Not a member here");
   assert.deepEqual(await built.app.moveSession(outsiders, "outsider", scope), { moved: false, reason: "forbidden" });
@@ -89,6 +89,11 @@ test("moves are refused for non-members, busy chats, strangers, and non-project 
     moved: false,
     reason: "unsupported_source",
   });
+
+  const parent = await personal("owner", "web:owner:move-parent", "Delegating work");
+  const child = await personal("owner", "web:owner:move-child", "Subagent work");
+  await built.sessions.setParentSession(child, parent);
+  assert.deepEqual(await built.app.moveSession(parent, "owner", scope), { moved: false, reason: "anchored" });
 
   const thread = (await built.sessions.get(sid))!.threadRef;
   const actor = { id: "internal:owner", type: "internal" as const };

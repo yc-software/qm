@@ -135,7 +135,6 @@ import {
   endSessionMoveDrag,
   projectDropHandlers,
   registerSessionMoveHost,
-  sessionMoveToast,
   sessionsToMove,
 } from "./session-move";
 
@@ -1381,14 +1380,14 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
   redrawSelection();
   if (opened) await openSession(opened, undefined, undefined, "replace");
   else if (moved && appState.currentView === "contexts") await renderContexts();
-  if (!failure) sessionMoveToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
-  else if (moved) sessionMoveToast(`Moved ${moved} of ${ids.length} chats to ${name}. ${failure}`);
-  else sessionMoveToast(failure);
+  if (!failure) canvasToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
+  else if (moved) canvasToast(`Moved ${moved} of ${ids.length} chats to ${name}. ${failure}`);
+  else canvasToast(failure);
 }
 
 registerSessionMoveHost({
   sessions: () => sessionsState.list,
-  movableFrom: (scopeId) => scopeId === `personal:${appState.me?.user}` || projectOf(scopeId) !== null,
+  movableFrom: (scopeId) => scopeId === personalScopeId() || projectOf(scopeId) !== null,
   move: moveSessionsToProject,
 });
 

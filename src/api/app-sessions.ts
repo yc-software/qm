@@ -1217,6 +1217,15 @@ export function createSessionMethods(
       const projects = deps.projects;
       if (!projectId || !projects) return { moved: false, reason: "not_project" };
       if ((await deps.runs.inFlightForThread(source.threadRef)).length) return { moved: false, reason: "busy" };
+      const [attached] = await decorateSessions(principalId, [source]);
+      if (
+        attached?.goal ||
+        attached?.crons ||
+        attached?.watches ||
+        attached?.backgroundJobs ||
+        (await deps.sessions.childrenOf(sessionId)).length
+      )
+        return { moved: false, reason: "anchored" };
       const items = (await transcripts.forViewer(sessionId, principalId)).items;
       const result = await projects.withRosterLock(projectId, async (project) => {
         if (project.orgId !== orgIdOf()) return { moved: false as const, reason: "not_project" as const };

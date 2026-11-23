@@ -689,9 +689,21 @@ export function canvasToast(msg: string): void {
   drawToast();
 }
 
+function floatingToastLayer(): HTMLElement {
+  let layer = document.querySelector<HTMLElement>(".split-toast-layer.floating");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "split-toast-layer floating";
+    document.body.appendChild(layer);
+  }
+  return layer;
+}
+
 function drawToast(): void {
-  if (!toastEl) return;
-  render(toastMsg ? html`<div class="split-toast" role="status">${toastMsg}</div>` : nothing, toastEl);
+  const host = toastEl?.offsetParent ? toastEl : floatingToastLayer();
+  for (const layer of [toastEl, document.querySelector<HTMLElement>(".split-toast-layer.floating")])
+    if (layer && layer !== host) render(nothing, layer);
+  render(toastMsg ? html`<div class="split-toast" role="status">${toastMsg}</div>` : nothing, host);
 }
 
 export function beginSessionDrag(s: CoreSession): void {

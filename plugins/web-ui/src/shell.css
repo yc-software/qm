@@ -712,7 +712,7 @@ a.chat-row-open {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
-.split-toast.session-move-toast {
+.split-toast-layer.floating .split-toast {
   position: fixed;
 }
 .context-detail.session-drop-over {
