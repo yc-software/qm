@@ -29,20 +29,8 @@ struct NativeDictationComposer: View {
       if let error = model.error {
         NativeAudioPermissionNotice(message: error, permission: model.permissionError)
       }
-
-      // The same corners as the composer row: the plus becomes discard, send stays send.
-      // Both are full 44pt circles so the pair reads as equals.
-      HStack {
-        discardButton
-        Spacer(minLength: 8)
-        sendButton
-      }
-      .padding(.horizontal, -4)
-      // The buttons sit where the composer's plus and send already were, so they only
-      // fade in place; rising would make them look like they jump.
-      .entrance(appeared, delay: 0.18, rise: 0, reduceMotion: reduceMotion)
     }
-    // No bottom padding: the ✕ and ↑ land exactly where the composer's plus and send were.
+    // The ✕ and ↑ live in the composer's own button row (ChatView), so they never move.
     .padding(.horizontal, 4)
     .padding(.top, 8)
     .accessibilityIdentifier("dictationComposer")
@@ -131,7 +119,13 @@ struct NativeDictationComposer: View {
 
   private var canFinish: Bool { model.state == .recording || model.state == .ready }
 
-  private var discardButton: some View {
+}
+
+/// The dictation panel's discard button, shown in the composer row where the plus sits.
+struct NativeDictationDiscardButton: View {
+  let model: NativeDictationModel
+
+  var body: some View {
     Button {
       model.cancel()
     } label: {
@@ -145,8 +139,16 @@ struct NativeDictationComposer: View {
     .buttonStyle(.plain)
     .accessibilityLabel("Discard recording")
   }
+}
 
-  @ViewBuilder private var sendButton: some View {
+/// The dictation panel's send (or retry) button, shown in the composer row where send sits.
+struct NativeDictationSendButton: View {
+  let model: NativeDictationModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private var canFinish: Bool { model.state == .recording || model.state == .ready }
+
+  var body: some View {
     if model.state == .retry {
       Button {
         model.retry()
@@ -264,11 +266,9 @@ final class NativeWordQueue {
 
 extension View {
   /// Fades and lifts a dictation row in after the panel opens, staggered by `delay`.
-  fileprivate func entrance(
-    _ appeared: Bool, delay: Double, rise: CGFloat = 6, reduceMotion: Bool
-  ) -> some View {
+  fileprivate func entrance(_ appeared: Bool, delay: Double, reduceMotion: Bool) -> some View {
     opacity(appeared || reduceMotion ? 1 : 0)
-      .offset(y: appeared || reduceMotion ? 0 : rise)
+      .offset(y: appeared || reduceMotion ? 0 : 6)
       .animation(reduceMotion ? nil : .easeOut(duration: 0.28).delay(delay), value: appeared)
   }
 }
