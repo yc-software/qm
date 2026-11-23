@@ -30,7 +30,8 @@ any issues that come up, and merge once CI is **fully** green.
    ```
 
    Run this with `execute`, an explicit `sandbox_id`, `background:true`, and authorized
-   credentials; subscribe with `background` action `watch` and the returned `process_id`.
+   credentials; subscribe with `background` action `watch` and the returned `process_id`,
+   without a `pattern`, so every final status wakes you.
    Keep that sandbox ID throughout the checkout, checks, and push.
    Keep one watcher per PR; hand off if another agent already owns it. The helper
    polls internally, retries recognized transport/server errors with bounded backoff,
@@ -42,7 +43,8 @@ any issues that come up, and merge once CI is **fully** green.
    checks, auth failures, rate limits, unknown errors, exhausted retries, and deadlines all
    remain nonzero. Keep `set -e`; never mask failure with a success marker or merge.
    A changed head invalidates successful checks and reviews: restart both on the
-   new SHA. Empty, skipped, or cancelled checks do not count as success.
+   new SHA. Empty, all-skipped, or cancelled checks do not count as success; skipped
+   checks beside passing ones do, and the record names them for you to confirm.
 
    For GitLab, use `glab ci status --live`; the GitHub helper does not cover it.
    Preserve its nonzero status and investigate failures before proceeding.
