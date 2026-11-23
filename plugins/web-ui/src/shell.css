@@ -2531,11 +2531,11 @@ qm-markdown .tok-in {
 .attachment-strip {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 6px;
   margin-top: 9px;
 }
 .attachment-strip {
-  align-items: flex-start;
   max-height: 240px;
   overflow-y: auto;
   padding: 2px;
@@ -2556,13 +2556,15 @@ qm-markdown .tok-in {
   padding: 6px 28px 6px 0;
 }
 .composer-image-open {
+  position: relative;
+  display: block;
   width: 100%;
   border: 0;
   padding: 0;
   cursor: zoom-in;
   background: transparent;
 }
-.composer-image img {
+.composer-image :is(img, video) {
   display: block;
   width: 100%;
   height: 80px;
@@ -2581,46 +2583,6 @@ qm-markdown .tok-in {
   border-radius: 50%;
   background: var(--background);
   color: var(--foreground);
-}
-.project-dialog.attachment-preview {
-  width: min(960px, calc(100vw - 32px));
-}
-.attachment-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-.attachment-preview-head span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.attachment-preview-body {
-  overflow: auto;
-  max-height: 70dvh;
-}
-.attachment-preview-body button {
-  display: block;
-  margin: auto;
-  border: 0;
-  padding: 0;
-  background: var(--secondary);
-  cursor: zoom-in;
-}
-.attachment-preview-body img {
-  display: block;
-  max-width: 100%;
-  max-height: 70dvh;
-  object-fit: contain;
-}
-.attachment-preview-body .actual-size {
-  max-width: none;
-  cursor: zoom-out;
-}
-.attachment-preview-body .actual-size img {
-  max-width: none;
-  max-height: none;
 }
 .queued-strip,
 .chat-bottom-dock > .bg-activity {
@@ -2726,6 +2688,7 @@ qm-markdown .tok-in {
   color: var(--muted-foreground);
 }
 .file-image {
+  position: relative;
   display: inline-block;
 
   max-width: min(320px, 100%);
@@ -2734,7 +2697,7 @@ qm-markdown .tok-in {
   overflow: hidden;
   line-height: 0;
 }
-.file-image img {
+.file-image > :is(img, video) {
   display: block;
 
   max-width: 100%;
@@ -2773,7 +2736,7 @@ qm-markdown .tok-in {
   width: 80px;
   border-radius: 12px;
 }
-.user-row > .message-files .file-image img {
+.user-row > .message-files .file-image > :is(img, video) {
   width: 100%;
   height: 80px;
   object-fit: cover;
@@ -2802,7 +2765,7 @@ qm-markdown .tok-in {
     font-size: 12px;
     line-height: 1.2;
   }
-  .user-row > .message-files .file-image img {
+  .user-row > .message-files .file-image > :is(img, video) {
     width: 22px;
     height: 22px;
     border-radius: 5px;
@@ -2811,6 +2774,9 @@ qm-markdown .tok-in {
   .user-row > .message-files .file-image .file-image-name,
   .user-row > .message-files .file-image .file-image-size {
     display: inline;
+  }
+  .user-row > .message-files .file-video-play {
+    display: none;
   }
 }
 .message-stack .user-row.stuck > .message-files > .attachment-images {
@@ -2834,7 +2800,7 @@ qm-markdown .tok-in {
   font-size: 12px;
   line-height: 1.2;
 }
-.message-stack .user-row.stuck > .message-files .file-image img {
+.message-stack .user-row.stuck > .message-files .file-image > :is(img, video) {
   width: 22px;
   height: 22px;
   border-radius: 5px;
@@ -2843,6 +2809,9 @@ qm-markdown .tok-in {
 .message-stack .user-row.stuck > .message-files .file-image .file-image-name,
 .message-stack .user-row.stuck > .message-files .file-image .file-image-size {
   display: inline;
+}
+.message-stack .user-row.stuck > .message-files .file-video-play {
+  display: none;
 }
 .file-image .file-image-name {
   min-width: 0;

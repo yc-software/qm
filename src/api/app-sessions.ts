@@ -583,7 +583,7 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork, pickRange) {
       const art = await deps.files.get(id);
       if (!art) return null;
       const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
@@ -593,9 +593,16 @@ export function createSessionMethods(
         allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
       }
       if (!allowed) return null;
-      const opened = await deps.files.open(id);
+      const range = pickRange?.(art.sizeBytes);
+      const opened = await deps.files.open(id, range);
       if (!opened) return null;
-      return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
+      return {
+        name: art.name,
+        mimetype: art.mimetype,
+        sizeBytes: opened.sizeBytes,
+        stream: opened.stream,
+        ...(range ? { range } : {}),
+      };
     },
 
     async listSessions(viewer) {

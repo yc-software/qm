@@ -9,7 +9,7 @@ import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createFileDragState } from "./file-drag";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, type DropEntryLike } from "./folder-drop";
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
@@ -35,7 +35,7 @@ import {
   switchedDefault,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, fieldSelect } from "./ui";
+import { fieldSelect } from "./ui";
 import { icon } from "./icons";
 import {
   defaultEffortForModel,
@@ -50,7 +50,8 @@ import { modelSupportsFastMode } from "./pi-models";
 import type { ComposerSurface, ConvCtx, SteeringRun } from "./conv-types";
 import { bumpSessionActivity, dropPendingSession, renderList } from "./sessions";
 import { appState } from "./shell";
-import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
+import { base64ToBytes, base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
+import { dataUrl, mediaKind, openMediaViewer, videoThumb, type MediaItem } from "./media";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
 import { isCompactLayout } from "./viewport";
@@ -621,25 +622,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                     composerState.attachments,
                     (a) => a.id,
                     (a) => html`
-                      <span class=${browserRenderableImage(a.mimeType) ? "file-chip composer-image" : "file-chip"}>
-                        ${
-                          browserRenderableImage(a.mimeType)
-                            ? html`<button
-                                type="button"
-                                class="composer-image-open"
-                                aria-label=${`Preview ${a.fileName}`}
-                                @click=${() => openImagePreview(a)}
-                              >
-                                <img
-                                  src=${a.content.startsWith("data:") ? a.content : `data:${a.mimeType};base64,${a.content}`}
-                                  alt=${a.fileName}
-                                  @error=${(event: Event) => {
-                                    (event.currentTarget as HTMLImageElement).parentElement!.hidden = true;
-                                  }}
-                                />
-                              </button>`
-                            : nothing
-                        }
+                      <span class=${stagedMedia(a) ? "file-chip composer-image" : "file-chip"}>
+                        ${stagedThumb(a)}
                         ${
                           pastedTextIds.has(a.id)
                             ? html`
@@ -654,9 +638,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
                                   <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
                                 </button>
                               `
-                            : html`${browserRenderableImage(a.mimeType) ? nothing : icon(Paperclip, 14)}<span
-                                  dir="auto"
-                                  title=${a.fileName}
+                            : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
                                   >${a.fileName}</span
                                 >`
                         }
@@ -1934,41 +1916,59 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     ctx.chat.state.host?.querySelector<HTMLInputElement>(".file-input")?.click();
   }
 
-  function openImagePreview(attachment: Attachment): void {
-    const dialog = document.createElement("dialog");
-    dialog.className = "project-dialog attachment-preview";
-    dialog.setAttribute("aria-label", attachment.fileName);
-    dialog.addEventListener(
-      "close",
-      () => {
-        render(nothing, dialog);
-        dialog.remove();
-      },
-      { once: true },
+  const stagedSources = new Map<string, string>();
+
+  function stagedMedia(attachment: Attachment): MediaItem | null {
+    const kind = mediaKind(attachment.fileName, attachment.mimeType);
+    if (kind !== "image" && kind !== "video") return null;
+    let src = stagedSources.get(attachment.id);
+    if (!src) {
+      src =
+        kind === "video"
+          ? URL.createObjectURL(
+              new Blob([base64ToBytes(attachment.content) as BlobPart], { type: attachment.mimeType }),
+            )
+          : dataUrl(attachment.content, attachment.mimeType);
+      stagedSources.set(attachment.id, src);
+    }
+    return { kind, name: attachment.fileName, src, size: attachment.size };
+  }
+
+  function stagedThumb(attachment: Attachment): TemplateResult | typeof nothing {
+    for (const [id, src] of stagedSources) {
+      if (composerState.attachments.some((staged) => staged.id === id)) continue;
+      URL.revokeObjectURL(src);
+      stagedSources.delete(id);
+    }
+    const media = stagedMedia(attachment);
+    if (!media) return nothing;
+    const hide = (event: Event): void => {
+      (event.currentTarget as HTMLElement).parentElement!.hidden = true;
+    };
+    return html`<button
+      type="button"
+      class="composer-image-open"
+      aria-label=${`Preview ${attachment.fileName}`}
+      @click=${(event: Event) => openStagedPreview(event, attachment)}
+    >
+      ${
+        media.kind === "video"
+          ? videoThumb(media.src, "file-video-play", hide)
+          : html`<img src=${media.src} alt=${attachment.fileName} @error=${hide} />`
+      }
+    </button>`;
+  }
+
+  function openStagedPreview(event: Event, current: Attachment): void {
+    const staged = composerState.attachments.filter((attachment) => stagedMedia(attachment));
+    const thumbs = (event.currentTarget as HTMLElement)
+      .closest(".attachment-strip")!
+      .querySelectorAll(".composer-image-open > :is(img, video)");
+    openMediaViewer(
+      staged.map((attachment) => stagedMedia(attachment)!),
+      staged.indexOf(current),
+      { originOf: (index) => thumbs[index] ?? null },
     );
-    document.body.append(dialog);
-    const src = attachment.content.startsWith("data:")
-      ? attachment.content
-      : `data:${attachment.mimeType};base64,${attachment.content}`;
-    render(
-      html`
-        <div class="attachment-preview-head">
-          <span dir="auto">${attachment.fileName}</span>
-          <button type="button" class="btn compact" @click=${() => dialog.close()}>Close</button>
-        </div>
-        <div class="attachment-preview-body">
-          <button
-            type="button"
-            aria-label="Toggle actual image size"
-            @click=${(event: Event) => (event.currentTarget as HTMLElement).classList.toggle("actual-size")}
-          >
-            <img src=${src} alt=${attachment.fileName} />
-          </button>
-        </div>
-      `,
-      dialog,
-    );
-    dialog.showModal();
   }
 
   function removeAttachment(id: string, agent: Agent): void {
