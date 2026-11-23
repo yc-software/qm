@@ -332,8 +332,10 @@ struct AttachmentPicker: View {
       Image(systemName: "plus")
         .font(.system(size: 15, weight: .medium))
         .foregroundStyle(QMTheme.ink)
-        .frame(width: 44, height: 44)
+        .frame(width: 32, height: 32)
         .background(QMTheme.ink.opacity(0.08), in: Circle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
