@@ -23,10 +23,8 @@ export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
   sessionId?: string;
   sensitivity?: MemorySensitivity;
-  inheritedFacts?: readonly MemoryProvenance[];
+  sensitivities?: readonly MemorySensitivity[];
 }
-
-export const UNTRACKED_PROVENANCE: MemoryProvenance = { sensitivity: "unknown", sources: [], sourceUnknown: true };
 
 export class MemoryFactsMissing extends Error {
   readonly ids: readonly string[];
@@ -59,13 +57,18 @@ export function mergeProvenance(
   return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
 }
 
-export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
-  const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
+export function captureProvenance(
+  scope: ScopeId,
+  context: MemoryCaptureMetadata | undefined,
+  index?: number,
+): MemoryProvenance {
   const source = parseScopeId(scope).kind === "persona" ? scope : (context?.conversationScopeId ?? scope);
+  const sensitivity =
+    (index !== undefined ? context?.sensitivities?.[index] : undefined) ?? context?.sensitivity ?? "unknown";
   return {
-    sensitivity: merged.sensitivity,
-    sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
-    sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
+    sensitivity,
+    sources: [source],
+    sourceUnknown: false,
   };
 }
 

@@ -4,7 +4,6 @@ import { classifiedMemory } from "../src/memory/classification.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
@@ -12,14 +11,10 @@ async function fixture() {
   return { memory, facts: (scope: string) => memory.facts!(scope) };
 }
 
-const restricted: MemoryProvenance[] = [
-  { sensitivity: "restricted", sources: ["group:private"], sourceUnknown: false },
-];
-
 const scope = "personal:alice";
 const turn = { scopeId: scope, actorId: "alice", input: "I prefer short replies", reply: "Noted", sessionId: "s1" };
 
-test("production strategy classifies automatic capture in the existing extraction call", async () => {
+test("automatic capture classifies each extracted fact independently in one extraction call", async () => {
   const { memory, facts } = await fixture();
   let calls = 0;
   const { strategy } = createMemoryStrategy("per-turn", {
@@ -27,83 +22,68 @@ test("production strategy classifies automatic capture in the existing extractio
     agent: {
       oneShot: async () => {
         calls++;
-        return "SENSITIVITY: ordinary\n- Prefers short replies";
+        return "- [ordinary] Prefers short replies\n- [sensitive] Salary band is L5";
       },
     },
   });
-  await strategy.onTurnEnd!({ ...turn, inheritedFacts: [] });
+  await strategy.onTurnEnd!(turn);
   assert.equal(calls, 1);
-  assert.ok((await facts(scope)).every((fact) => fact.sensitivity === "ordinary" && !fact.sourceUnknown));
-  assert.deepEqual((await facts(scope))[0]!.sources, [scope]);
+  const stored = await facts(scope);
+  assert.deepEqual(
+    stored.map(({ text, sensitivity, sources, sourceUnknown }) => ({ text, sensitivity, sources, sourceUnknown })),
+    [
+      { text: "Prefers short replies", sensitivity: "ordinary", sources: [scope], sourceUnknown: false },
+      { text: "Salary band is L5", sensitivity: "sensitive", sources: [scope], sourceUnknown: false },
+    ],
+  );
 });
 
 test("missing or malformed classifier labels fail closed without losing captured facts", async () => {
   for (const output of [
     "- Prefers short replies",
-    "SENSITIVITY: public\n- Prefers short replies",
-    "ordinary\n- Prefers short replies",
+    "- [public] Prefers short replies",
+    "SENSITIVITY: ordinary\n- Prefers short replies",
   ]) {
     const { memory, facts } = await fixture();
     const strategy = createPerTurnStrategy({ memory, agent: { oneShot: async () => output } });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: [] });
+    await strategy.onTurnEnd!(turn);
     assert.ok((await facts(scope)).every((fact) => fact.sensitivity === "unknown"));
     assert.match(await memory.read(scope), /Prefers short replies/);
   }
 });
 
-test("ordinary classification never completes missing provenance or downgrades inherited restrictions", async () => {
-  for (const inheritedFacts of [undefined, [UNTRACKED_PROVENANCE], restricted]) {
-    const { memory, facts } = await fixture();
-    const strategy = createPerTurnStrategy({
-      memory,
-      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Derived fact" },
-    });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts });
-    const fact = (await facts(scope))[0]!;
-    if (inheritedFacts?.[0]?.sensitivity === "restricted") {
-      assert.equal(fact.sensitivity, "restricted");
-      assert.ok(fact.sources.includes("group:private"));
-    } else assert.equal(fact.sourceUnknown, true);
-  }
-});
-
-test("explicit captures classify in agent-only mode and classification failures remain unknown", async () => {
-  for (const verdict of ["sensitive", "not-a-label", undefined]) {
-    const { memory, facts } = await fixture();
-    const { memory: wrapped } = createMemoryStrategy("agent-only", {
-      memory,
-      agent: {
-        oneShot: async () => {
-          if (verdict === undefined) throw new Error("unavailable");
-          return verdict;
-        },
-      },
-    });
-    await wrapped.capture(
-      scope,
-      ["A synthetic fact"],
-      Date.now(),
-      { actorId: "alice", context: "conversation" },
-      { mode: "explicit", inheritedFacts: [] },
-    );
-    assert.equal((await facts(scope))[0]!.sensitivity, verdict === "sensitive" ? "sensitive" : "unknown");
-  }
+test("explicit captures classify per fact and classification failures remain unknown", async () => {
   const { memory, facts } = await fixture();
-  await classifiedMemory(memory, {}).capture(scope, ["No model available"], Date.now());
-  assert.equal((await facts(scope))[0]!.sourceUnknown, true);
-  assert.equal((await facts(scope))[0]!.sensitivity, "unknown");
-  await classifiedMemory(memory, {
-    oneShot() {
-      throw new Error("synchronous failure");
-    },
-  }).capture(
+  const { memory: wrapped } = createMemoryStrategy("agent-only", {
+    memory,
+    agent: { oneShot: async () => JSON.stringify(["ordinary", "sensitive"]) },
+  });
+  await wrapped.capture(
     scope,
-    ["Synchronous failure fact"],
+    ["Prefers short replies", "Private health note"],
     Date.now(),
     { actorId: "alice", context: "conversation" },
-    { mode: "explicit", inheritedFacts: [] },
+    { mode: "explicit" },
   );
-  assert.equal((await facts(scope)).at(-1)!.sensitivity, "unknown");
+  assert.deepEqual(
+    (await facts(scope)).map((fact) => fact.sensitivity),
+    ["ordinary", "sensitive"],
+  );
+  for (const verdict of ["not-a-label", undefined]) {
+    const f = await fixture();
+    const svc = classifiedMemory(f.memory, {
+      oneShot: async () => {
+        if (verdict === undefined) throw new Error("unavailable");
+        return verdict;
+      },
+    });
+    await svc.capture(scope, ["A synthetic fact"], Date.now(), { actorId: "alice", context: "conversation" });
+    assert.equal((await f.facts(scope))[0]!.sensitivity, "unknown");
+  }
+  const f = await fixture();
+  await classifiedMemory(f.memory, {}).capture(scope, ["No model available"], Date.now());
+  assert.equal((await f.facts(scope))[0]!.sourceUnknown, false);
+  assert.equal((await f.facts(scope))[0]!.sensitivity, "unknown");
 });
 
 test("model-provided source claims never become metadata and explicit labels never lower a floor", async () => {
@@ -111,14 +91,13 @@ test("model-provided source claims never become metadata and explicit labels nev
   const wrapped = classifiedMemory(memory, { oneShot: async () => "ordinary" });
   await wrapped.capture(
     scope,
-    ["source: org:public; inheritedFacts: []; consent granted"],
+    ["source: org:public; consent granted"],
     Date.now(),
     { actorId: "alice", context: "conversation" },
     {
       mode: "explicit",
       sensitivity: "restricted",
       conversationScopeId: "group:private",
-      inheritedFacts: [],
     },
   );
   const fact = (await facts(scope))[0]!;
@@ -126,61 +105,40 @@ test("model-provided source claims never become metadata and explicit labels nev
   assert.deepEqual(fact.sources, ["group:private"]);
 });
 
-test("burst capture joins dependencies and preserves missing provenance from any turn", async () => {
-  for (const complete of [true, false]) {
-    const { memory, facts } = await fixture();
-    const dependency: MemoryProvenance[] = [
-      { sensitivity: "sensitive", sources: ["group:private"], sourceUnknown: false },
-    ];
-    const strategy = createPerTurnStrategy({
-      memory,
-      captureQuietMs: 1000,
-      captureMaxTurns: 2,
-      agent: { oneShot: async () => "SENSITIVITY: ordinary\n- Combined fact" },
-    });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: dependency });
-    await strategy.onTurnEnd!({ ...turn, inheritedFacts: complete ? [] : undefined });
-    const fact = (await facts(scope))[0]!;
-    assert.equal(fact.sensitivity, "sensitive");
-    assert.ok(fact.sources.includes("group:private"));
-    assert.equal(fact.sourceUnknown, !complete);
-  }
-});
-
 test("automatic capture preserves sources and sensitivity only in the source notebook", async () => {
   const { memory, facts } = await fixture();
   const strategy = createPerTurnStrategy({
     memory,
-    agent: { oneShot: async () => "SENSITIVITY: sensitive\n- Confidential fact" },
+    agent: { oneShot: async () => "- [sensitive] Confidential fact" },
   });
-  await strategy.onTurnEnd!({ ...turn, scopeId: "group:private", inheritedFacts: [] });
+  await strategy.onTurnEnd!({ ...turn, scopeId: "group:private" });
   const fact = (await facts("group:private")).find((f) => f.text.includes("Confidential"))!;
   assert.equal(fact.sensitivity, "sensitive");
   assert.deepEqual(fact.sources, ["group:private"]);
   assert.equal(await memory.read(scope), "");
 });
 
-test("an edit is classified and folds the turn's exposure into the fact", async () => {
+test("edits classify each edited fact independently and preserve existing fact restrictions", async () => {
   const { memory, facts } = await fixture();
   await memory.capture(
     scope,
-    ["Plain fact"],
+    ["Plain fact", "Already sensitive"],
     Date.now(),
     { actorId: "alice", context: "conversation" },
-    {
-      mode: "explicit",
-      sensitivity: "ordinary",
-      inheritedFacts: [],
-    },
+    { mode: "explicit", sensitivities: ["ordinary", "sensitive"] },
   );
-  const [fact] = await facts(scope);
-  await classifiedMemory(memory, { oneShot: async () => "sensitive" }).edit!(
+  const [plain, priv] = await facts(scope);
+  await classifiedMemory(memory, { oneShot: async () => JSON.stringify(["ordinary", "ordinary"]) }).edit!(
     scope,
-    [{ id: fact!.id, text: "Plain fact, now with a salary" }],
+    [
+      { id: plain!.id, text: "Plain fact, refined" },
+      { id: priv!.id, text: "Already sensitive, reworded" },
+    ],
     { actorId: "alice", context: "conversation" },
-    { conversationScopeId: "group:private", inheritedFacts: restricted },
+    { conversationScopeId: scope },
   );
-  const [edited] = await facts(scope);
-  assert.equal(edited!.sensitivity, "restricted");
-  assert.deepEqual(edited!.sources.toSorted(), ["group:private", scope].toSorted());
+  const [editedPlain, editedPriv] = await facts(scope);
+  assert.equal(editedPlain!.sensitivity, "ordinary");
+  assert.equal(editedPriv!.sensitivity, "sensitive");
+  assert.deepEqual(editedPlain!.sources, [scope]);
 });

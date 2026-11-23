@@ -1,6 +1,5 @@
 import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
-import type { MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { isAgentReply, type Item } from "../../sessions/items.ts";
@@ -31,7 +30,6 @@ export function startMemoryCapture(turn: {
   cancelStopped: boolean;
   personConversationTurn: boolean;
   useMemory: boolean;
-  captureDependencies: () => MemoryProvenance[];
   turnInput: string;
   reply: string;
   spine: SpineState;
@@ -52,7 +50,6 @@ export function startMemoryCapture(turn: {
     cancelStopped,
     personConversationTurn,
     useMemory,
-    captureDependencies,
     turnInput,
     reply,
     spine,
@@ -73,7 +70,6 @@ export function startMemoryCapture(turn: {
           scopeId: memoryScopeId,
           conversationScopeId: scopeId,
           ...(audienceScopeId ? { audienceScopeId } : {}),
-          inheritedFacts: captureDependencies(),
           input: turnInput,
           reply,
           actorId: actor.id,

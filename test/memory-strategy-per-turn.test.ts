@@ -101,7 +101,7 @@ test("automatic capture carries the full turn and delivery context", async () =>
   assert.deepEqual(captures[0]?.[3], { actorId: "U1", context: "conversation" });
   assert.deepEqual(captures[0]?.[4], {
     mode: "automatic",
-    sensitivity: "unknown",
+    sensitivities: ["unknown"],
     conversationScopeId: "channel:C1",
     input: "question",
     reply: "answer",

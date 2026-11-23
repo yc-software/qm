@@ -79,7 +79,6 @@ test("default memory policy recalls visible org memory without crossing into per
     { actorId: "admin", context: "conversation" },
     {
       mode: "explicit",
-      inheritedFacts: [],
       sensitivity: "ordinary",
     },
   );
@@ -103,7 +102,6 @@ test("memory recall policy can be tightened to writable scope only", async () =>
     { actorId: "admin", context: "conversation" },
     {
       mode: "explicit",
-      inheritedFacts: [],
       sensitivity: "ordinary",
     },
   );
@@ -174,7 +172,7 @@ test("memory: duplicate capture tightens metadata without adding a fact", async 
   const mem = createPostgresMemoryService(testDatabaseUrl());
   const sid = scopeId("personal", "U1");
   const at = Date.UTC(2026, 0, 2);
-  await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit", inheritedFacts: [] });
+  await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit" });
   assert.equal(
     await mem.capture(sid, ["Salary band is L5"], at, undefined, { mode: "explicit", sensitivity: "restricted" }),
     0,
