@@ -25,6 +25,7 @@
     "dev-instance:status": "bash scripts/dev-instance.sh status",
     "dev-instance:down": "bash scripts/dev-instance.sh down",
     "worker": "node --env-file-if-exists=.env src/runs/worker-main.ts",
+    "qa:runtime": "node --env-file-if-exists=.env scripts/dev/runtime-qa.ts",
     "test": "node scripts/run-pg-tests.mjs test/*.test.ts",
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:e2e": "node --test test/e2e/*.test.ts",
