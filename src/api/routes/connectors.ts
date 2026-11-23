@@ -1,15 +1,7 @@
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
-import { GoogleApiError } from "../../connectors/google-api.ts";
-import {
-  CalendarInputError,
-  createCalendarEvent,
-  deleteCalendarEvent,
-  listCalendarEvents,
-  parseEventPatch,
-  updateCalendarEvent,
-  type EventInput,
-  type EventPatch,
-} from "../../connectors/google-calendar.ts";
+import { GmailApiError } from "../../connectors/gmail-api.ts";
+import { listCalendarEvents, REPLIES, respondToEvent, type Reply } from "../../connectors/google-calendar.ts";
+import { GaxiosError } from "googleapis-common";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -628,11 +620,13 @@ function sendGoogleFailure(
   code: string,
   messages: { reconnect: string; retry: string },
 ): void {
-  const upstream = error instanceof GoogleApiError ? error.status : 0;
+  const upstream = error instanceof GmailApiError || error instanceof GaxiosError ? (error.status ?? 0) : 0;
   const reconnect = upstream === 401 || upstream === 403;
   let status = upstream === 404 ? 404 : 502;
   if (reconnect) status = 409;
-  const detail = error instanceof GoogleApiError ? `${error.status} ${error.detail}` : undefined;
+  let detail: string | undefined;
+  if (error instanceof GmailApiError) detail = `${error.status} ${error.detail}`;
+  else if (error instanceof GaxiosError) detail = String(error.status);
   if (reconnect) console.warn(`[google] ${code}: ${errMessage(error)} ${detail}`);
   else reportFailure(`connectors: ${code}`, error, detail);
   sendJson(ctx.res, status, {
@@ -666,44 +660,39 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   }
 }
 
+const CALENDAR_NOT_CONNECTED = "Connect your Google account in Settings to see your calendar.";
+const CALENDAR_FAILURE = {
+  reconnect: "Reconnect Google to use your calendar.",
+  retry: "Couldn't reach Google Calendar.",
+};
+
 export async function googleCalendarEvents(ctx: ApiCtx): Promise<void> {
-  const method = ctx.req.method;
   const timeMin = ctx.url.searchParams.get("timeMin") ?? "";
   const timeMax = ctx.url.searchParams.get("timeMax") ?? "";
-  if (method === "GET" && (Number.isNaN(Date.parse(timeMin)) || Number.isNaN(Date.parse(timeMax))))
+  if (Number.isNaN(Date.parse(timeMin)) || Number.isNaN(Date.parse(timeMax)))
     return sendJson(ctx.res, 400, { error: "bad_request" });
-  let input: EventPatch | undefined;
   try {
-    if (method === "POST" || method === "PATCH") input = parseEventPatch(ctx.body, method === "PATCH");
+    const google = await personGoogleAuth(ctx, "www.googleapis.com", CALENDAR_NOT_CONNECTED);
+    if (!google) return;
+    return sendJson(ctx.res, 200, {
+      accountType: google.accountType,
+      ...(await listCalendarEvents(google.accessToken, timeMin, timeMax)),
+    });
   } catch (error) {
-    if (error instanceof CalendarInputError) return sendJson(ctx.res, 400, { error: "bad_request" });
-    throw error;
+    return sendGoogleFailure(ctx, error, "calendar_unavailable", CALENDAR_FAILURE);
   }
+}
+
+export async function googleCalendarRsvp(ctx: ApiCtx): Promise<void> {
+  const reply = (ctx.body as { responseStatus?: unknown } | null)?.responseStatus;
+  if (typeof reply !== "string" || !REPLIES.includes(reply)) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {
-    const google = await personGoogleAuth(
-      ctx,
-      "www.googleapis.com",
-      "Connect your Google account in Settings to see your calendar.",
-    );
+    const google = await personGoogleAuth(ctx, "www.googleapis.com", CALENDAR_NOT_CONNECTED);
     if (!google) return;
     const { calendarId = "", eventId = "" } = ctx.params;
-    if (method === "GET")
-      return sendJson(ctx.res, 200, {
-        accountType: google.accountType,
-        ...(await listCalendarEvents(google.accessToken, timeMin, timeMax)),
-      });
-    if (method === "POST")
-      return sendJson(ctx.res, 200, await createCalendarEvent(google.accessToken, input as EventInput));
-    if (method === "PATCH")
-      return sendJson(ctx.res, 200, await updateCalendarEvent(google.accessToken, calendarId, eventId, input ?? {}));
-    await deleteCalendarEvent(google.accessToken, calendarId, eventId);
-    ctx.res.writeHead(204);
-    ctx.res.end();
+    return sendJson(ctx.res, 200, await respondToEvent(google.accessToken, calendarId, eventId, reply as Reply));
   } catch (error) {
-    return sendGoogleFailure(ctx, error, "calendar_unavailable", {
-      reconnect: "Reconnect Google to use your calendar.",
-      retry: "Couldn't reach Google Calendar.",
-    });
+    return sendGoogleFailure(ctx, error, "calendar_unavailable", CALENDAR_FAILURE);
   }
 }
 
@@ -711,20 +700,20 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...forInboxLoopsPeople([
     { method: "GET", path: "/v1/connectors/gmail/sent/:messageId", actor: "person", auth: "source", handle: gmailSent },
     { method: "GET", path: "/v1/connectors/gmail/sent", actor: "person", auth: "source", handle: gmailSent },
-    ...(["GET", "POST"] as const).map((method) => ({
-      method,
+    {
+      method: "GET",
       path: "/v1/connectors/google-calendar/events",
-      actor: "person" as const,
-      auth: "source" as const,
+      actor: "person",
+      auth: "source",
       handle: googleCalendarEvents,
-    })),
-    ...(["PATCH", "DELETE"] as const).map((method) => ({
-      method,
+    },
+    {
+      method: "PATCH",
       path: "/v1/connectors/google-calendar/events/:calendarId/:eventId",
-      actor: "person" as const,
-      auth: "source" as const,
-      handle: googleCalendarEvents,
-    })),
+      actor: "person",
+      auth: "source",
+      handle: googleCalendarRsvp,
+    },
   ]),
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   {

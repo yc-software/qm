@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { getSentEmail, listSentEmails } from "../src/connectors/gmail-sent.ts";
-import { GoogleApiError } from "../src/connectors/google-api.ts";
+import { GmailApiError } from "../src/connectors/gmail-api.ts";
 
 test("sent mail reads only SENT messages, paginates, and includes mail sent outside QM", async () => {
   const calls: URL[] = [];
@@ -43,7 +43,7 @@ test("sent mail reads only SENT messages, paginates, and includes mail sent outs
 test("Gmail errors do not expose upstream response bodies or tokens", async () => {
   await assert.rejects(
     listSentEmails("private-token", undefined, async () => new Response("private upstream response", { status: 403 })),
-    (error: unknown) => error instanceof GoogleApiError && error.status === 403 && !error.message.includes("private"),
+    (error: unknown) => error instanceof GmailApiError && error.status === 403 && !error.message.includes("private"),
   );
 });
 
@@ -64,6 +64,6 @@ test("sent message details decode MIME text and reject non-sent messages", async
   assert.deepEqual(result.attachments, ["report.pdf"]);
   await assert.rejects(
     getSentEmail("token", "m1", async () => Response.json({ ...payload, labelIds: ["INBOX"] })),
-    (error: unknown) => error instanceof GoogleApiError && error.status === 404,
+    (error: unknown) => error instanceof GmailApiError && error.status === 404,
   );
 });

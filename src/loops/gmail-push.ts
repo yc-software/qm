@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
 import { conversationChanged, type IngressEntry } from "./ingress.ts";
-import { GoogleApiError, gmailApi } from "../connectors/google-api.ts";
+import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 
 export interface GmailPushConfig {
   topic: string;
@@ -78,7 +78,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
           try {
             message = await request<GmailMessage>(`messages/${encodeURIComponent(id)}?format=metadata`);
           } catch (error) {
-            if (error instanceof GoogleApiError && error.status === 404) continue;
+            if (error instanceof GmailApiError && error.status === 404) continue;
             throw error;
           }
           const sent = message.labelIds?.includes("SENT") === true;
@@ -142,7 +142,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
           latest = page.historyId;
         } while (pageToken);
       } catch (error) {
-        if (!(error instanceof GoogleApiError && error.status === 404)) throw error;
+        if (!(error instanceof GmailApiError && error.status === 404)) throw error;
         pageToken = undefined;
         do {
           const query = new URLSearchParams({ labelIds: "INBOX", maxResults: "100" });

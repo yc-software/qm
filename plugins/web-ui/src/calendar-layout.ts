@@ -1,23 +1,15 @@
 import {
   addDays,
-  addMonths,
-  addWeeks,
   differenceInCalendarDays,
   differenceInMinutes,
   isSameDay,
-  endOfMonth,
-  endOfWeek,
   max as latest,
   min as earliest,
   parseISO,
   startOfDay,
-  startOfMonth,
   startOfWeek,
 } from "date-fns";
 import type { CalendarEvent } from "./calendar-api";
-
-export const CALENDAR_VIEWS = ["day", "week", "month"] as const;
-export type CalendarView = (typeof CALENDAR_VIEWS)[number];
 
 const DAY_MINUTES = 24 * 60;
 const MIN_BLOCK_MINUTES = 30;
@@ -44,18 +36,9 @@ export interface Block extends Span {
   width: number;
 }
 
-export function visibleDays(view: CalendarView, anchor: Date): Date[] {
-  const day = startOfDay(anchor);
-  if (view === "day") return [day];
-  const first = view === "week" ? startOfWeek(day) : startOfWeek(startOfMonth(day));
-  const count = view === "week" ? 7 : differenceInCalendarDays(endOfWeek(endOfMonth(day)), first) + 1;
-  return Array.from({ length: count }, (_, index) => addDays(first, index));
-}
-
-export function shiftAnchor(view: CalendarView, anchor: Date, step: number): Date {
-  if (view === "day") return addDays(anchor, step);
-  if (view === "week") return addWeeks(anchor, step);
-  return addMonths(anchor, step);
+export function weekDays(anchor: Date): Date[] {
+  const first = startOfWeek(anchor);
+  return Array.from({ length: 7 }, (_, index) => addDays(first, index));
 }
 
 export function eventSpan(event: CalendarEvent): Span {
@@ -151,10 +134,8 @@ export const HOUR_ONLY = formatter({ hour: "numeric" });
 const HOUR_MINUTE = formatter({ hour: "numeric", minute: "2-digit" });
 const LONG_DAY = formatter({ weekday: "long", month: "long", day: "numeric" });
 export const LONG_DATE = formatter({ weekday: "long", month: "long", day: "numeric", year: "numeric" });
-export const MONTH_YEAR = formatter({ month: "long", year: "numeric" });
 export const SHORT_MONTH_YEAR = formatter({ month: "short", year: "numeric" });
 export const WEEKDAY = formatter({ weekday: "short" });
-export const MONTH_DAY = formatter({ month: "short", day: "numeric" });
 const DATE_TIME = formatter({ weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 export function timeRange(start: Date, end: Date): string {

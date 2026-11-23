@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CalendarEvent } from "../src/calendar-api.ts";
-import { dayBlocks, eventSpan, laneBars, visibleDays } from "../src/calendar-layout.ts";
+import { dayBlocks, eventSpan, laneBars, weekDays } from "../src/calendar-layout.ts";
 
 const event = (id: string, start: string, end: string, allDay = false): CalendarEvent => ({
   id,
@@ -13,14 +13,11 @@ const event = (id: string, start: string, end: string, allDay = false): Calendar
   htmlLink: "",
   color: "#039be5",
   attendees: [],
-  editable: true,
 });
 
-test("week and month ranges start on the week's first day and cover whole weeks", () => {
-  const week = visibleDays("week", new Date(2026, 10, 20));
+test("a week starts on the week's first day", () => {
+  const week = weekDays(new Date(2026, 10, 20));
   assert.deepEqual([week.length, week[0]!.getDate(), week[6]!.getDate()], [7, 15, 21]);
-  const month = visibleDays("month", new Date(2026, 10, 20));
-  assert.deepEqual([month.length, month[0]!.getDate(), month.at(-1)!.getDate()], [35, 1, 5]);
 });
 
 test("overlapping events share a day side by side and free columns are reused", () => {
@@ -45,7 +42,7 @@ test("overlapping events share a day side by side and free columns are reused", 
 });
 
 test("multi-day events take lanes clipped to the visible days", () => {
-  const days = visibleDays("week", new Date(2026, 10, 20));
+  const days = weekDays(new Date(2026, 10, 20));
   const bars = laneBars(
     [event("trip", "2026-11-13", "2026-11-17", true), event("offsite", "2026-11-16", "2026-11-19", true)].map(
       eventSpan,

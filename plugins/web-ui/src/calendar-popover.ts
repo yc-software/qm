@@ -1,40 +1,22 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import DOMPurify from "dompurify";
-import {
-  AlignLeft,
-  ArrowUpRight,
-  Calendar as CalendarIcon,
-  Check,
-  CircleHelp,
-  MapPin,
-  Pencil,
-  Trash2,
-  Users,
-  Video,
-  X,
-} from "lucide";
+import { AlignLeft, ArrowUpRight, Calendar as CalendarIcon, Check, CircleHelp, MapPin, Users, Video, X } from "lucide";
 import { icon } from "./icons";
 import { initials, photoTpl } from "./ui";
 import { speakerAvatar } from "./speaker-avatars";
-import type { Calendar, CalendarEvent, ResponseStatus } from "./calendar-api";
+import type { Calendar, CalendarEvent, Reply, ResponseStatus } from "./calendar-api";
 import { eventSpan, whenLabel } from "./calendar-layout";
-
-export type Reply = Exclude<ResponseStatus, "needsAction">;
 
 export interface Popover {
   event: CalendarEvent;
   rect: DOMRect;
   busy: boolean;
   error: string;
-  confirmDelete: boolean;
 }
 
 export interface PopoverActions {
   close: () => void;
-  edit: (event: CalendarEvent) => void;
-  confirmDelete: (asking: boolean) => void;
-  remove: () => void;
   respond: (status: Reply) => void;
 }
 
@@ -87,9 +69,7 @@ function guestsTpl(event: CalendarEvent): TemplateResult | typeof nothing {
           (person) =>
             html`<li>
               <span class="cal-avatar" aria-hidden="true"
-                >${initials(person.name || person.email)}${photoTpl(speakerAvatar(person.email.toLowerCase()))}${statusIcon(
-                  person.responseStatus,
-                )}</span
+                >${initials(person.name || person.email)}${photoTpl(speakerAvatar(person.email.toLowerCase()))}${statusIcon(person.responseStatus)}</span
               >
               <span class="cal-guest-name">
                 <span>${person.name || person.email}${person.self ? " (you)" : ""}</span>
@@ -103,14 +83,6 @@ function guestsTpl(event: CalendarEvent): TemplateResult | typeof nothing {
 }
 
 function footTpl(pop: Popover, act: PopoverActions): TemplateResult | typeof nothing {
-  if (pop.confirmDelete)
-    return html`<div class="cal-pop-foot">
-      <span>Delete this event?</span>
-      <button class="btn" type="button" ?disabled=${pop.busy} @click=${() => act.confirmDelete(false)}>Cancel</button>
-      <button class="btn danger" type="button" ?disabled=${pop.busy} @click=${act.remove}>
-        ${pop.busy ? "Deleting…" : "Delete"}
-      </button>
-    </div>`;
   const reply = pop.event.selfResponse;
   if (!reply) return nothing;
   return html`<div class="cal-pop-foot">
@@ -150,30 +122,6 @@ export function popoverTpl(pop: Popover, calendars: Calendar[], act: PopoverActi
     }}
   >
     <div class="cal-pop-actions">
-      ${
-        event.editable
-          ? html`<button
-                class="icon-btn compact subtle"
-                type="button"
-                aria-label="Edit event"
-                title="Edit"
-                ?disabled=${pop.busy}
-                @click=${() => act.edit(event)}
-              >
-                ${icon(Pencil, 15)}
-              </button>
-              <button
-                class="icon-btn compact subtle"
-                type="button"
-                aria-label="Delete event"
-                title="Delete"
-                ?disabled=${pop.busy}
-                @click=${() => act.confirmDelete(true)}
-              >
-                ${icon(Trash2, 15)}
-              </button>`
-          : nothing
-      }
       ${
         event.htmlLink
           ? html`<a

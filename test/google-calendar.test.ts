@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { googleCalendarEvents } from "../src/api/routes/connectors.ts";
+import { googleCalendarEvents, googleCalendarRsvp } from "../src/api/routes/connectors.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 
 function call(method: string, path: string, fetchImpl: typeof fetch, body?: unknown, params = {}) {
+  const handle = method === "GET" ? googleCalendarEvents : googleCalendarRsvp;
   const out = { status: 0, body: undefined as unknown, requests: [] as { method: string; url: URL; body: unknown }[] };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -32,7 +33,7 @@ function call(method: string, path: string, fetchImpl: typeof fetch, body?: unkn
     },
     deps: { connectorTokens: { connectorDerivedAuth: async () => ({ accessToken: "token" }) } },
   } as unknown as ApiCtx;
-  return googleCalendarEvents(ctx)
+  return handle(ctx)
     .finally(() => {
       globalThis.fetch = originalFetch;
     })
@@ -43,7 +44,6 @@ const work = {
   id: "work@example.com",
   summary: "Work",
   backgroundColor: "#111111",
-  accessRole: "owner",
   selected: true,
 };
 
@@ -51,9 +51,8 @@ async function google(input: string | URL | Request, init?: RequestInit): Promis
   const url = new URL(String(input));
   if (url.pathname.endsWith("/colors")) return Response.json({ event: { "5": { background: "#fbd75b" } } });
   if (url.pathname.endsWith("/users/me/calendarList"))
-    return Response.json({ items: [work, { id: "hidden", accessRole: "reader", selected: false }] });
+    return Response.json({ items: [work, { id: "hidden", selected: false }] });
   if (url.pathname.includes("/users/me/calendarList/")) return Response.json(work);
-  if (init?.method === "DELETE") return new Response(null, { status: 204 });
   if (url.pathname.endsWith("/events") && init?.method === "GET")
     return Response.json({
       items: [
@@ -99,7 +98,7 @@ test("lists selected calendars and their events in start order", async () => {
     google,
   );
   assert.equal(out.status, 200);
-  const calendars = [{ id: "work@example.com", name: "Work", color: "#111111", primary: false, writable: true }];
+  const calendars = [{ id: "work@example.com", name: "Work", color: "#111111" }];
   assert.deepEqual(out.body, {
     accountType: "default",
     calendars,
@@ -114,7 +113,6 @@ test("lists selected calendars and their events in start order", async () => {
         htmlLink: "",
         color: "#111111",
         attendees: [],
-        editable: true,
       },
       {
         id: "b",
@@ -131,7 +129,6 @@ test("lists selected calendars and their events in start order", async () => {
           { email: "boss@example.com", responseStatus: "needsAction", self: false, organizer: true },
         ],
         selfResponse: "needsAction",
-        editable: false,
       },
     ],
   });
@@ -140,48 +137,19 @@ test("lists selected calendars and their events in start order", async () => {
   assert.equal(events?.url.searchParams.get("singleEvents"), "true");
 });
 
-test("creates, RSVPs and deletes events with the Google write semantics", async () => {
-  const created = await call("POST", "/v1/connectors/google-calendar/events", google, {
-    title: "Lunch",
-    start: "2026-11-22",
-    end: "2026-11-23",
-    allDay: true,
-    attendees: ["x@example.com"],
-    addMeet: true,
-  });
-  assert.equal(created.status, 200);
-  const insert = created.requests.find((r) => r.method === "POST")!;
-  assert.equal(insert.url.pathname, "/calendar/v3/calendars/primary/events");
-  assert.equal(insert.url.searchParams.get("conferenceDataVersion"), "1");
-  const insertBody = insert.body as Record<string, any>;
-  assert.deepEqual(insertBody.start, { date: "2026-11-22" });
-  assert.deepEqual(insertBody.attendees, [{ email: "x@example.com" }]);
-  assert.equal(insertBody.conferenceData.createRequest.conferenceSolutionKey.type, "hangoutsMeet");
-
+test("RSVPs by patching only the person's own attendee status", async () => {
   const params = { calendarId: "work@example.com", eventId: "e1" };
-  const rsvp = await call(
-    "PATCH",
-    "/v1/connectors/google-calendar/events/x/e1",
-    google,
-    { responseStatus: "accepted" },
-    params,
-  );
+  const path = "/v1/connectors/google-calendar/events/x/e1";
+  const rsvp = await call("PATCH", path, google, { responseStatus: "accepted" }, params);
   assert.equal(rsvp.status, 200);
-  assert.deepEqual(rsvp.requests.find((r) => r.method === "PATCH")?.body, {
+  const patch = rsvp.requests.find((r) => r.method === "PATCH")!;
+  assert.equal(patch.url.searchParams.get("sendUpdates"), "all");
+  assert.deepEqual(patch.body, {
     attendees: [{ email: "eve@example.com", self: true, responseStatus: "accepted" }, { email: "x@example.com" }],
   });
-
-  const deleted = await call("DELETE", "/v1/connectors/google-calendar/events/x/e1", google, undefined, params);
-  assert.equal(deleted.status, 204);
-
-  for (const bad of [
-    { title: "x", start: "2026-11-22T10:00:00Z", end: "nope", allDay: false },
-    { title: "x", start: "2026-11-22T10:00:00Z", end: "2026-11-22T11:00:00Z", allDay: true },
-  ]) {
-    const out = await call("POST", "/v1/connectors/google-calendar/events", google, bad);
-    assert.equal(out.status, 400);
-    assert.equal(out.requests.length, 0);
-  }
+  const bad = await call("PATCH", path, google, { responseStatus: "needsAction" }, params);
+  assert.equal(bad.status, 400);
+  assert.equal(bad.requests.length, 0);
 });
 
 test("upstream auth failures ask the person to reconnect", async () => {

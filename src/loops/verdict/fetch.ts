@@ -8,7 +8,7 @@ import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
-import { GoogleApiError, gmailApi } from "../../connectors/google-api.ts";
+import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
 import { perTenant } from "../../tenants/cache.ts";
 import {
@@ -85,7 +85,7 @@ const goneSlackErrors = new Map([
 ]);
 
 function sourceGone(error: unknown): string | undefined {
-  if (error instanceof GoogleApiError)
+  if (error instanceof GmailApiError)
     return error.status === 404 ? "The conversation is no longer available in Gmail." : undefined;
   const code =
     isObj(error) && error.code === ErrorCode.PlatformError && isObj(error.data) ? error.data.error : undefined;
@@ -170,7 +170,7 @@ export function createSourceClients(deps: SourceClientDeps): SourceClients {
       try {
         return await gmailApi(token, fetchImpl)(path, { timeoutMs: SOURCE_TIMEOUT_MS });
       } catch (error) {
-        if (error instanceof GoogleApiError && error.status === 429) limitFor(owner, "Gmail", error.retryAfterSeconds);
+        if (error instanceof GmailApiError && error.status === 429) limitFor(owner, "Gmail", error.retryAfterSeconds);
         throw error;
       }
     },

@@ -89,7 +89,6 @@
 }
 
 .dark {
-  color-scheme: dark;
   --ultrafast-accent: #ceadff;
   --markdown-link: #4c8edb;
   --cta: oklch(0.42 0.085 250);

@@ -1,13 +1,12 @@
 import { api } from "./core-bridge";
 
 export type ResponseStatus = "needsAction" | "accepted" | "declined" | "tentative";
+export type Reply = Exclude<ResponseStatus, "needsAction">;
 
 export interface Calendar {
   id: string;
   name: string;
   color: string;
-  primary: boolean;
-  writable: boolean;
 }
 
 interface CalendarAttendee {
@@ -32,22 +31,7 @@ export interface CalendarEvent {
   color: string;
   attendees: CalendarAttendee[];
   selfResponse?: ResponseStatus;
-  editable: boolean;
 }
-
-export interface EventInput {
-  calendarId?: string;
-  title: string;
-  start: string;
-  end: string;
-  allDay: boolean;
-  location?: string;
-  description?: string;
-  attendees?: string[];
-  addMeet?: boolean;
-}
-
-export type EventPatch = Partial<EventInput> & { responseStatus?: Exclude<ResponseStatus, "needsAction"> };
 
 export interface CalendarEvents {
   accountType?: string;
@@ -57,21 +41,13 @@ export interface CalendarEvents {
 
 const EVENTS = "/api/calendar/events";
 
-const eventPath = (calendarId: string, eventId: string): string =>
-  `${EVENTS}/${encodeURIComponent(calendarId)}/${encodeURIComponent(eventId)}`;
-
 export function listEvents(timeMin: string, timeMax: string): Promise<CalendarEvents> {
   return api<CalendarEvents>(`${EVENTS}?${new URLSearchParams({ timeMin, timeMax })}`);
 }
 
-export function createEvent(input: EventInput): Promise<CalendarEvent> {
-  return api<CalendarEvent>(EVENTS, { method: "POST", body: JSON.stringify(input) });
-}
-
-export function updateEvent(calendarId: string, eventId: string, patch: EventPatch): Promise<CalendarEvent> {
-  return api<CalendarEvent>(eventPath(calendarId, eventId), { method: "PATCH", body: JSON.stringify(patch) });
-}
-
-export async function deleteEvent(calendarId: string, eventId: string): Promise<void> {
-  await api(eventPath(calendarId, eventId), { method: "DELETE" });
+export function respond(calendarId: string, eventId: string, responseStatus: Reply): Promise<CalendarEvent> {
+  return api<CalendarEvent>(`${EVENTS}/${encodeURIComponent(calendarId)}/${encodeURIComponent(eventId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ responseStatus }),
+  });
 }
