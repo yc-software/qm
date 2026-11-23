@@ -42,8 +42,9 @@ struct NativeDictationComposer: View {
       // fade in place; rising would make them look like they jump.
       .entrance(appeared, delay: 0.18, rise: 0, reduceMotion: reduceMotion)
     }
+    // No bottom padding: the ✕ and ↑ land exactly where the composer's plus and send were.
     .padding(.horizontal, 4)
-    .padding(.vertical, 8)
+    .padding(.top, 8)
     .accessibilityIdentifier("dictationComposer")
     .onAppear { appeared = true }
     // A light tap when the microphone goes live, a firmer one when recording ends,

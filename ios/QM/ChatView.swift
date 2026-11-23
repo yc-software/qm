@@ -778,11 +778,8 @@ struct ChatView: View {
       if dictation.busy {
         NativeDictationComposer(model: dictation)
           .transition(
-            reduceMotion
-              ? .opacity
-              : .asymmetric(
-                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .bottom)),
-                removal: .opacity))
+            // Opacity only: a scale would nudge the corner buttons inward and up.
+            .opacity)
       } else {
         composerTextField
         if let error = dictation.error {
