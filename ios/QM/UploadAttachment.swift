@@ -330,7 +330,7 @@ struct AttachmentPicker: View {
       }
     } label: {
       Image(systemName: "plus")
-        .font(.system(size: 18, weight: .medium))
+        .font(.system(size: 15, weight: .medium))
         .foregroundStyle(QMTheme.ink)
         .frame(width: 44, height: 44)
         .background(QMTheme.ink.opacity(0.08), in: Circle())

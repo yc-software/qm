@@ -805,7 +805,7 @@ struct ChatView: View {
             dictation.start()
           } label: {
             Image(systemName: "mic")
-              .font(.system(size: 21)).frame(width: 44, height: 44)
+              .font(.system(size: 18)).frame(width: 44, height: 44)
               .foregroundStyle(QMTheme.ink)
           }
           .accessibilityLabel("Dictate message")
