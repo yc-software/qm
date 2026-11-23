@@ -4727,11 +4727,19 @@ summary.stopped-head:focus-visible {
   flex-direction: column;
   align-items: stretch;
   margin: 0 0 20px;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
   padding: 0 0 0 48px;
   transition: opacity 0.2s ease;
 }
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row).continued-row {
   margin-top: -14px;
+}
+.slack-thread-chat .message-stack > .user-row > .message-meta {
+  left: 48px;
+  right: auto;
+  padding: 0;
 }
 .slack-thread-chat .message-stack > .sending-row {
   opacity: 0.5;

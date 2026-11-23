@@ -1,3 +1,4 @@
+import { splitLinks } from "./linkify";
 import { html, nothing, type TemplateResult } from "lit";
 import { ExternalLink } from "lucide";
 import { charForName } from "./emoji-picker";
@@ -50,15 +51,18 @@ export function slackWireBubble(text: string, self: string): TemplateResult {
     </div>`;
 }
 
+function textLink(href: string, label: string): TemplateResult {
+  return html`<a class="inbox-text-link" href=${href} target="_blank" rel="noreferrer noopener">${label}</a>`;
+}
+
 function slackWireText(text: string, self: string): TemplateResult {
   const segments = splitSlackWire(text).map((seg) => {
     if (seg.kind === "mention")
       return html`<span class="slack-mention ${seg.handle.toLowerCase() === self ? "self" : ""}">@${seg.handle}</span>`;
-    if (seg.kind === "link")
-      return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-        >${seg.label}</a
-      >`;
-    return withEmoji(seg.text, charForName);
+    if (seg.kind === "link") return textLink(seg.href, seg.label);
+    return splitLinks(seg.text).map((part) =>
+      part.kind === "link" ? textLink(part.href, part.href) : withEmoji(part.text, charForName),
+    );
   });
   return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
 }
