@@ -253,6 +253,7 @@ test("background lifecycle survives restart, links to the web conversation from 
   const monitor = f.watch();
   await f.manager().reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Watching for updates");
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.advance(290_000);
   const wake = f.add("wake");
   await f.reconcile();
