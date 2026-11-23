@@ -1455,15 +1455,20 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(
-              s.surface === "slack" && s.type === "channel"
-                ? slackTitle(defaultSessionTitle(s), s.title?.trim())
-                : groupDmTitle(s),
-              chatSurface?.label ?? "",
-              !chatSurface,
-              shownMessages,
-              openInSurface(sessionSlackUrl(s), chatSurface?.label),
-            )}
+            ${
+              s.surface === "slack"
+                ? chatHeader(
+                    s.type === "channel" ? slackTitle(defaultSessionTitle(s), s.title?.trim()) : groupDmTitle(s),
+                    null,
+                    shownMessages,
+                    { shown: 3, named: true },
+                    openInSurface(sessionSlackUrl(s), chatSurface?.label),
+                  )
+                : chatHeader(groupDmTitle(s), chatSurface ? chatSurface.label : "Read-only", shownMessages, {
+                    shown: 5,
+                    named: false,
+                  })
+            }
             ${
               slackReply
                 ? nothing
@@ -2035,30 +2040,38 @@ export function createChatSurface(
     return [...seen.values()];
   }
 
-  function participantStack(people: Participant[]): TemplateResult | typeof nothing {
+  function participantStack(people: Participant[], max: number): TemplateResult | typeof nothing {
     if (!people.length) return nothing;
-    const shown = people.slice(0, 5);
-    const rest = people.slice(5);
+    const shown = people.slice(0, max);
+    const rest = people.slice(max);
     return html`<div class="chat-participants" role="list" aria-label=${`${people.length} participants`}>
       ${shown.map((person) => html`<span role="listitem" class="chat-participant">${avatarTpl(person)}</span>`)}
       ${rest.length ? html`<span class="chat-participant-more" ${tip(rest.map((p) => p.name).join(", "))}>+${rest.length}</span>` : nothing}
     </div>`;
   }
 
+  function peopleNames(people: Participant[], shown: number): string {
+    const named = people.slice(0, shown).map((person) => (person.key === appState.me?.user ? "you" : person.name));
+    return `${named.join(", ")}${people.length > shown ? ` +${people.length - shown}` : ""}`;
+  }
+
   function chatHeader(
     title: string | TemplateResult,
-    detail: string,
-    readOnly: boolean,
-    messages: AgentMessage[] = [],
+    subtitle: string | null,
+    messages: AgentMessage[],
+    people: { shown: number; named: boolean },
     action: TemplateResult | typeof nothing = nothing,
   ): TemplateResult {
+    const participants = conversationParticipants(messages);
     return html`
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title" dir="auto">${title}</div>
-          <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
+          ${subtitle === null ? nothing : html`<div class="chat-subtitle">${subtitle}</div>`}
         </div>
-        ${participantStack(conversationParticipants(messages))} ${action}
+        ${participantStack(people.named ? participants.slice(0, people.shown) : participants, people.shown)}
+        ${people.named && participants.length ? html`<span class="chat-participant-names">${peopleNames(participants, people.shown)}</span>` : nothing}
+        ${action}
       </header>
     `;
   }
@@ -2343,6 +2356,7 @@ export function createChatSurface(
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
       const labeled = chatState.labelSpeakers;
+      const workBelow = isReadOnlySlackView();
       return html`
         <article
           class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
@@ -2360,8 +2374,10 @@ export function createChatSurface(
           }
           ${viaLine(msg as AssistantWork)}
           <div class="assistant-body">
-            ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+            ${workBelow ? nothing : workView} ${assistantContent(msg, isStreaming, showWork)}
+            ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
+            ${workBelow && workView !== nothing ? html`<div class="slack-work">${workView}</div>` : nothing}
             ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>
         </article>

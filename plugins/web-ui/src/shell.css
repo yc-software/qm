@@ -4693,6 +4693,35 @@ summary.stopped-head:focus-visible {
   overflow: hidden;
   white-space: nowrap;
 }
+.slack-thread-chat {
+  --content-w: 696px;
+  --composer-inset: 0px;
+}
+.slack-thread-chat .chat-scroll {
+  scrollbar-gutter: stable both-edges;
+}
+.slack-thread-chat .chat-topbar {
+  height: 48px;
+  gap: 14px;
+  padding: 0 20px;
+}
+.chat-participant-names {
+  flex: none;
+  margin-left: -6px;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  white-space: nowrap;
+}
+.slack-work {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 1px 0 1px 12px;
+  border-left: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
 .slack-where-slash {
   color: var(--muted-foreground);
   font-weight: 400;

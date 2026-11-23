@@ -51,6 +51,8 @@ test("Slack conversations show directory Slack photos on messages and in the hea
       [...document.querySelectorAll(".chat-participants img")].map((i) => i.getAttribute("src")),
       [photos["eve@example.com"], photos["regan@example.com"]],
     );
+    assert.ok(document.querySelector(".chat-participant-names")?.textContent?.includes(","));
+    assert.equal(document.querySelector(".chat-subtitle"), null);
     assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com", "tester"], "one lookup per person");
   } finally {
     await h.close();
