@@ -13,10 +13,16 @@ import {
 import type { CoreSession } from "../src/core-bridge.ts";
 
 const sessions = [
-  { id: "a", scopeId: "personal:me" },
-  { id: "b", scopeId: "personal:me" },
-  { id: "c", scopeId: "group:project:launch" },
+  { id: "a", scopeId: "personal:me", surface: "web" },
+  { id: "b", scopeId: "personal:me", surface: "web" },
+  { id: "c", scopeId: "group:project:launch", surface: "web" },
+  { id: "busy", scopeId: "personal:me", surface: "web", working: true },
+  { id: "slack", scopeId: "personal:me", surface: "slack" },
+  { id: "child", scopeId: "personal:me", surface: "web", parentSessionId: "a" },
+  { id: "channel", scopeId: "channel:C1", surface: "web" },
+  { id: "other", scopeId: "group:project:other", surface: "web" },
 ] as CoreSession[];
+const isProject = (scopeId: string) => scopeId.startsWith("group:project:");
 
 test("dragging a selected row carries the whole selection; other rows move alone", () => {
   assert.deepEqual(sessionsToMove(new Set(["a", "b"]), "b"), ["a", "b"]);
@@ -25,9 +31,10 @@ test("dragging a selected row carries the whole selection; other rows move alone
   assert.deepEqual(sessionsToMove(new Set(), "a"), ["a"]);
 });
 
-test("only sessions outside the target project are movable", () => {
-  assert.deepEqual(movableInto(sessions, ["a", "c", "missing"], "group:project:launch"), ["a"]);
-  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch"), []);
+test("only idle top-level web chats from a personal scope or another project are movable", () => {
+  const all = sessions.map((s) => s.id);
+  assert.deepEqual(movableInto(sessions, [...all, "missing"], "group:project:launch", isProject), ["a", "b", "other"]);
+  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", isProject), []);
 });
 
 function fixture() {
@@ -40,6 +47,7 @@ function fixture() {
   const moves: Array<{ ids: readonly string[]; scopeId: string }> = [];
   registerSessionMoveHost({
     sessions: () => sessions,
+    isProject,
     move: async (ids, scopeId) => {
       moves.push({ ids, scopeId });
     },
@@ -71,11 +79,11 @@ test("a project accepts dragged sessions, highlights while over, and moves them 
   assert.equal(fire("dragover").defaultPrevented, false, "the drag is over once dropped");
 });
 
-test("a project ignores drags that are not sessions or are already there", () => {
+test("a project ignores drags that are not sessions, are already there, or would be refused", () => {
   const { target, moves, fire } = fixture();
   endSessionMoveDrag();
   assert.equal(fire("dragover").defaultPrevented, false);
-  beginSessionMoveDrag(["c"]);
+  beginSessionMoveDrag(["c", "busy"]);
   assert.equal(fire("dragover").defaultPrevented, false);
   fire("drop");
   assert.ok(!target.classList.contains(SESSION_DROP_OVER_CLASS));

@@ -1369,6 +1369,7 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
         opened ??= session;
       }
     } catch (error) {
+      reportHandledError("web:session_move", error);
       failure ??= errMessage(error);
     }
   }
@@ -1380,11 +1381,16 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
   redrawSelection();
   if (opened) await openSession(opened, undefined, undefined, "replace");
   else if (moved && appState.currentView === "contexts") await renderContexts();
-  if (failure) sessionMoveToast(failure);
-  else sessionMoveToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
+  if (!failure) sessionMoveToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
+  else if (moved) sessionMoveToast(`Moved ${moved} of ${ids.length} chats to ${name}. ${failure}`);
+  else sessionMoveToast(failure);
 }
 
-registerSessionMoveHost({ sessions: () => sessionsState.list, move: moveSessionsToProject });
+registerSessionMoveHost({
+  sessions: () => sessionsState.list,
+  isProject: (scopeId) => projectOf(scopeId) !== null,
+  move: moveSessionsToProject,
+});
 
 async function promoteSession(id: string): Promise<void> {
   sessionsState.openMenuId = null;

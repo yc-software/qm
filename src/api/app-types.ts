@@ -966,4 +966,7 @@ interface SessionPageResult {
 
 export type MoveSessionResult =
   | { moved: true; session: Session }
-  | { moved: false; reason: "not_found" | "same_scope" | "unsupported_source" | "forbidden" | "busy" };
+  | {
+      moved: false;
+      reason: "not_found" | "same_scope" | "unsupported_source" | "not_project" | "forbidden" | "busy";
+    };

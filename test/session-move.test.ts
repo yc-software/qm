@@ -80,7 +80,14 @@ test("moves are refused for non-members, busy chats, strangers, and non-project 
   });
   assert.deepEqual(await built.app.moveSession(sid, "owner", "personal:member"), {
     moved: false,
-    reason: "forbidden",
+    reason: "not_project",
+  });
+  const sideChat = await built.app.forkSession(sid, "owner", {
+    sideChat: { entrySeq: 0, quote: "private notes", occurrence: 0 },
+  });
+  assert.deepEqual(await built.app.moveSession(sideChat!.session.id, "owner", scope), {
+    moved: false,
+    reason: "unsupported_source",
   });
 
   const thread = (await built.sessions.get(sid))!.threadRef;

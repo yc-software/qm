@@ -1205,19 +1205,23 @@ export function createSessionMethods(
       if (source.scopeId === targetScopeId) return { moved: false, reason: "same_scope" };
       const from = parseScopeId(source.scopeId);
       const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref) !== null;
-      if ((from.kind !== "personal" && !fromProject) || !(await mayWriteSession(principalId, source)))
+      const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
+      if (
+        (from.kind !== "personal" && !fromProject) ||
+        !topLevelWebChat ||
+        !(await mayWriteSession(principalId, source))
+      )
         return { moved: false, reason: "unsupported_source" };
       const target = parseScopeId(targetScopeId);
       const projectId = target.kind === "group" ? projectIdFromGroupRef(target.ref) : null;
       const projects = deps.projects;
-      if (!projectId || !projects) return { moved: false, reason: "forbidden" };
+      if (!projectId || !projects) return { moved: false, reason: "not_project" };
+      if ((await deps.runs.inFlightForThread(source.threadRef)).length) return { moved: false, reason: "busy" };
+      const items = (await transcripts.forViewer(sessionId, principalId)).items;
       const result = await projects.withRosterLock(projectId, async (project) => {
-        if (project.orgId !== orgIdOf()) return { moved: false as const, reason: "forbidden" as const };
+        if (project.orgId !== orgIdOf()) return { moved: false as const, reason: "not_project" as const };
         const members = await projects.members(target.ref);
         if (!members?.includes(principalId)) return { moved: false as const, reason: "forbidden" as const };
-        if ((await deps.runs.inFlightForThread(source.threadRef)).length)
-          return { moved: false as const, reason: "busy" as const };
-        const items = (await transcripts.forViewer(sessionId, principalId)).items;
         const { session: moved } = await copyToFreshWebSession(
           principalId,
           { type: "group", scopeId: targetScopeId, channelName: project.name },
@@ -1234,7 +1238,7 @@ export function createSessionMethods(
         await deps.sessions.updateParticipantView(sessionId, principalId, { archived: true });
         return { moved: true as const, sessionId: moved.id };
       });
-      if (!result) return { moved: false, reason: "forbidden" };
+      if (!result) return { moved: false, reason: "not_project" };
       if (!result.moved) return result;
       h.recordAudit({
         at: Date.now(),

@@ -4,12 +4,14 @@ export const SESSION_DROP_OVER_CLASS = "session-drop-over";
 
 export interface SessionMoveHost {
   sessions(): readonly CoreSession[];
+  isProject(scopeId: string): boolean;
   move(ids: readonly string[], scopeId: string): Promise<void>;
 }
 
 let host: SessionMoveHost | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 let dragIds: readonly string[] | null = null;
+const movableByTarget = new Map<string, string[]>();
 
 export function registerSessionMoveHost(next: SessionMoveHost | null): void {
   host = next;
@@ -20,30 +22,47 @@ export function sessionsToMove(selected: ReadonlySet<string>, draggedId: string)
 }
 
 export function movableInto(
-  sessions: readonly Pick<CoreSession, "id" | "scopeId">[],
+  sessions: readonly CoreSession[],
   ids: readonly string[],
   scopeId: string,
+  isProject: (scopeId: string) => boolean,
 ): string[] {
   const byId = new Map(sessions.map((s) => [s.id, s]));
   return ids.filter((id) => {
     const s = byId.get(id);
-    return Boolean(s && s.scopeId !== scopeId);
+    return Boolean(
+      s &&
+      s.scopeId !== scopeId &&
+      s.surface === "web" &&
+      !s.working &&
+      !s.parentSessionId &&
+      !s.sideChat &&
+      (s.scopeId.startsWith("personal:") || isProject(s.scopeId)),
+    );
   });
 }
 
 export function beginSessionMoveDrag(ids: readonly string[]): void {
   dragIds = ids.length ? ids : null;
+  movableByTarget.clear();
 }
 
 export function endSessionMoveDrag(): void {
   dragIds = null;
+  movableByTarget.clear();
   for (const el of document.querySelectorAll(`.${SESSION_DROP_OVER_CLASS}`))
     el.classList.remove(SESSION_DROP_OVER_CLASS);
 }
 
 function droppable(scopeId: string): string[] {
   if (!dragIds || !host) return [];
-  return movableInto(host.sessions(), dragIds, scopeId);
+  const target = host;
+  let ids = movableByTarget.get(scopeId);
+  if (!ids) {
+    ids = movableInto(target.sessions(), dragIds, scopeId, (scope) => target.isProject(scope));
+    movableByTarget.set(scopeId, ids);
+  }
+  return ids;
 }
 
 export interface ProjectDropHandlers {
