@@ -257,11 +257,37 @@ struct NativeDictationGlow: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var smoother = NativeWaveSmoother()
 
-  private static let colors = [
-    Color(red: 0.20, green: 0.39, blue: 0.88), Color(red: 0.48, green: 0.36, blue: 0.94),
-    Color(red: 0.75, green: 0.42, blue: 1.00), Color(red: 1.00, green: 0.42, blue: 0.53),
-    Color(red: 1.00, green: 0.48, blue: 0.44), Color(red: 0.43, green: 0.61, blue: 0.97),
-    Color(red: 0.20, green: 0.39, blue: 0.88),
+  /// One band of colour patches around the rim. Each band turns at its own speed and wobbles,
+  /// so the patches drift past one another and the edge never lights evenly.
+  private struct Band {
+    let colors: [Color]
+    let speed: Double
+    let phase: Double
+  }
+
+  private static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
+  private static let sky = Color(red: 0.43, green: 0.61, blue: 0.97)
+  private static let violet = Color(red: 0.55, green: 0.40, blue: 0.98)
+  private static let pink = Color(red: 0.98, green: 0.45, blue: 0.62)
+  private static let coral = Color(red: 1.00, green: 0.55, blue: 0.47)
+  private static let bands = [
+    Band(
+      colors: [
+        blue, blue.opacity(0), sky.opacity(0), sky, violet.opacity(0), blue.opacity(0), blue,
+      ],
+      speed: 23, phase: 0),
+    Band(
+      colors: [
+        pink.opacity(0), pink, pink.opacity(0), violet.opacity(0), violet, violet.opacity(0),
+        pink.opacity(0),
+      ],
+      speed: -31, phase: 1.7),
+    Band(
+      colors: [
+        coral.opacity(0), sky.opacity(0), coral, coral.opacity(0), blue.opacity(0), blue,
+        coral.opacity(0),
+      ],
+      speed: 17, phase: 3.9),
   ]
 
   var body: some View {
@@ -270,17 +296,23 @@ struct NativeDictationGlow: View {
       timeline in
       let time = timeline.date.timeIntervalSinceReferenceDate
       let level = smoother.step(toward: active ? model.level : 0, at: time)
-      let gradient = AngularGradient(
-        colors: Self.colors, center: .center, angle: .degrees(reduceMotion ? 0 : time * 40))
       let shape = RoundedRectangle(cornerRadius: cornerRadius)
       // Room noise sits below the threshold, so nothing shows until the person speaks.
       let presence = min(1, max(0, (level - 0.12) / 0.3))
       ZStack {
-        shape.strokeBorder(gradient, lineWidth: 14 + 14 * level)
-          .blur(radius: 12 + 8 * level)
-          .opacity(0.8 * presence)
-        shape.strokeBorder(gradient, lineWidth: 1.5 + level)
-          .opacity(presence)
+        ForEach(Self.bands.indices, id: \.self) { index in
+          let band = Self.bands[index]
+          let wobble = sin(time * (1.3 + Double(index) * 0.7) + band.phase)
+          let flicker = reduceMotion ? 1 : 0.6 + 0.4 * wobble * sin(time * 2.9 + band.phase * 2)
+          let drift = time * band.speed + 30 * sin(time * 0.6 + band.phase)
+          let angle = band.phase * 57 + (reduceMotion ? 0 : drift)
+          shape.strokeBorder(
+            AngularGradient(colors: band.colors, center: .center, angle: .degrees(angle)),
+            lineWidth: 3 + 6 * level * flicker
+          )
+          .blur(radius: 4 + 4 * level)
+          .opacity(0.5 * presence * flicker)
+        }
       }
       .clipShape(shape)
     }
