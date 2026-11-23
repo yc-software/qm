@@ -847,6 +847,9 @@ struct ChatView: View {
     }
     .padding(8)
     .composerChrome()
+    .overlay {
+      if dictation.busy { NativeDictationGlow(model: dictation) }
+    }
     // The composer grows into the dictation panel on one spring, so the chrome, the outgoing
     // field and the incoming orb move together instead of snapping.
     .animation(reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.16), value: dictation.busy)

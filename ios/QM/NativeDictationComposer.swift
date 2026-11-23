@@ -249,6 +249,45 @@ private struct NativeDictationWaves: View {
   }
 }
 
+/// A gradient rim around the dictation panel that brightens, thickens and turns as the
+/// speaker's voice gets louder, and fades once recording stops.
+struct NativeDictationGlow: View {
+  let model: NativeDictationModel
+  var cornerRadius: CGFloat = 24
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var smoother = NativeWaveSmoother()
+
+  private static let colors = [
+    Color(red: 0.20, green: 0.39, blue: 0.88), Color(red: 0.48, green: 0.36, blue: 0.94),
+    Color(red: 0.75, green: 0.42, blue: 1.00), Color(red: 1.00, green: 0.42, blue: 0.53),
+    Color(red: 1.00, green: 0.48, blue: 0.44), Color(red: 0.43, green: 0.61, blue: 0.97),
+    Color(red: 0.20, green: 0.39, blue: 0.88),
+  ]
+
+  var body: some View {
+    let active = model.state == .recording
+    TimelineView(.animation(minimumInterval: reduceMotion ? 0.1 : 1.0 / 60, paused: !active)) {
+      timeline in
+      let time = timeline.date.timeIntervalSinceReferenceDate
+      let level = smoother.step(toward: active ? model.level : 0, at: time)
+      let gradient = AngularGradient(
+        colors: Self.colors, center: .center, angle: .degrees(reduceMotion ? 0 : time * 40))
+      let shape = RoundedRectangle(cornerRadius: cornerRadius)
+      ZStack {
+        shape.strokeBorder(gradient, lineWidth: 6 + 10 * level)
+          .blur(radius: 10 + 8 * level)
+          .opacity(0.2 + 0.6 * level)
+        shape.strokeBorder(gradient, lineWidth: 1.5 + 1.5 * level)
+          .opacity(0.4 + 0.6 * level)
+      }
+    }
+    .opacity(active ? 1 : 0)
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: active)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+}
+
 /// Eases the microphone level, which arrives ten times a second, into per-frame motion:
 /// quick to rise with the voice and slower to settle.
 private final class NativeWaveSmoother {
