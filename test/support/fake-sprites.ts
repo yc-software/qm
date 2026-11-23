@@ -168,7 +168,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
   const sprites = new Map<string, { home: string }>();
   const policies = new Map<string, NetworkRule[]>();
   const resources = new Map<string, { limitMB: number }>();
-  const checkpoints = new Map<string, Array<{ id: string; createTime: string; dir: string }>>();
+  const checkpoints = new Map<string, Array<{ id: string; createTime: string; dir: string; policy?: NetworkRule[] }>>();
   const execScripts: string[] = [];
   const calls: SpritesCall[] = [];
   const gateway502 = new Set<string>();
@@ -370,7 +370,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       const dir = join(root, ".checkpoints", name, id);
       cpSync(ensureDir(name), dir, { recursive: true });
       const list = checkpoints.get(name) ?? [];
-      list.push({ id, createTime: new Date(Date.now() + list.length).toISOString(), dir });
+      list.push({ id, createTime: new Date(Date.now() + list.length).toISOString(), dir, policy: policies.get(name) });
       checkpoints.set(name, list);
       void body;
       return ndjson([
@@ -391,6 +391,8 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
       const home = ensureDir(name);
       rmSync(home, { recursive: true, force: true });
       cpSync(cp.dir, home, { recursive: true });
+      if (cp.policy) policies.set(name, cp.policy);
+      else policies.delete(name);
       gateway502.delete(name);
       return ndjson([
         { type: "info", data: `restoring ${cp.id}` },

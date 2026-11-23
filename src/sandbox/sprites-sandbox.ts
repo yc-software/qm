@@ -481,7 +481,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     },
     isProvisioned: (name) => ensured.has(name),
     async recreateScratch(name) {
-      if (await spriteExists(name)) await deleteSprite(name);
+      await deleteSprite(name);
       await attempt(`create ${name}`, () => client(name).createSprite(name, { waitForCapacity: true }));
       await applyResources(name);
       ensured.add(name);
@@ -690,6 +690,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
           }
           let restored: Checkpoint | undefined;
           try {
+            await initializationStore.merge(name, { egressHosts: undefined });
             restored = await restoreLatestCheckpoint(name);
           } catch (e) {
             throw new Error(

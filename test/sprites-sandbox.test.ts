@@ -6,6 +6,7 @@ import {
   createSpritesSandbox,
   processKeepaliveScript,
   retrySpritesControl,
+  type StoredSprite,
   spritesErrorDetail,
 } from "../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
@@ -299,6 +300,24 @@ test("a recreated sprite gets the egress policy re-pinned, never served from a s
   assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
 });
 
+test("a scratch sprite removed outside core gets the egress policy again on its next lease", async () => {
+  const store = testMap<StoredSprite>();
+  const s = make({ egressProxyUrl: "https://proxy.example.com", initializationStore: store });
+  const token = await proxyToken();
+  const a = await s.provision(scope, { scratch: { key: "job-gone" }, egressToken: token });
+  assert.deepEqual(fake.policy(a.id), [{ domain: "proxy.example.com", action: "allow" }]);
+  const res = await fetch(`${fake.baseUrl}/v1/sprites/${a.id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${FAKE_SPRITES_TOKEN}` },
+  });
+  assert.ok(res.ok);
+  assert.equal(fake.policy(a.id), null);
+  const restarted = make({ egressProxyUrl: "https://proxy.example.com", initializationStore: store });
+  const b = await restarted.provision(scope, { scratch: { key: "job-gone" }, egressToken: token });
+  assert.equal(b.id, a.id);
+  assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
+});
+
 test("a failed egress setup releases the scratch lease instead of wedging the key", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt-scratch", "job-egress"));
@@ -462,6 +481,22 @@ test("a refused restart on a faulted sprite restores the latest checkpoint", asy
   assert.match(restored!.message, /http 502/);
   assert.match(restored!.message, /machine unreachable/);
   assert.match(restored!.message, /restored checkpoint v1/);
+});
+
+test("a checkpoint restore that rolls back the network policy gets the egress policy re-applied", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const h = await s.provision(scope);
+  await s.teardown(h);
+  assert.equal(fake.policy(h.id), null);
+  const pinned = await s.provision(scope, { egressToken: await proxyToken() });
+  assert.deepEqual(fake.policy(pinned.id), [{ domain: "proxy.example.com", action: "allow" }]);
+  fake.refuseRestart(h.id);
+  fake.unhealthy(h.id, "machine unreachable");
+  await s.restartComputer!(scope);
+  assert.equal(fake.policy(h.id), null, "the restore rolled the platform policy back to the checkpoint");
+  fake.health(h.id, "healthy", "ok");
+  const again = await s.provision(scope, { egressToken: await proxyToken() });
+  assert.deepEqual(fake.policy(again.id), [{ domain: "proxy.example.com", action: "allow" }]);
 });
 
 test("a refused restart with a healthy check restores nothing and surfaces the refusal", async () => {
