@@ -7,7 +7,7 @@ export function hiddenMessage(message: AgentMessage): boolean {
   return Boolean(opener || resumeAnchor);
 }
 
-export function continuedSpeakers(rows: readonly AgentMessage[]): Set<AgentMessage> {
+export function continuedSpeakers(agents: boolean, rows: readonly AgentMessage[]): Set<AgentMessage> {
   const continued = new Set<AgentMessage>();
   let previous: string | undefined;
   for (const message of rows) {
@@ -17,7 +17,7 @@ export function continuedSpeakers(rows: readonly AgentMessage[]): Set<AgentMessa
       speakerId?: string;
       personaId?: string;
     };
-    const key = role === "user" ? speakerId || speaker : `${role}:${personaId ?? ""}`;
+    const key = role === "user" ? speakerId || speaker : agents ? `${role}:${personaId ?? ""}` : undefined;
     if (key && key === previous) continued.add(message);
     previous = key;
   }

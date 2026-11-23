@@ -394,6 +394,7 @@ export function createChatSurface(
       message.role === "assistant" ? assistantDisplayText(messageText(message)) : messageText(message),
     );
     continuedSpeakerRows = continuedSpeakers(
+      isReadOnlySlackView(),
       messages.filter((m) => !hiddenMessage(m) && !rendersInsideWork(m) && !slackReactions.reactionRows.has(m)),
     );
   }
@@ -1454,17 +1455,15 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${
-              s.surface === "slack"
-                ? chatHeader(
-                    slackTitle(defaultSessionTitle(s), s.title?.trim()),
-                    chatSurface?.label ?? "",
-                    !chatSurface,
-                    shownMessages,
-                    openInSurface(sessionSlackUrl(s), chatSurface?.label),
-                  )
-                : chatHeader(groupDmTitle(s), chatSurface?.label ?? "", !chatSurface, shownMessages)
-            }
+            ${chatHeader(
+              s.surface === "slack" && s.type === "channel"
+                ? slackTitle(defaultSessionTitle(s), s.title?.trim())
+                : groupDmTitle(s),
+              chatSurface?.label ?? "",
+              !chatSurface,
+              shownMessages,
+              openInSurface(sessionSlackUrl(s), chatSurface?.label),
+            )}
             ${
               slackReply
                 ? nothing

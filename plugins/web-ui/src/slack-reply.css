@@ -19,9 +19,6 @@ qm-slack-reply {
   align-items: end;
   gap: 10px;
   box-sizing: border-box;
-  width: calc(100% - 48px);
-  max-width: 696px;
-  margin: 8px auto 18px;
   padding: 7px 7px 7px 11px;
   border: 1px solid var(--border);
   border-radius: 14px;

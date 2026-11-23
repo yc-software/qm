@@ -4721,18 +4721,6 @@ summary.stopped-head:focus-visible {
 .open-in-surface:hover {
   background: var(--secondary);
 }
-.slack-thread-chat .chat-scroll {
-  padding: 0;
-  scrollbar-gutter: auto;
-}
-.slack-thread-chat .message-stack {
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 744px;
-  margin: 0 auto;
-  padding: 28px 24px 8px;
-  gap: 0;
-}
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) {
   position: relative;
   display: flex;
