@@ -1,3 +1,4 @@
+import { reportHandledError } from "./browser-errors.ts";
 import { mediaKind } from "./media-layout.ts";
 
 export function filePreviewKind(name: string, mimetype = ""): "markdown" | "csv" | "tsv" | "text" | null {
@@ -31,5 +32,8 @@ export function previewFile(event: MouseEvent, name: string, href: string, mimet
         }),
       )
     : import("./file-viewer.ts").then(({ openFileViewer }) => openFileViewer(name, href, kind!, mimetype));
-  void opened.catch(() => window.open(href, "_blank", "noopener,noreferrer"));
+  void opened.catch((error: unknown) => {
+    reportHandledError("web:file_preview", error);
+    window.open(href, "_blank", "noopener,noreferrer");
+  });
 }
