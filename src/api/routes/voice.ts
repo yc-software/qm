@@ -63,6 +63,8 @@ export function voiceKey(ctx: ApiCtx): string | undefined {
   return ctx.actor?.imp ? undefined : ctx.deps.openaiApiKey?.trim() || undefined;
 }
 
+type UploadKind = "voice" | "dictation" | "meeting";
+
 interface Caller {
   user: string;
   org: string;
@@ -70,8 +72,28 @@ interface Caller {
   signal: AbortSignal;
 }
 
-function providerFailure(res: ServerResponse, error: unknown, dictation: boolean): void {
+function meetingFailure(res: ServerResponse, provider: VoiceProviderError | undefined): boolean {
+  const status = provider?.status;
+  if (status === 401 || status === 403 || status === 404 || provider?.code === "insufficient_quota") {
+    sendJson(res, 403, {
+      error: "transcription_refused",
+      message: "OpenAI refused this instance's transcription requests, so the meeting cannot be transcribed.",
+    });
+    return true;
+  }
+  if (status !== undefined && REJECTED_STATUSES.has(status)) {
+    sendJson(res, 422, {
+      error: "segment_rejected",
+      message: "OpenAI rejected this part of the recording. Retrying will not help.",
+    });
+    return true;
+  }
+  return false;
+}
+
+function providerFailure(res: ServerResponse, error: unknown, kind: UploadKind): void {
   const provider = error instanceof VoiceProviderError ? error : undefined;
+  const dictation = kind !== "voice";
   if (provider?.status === 429 && provider.code !== "insufficient_quota") {
     if (provider.retryAfterS !== undefined)
       res.setHeader("retry-after", String(Math.min(provider.retryAfterS, MAX_RETRY_AFTER_S)));
@@ -88,6 +110,7 @@ function providerFailure(res: ServerResponse, error: unknown, dictation: boolean
     (provider.code === "unsupported_format" || (provider.code === "invalid_value" && provider.param === "file"))
   )
     return sendJson(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
+  if (kind === "meeting" && meetingFailure(res, provider)) return;
   if (provider?.status !== undefined && REJECTED_STATUSES.has(provider.status))
     return sendJson(res, 502, {
       error: dictation ? "dictation_rejected" : "voice_rejected",
@@ -104,7 +127,7 @@ function providerFailure(res: ServerResponse, error: unknown, dictation: boolean
 async function callProvider(
   ctx: ApiCtx,
   apiKey: string,
-  dictation: boolean,
+  kind: UploadKind,
   work: (caller: (timeoutMs: number) => Caller, clientGone: AbortSignal) => Promise<void>,
 ): Promise<void> {
   const { res } = ctx;
@@ -125,8 +148,8 @@ async function callProvider(
       controller.signal,
     );
   } catch (error) {
-    reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
-    if (!controller.signal.aborted) providerFailure(res, error, dictation);
+    reportVoiceError(error, kind === "voice" ? "voice_provider" : "dictation_provider", controller.signal.aborted);
+    if (!controller.signal.aborted) providerFailure(res, error, kind);
   } finally {
     finished.abort();
     res.off("close", disconnect);
@@ -137,6 +160,7 @@ export async function transcribeUpload(
   ctx: ApiCtx,
   apiKey: string,
   prompt?: string,
+  kind: UploadKind = "dictation",
 ): Promise<string | null | undefined> {
   const { req, res } = ctx;
   const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
@@ -146,7 +170,7 @@ export async function transcribeUpload(
   }
   extendBodyDeadline(req, TRANSCRIBE_TIMEOUT_MS);
   let text: string | null | undefined;
-  await callProvider(ctx, apiKey, true, async (caller, clientGone) => {
+  await callProvider(ctx, apiKey, kind, async (caller, clientGone) => {
     let audio: { file: string; size: number };
     try {
       audio = await spool(req, clientGone);
@@ -202,7 +226,7 @@ async function liveVoice(ctx: ApiCtx): Promise<void> {
   const sdp = offer?.sdp;
   if (typeof sdp !== "string" || !sdp.startsWith("v=0") || sdp.length > 60_000)
     return sendJson(res, 400, { error: "invalid_offer" });
-  return callProvider(ctx, apiKey, false, async (caller) =>
+  return callProvider(ctx, apiKey, "voice", async (caller) =>
     sendJson(res, 201, await createLiveVoice(sdp, caller(LIVE_SESSION_TIMEOUT_MS))),
   );
 }

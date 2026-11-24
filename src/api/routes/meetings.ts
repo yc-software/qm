@@ -1,7 +1,10 @@
+import { reportBackendError } from "../../../plugins/chassis/src/error-reporting.ts";
 import { overheardItem } from "../../agent/replay.ts";
+import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
 import { isOverheard } from "../../sessions/items.ts";
 import type { Run } from "../../runs/run-store.ts";
 import { scopeId, type TurnRequest } from "../../types.ts";
+import { uuidSchema } from "../../util/ids.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { isObj } from "./shared.ts";
@@ -11,7 +14,6 @@ import { meetingThread, webTurnBase } from "./web-turns.ts";
 const CHECK_IN_MS = 120_000;
 const PROMPT_CHARS = 1_000;
 const PROMPT_LINES = 12;
-const UUID_CHARS = "0123456789abcdef-";
 
 const CHECK_IN =
   "Meeting check-in. Reply only with something worth a glance mid-meeting: a claim you checked that is wrong or materially off (what was said, what is true, the source), or context the person would want right now. One or two lines, no summaries. Otherwise end with finish_silently.";
@@ -41,14 +43,6 @@ function clock(at: number, timeZone: string | undefined, date = false): string {
   }).format(at);
 }
 
-function validZone(timeZone: unknown): timeZone is string {
-  try {
-    return typeof timeZone === "string" && Boolean(clock(0, timeZone));
-  } catch {
-    return false;
-  }
-}
-
 function epochMs(raw: unknown): number | undefined {
   const at = Number(raw);
   return Number.isSafeInteger(at) && at > 0 ? at : undefined;
@@ -62,12 +56,13 @@ async function openMeeting(ctx: ApiCtx, id: unknown): Promise<Meeting | undefine
     });
     return undefined;
   }
-  if (typeof id !== "string" || id.length !== 36 || ![...id.toLowerCase()].every((c) => UUID_CHARS.includes(c))) {
+  const parsed = uuidSchema.safeParse(id);
+  if (!parsed.success) {
     sendJson(ctx.res, 400, { error: "bad_request", message: "The meeting id must be a UUID." });
     return undefined;
   }
   const user = ctx.actor!.p;
-  return { user, threadRef: meetingThread(user, id.toLowerCase()) };
+  return { user, threadRef: meetingThread(user, parsed.data.toLowerCase()) };
 }
 
 async function meetingTurn(ctx: ApiCtx, meeting: Meeting, text: string): Promise<TurnRequest> {
@@ -85,7 +80,7 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
   if (!meeting) return;
   const startedAt = epochMs(p.startedAt);
   const timezone = p.timezone;
-  if (!startedAt || !validZone(timezone))
+  if (!startedAt || !isValidCapabilityTimezone(timezone))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "startedAt and a valid timezone are required." });
   const app = typeof p.app === "string" && p.app.trim() ? p.app.trim() : undefined;
   const spawned = await ctx.app.spawnSession(meeting.user, {
@@ -135,7 +130,7 @@ async function meetingSpeech(ctx: ApiCtx): Promise<void> {
   const recent = (await sessions.getItems(session.id, { limit: PROMPT_LINES, messagesOnly: true }))
     .filter(isOverheard)
     .map((item) => item.text ?? "");
-  const text = await transcribeUpload(ctx, voiceKey(ctx)!, transcriptionPrompt(started, recent));
+  const text = await transcribeUpload(ctx, voiceKey(ctx)!, transcriptionPrompt(started, recent), "meeting");
   if (text === undefined) return;
   if (!text) return sendJson(ctx.res, 200, { text: "" });
   const stored = await sessions.appendDelivery(
@@ -176,7 +171,9 @@ async function afterSpeech(ctx: ApiCtx, meeting: Meeting, sessionId: string, sta
     async: true,
   });
   if (result.status === "refused")
-    console.error(`[meetings] check-in refused in ${meeting.threadRef}: ${result.reason}`);
+    reportBackendError(new Error(`meeting check-in refused: ${result.reason}`), "meeting_check_in_refused", {
+      threadRef: meeting.threadRef,
+    });
 }
 
 async function stopMeeting(ctx: ApiCtx): Promise<void> {

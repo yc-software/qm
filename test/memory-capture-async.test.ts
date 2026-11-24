@@ -188,13 +188,21 @@ test("memory capture runs only for a person's own turn in a human conversation",
     proactiveOpener: true,
   });
   const person = await turn("web", `web:U1:dm:${run}`, { kind: "human" }, "I prefer terse replies");
+  const wake = await orch.handleTurn({
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: `web:U1:wake:${run}`, audience: [actor] },
+    origin: { kind: "human" },
+    text: "Write the meeting up and attach the transcript.",
+    displayText: "Recording stopped",
+  });
   await new Promise((r) => setTimeout(r, 50));
 
   assert.deepEqual(
-    [subagent.status, cron.status, sent.status, opener.status, person.status],
-    ["ok", "ok", "ok", "ok", "ok"],
+    [subagent.status, cron.status, sent.status, opener.status, person.status, wake.status],
+    ["ok", "ok", "ok", "ok", "ok", "ok"],
   );
-  assert.deepEqual(captured, ["I prefer terse replies"]);
+  assert.deepEqual(captured.toSorted(), ["I prefer terse replies", "Recording stopped"]);
 });
 
 test("approval replay preserves the memory opt-out", () => {

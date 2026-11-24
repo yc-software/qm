@@ -124,3 +124,16 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
   await speech(1_795_000_020_000);
   assert.equal(turns.length, 3);
 });
+
+test("a segment OpenAI rejects is dropped, and a refused key ends the recording", async (t) => {
+  const realFetch = globalThis.fetch;
+  const statuses = [400, 401];
+  t.mock.method(globalThis, "fetch", async (url: string | URL, init?: RequestInit) =>
+    String(url).startsWith("https://api.openai.com/")
+      ? Response.json({ error: { code: "rejected" } }, { status: statuses.shift() })
+      : realFetch(url, init),
+  );
+  const speech = () => post(`/api/meetings/${id}/speech?speaker=me&at=1`, "audio", { "content-type": "audio/webm" });
+  assert.deepEqual([(await speech()).status, (await speech()).status], [422, 403]);
+  assert.equal((await post(`/api/meetings/${"-".repeat(36)}/stop`, { endedAt: 1 })).status, 400);
+});
