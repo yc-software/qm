@@ -450,7 +450,6 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
-import { createPersonaSlackStore, type PersonaSlackStore } from "./surfaces/persona-slack.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createGenericChatSurface } from "./surfaces/generic-chat/adapter.ts";
@@ -526,7 +525,6 @@ export interface BuiltApp {
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
-  personaSlack: PersonaSlackStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
@@ -756,13 +754,8 @@ export function buildApp(
     config.orgId,
     artifactMap("slack_installation"),
     slackKeyMaterial,
+    config.publicUrl ? { publicUrl: config.publicUrl } : undefined,
   );
-  const personaSlack = createPersonaSlackStore({
-    appsMap: artifactMap("persona_slack_apps"),
-    configTokenMap: artifactMap("slack_config_token"),
-    keyMaterial: slackKeyMaterial,
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-  });
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
@@ -3337,7 +3330,6 @@ export function buildApp(
     config: configStore,
     connectorTokens,
     slackInstallation,
-    personaSlack,
     resolveClient,
     consentLinks,
     oauthFlows,
@@ -3472,7 +3464,6 @@ export function serverDeps(
     ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
     connectorTokens: built.connectorTokens,
     slackInstallation: built.slackInstallation,
-    personaSlack: built.personaSlack,
     slackEnvironmentState,
     ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
     ...(slackEnvBotToken ? { slackEnvBotToken } : {}),

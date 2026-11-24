@@ -1,13 +1,38 @@
+import { randomBytes } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { App as BoltApp, Receiver } from "@slack/bolt";
+import { isValidSlackRequest } from "@slack/bolt";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
+import type { EnvelopeStaging } from "../slack/envelope-staging.ts";
+import {
+  createDeferredEnvelopeAck,
+  describeEnvelope,
+  envelopeStageFor,
+  isGatedEnvelope,
+} from "../slack/deferred-ack.ts";
+import { sendJson } from "../api/http.ts";
+import { swallow } from "../util/errors.ts";
+import { buildSlackAppManifest, slackBotManifestCreationUrl, slackOAuthAuthorizeUrl } from "./slack-manifest.ts";
+
+const MAX_EVENT_BODY_BYTES = 5 * 1024 * 1024;
+const CONFIG_TOKEN_REFRESH_BUFFER_MS = 5 * 60_000;
+const BASE_TARGET = "base";
 
 interface ActiveSlackInstallation {
+  kind?: "installation";
   serviceBlocked?: boolean;
   orgId: string;
+  personaId?: string;
   disabled: false;
-  botTokenEnc: string;
+  pending?: boolean;
+  botTokenEnc?: string;
   appTokenEnc?: string;
+  signingSecretEnc?: string;
+  clientId?: string;
+  clientSecretEnc?: string;
+  oauthState?: string;
   appId?: string;
   installId?: string;
   installedAt?: number;
@@ -19,20 +44,34 @@ interface ActiveSlackInstallation {
 }
 
 interface DisabledSlackInstallation {
+  kind?: "installation";
   installedAt?: number;
   serviceBlocked?: boolean;
   orgId: string;
+  personaId?: string;
   disabled: true;
   updatedAt: number;
   updatedBy: string;
   version: string;
 }
 
-type StoredSlackInstallation = ActiveSlackInstallation | DisabledSlackInstallation;
+interface StoredSlackConfigToken {
+  kind: "config-token";
+  orgId: string;
+  accessTokenEnc?: string;
+  refreshTokenEnc?: string;
+  expiresAt?: number;
+  updatedAt: number;
+  updatedBy: string;
+}
 
-interface SlackInstallation {
+export type StoredSlackInstallation = ActiveSlackInstallation | DisabledSlackInstallation | StoredSlackConfigToken;
+
+export interface SlackInstallation {
+  personaId?: string;
   botToken: string;
   appToken?: string;
+  signingSecret?: string;
   appId?: string;
   installId?: string;
   installedAt?: number;
@@ -43,7 +82,7 @@ interface SlackInstallation {
   version: string;
 }
 
-interface SlackInstallationStatus {
+export interface SlackInstallationStatus {
   configured: boolean;
   managed: boolean;
   teamId?: string;
@@ -53,12 +92,34 @@ interface SlackInstallationStatus {
   version?: string;
 }
 
+export interface SlackConfigTokenStatus {
+  configured: boolean;
+  hasRefreshToken: boolean;
+  expiresAt?: number;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface SlackAppProvisionStatus {
+  status: "unconnected" | "pending_install" | "connected";
+  appId?: string;
+  teamId?: string;
+  teamName?: string;
+  oauthAuthorizeUrl?: string;
+  hasOrgConfigToken: boolean;
+  publicUrlConfigured: boolean;
+  manifestCreateUrl: string;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
 export interface SlackInstallationStore {
   get(): Promise<SlackInstallation | null>;
   status(): Promise<SlackInstallationStatus>;
   set(input: {
     botToken: string;
     appToken?: string;
+    signingSecret?: string;
     appId?: string;
     installId?: string;
     installedAt?: number;
@@ -78,58 +139,350 @@ export interface SlackInstallationStore {
   disableManaged(installId: string): Promise<boolean>;
   enableManaged(): Promise<boolean>;
   onSet(listener: () => void): void;
+
+  configTokenStatus(): Promise<SlackConfigTokenStatus>;
+  setConfigToken(input: {
+    accessToken?: string;
+    refreshToken?: string;
+    updatedBy: string;
+  }): Promise<SlackConfigTokenStatus>;
+  deleteConfigToken(): Promise<void>;
+
+  appStatus(personaId?: string, displayName?: string): Promise<SlackAppProvisionStatus>;
+  createApp(input: {
+    personaId?: string;
+    name: string;
+    description?: string;
+    configToken?: string;
+    saveOrgConfigToken?: boolean;
+    orgDeploy?: boolean;
+    updatedBy: string;
+  }): Promise<{ status: SlackAppProvisionStatus; oauthAuthorizeUrl: string; appId: string }>;
+  completeOAuth(input: {
+    code: string;
+    state: string;
+  }): Promise<{ personaId?: string; appId?: string; teamId?: string; teamName?: string }>;
+  attachHttpApp(input: {
+    personaId?: string;
+    botToken: string;
+    signingSecret: string;
+    appId?: string;
+    updatedBy: string;
+  }): Promise<SlackAppProvisionStatus>;
+  deleteApp(input: {
+    personaId?: string;
+    updatedBy: string;
+    deleteRemote?: boolean;
+    configToken?: string;
+  }): Promise<void>;
+  listPersonaApps(): Promise<SlackInstallation[]>;
+
+  receiver(target: string, signingSecret: string, staging?: EnvelopeStaging): Receiver;
+  handleHttpEvent(target: string, req: IncomingMessage, res: ServerResponse): Promise<void>;
+}
+
+interface SlackApiResult {
+  ok?: boolean;
+  error?: string;
+  errors?: Array<{ message?: string; pointer?: string }>;
+  token?: string;
+  refresh_token?: string;
+  exp?: number;
+  app_id?: string;
+  credentials?: {
+    client_id?: string;
+    client_secret?: string;
+    signing_secret?: string;
+  };
+  access_token?: string;
+  team?: { id?: string; name?: string } | string;
+  team_id?: string;
+  oauth_authorize_url?: string;
+}
+
+function isInstallationRecord(
+  record: StoredSlackInstallation | null | undefined,
+): record is ActiveSlackInstallation | DisabledSlackInstallation {
+  return Boolean(record && record.kind !== "config-token");
+}
+
+function isActiveConnected(record: StoredSlackInstallation | null | undefined): record is ActiveSlackInstallation {
+  return isInstallationRecord(record) && !record.disabled && !record.pending && Boolean(record.botTokenEnc);
+}
+
+function formatSlackError(method: string, data: SlackApiResult): string {
+  const details = data.errors
+    ?.map((e) => (e.pointer ? `${e.pointer}: ${e.message ?? ""}` : (e.message ?? "")))
+    .filter(Boolean)
+    .join("; ");
+  return details ? `${method}: ${data.error ?? "unknown"} (${details})` : `${method}: ${data.error ?? "unknown"}`;
+}
+
+async function readRawBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : (chunk as Buffer);
+    total += buf.length;
+    if (total > maxBytes) throw new Error("request_body_too_large");
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function parseSlackPayload(rawBody: string, contentType: string): Record<string, unknown> {
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    const params = new URLSearchParams(rawBody);
+    const payload = params.get("payload");
+    if (payload) return JSON.parse(payload) as Record<string, unknown>;
+    return Object.fromEntries(params.entries());
+  }
+  return JSON.parse(rawBody) as Record<string, unknown>;
 }
 
 export function createSlackInstallationStore(
   orgId: string,
   map: DurableMap<StoredSlackInstallation>,
   keyMaterial: Buffer | string,
+  opts?: { publicUrl?: string; fetchImpl?: typeof fetch },
 ): SlackInstallationStore {
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
-  const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
-    record && !record.disabled
-      ? {
-          configured: true,
-          managed: true,
-          ...(record.teamId ? { teamId: record.teamId } : {}),
-          ...(record.teamName ? { teamName: record.teamName } : {}),
-          updatedAt: record.updatedAt,
-          updatedBy: record.updatedBy,
-          version: record.version,
-        }
-      : { configured: false, managed: record !== null };
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  const baseUrl = opts?.publicUrl?.replace(/\/+$/, "");
+
+  const personaPrefix = `${orgId}:persona:`;
+  const configTokenKey = `${orgId}:config-token`;
+  const keyFor = (personaId?: string) => (personaId ? `${personaPrefix}${personaId}` : orgId);
+  const targetFor = (personaId?: string) => personaId ?? BASE_TARGET;
+  const eventsUrlFor = (personaId?: string) =>
+    baseUrl ? `${baseUrl}/slack/events/app/${encodeURIComponent(targetFor(personaId))}` : undefined;
+  const oauthCallbackUrl = () => (baseUrl ? `${baseUrl}/v1/slack/oauth/callback` : undefined);
+
   const setListeners = new Set<() => void>();
-  return {
-    onSet(listener) {
-      setListeners.add(listener);
-    },
-    async get() {
-      const record = await map.get(orgId);
-      if (!record || record.disabled) return null;
+  const notifySet = () => {
+    for (const listener of setListeners) listener();
+  };
+
+  const pendingVerifications = new Set<string>();
+  type ActiveReceiver = { app: BoltApp; signingSecret: string; staging?: EnvelopeStaging };
+  const activeReceivers = new Map<string, ActiveReceiver>();
+
+  const callSlack = async (
+    method: string,
+    token: string | undefined,
+    body?: Record<string, unknown> | string,
+    form = false,
+  ): Promise<SlackApiResult> => {
+    const headers: Record<string, string> = {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (body !== undefined) {
+      headers["content-type"] = form ? "application/x-www-form-urlencoded" : "application/json; charset=utf-8";
+    }
+    let payload = "";
+    if (typeof body === "string") payload = body;
+    else if (body !== undefined) payload = JSON.stringify(body);
+    const res = await fetchImpl(`https://slack.com/api/${method}`, {
+      method: "POST",
+      headers,
+      ...(body !== undefined ? { body: payload } : {}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = (await res.json()) as SlackApiResult;
+    if (!res.ok || !data.ok) throw new Error(formatSlackError(method, data));
+    return data;
+  };
+
+  const rotateRefreshToken = async (
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string; expiresAt: number }> => {
+    const data = await callSlack(
+      "tooling.tokens.rotate",
+      undefined,
+      new URLSearchParams({ refresh_token: refreshToken }).toString(),
+      true,
+    );
+    if (!data.token || !data.refresh_token) {
+      throw new Error("tooling.tokens.rotate returned no rotated tokens");
+    }
+    return {
+      accessToken: data.token,
+      refreshToken: data.refresh_token,
+      expiresAt: typeof data.exp === "number" ? data.exp * 1000 : Date.now() + 12 * 3600_000,
+    };
+  };
+
+  const getStoredConfigToken = async (): Promise<StoredSlackConfigToken | null> => {
+    const rec = await map.get(configTokenKey);
+    return rec && rec.kind === "config-token" ? rec : null;
+  };
+
+  const resolveConfigAccessToken = async (
+    explicitToken: string | undefined,
+    saveToOrg: boolean,
+    updatedBy: string,
+  ): Promise<string> => {
+    const trimmed = explicitToken?.trim();
+    if (trimmed) {
+      if (trimmed.startsWith("xoxe-")) {
+        const rotated = await rotateRefreshToken(trimmed);
+        if (saveToOrg) {
+          await map.put(configTokenKey, {
+            kind: "config-token",
+            orgId,
+            accessTokenEnc: encryptSecret(rotated.accessToken, key),
+            refreshTokenEnc: encryptSecret(rotated.refreshToken, key),
+            expiresAt: rotated.expiresAt,
+            updatedAt: Date.now(),
+            updatedBy,
+          });
+        }
+        return rotated.accessToken;
+      }
+      if (trimmed.startsWith("xoxe.xoxp-")) {
+        if (saveToOrg) {
+          await map.put(configTokenKey, {
+            kind: "config-token",
+            orgId,
+            accessTokenEnc: encryptSecret(trimmed, key),
+            expiresAt: Date.now() + 11 * 3600_000,
+            updatedAt: Date.now(),
+            updatedBy,
+          });
+        }
+        return trimmed;
+      }
+      throw new Error(
+        "Slack App Configuration Token must be a Refresh Token (xoxe-1-…) or Access Token (xoxe.xoxp-…) from api.slack.com/apps.",
+      );
+    }
+    const stored = await getStoredConfigToken();
+    if (!stored) {
+      throw new Error(
+        "No Slack App Configuration Token is configured. Generate one at https://api.slack.com/apps (Your App Configuration Tokens) and provide the Refresh Token (xoxe-1-…).",
+      );
+    }
+    const hasFreshAccess =
+      stored.accessTokenEnc && stored.expiresAt && stored.expiresAt - Date.now() > CONFIG_TOKEN_REFRESH_BUFFER_MS;
+    if (hasFreshAccess) return decryptSecret(stored.accessTokenEnc!, key);
+    if (stored.refreshTokenEnc) {
+      const rotated = await rotateRefreshToken(decryptSecret(stored.refreshTokenEnc, key));
+      await map.put(configTokenKey, {
+        kind: "config-token",
+        orgId,
+        accessTokenEnc: encryptSecret(rotated.accessToken, key),
+        refreshTokenEnc: encryptSecret(rotated.refreshToken, key),
+        expiresAt: rotated.expiresAt,
+        updatedAt: Date.now(),
+        updatedBy,
+      });
+      return rotated.accessToken;
+    }
+    if (stored.accessTokenEnc) return decryptSecret(stored.accessTokenEnc, key);
+    throw new Error(
+      "Stored Slack App Configuration Token is expired; generate a new one at https://api.slack.com/apps.",
+    );
+  };
+
+  const decryptInstallation = (record: ActiveSlackInstallation): SlackInstallation => ({
+    ...(record.personaId ? { personaId: record.personaId } : {}),
+    botToken: decryptSecret(record.botTokenEnc!, key),
+    ...(record.appTokenEnc ? { appToken: decryptSecret(record.appTokenEnc, key) } : {}),
+    ...(record.signingSecretEnc ? { signingSecret: decryptSecret(record.signingSecretEnc, key) } : {}),
+    ...(record.appId ? { appId: record.appId } : {}),
+    ...(record.installId ? { installId: record.installId } : {}),
+    ...(record.installedAt ? { installedAt: record.installedAt } : {}),
+    ...(record.teamId ? { teamId: record.teamId } : {}),
+    ...(record.teamName ? { teamName: record.teamName } : {}),
+    updatedAt: record.updatedAt,
+    updatedBy: record.updatedBy,
+    version: record.version,
+  });
+
+  const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus => {
+    if (isActiveConnected(record)) {
       return {
-        botToken: decryptSecret(record.botTokenEnc, key),
-        ...(record.appTokenEnc ? { appToken: decryptSecret(record.appTokenEnc, key) } : {}),
-        ...(record.appId ? { appId: record.appId } : {}),
-        ...(record.installId ? { installId: record.installId } : {}),
-        ...(record.installedAt ? { installedAt: record.installedAt } : {}),
+        configured: true,
+        managed: true,
         ...(record.teamId ? { teamId: record.teamId } : {}),
         ...(record.teamName ? { teamName: record.teamName } : {}),
         updatedAt: record.updatedAt,
         updatedBy: record.updatedBy,
         version: record.version,
       };
+    }
+    return { configured: false, managed: isInstallationRecord(record) };
+  };
+
+  const toProvisionStatus = async (
+    record: StoredSlackInstallation | null,
+    displayName?: string,
+  ): Promise<SlackAppProvisionStatus> => {
+    const cfg = await getStoredConfigToken();
+    const hasOrgConfigToken = Boolean(cfg?.refreshTokenEnc || cfg?.accessTokenEnc);
+    const manifestCreateUrl = slackBotManifestCreationUrl(displayName);
+    const redirectUri = oauthCallbackUrl();
+    if (!isInstallationRecord(record) || record.disabled) {
+      return {
+        status: "unconnected",
+        hasOrgConfigToken,
+        publicUrlConfigured: Boolean(baseUrl),
+        manifestCreateUrl,
+      };
+    }
+    if (record.pending) {
+      const oauthAuthorizeUrl =
+        record.clientId && record.oauthState && redirectUri
+          ? slackOAuthAuthorizeUrl(record.clientId, redirectUri, record.oauthState)
+          : undefined;
+      return {
+        status: "pending_install",
+        ...(record.appId ? { appId: record.appId } : {}),
+        ...(oauthAuthorizeUrl ? { oauthAuthorizeUrl } : {}),
+        hasOrgConfigToken,
+        publicUrlConfigured: Boolean(baseUrl),
+        manifestCreateUrl,
+        updatedAt: record.updatedAt,
+        updatedBy: record.updatedBy,
+      };
+    }
+    return {
+      status: "connected",
+      ...(record.appId ? { appId: record.appId } : {}),
+      ...(record.teamId ? { teamId: record.teamId } : {}),
+      ...(record.teamName ? { teamName: record.teamName } : {}),
+      hasOrgConfigToken,
+      publicUrlConfigured: Boolean(baseUrl),
+      manifestCreateUrl,
+      updatedAt: record.updatedAt,
+      updatedBy: record.updatedBy,
+    };
+  };
+
+  return {
+    onSet(listener) {
+      setListeners.add(listener);
     },
+
+    async get() {
+      const record = await map.get(orgId);
+      if (!isActiveConnected(record)) return null;
+      return decryptInstallation(record);
+    },
+
     async status() {
       return publicStatus(await map.get(orgId));
     },
+
     async set(input) {
       const updatedAt = Date.now();
-      const record: StoredSlackInstallation = {
+      const record: ActiveSlackInstallation = {
+        kind: "installation",
         orgId,
         disabled: false,
         serviceBlocked: true,
         botTokenEnc: encryptSecret(input.botToken, key),
         ...(input.appToken ? { appTokenEnc: encryptSecret(input.appToken, key) } : {}),
+        ...(input.signingSecret ? { signingSecretEnc: encryptSecret(input.signingSecret, key) } : {}),
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.installId ? { installId: input.installId } : {}),
         ...(input.teamId ? { teamId: input.teamId } : {}),
@@ -141,14 +494,18 @@ export function createSlackInstallationStore(
       await map.putIfAbsent(orgId, record);
       const stored = await map.update(orgId, (current) => ({
         ...record,
-        ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
+        ...(isInstallationRecord(current) && current.installedAt !== undefined
+          ? { installedAt: current.installedAt }
+          : {}),
       }));
       if (!stored) throw new Error("Slack installation disappeared during update");
-      for (const listener of setListeners) listener();
+      notifySet();
       return publicStatus(stored);
     },
+
     async setManaged(input) {
       await map.putIfAbsent(orgId, {
+        kind: "installation",
         orgId,
         disabled: true,
         updatedAt: 0,
@@ -157,6 +514,7 @@ export function createSlackInstallationStore(
       });
       let accepted = false;
       await map.update(orgId, (record) => {
+        if (!isInstallationRecord(record)) return record;
         if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
         if (!record.disabled && record.installId === input.installId) {
           accepted =
@@ -167,6 +525,7 @@ export function createSlackInstallationStore(
           return record;
         accepted = true;
         return {
+          kind: "installation",
           orgId,
           disabled: false,
           botTokenEnc: encryptSecret(input.botToken, key),
@@ -182,9 +541,11 @@ export function createSlackInstallationStore(
       });
       return accepted;
     },
+
     async enableManaged() {
       let accepted = true;
       await map.update(orgId, (record) => {
+        if (!isInstallationRecord(record)) return record;
         if (!record.disabled && !record.installId) {
           accepted = false;
           return record;
@@ -193,12 +554,14 @@ export function createSlackInstallationStore(
       });
       return accepted;
     },
+
     async disableManaged(installId) {
       let disabled = false;
       await map.update(orgId, (record) => {
-        if (record.disabled || record.installId !== installId) return record;
+        if (!isInstallationRecord(record) || record.disabled || record.installId !== installId) return record;
         disabled = true;
         return {
+          kind: "installation",
           orgId,
           disabled: true,
           installedAt: record.installedAt,
@@ -209,24 +572,365 @@ export function createSlackInstallationStore(
       });
       return disabled;
     },
+
     async delete(updatedBy) {
-      const record = await map.update(orgId, (current) => ({
-        orgId,
-        disabled: true,
-        serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-        ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-        updatedAt: Date.now(),
-        updatedBy,
-        version: crypto.randomUUID(),
-      }));
-      if (record) return;
+      const record = await map.update(orgId, (current) => {
+        const inst = isInstallationRecord(current) ? current : null;
+        return {
+          kind: "installation",
+          orgId,
+          disabled: true,
+          serviceBlocked: inst?.serviceBlocked || Boolean(inst && !inst.disabled && !inst.installId),
+          ...(inst?.installedAt ? { installedAt: inst.installedAt } : {}),
+          updatedAt: Date.now(),
+          updatedBy,
+          version: crypto.randomUUID(),
+        };
+      });
+      if (record) {
+        notifySet();
+        return;
+      }
       const updatedAt = Date.now();
       await map.put(orgId, {
+        kind: "installation",
         orgId,
         disabled: true,
         updatedAt,
         updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
+      });
+      notifySet();
+    },
+
+    async configTokenStatus() {
+      const rec = await getStoredConfigToken();
+      if (!rec) return { configured: false, hasRefreshToken: false };
+      return {
+        configured: Boolean(rec.refreshTokenEnc || rec.accessTokenEnc),
+        hasRefreshToken: Boolean(rec.refreshTokenEnc),
+        ...(rec.expiresAt ? { expiresAt: rec.expiresAt } : {}),
+        updatedAt: rec.updatedAt,
+        updatedBy: rec.updatedBy,
+      };
+    },
+
+    async setConfigToken(input) {
+      const refresh = input.refreshToken?.trim();
+      const access = input.accessToken?.trim();
+      if (!refresh && !access)
+        throw new Error("Provide a Slack App Configuration refreshToken (xoxe-1-…) or accessToken (xoxe.xoxp-…).");
+      let accessToken = access;
+      let refreshToken = refresh;
+      let expiresAt = Date.now() + 11 * 3600_000;
+      if (refresh) {
+        if (!refresh.startsWith("xoxe-"))
+          throw new Error("Slack App Configuration refresh token must start with xoxe-.");
+        const rotated = await rotateRefreshToken(refresh);
+        accessToken = rotated.accessToken;
+        refreshToken = rotated.refreshToken;
+        expiresAt = rotated.expiresAt;
+      } else if (accessToken && !accessToken.startsWith("xoxe.xoxp-")) {
+        throw new Error("Slack App Configuration access token must start with xoxe.xoxp-.");
+      }
+      const updatedAt = Date.now();
+      await map.put(configTokenKey, {
+        kind: "config-token",
+        orgId,
+        ...(accessToken ? { accessTokenEnc: encryptSecret(accessToken, key) } : {}),
+        ...(refreshToken ? { refreshTokenEnc: encryptSecret(refreshToken, key) } : {}),
+        expiresAt,
+        updatedAt,
+        updatedBy: input.updatedBy,
+      });
+      return {
+        configured: true,
+        hasRefreshToken: Boolean(refreshToken),
+        expiresAt,
+        updatedAt,
+        updatedBy: input.updatedBy,
+      };
+    },
+
+    async deleteConfigToken() {
+      await map.delete(configTokenKey);
+    },
+
+    async appStatus(personaId, displayName) {
+      return toProvisionStatus(await map.get(keyFor(personaId)), displayName);
+    },
+
+    async createApp(input) {
+      const eventsUrl = eventsUrlFor(input.personaId);
+      const redirectUri = oauthCallbackUrl();
+      if (!eventsUrl || !redirectUri) {
+        throw new Error("PUBLIC_WEB_URL must be configured to create Slack apps automatically.");
+      }
+      const accessToken = await resolveConfigAccessToken(
+        input.configToken,
+        Boolean(input.saveOrgConfigToken),
+        input.updatedBy,
+      );
+      const manifest = buildSlackAppManifest({
+        name: input.name,
+        description: input.description,
+        eventsUrl,
+        redirectUrl: redirectUri,
+        orgDeploy: input.orgDeploy,
+      });
+      const target = targetFor(input.personaId);
+      pendingVerifications.add(target);
+      let created: SlackApiResult;
+      try {
+        created = await callSlack("apps.manifest.create", accessToken, { manifest: JSON.stringify(manifest) });
+      } finally {
+        pendingVerifications.delete(target);
+      }
+      const appId = created.app_id;
+      const creds = created.credentials;
+      if (!appId || !creds?.client_id || !creds.client_secret || !creds.signing_secret) {
+        throw new Error("apps.manifest.create returned incomplete app credentials");
+      }
+      const oauthState = `${target}.${randomBytes(24).toString("hex")}`;
+      const updatedAt = Date.now();
+      const record: ActiveSlackInstallation = {
+        kind: "installation",
+        orgId,
+        ...(input.personaId ? { personaId: input.personaId } : {}),
+        disabled: false,
+        pending: true,
+        serviceBlocked: true,
+        appId,
+        clientId: creds.client_id,
+        clientSecretEnc: encryptSecret(creds.client_secret, key),
+        signingSecretEnc: encryptSecret(creds.signing_secret, key),
+        oauthState,
+        updatedAt,
+        updatedBy: input.updatedBy,
+        version: `${updatedAt}:${crypto.randomUUID()}`,
+      };
+      await map.put(keyFor(input.personaId), record);
+      const oauthAuthorizeUrl = slackOAuthAuthorizeUrl(creds.client_id, redirectUri, oauthState);
+      const status = await toProvisionStatus(record, input.name);
+      return { status, oauthAuthorizeUrl, appId };
+    },
+
+    async completeOAuth(input) {
+      const redirectUri = oauthCallbackUrl();
+      if (!redirectUri) throw new Error("PUBLIC_WEB_URL is not configured.");
+      const dot = input.state.indexOf(".");
+      if (dot <= 0) throw new Error("Invalid OAuth state");
+      const target = input.state.slice(0, dot);
+      const personaId = target === BASE_TARGET ? undefined : target;
+      const storageKey = keyFor(personaId);
+      const rec = await map.get(storageKey);
+      if (
+        !isInstallationRecord(rec) ||
+        rec.disabled ||
+        !rec.oauthState ||
+        rec.oauthState !== input.state ||
+        !rec.clientId ||
+        !rec.clientSecretEnc
+      ) {
+        throw new Error("OAuth state mismatch or no pending Slack app install found.");
+      }
+      const exchanged = await callSlack(
+        "oauth.v2.access",
+        undefined,
+        new URLSearchParams({
+          client_id: rec.clientId,
+          client_secret: decryptSecret(rec.clientSecretEnc, key),
+          code: input.code,
+          redirect_uri: redirectUri,
+        }).toString(),
+        true,
+      );
+      const botToken = exchanged.access_token;
+      if (!botToken || !botToken.startsWith("xoxb-")) {
+        throw new Error("Slack OAuth did not return a bot token (xoxb-).");
+      }
+      const teamObj = typeof exchanged.team === "object" && exchanged.team ? exchanged.team : undefined;
+      const teamId = teamObj?.id ?? exchanged.team_id;
+      const teamName = teamObj?.name ?? (typeof exchanged.team === "string" ? exchanged.team : undefined);
+      const updatedAt = Date.now();
+      const updated: ActiveSlackInstallation = {
+        ...rec,
+        pending: false,
+        botTokenEnc: encryptSecret(botToken, key),
+        ...(teamId ? { teamId } : {}),
+        ...(teamName ? { teamName } : {}),
+        updatedAt,
+        version: `${updatedAt}:${crypto.randomUUID()}`,
+      };
+      delete updated.oauthState;
+      await map.put(storageKey, updated);
+      notifySet();
+      return {
+        ...(personaId ? { personaId } : {}),
+        ...(rec.appId ? { appId: rec.appId } : {}),
+        ...(teamId ? { teamId } : {}),
+        ...(teamName ? { teamName } : {}),
+      };
+    },
+
+    async attachHttpApp(input) {
+      const botToken = input.botToken.trim();
+      const signingSecret = input.signingSecret.trim();
+      if (!botToken.startsWith("xoxb-")) throw new Error("Bot token must start with xoxb-.");
+      if (!signingSecret) throw new Error("Signing secret is required.");
+      const auth = await callSlack("auth.test", botToken);
+      const teamId = auth.team_id;
+      const teamName = typeof auth.team === "string" ? auth.team : undefined;
+      const appId = input.appId?.trim() || auth.app_id;
+      const updatedAt = Date.now();
+      const record: ActiveSlackInstallation = {
+        kind: "installation",
+        orgId,
+        ...(input.personaId ? { personaId: input.personaId } : {}),
+        disabled: false,
+        pending: false,
+        serviceBlocked: true,
+        botTokenEnc: encryptSecret(botToken, key),
+        signingSecretEnc: encryptSecret(signingSecret, key),
+        ...(appId ? { appId } : {}),
+        ...(teamId ? { teamId } : {}),
+        ...(teamName ? { teamName } : {}),
+        updatedAt,
+        updatedBy: input.updatedBy,
+        version: `${updatedAt}:${crypto.randomUUID()}`,
+      };
+      await map.put(keyFor(input.personaId), record);
+      notifySet();
+      return toProvisionStatus(record);
+    },
+
+    async deleteApp(input) {
+      const storageKey = keyFor(input.personaId);
+      const rec = await map.get(storageKey);
+      if (input.deleteRemote && isInstallationRecord(rec) && !rec.disabled && rec.appId) {
+        const accessToken = await resolveConfigAccessToken(input.configToken, false, input.updatedBy);
+        await callSlack("apps.manifest.delete", accessToken, { app_id: rec.appId });
+      }
+      if (!input.personaId) {
+        await this.delete(input.updatedBy);
+        return;
+      }
+      await map.delete(storageKey);
+      notifySet();
+    },
+
+    async listPersonaApps() {
+      const entries = await map.entries();
+      const out: SlackInstallation[] = [];
+      for (const [k, rec] of entries) {
+        if (!k.startsWith(personaPrefix)) continue;
+        if (!isActiveConnected(rec)) continue;
+        out.push(decryptInstallation(rec));
+      }
+      return out;
+    },
+
+    receiver(target, signingSecret, staging) {
+      let instance: ActiveReceiver | undefined;
+      return {
+        init(app) {
+          instance = { app, signingSecret, staging };
+        },
+        async start() {
+          if (instance) activeReceivers.set(target, instance);
+        },
+        async stop() {
+          if (instance && activeReceivers.get(target) === instance) activeReceivers.delete(target);
+        },
+      } as Receiver;
+    },
+
+    async handleHttpEvent(target, req, res) {
+      let rawBody: string;
+      try {
+        rawBody = await readRawBody(req, MAX_EVENT_BODY_BYTES);
+      } catch {
+        return sendJson(res, 413, { error: "payload_too_large" });
+      }
+      const contentType = String(req.headers["content-type"] ?? "");
+      let payload: Record<string, unknown>;
+      try {
+        payload = parseSlackPayload(rawBody, contentType);
+      } catch {
+        return sendJson(res, 400, { error: "invalid_payload" });
+      }
+      if (payload.type === "url_verification" && typeof payload.challenge === "string") {
+        if (pendingVerifications.has(target)) {
+          return sendJson(res, 200, { challenge: payload.challenge });
+        }
+      }
+      const active = activeReceivers.get(target);
+      let signingSecret = active?.signingSecret;
+      if (!signingSecret) {
+        const stored = await map.get(keyFor(target === BASE_TARGET ? undefined : target));
+        if (isInstallationRecord(stored) && !stored.disabled && stored.signingSecretEnc) {
+          signingSecret = decryptSecret(stored.signingSecretEnc, key);
+        }
+      }
+      if (!signingSecret) return sendJson(res, 404, { error: "not_configured" });
+      const tsHeader = req.headers["x-slack-request-timestamp"];
+      const sigHeader = req.headers["x-slack-signature"];
+      if (
+        typeof tsHeader !== "string" ||
+        typeof sigHeader !== "string" ||
+        !isValidSlackRequest({
+          signingSecret,
+          body: rawBody,
+          headers: {
+            "x-slack-signature": sigHeader,
+            "x-slack-request-timestamp": Number(tsHeader),
+          },
+        })
+      ) {
+        return sendJson(res, 401, { error: "invalid_signature" });
+      }
+      if (payload.type === "url_verification" && typeof payload.challenge === "string") {
+        return sendJson(res, 200, { challenge: payload.challenge });
+      }
+      if (!active) return sendJson(res, 503, { error: "slack_app_not_ready" });
+      const retryNumHeader = req.headers["x-slack-retry-num"];
+      const retryNum = typeof retryNumHeader === "string" && retryNumHeader !== "" ? Number(retryNumHeader) : undefined;
+      const retryReason =
+        typeof req.headers["x-slack-retry-reason"] === "string" ? req.headers["x-slack-retry-reason"] : undefined;
+      await new Promise<void>((resolve) => {
+        let replied = false;
+        const respond = (status: number, body: unknown): void => {
+          if (replied) return;
+          replied = true;
+          if (typeof body === "string") {
+            res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+            res.end(body);
+          } else {
+            sendJson(res, status, body ?? {});
+          }
+          resolve();
+        };
+        const { ack, gate } = createDeferredEnvelopeAck(async (ackPayload) => respond(200, ackPayload ?? {}), {
+          gated: isGatedEnvelope(payload),
+          label: describeEnvelope(payload),
+          onWithhold: () => respond(503, { error: "not_persisted" }),
+          ...envelopeStageFor(active.staging, payload),
+        });
+        void active.app
+          .processEvent({
+            body: payload,
+            ack,
+            ...(retryNum !== undefined && Number.isFinite(retryNum) ? { retryNum } : {}),
+            ...(retryReason ? { retryReason } : {}),
+            customProperties: { ackGate: gate },
+          })
+          .then(
+            () => gate.persisted(),
+            (e: unknown) => {
+              swallow("slack-http: process event", e);
+              gate.failed("delivery failed");
+            },
+          );
       });
     },
   };

@@ -149,6 +149,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "{deleteRemote?} disconnects the persona's Slack app (org admin or persona owner)",
       },
       {
+        method: "POST",
+        path: "/v1/admin/slack-installation/create",
+        summary:
+          "org admin: {name?,description?,configToken?,refreshToken?,orgDeploy?} creates the base org Slack app via Slack App Manifest API",
+      },
+      {
         method: "GET",
         path: "/v1/admin/slack-config-token",
         summary: "org admin: check whether a workspace Slack App Configuration Token is saved",

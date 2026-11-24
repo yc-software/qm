@@ -82,7 +82,6 @@ import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
-import type { PersonaSlackStore } from "../surfaces/persona-slack.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 import type { ModelRoutes } from "../model/model-route.ts";
@@ -121,7 +120,6 @@ export interface ServerDeps {
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
-  personaSlack?: PersonaSlackStore;
   slackInstallationFetch?: typeof fetch;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;

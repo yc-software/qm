@@ -51,6 +51,8 @@ import {
   getSlackEmojiList,
   getSlackInstallation,
   putSlackInstallation,
+  createSlackInstallation,
+  slackOAuthCallback,
   startSlackInstallation,
   managedSlackEvent,
   managedSlackRequest,
@@ -114,6 +116,7 @@ const routes: Route<ApiCtx>[] = [
     handle: managedSlackRequest,
   },
   { method: "POST", path: "/v1/slack/managed/events", auth: "public", tenant: "none", handle: managedSlackEvent },
+  { method: "GET", path: "/v1/slack/oauth/callback", auth: "public", handle: slackOAuthCallback },
   ...withAdmin([
     {
       method: "POST",
@@ -121,6 +124,13 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: { owner: true },
       handle: startSlackInstallation,
+    },
+    {
+      method: "POST",
+      path: "/v1/admin/slack-installation/create",
+      auth: "either",
+      admin: { owner: true },
+      handle: createSlackInstallation,
     },
     {
       method: "GET",
