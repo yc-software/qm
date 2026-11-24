@@ -258,6 +258,11 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   const request = record.request;
   const threadRef = typeof request?.conversation?.threadRef === "string" ? request.conversation.threadRef : "";
   if (!request || !samePerson(request.actor?.externalId, user)) return sendJson(res, 404, { error: "not_found" });
+  if (request.surfaceOrigin?.audience === "external" && request.conversation.kind !== "dm")
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "Continue this request privately instead of resuming a shared approval.",
+    });
   if (/^web:.+:inbox$/.test(threadRef)) {
     const resolved = await resolveWebConversation(ctx, user, threadRef);
     if ("error" in resolved) return sendJson(res, 403, resolved);
