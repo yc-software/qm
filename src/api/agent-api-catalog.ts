@@ -369,7 +369,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
-          "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
+          "read the bounded transcript (including reasoning, tool calls, and results) of one of the asking person's conversations or an accessible automation fire session (by session id from a delivery note or cron runs); defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a session they cannot see",
       },
     ],
   },

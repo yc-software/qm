@@ -16,7 +16,7 @@ import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { reportFailure } from "../util/errors.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { windowedTranscript } from "../sessions/session-store.ts";
+import { windowedTranscript, type SessionOrigin } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -160,6 +160,17 @@ export function createSessionMethods(
     artifactAuthor,
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
+  const fireOrigins: ReadonlySet<SessionOrigin> = new Set(["cron", "webhook", "monitor", "loop"]);
+  const accessibleFireSession = async (
+    sessionId: string,
+    principalId: string,
+    fireScope: "accessible" | ScopeId,
+  ): Promise<Session | null> => {
+    const session = await deps.sessions.get(sessionId);
+    if (!session?.origin || !fireOrigins.has(session.origin)) return null;
+    if (fireScope !== "accessible" && session.scopeId !== fireScope) return null;
+    return (await canUseContext(principalId, session.scopeId)) ? session : null;
+  };
   const pinView = (
     rec: { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number },
     item?: Item,
@@ -443,23 +454,43 @@ export function createSessionMethods(
 
     async getSessionForViewer(sessionId, viewer, window) {
       const principalId = viewer.actorId;
-      const found = await sessionForViewer(sessionId, principalId);
+      const participantSession = await sessionForViewer(sessionId, principalId);
+      const found =
+        participantSession ??
+        (viewer.fireScope && viewer.fireScope !== "none"
+          ? await accessibleFireSession(sessionId, principalId, viewer.fireScope)
+          : null);
       if (!found || !sessionVisibleTo(viewer, found)) return null;
+      if (
+        viewer.fireScope &&
+        viewer.fireScope !== "accessible" &&
+        found.origin &&
+        fireOrigins.has(found.origin) &&
+        (viewer.fireScope === "none" || found.scopeId !== viewer.fireScope)
+      ) {
+        return null;
+      }
+      const readTranscript = (opts: { limit?: number; beforeSeq?: number; sinceSeq?: number }) =>
+        participantSession
+          ? transcripts.forViewer(sessionId, principalId, opts)
+          : transcripts.forRender(sessionId, opts);
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, {
+        readTranscript({
           limit,
           beforeSeq: window?.beforeSeq,
           sinceSeq: window?.sinceSeq,
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
-        window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
+        participantSession && window?.beforeSeq === undefined
+          ? deps.sessions.latestVisiblePromptAt(sessionId, principalId)
+          : undefined,
         window?.beforeSeq === undefined ? deps.runs.activeForThread(found.threadRef) : undefined,
       ]);
       const session = {
         ...withoutStoredFacts(found),
-        canContinue: await canContinueOnWeb(principalId, found),
+        canContinue: participantSession ? await canContinueOnWeb(principalId, found) : false,
         ...ownRunState(run ?? undefined),
       };
       const goal = openGoal(goals.get(sessionId));
@@ -468,14 +499,14 @@ export function createSessionMethods(
       let visible = read.items;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
-        read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
+        read = await readTranscript({ limit, beforeSeq: window?.beforeSeq });
         visible = read.items;
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seqs) =>
-        viewerStoredItemsAt(sessionId, principalId, seqs),
-      );
+      const pins = participantSession
+        ? await decoratedPins(pinRecords, visible, (seqs) => viewerStoredItemsAt(sessionId, principalId, seqs))
+        : [];
       return {
         session,
         items: w.items,

@@ -35,7 +35,14 @@ describe("agent conversations self-API", async () => {
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
     mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
+      {
+        actorId,
+        scopeId: scope,
+        audienceScopeId: scope,
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        liveActor: live,
+      },
       SECRET,
     );
 
@@ -309,6 +316,33 @@ describe("agent conversations self-API", async () => {
     const { conversation } = (await res.json()) as { conversation: { title: string | null; pinned: boolean } };
     assert.equal(conversation.title, "Launch plan");
     assert.equal(conversation.pinned, true);
+  });
+
+  it("inspects own fire sessions from a DM, not from shared rooms or for other users", async () => {
+    for (const [surface, threadRef, expectedParticipants] of [
+      ["cron", "cron:c1:1", 1],
+      ["monitor", "monitor:m1:1", 0],
+    ] as const) {
+      const fireId = (
+        await built.app.turn({
+          surface,
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef },
+          text: "run digest",
+          origin: { kind: "automation" },
+        })
+      ).sessionId!;
+      assert.equal((await built.sessions.participantsOf(fireId)).length, expectedParticipants);
+      const own = await get(`/v1/conversations/${fireId}`, await capFor("U1"));
+      assert.equal(own.status, 200);
+      const body = (await own.json()) as { items: Item[] };
+      assert.ok(body.items.some((i) => i.kind === "AgentMessage"));
+      assert.equal((await get(`/v1/conversations/${fireId}`, await capFor("U2"))).status, 404);
+      assert.equal(
+        (await get(`/v1/conversations/${fireId}`, await capFor("U1", scopeId("channel", "C1")))).status,
+        404,
+      );
+    }
   });
 });
 

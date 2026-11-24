@@ -369,7 +369,7 @@ export interface App {
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> & { fireScope?: "accessible" | "none" | ScopeId },
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
