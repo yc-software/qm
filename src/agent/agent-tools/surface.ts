@@ -13,8 +13,9 @@ export function surfaceTool(kit: ToolKit) {
   const surfaceLabel = opts?.surfacePrompt?.label ?? surfaceName;
   const mentionSyntax = opts?.surfacePrompt?.mentionSyntax;
   const textOnly = opts?.surfacePrompt?.textOnly === true;
-  const sentText = (sent: string) =>
-    opts?.surfacePrompt?.transcript ? { bytes: sent.length } : { text: capText(sent) };
+  const transcript = opts?.surfacePrompt?.transcript === true;
+  const sentText = (sent: string) => (transcript ? { bytes: sent.length } : { text: capText(sent) });
+  const endsTurn = (shown: boolean) => (transcript && shown ? { terminate: true } : {});
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
@@ -175,7 +176,7 @@ export function surfaceTool(kit: ToolKit) {
               ...(r.ok && r.ts ? { ts: r.ts } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
-            text(sent),
+            { ...text(sent), ...endsTurn(r.ok) },
             !r.ok,
           );
         }
@@ -266,9 +267,12 @@ export function surfaceTool(kit: ToolKit) {
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
               ...(r.ts ? { ts: r.ts } : {}),
             },
-            text(
-              r.ok ? `[edited ref=${params.ref}]` : `[not edited] ${r.message ?? "edit failed"} (ref ${params.ref})`,
-            ),
+            {
+              ...text(
+                r.ok ? `[edited ref=${params.ref}]` : `[not edited] ${r.message ?? "edit failed"} (ref ${params.ref})`,
+              ),
+              ...endsTurn(r.ok && !Object.keys(routing).length),
+            },
             !r.ok,
           );
         }

@@ -497,6 +497,27 @@ test("a bytes-only surface call (legacy post / reach) replays with stand-in text
   assert.ok(!("bytes" in args), "the schema-invalid bytes summary must never replay as the model's own call");
 });
 
+test("a web post replays with its message text, and a post whose call was compacted away replays as the reply", () => {
+  const result = (callId: string, seq: number) =>
+    at({ kind: "ToolResult", callId, tool: "web", isError: false, text: "[sent]", body: { action: "post" } }, seq);
+  const msgs = reconstructMessagesFromHistory([
+    at({ kind: "UserMessage", text: "hi" }, 0),
+    at({ kind: "ToolCall", callId: "c1", tool: "web", body: { action: "post", bytes: 5 } }, 1),
+    result("c1", 2),
+    at({ kind: "AgentMessage", text: "First", body: { callId: "c1" } }, 3),
+    at({ kind: "UserMessage", text: "again" }, 4),
+    at({ kind: "AgentMessage", text: "Second", body: { callId: "c0" } }, 5),
+  ]);
+  assertValidWire(msgs);
+  const blocks = msgs.flatMap((m) => (m.role === "assistant" ? m.content : []));
+  const posted = blocks.find((b) => b.type === "toolCall");
+  assert.equal(posted?.type === "toolCall" && posted.arguments.text, "First");
+  assert.deepEqual(
+    blocks.flatMap((b) => (b.type === "text" ? [b.text] : [])),
+    ["Second"],
+  );
+});
+
 test("a text-carrying post call replays verbatim (ts/broadcast preserved)", () => {
   const msgs = reconstructMessagesFromHistory([
     at({ kind: "UserMessage", text: "hi" }, 0),
