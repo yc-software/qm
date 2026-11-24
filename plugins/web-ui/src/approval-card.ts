@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { X } from "lucide";
 import { icon } from "./icons";
 import type { ApprovalDecision, PendingApproval } from "./core-bridge";
@@ -26,40 +27,28 @@ export interface ApprovalCardOptions {
   declineAll: () => void;
 }
 
-function toggleClamp(e: Event): void {
-  const el = e.currentTarget as HTMLElement;
-  if (el.scrollHeight > el.clientHeight + 2 || el.classList.contains("open")) el.classList.toggle("open");
-}
+const ROW_LIMIT = 6;
 
 function segmentsView(segments: Segment[]): TemplateResult[] {
   return segments.map((seg) => (seg.changed ? html`<mark class="ac-diff">${seg.text}</mark>` : html`${seg.text}`));
 }
 
-function nodeView(node: ArgNode, clamp: boolean, segments?: Segment[]): TemplateResult | typeof nothing {
-  if (segments && (node.kind === "text" || node.kind === "scalar")) {
-    const cls = node.kind === "text" ? `ac-text ${clamp ? "clamp" : ""}` : "ac-value";
-    return html`<div class=${cls} dir="auto" @click=${clamp && node.kind === "text" ? toggleClamp : null}>
-      <span class="ac-pre">${segmentsView(segments)}</span>
-    </div>`;
-  }
+function nodeView(node: ArgNode, segments?: Segment[]): TemplateResult {
+  const body = segments ? segmentsView(segments) : node.kind === "text" || node.kind === "scalar" ? node.text : "";
   switch (node.kind) {
     case "scalar":
       return html`<span class="ac-value ${node.literal ? "literal" : ""} ${node.ident ? "ident" : ""}" dir="auto"
-        >${node.text}</span
+        >${body}</span
       >`;
     case "text":
-      return clamp
-        ? html`<div class="ac-text clamp" dir="auto" title="Click to expand" @click=${toggleClamp}>
-            <span class="ac-pre">${node.text}</span>
-          </div>`
-        : html`<div class="ac-text" dir="auto"><span class="ac-pre">${node.text}</span></div>`;
+      return html`<div class="ac-text" dir="auto" tabindex="0">${body}</div>`;
     case "record":
       return node.inline
         ? html`<div class="ac-inline-record">${inlineView(node.view)}</div>`
-        : html`<div class="ac-record">${argsView(node.view, clamp)}</div>`;
+        : html`<div class="ac-record">${argsView(node.view)}</div>`;
     case "list":
       return html`<ol class="ac-list">
-        ${node.items.map((item) => html`<li>${nodeView(item, clamp)}</li>`)}
+        ${node.items.map((item) => html`<li>${nodeView(item)}</li>`)}
       </ol>`;
   }
 }
@@ -70,11 +59,7 @@ function fieldLabel(f: ArgField): TemplateResult {
   </dt>`;
 }
 
-export function argsView(
-  view: ArgView,
-  clamp = false,
-  diffs?: Map<string, Segment[]>,
-): TemplateResult | typeof nothing {
+export function argsView(view: ArgView, diffs?: Map<string, Segment[]>): TemplateResult | typeof nothing {
   if (!view.fields.length && !view.empty.length) return nothing;
   return html`${
     view.fields.length
@@ -83,7 +68,7 @@ export function argsView(
             (f) =>
               html`<div class="ac-row ac-k-${f.node.kind}">
                 ${fieldLabel(f)}
-                <dd>${nodeView(f.node, clamp, diffs?.get(f.full))}</dd>
+                <dd>${nodeView(f.node, diffs?.get(f.full))}</dd>
               </div>`,
           )}
         </dl>`
@@ -93,15 +78,12 @@ export function argsView(
 }
 
 function inlineView(view: ArgView): TemplateResult {
-  return html`<div class="ac-inline">
-    ${view.fields.map(
-      (f) =>
-        html`<span class="ac-pair"
-          ><span class="ac-pair-key" title=${f.full}>${[...f.path, f.label].join(" ")}</span>
-          ${nodeView(f.node, true)}</span
-        >`,
-    )}
-  </div>`;
+  return html`${view.fields.map(
+    (f) =>
+      html`<span class="ac-pair"
+        ><span class="ac-pair-key" title=${f.full}>${[...f.path, f.label].join(" ")}</span> ${nodeView(f.node)}</span
+      >`,
+  )}`;
 }
 
 function toolLine(call: ApprovalCall | null): TemplateResult | typeof nothing {
@@ -117,51 +99,33 @@ function commandBody(a: PendingApproval): TemplateResult {
     ${showMatch ? html`<div class="ac-note">Matched <code>${a.matched}</code></div>` : nothing}`;
 }
 
-export function approvalBody(a: PendingApproval, clamp = false): TemplateResult {
+export function approvalBody(a: PendingApproval): TemplateResult {
   const call = approvalCall(a);
   const reason = realApprovalReason(a.reason);
-  return html`${call ? argsView(argView(call.args), clamp) : commandBody(a)}
+  return html`${call ? argsView(argView(call.args)) : commandBody(a)}
   ${reason ? html`<div class="ac-note">${reason.charAt(0).toUpperCase() + reason.slice(1)}.</div>` : nothing}`;
 }
 
 function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult | typeof nothing {
-  const session = a.grantModes?.session !== false;
-  const always = a.grantModes?.always !== false;
-  if (!session && !always) return nothing;
+  const modes = (["session", "always"] as const).filter((m) => a.grantModes?.[m] !== false);
+  if (!modes.length) return nothing;
   return html`<div class="ac-scopes">
-    ${
-      session
-        ? html`<button
-            type="button"
-            ?disabled=${o.busy}
-            @click=${() => o.decide({ requestId: a.requestId, approved: true, scope: "session" })}
-          >
-            Allow for this session
-          </button>`
-        : nothing
-    }
-    ${
-      always
-        ? html`<button
-            type="button"
-            ?disabled=${o.busy}
-            @click=${() => o.decide({ requestId: a.requestId, approved: true, scope: "always" })}
-          >
-            Always allow
-          </button>`
-        : nothing
-    }
+    ${modes.map(
+      (scope) =>
+        html`<button
+          type="button"
+          ?disabled=${o.busy}
+          @click=${() => o.decide({ requestId: a.requestId, approved: true, scope })}
+        >
+          ${scope === "session" ? "Allow for this session" : "Always allow"}
+        </button>`,
+    )}
   </div>`;
 }
 
 function footer(count: number, o: ApprovalCardOptions): TemplateResult | typeof nothing {
-  if (o.docked)
-    return o.typing
-      ? html`<div class="ac-foot ac-typing">
-          Sending declines ${count > 1 ? `all ${count}` : "this"} and passes your note on.
-        </div>`
-      : nothing;
-  return html`<div class="ac-foot ac-actions">
+  if (o.docked) return nothing;
+  return html`<div class="ac-actions">
     <button type="button" class="ac-link" ?disabled=${o.busy} @click=${o.declineAll}>Decline</button>
     <button type="button" class="ac-approve" ?disabled=${o.busy} @click=${o.approveAll}>
       ${count > 1 ? `Approve all ${count}` : "Approve"}
@@ -182,21 +146,28 @@ function closeButton(label: string, o: ApprovalCardOptions, onClick: () => void,
   </button>`;
 }
 
-function singleCard(a: PendingApproval, o: ApprovalCardOptions): TemplateResult {
-  const call = approvalCall(a);
-  return html`<section class="ac-card" role="group" aria-label="Approval">
+function card(o: ApprovalCardOptions, cls: string, eyebrow: string, tool: ApprovalCall | null, body: unknown, n: number) {
+  return html`<section class="ac-card ${cls} ${o.typing ? "declining" : ""}" role="group" aria-label="Approval">
     <header class="ac-head">
-      <span class="ac-eyebrow">Needs your approval</span>
-      ${toolLine(call)} ${closeButton("Decline", o, o.declineAll, "ac-dismiss")}
+      <span class="ac-eyebrow">${eyebrow}</span>
+      ${toolLine(tool)} ${closeButton(n > 1 ? "Decline all" : "Decline", o, o.declineAll, "ac-dismiss")}
     </header>
-    <h3 class="ac-title" dir="auto">${approvalHeading(a, call)}</h3>
-    <div class="ac-body">${approvalBody(a)}</div>
-    ${scopeLinks(a, o)} ${footer(1, o)}
+    ${body} ${footer(n, o)}
   </section>`;
 }
 
-function rowDrop(a: PendingApproval, o: ApprovalCardOptions): TemplateResult {
-  return closeButton("Leave this one out", o, () => o.decide({ requestId: a.requestId, approved: false }), "ac-drop");
+function singleCard(a: PendingApproval, o: ApprovalCardOptions): TemplateResult {
+  const call = approvalCall(a);
+  return card(
+    o,
+    "",
+    "Needs your approval",
+    call,
+    html`<h3 class="ac-title" dir="auto">${approvalHeading(a, call)}</h3>
+      <div class="ac-body">${approvalBody(a)}</div>
+      ${scopeLinks(a, o)}`,
+    1,
+  );
 }
 
 function textOf(node: ArgNode): string | null {
@@ -218,63 +189,94 @@ function rowDiffs(rows: BatchRow[], index: number): Map<string, Segment[]> {
   return diffs;
 }
 
+function snippet(view: ArgView): string {
+  const texts = view.fields.map((f) => textOf(f.node)).filter((t): t is string => !!t);
+  return texts.join(" · ").replace(/\s+/g, " ").slice(0, 240);
+}
+
+interface Row {
+  approval: PendingApproval;
+  heading: string;
+  preview: string;
+  body: () => TemplateResult;
+}
+
+function rowView(row: Row, i: number, o: ApprovalCardOptions): TemplateResult {
+  return html`<li class="ac-item">
+    <details>
+      <summary>
+        <span class="ac-index">${i + 1}</span>
+        <span class="ac-item-title" dir="auto">${row.heading}</span>
+        <span class="ac-preview" dir="auto">${row.preview}</span>
+      </summary>
+      <div class="ac-item-body">${row.body()}</div>
+    </details>
+    ${closeButton("Leave this one out", o, () => o.decide({ requestId: row.approval.requestId, approved: false }), "ac-drop")}
+  </li>`;
+}
+
+function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
+  const keyed = (list: Row[], from: number) =>
+    repeat(
+      list,
+      (r) => r.approval.requestId,
+      (r, i) => rowView(r, from + i, o),
+    );
+  if (rows.length <= ROW_LIMIT) return html`<ol class="ac-items">${keyed(rows, 0)}</ol>`;
+  const head = ROW_LIMIT - 1;
+  return html`<ol class="ac-items">
+    ${keyed(rows.slice(0, head), 0)}
+    <li class="ac-more">
+      <details>
+        <summary>and ${rows.length - head} more</summary>
+        <ol class="ac-items">${keyed(rows.slice(head), head)}</ol>
+      </details>
+    </li>
+  </ol>`;
+}
+
 function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): TemplateResult {
   const batch = approvalBatch(approvals);
-  const n = approvals.length;
-  const head = html`<header class="ac-head">
-    <span class="ac-eyebrow">${n} calls need your approval</span>
-    ${batch ? toolLine(batch.call) : nothing} ${closeButton("Decline all", o, o.declineAll, "ac-dismiss")}
-  </header>`;
-  const sharedScalars = batch
-    ? { fields: batch.shared.fields.filter((f) => f.node.kind === "scalar"), empty: [] }
-    : null;
-  const sharedRest = batch
-    ? { fields: batch.shared.fields.filter((f) => f.node.kind !== "scalar"), empty: batch.shared.empty }
-    : null;
-  if (batch)
-    return html`<section class="ac-card ac-batch" role="group" aria-label="Approvals">
-      ${head}
-      ${
-        batch.shared.fields.length || batch.shared.empty.length
-          ? html`<div class="ac-shared">
-              <span class="ac-caption">Same for each</span>
-              ${sharedScalars!.fields.length ? inlineView(sharedScalars!) : nothing} ${argsView(sharedRest!, true)}
-            </div>`
-          : nothing
-      }
-      <ol class="ac-items">
-        ${batch.rows.map(
-          (row, i) =>
-            html`<li class="ac-item">
-              <span class="ac-index">${i + 1}</span>
-              <div class="ac-item-main">
-                <div class="ac-item-title" dir="auto">${row.heading}</div>
-                ${argsView(row.view, true, rowDiffs(batch.rows, i))}
-              </div>
-              ${rowDrop(row.approval, o)}
-            </li>`,
-        )}
-      </ol>
-      ${footer(n, o)}
-    </section>`;
-  return html`<section class="ac-card ac-batch ac-mixed" role="group" aria-label="Approvals">
-    ${head}
-    <ol class="ac-items">
-      ${approvals.map((a, i) => {
-        const call = approvalCall(a);
-        return html`<li class="ac-item">
-          <span class="ac-index">${i + 1}</span>
-          <div class="ac-item-main">
-            <div class="ac-item-title" dir="auto">${approvalHeading(a, call)}</div>
-            ${call ? html`<div class="ac-item-tool">${toolLine(call)}</div>` : nothing}
-            <div class="ac-body">${approvalBody(a, true)}</div>
-          </div>
-          ${rowDrop(a, o)}
-        </li>`;
-      })}
-    </ol>
-    ${footer(n, o)}
-  </section>`;
+  const eyebrow = `${approvals.length} calls need your approval`;
+  if (!batch) {
+    const rows = approvals.map((a): Row => {
+      const call = approvalCall(a);
+      return {
+        approval: a,
+        heading: approvalHeading(a, call),
+        preview: call ? snippet(argView(call.args)) : a.command,
+        body: () => html`${call ? html`<div class="ac-item-tool">${toolLine(call)}</div>` : nothing}${approvalBody(a)}`,
+      };
+    });
+    return card(o, "ac-batch", eyebrow, null, rowsView(rows, o), approvals.length);
+  }
+  const rows = batch.rows.map(
+    (row, i): Row => ({
+      approval: row.approval,
+      heading: row.heading,
+      preview: snippet(row.view),
+      body: () => html`${argsView(row.view, rowDiffs(batch.rows, i))}`,
+    }),
+  );
+  const shared = batch.shared;
+  const scalars = { fields: shared.fields.filter((f) => f.node.kind === "scalar"), empty: [] };
+  const rest = { fields: shared.fields.filter((f) => f.node.kind !== "scalar"), empty: shared.empty };
+  return card(
+    o,
+    "ac-batch",
+    eyebrow,
+    batch.call,
+    html`${
+      shared.fields.length || shared.empty.length
+        ? html`<div class="ac-shared">
+            <span class="ac-caption">Same for each</span>
+            ${inlineView(scalars)} ${argsView(rest)}
+          </div>`
+        : nothing
+    }
+    ${rowsView(rows, o)}`,
+    approvals.length,
+  );
 }
 
 export function approvalCard(approvals: PendingApproval[], o: ApprovalCardOptions): TemplateResult {

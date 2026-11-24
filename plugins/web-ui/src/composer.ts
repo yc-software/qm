@@ -814,7 +814,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       >
         <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span><kbd aria-hidden="true">↵</kbd>
       </button>`;
-    if (docked.length) return sendButton("Send, declining the pending call");
+    if (docked.length)
+      return html`<button class="send-btn ac-confirm ac-decline" type="submit" ?disabled=${!composerCanSend()}>
+        <span>${docked.length > 1 ? `Decline all ${docked.length} and send` : "Decline and send"}</span
+        ><kbd aria-hidden="true">↵</kbd>
+      </button>`;
     if (!agent.state.isStreaming) return sendButton("Send");
     if (ctx.chat.isStopping())
       return html`

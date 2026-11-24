@@ -3424,7 +3424,7 @@ export function createChatSurface(
       return html`<div class="approval-head">
           <span class="approval-call-title" dir="auto">${approvalHeading(a, call)}</span>
         </div>
-        ${approvalBody(a, !expanded)}`;
+        ${approvalBody(a)}`;
     const summary = firstLine(a.command, 80);
     const truncated = a.command.includes("\n") || a.command.length > 80;
     return html`
