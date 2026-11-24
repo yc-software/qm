@@ -1,4 +1,5 @@
 import type { PersonaService } from "../../personas/persona-service.ts";
+import type { UiStateStore } from "../../surfaces/ui-state.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
@@ -117,6 +118,7 @@ export interface OrchestratorDeps {
   resolveSessionRuntime?: (route: SessionRoute) => Promise<RuntimeChoice>;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
+  uiState?: UiStateStore;
   sessionSyscalls?: SessionSyscallsFactory;
   files: FileArtifactStore;
   toolOutput: ToolOutputStore;

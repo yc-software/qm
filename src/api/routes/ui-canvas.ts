@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { waitForClientResult } from "../../runs/run-signal-store.ts";
+import { relayToClient, signalClient } from "../../surfaces/client-relay.ts";
 import type { UiSignal } from "../../runs/session-state-bus.ts";
 import {
   readUiCanvas,
@@ -17,7 +17,6 @@ import { sendJson } from "../http.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
-import { swallow } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const OBSERVE_TIMEOUT_MS = 15_000;
@@ -69,14 +68,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
 }
 
 function signalBrowser(ctx: ApiCtx, turn: Pick<UiTurn, "actorId" | "sessionId" | "threadRef">, ui: UiSignal): void {
-  ctx.deps.sessionStateBus?.emit({
-    threadRef: turn.threadRef,
-    sessionId: turn.sessionId,
-    participants: [turn.actorId],
-    state: "ui",
-    at: Date.now(),
-    ui,
-  });
+  signalClient(ctx.deps.sessionStateBus, turn, ui);
 }
 
 function canvasSummary(canvas: UiCanvas | null): Record<string, unknown> | null {
@@ -182,21 +174,22 @@ async function observe(ctx: ApiCtx): Promise<void> {
   if (selector && selector.length > MAX_SELECTOR_CHARS)
     return sendJson(res, 400, { error: "bad_request", message: "selector is too long" });
   const callId = randomUUID();
-  const pendingId = uiStateId(turn.actorId, uiObserveKey(callId));
-  await deps.uiState!.put(pendingId, { value: { runId: turn.runId }, updatedAt: Date.now() });
-  signalBrowser(ctx, turn, {
-    kind: "observe",
-    callId,
-    ...(selector ? { selector } : {}),
-    ...(b.css === true ? { css: true } : {}),
-    ...(b.screenshot === true ? { screenshot: true } : {}),
-  });
-  let outcome: Awaited<ReturnType<typeof waitForClientResult>>;
-  try {
-    outcome = await waitForClientResult(deps.signals, turn.runId, callId, { timeoutMs: OBSERVE_TIMEOUT_MS });
-  } finally {
-    await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
-  }
+  const { outcome } = await relayToClient(
+    { ...(deps.sessionStateBus ? { bus: deps.sessionStateBus } : {}), uiState: deps.uiState!, signals: deps.signals },
+    {
+      to: turn,
+      pendingId: uiStateId(turn.actorId, uiObserveKey(callId)),
+      pending: { runId: turn.runId },
+      ui: {
+        kind: "observe",
+        callId,
+        ...(selector ? { selector } : {}),
+        ...(b.css === true ? { css: true } : {}),
+        ...(b.screenshot === true ? { screenshot: true } : {}),
+      },
+      timeoutMs: OBSERVE_TIMEOUT_MS,
+    },
+  );
   audit(ctx, {
     principalId: turn.actorId,
     action: "ui.observe",

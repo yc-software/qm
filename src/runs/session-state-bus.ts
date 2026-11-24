@@ -6,7 +6,8 @@ type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui"
 
 export type UiSignal =
   | { kind: "canvas" }
-  | { kind: "observe"; callId: string; selector?: string; css?: boolean; screenshot?: boolean; preview?: boolean };
+  | { kind: "observe"; callId: string; selector?: string; css?: boolean; screenshot?: boolean; preview?: boolean }
+  | { kind: "desktop"; callId: string; stop?: boolean };
 
 export interface SessionStateEvent {
   tenantId?: string;

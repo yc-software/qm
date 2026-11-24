@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { selfReadAudience } from "./routes/shared.ts";
+import { selfReadAudience } from "../auth/self-read-audience.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopClientForTurn, introducesUser } from "../src/core/turn-origin.ts";
+import { desktopClientForTurn, introducesUser, mayDriveDesktop } from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
@@ -31,4 +31,12 @@ test("only a person's own message introduces them to the roster", () => {
     false,
     "someone from another Slack workspace is not one of ours",
   );
+});
+
+test("only messages a person sent may drive their desktop, from any client", () => {
+  assert.equal(mayDriveDesktop({ origin: { kind: "human" } }), true);
+  for (const kind of ["direct", "ambient", "automation"] as const)
+    assert.equal(mayDriveDesktop({ origin: { kind } }), false);
+  for (const patch of [{ botActor: true }, { proactiveOpener: true }, { surfaceOrigin: { audience: "external" } }])
+    assert.equal(mayDriveDesktop({ origin: { kind: "human" }, ...patch } as never), false);
 });
