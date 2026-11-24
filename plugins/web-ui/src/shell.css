@@ -1858,7 +1858,6 @@ a.chat-row-open {
   font-size: var(--font-13);
 }
 .pinned-item-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .pinned-item-preview {
@@ -1866,6 +1865,45 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown > div {
+  display: inline;
+  color: inherit;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown :is(p, ul, ol, li, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown :is(p, li) + :is(p, li) {
+  margin-inline-start: 0.4em;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown br {
+  display: none;
+}
+.pinned-item-text qm-markdown > div {
+  color: inherit;
+}
+.pinned-item-text qm-markdown > div > :first-child {
+  margin-top: 0;
+}
+.pinned-item-text qm-markdown > div > :last-child {
+  margin-bottom: 0;
+}
+.pinned-item-text qm-markdown :is(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  margin-block: 0.25em;
+}
+.pinned-item-text qm-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  font-weight: 600;
 }
 .pinned-strip a {
   color: var(--primary);
@@ -4170,7 +4208,8 @@ qm-markdown .tok-in {
 }
 
 .assistant-body :is(markdown-block, qm-markdown).markdown-content :not(pre) > code,
-.user-bubble :is(markdown-block, qm-markdown).markdown-content :not(pre) > code {
+.user-bubble :is(markdown-block, qm-markdown).markdown-content :not(pre) > code,
+.pinned-strip :is(markdown-block, qm-markdown).markdown-content :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
   padding: 1px 5px;

@@ -165,7 +165,6 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
-import { splitLinks } from "./linkify";
 import { slackPreviewText, slackWireToPlain, stripSlackDirectives } from "./slack-text";
 import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
@@ -1652,14 +1651,6 @@ export function createChatSurface(
     else readonlyRedraw?.();
   }
 
-  function linkifiedText(text: string): TemplateResult {
-    return html`${splitLinks(text).map((seg) =>
-      seg.kind === "link"
-        ? html`<a href=${seg.href} target="_blank" rel="noreferrer noopener">${seg.href}</a>`
-        : seg.text,
-    )}`;
-  }
-
   function pinnedStrip(): TemplateResult | typeof nothing {
     const pins = chatState.pins;
     if (!pins.length) return nothing;
@@ -1671,9 +1662,9 @@ export function createChatSurface(
         ${
           expanded
             ? html`<span class="pinned-strip-label">Pinned</span>`
-            : html`<span class="pinned-strip-peek"
-                >${linkifiedText(first.text ?? first.preview ?? `entry #${first.entrySeq}`)}</span
-              >`
+            : html`<div class="pinned-strip-peek">
+                ${markdown(first.text ?? first.preview ?? `entry #${first.entrySeq}`)}
+              </div>`
         }
         <button class="pinned-strip-toggle" aria-expanded=${expanded} title=${expanded ? "Collapse pins" : "Show pins"}>
           ${icon(expanded ? ChevronUp : ChevronDown, 13)}
@@ -1684,8 +1675,8 @@ export function createChatSurface(
           ? pins.map(
               (p) =>
                 html`<div class="pinned-item">
-                  <span class="pinned-item-text">${linkifiedText(p.text ?? p.preview ?? `entry #${p.entrySeq}`)}</span>
-                  ${p.text && p.preview ? html`<span class="pinned-item-preview">${linkifiedText(p.preview)}</span>` : nothing}
+                  <div class="pinned-item-text">${markdown(p.text ?? p.preview ?? `entry #${p.entrySeq}`)}</div>
+                  ${p.text && p.preview ? html`<div class="pinned-item-preview">${markdown(p.preview)}</div>` : nothing}
                 </div>`,
             )
           : nothing
