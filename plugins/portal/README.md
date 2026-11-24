@@ -98,7 +98,7 @@ nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 model gateway key and switches it on, once. Sign-in does not wait for that call: the
 person is recorded and granted at once, and portal shows "Setting up your workspace",
 which reloads `/auth/setting-up` every few seconds. Each reload repeats the self-serve
-call, which starts the provisioner call again unless one is already running, and the
+call, which starts the provisioner call again unless this core process has one running, and the
 person enters once the workspace is switched on. The waiting page lasts as long as the
 sign-in choice cookie. The provisioner must therefore answer repeated calls for a tenant
 with the same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
