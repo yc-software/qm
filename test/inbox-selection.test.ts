@@ -24,7 +24,7 @@ function world(enabled = true) {
     config: testConfigStore("org"),
   };
   const uiState = testMap<PersistedUiState>();
-  const call = async (method = "GET", body: unknown = null, query = "", actor = "alice", capability: object | null = null) => {
+  const call = async (method = "GET", body: unknown = null, query = "", actor = "alice", cap: unknown = null) => {
     let status = 0;
     let data: any;
     await inboxRoutes
@@ -34,7 +34,7 @@ function world(enabled = true) {
         body,
         url: new URL(`http://local/v1/inbox?${query}`),
         actor: { p: actor },
-        capability,
+        capability: cap,
         deps: {
           loops: deps,
           uiState,
@@ -443,8 +443,9 @@ test("an agent opens the person's inbox only in their own DM, never in a group D
   const w = world();
   const own = { actorId: "alice", scopeId: "personal:alice", audienceScopeId: "personal:alice", exp: 0 };
   assert.equal((await w.call("GET", null, "", "alice", own)).status, 200);
-  for (const room of ["group:G1", "channel:C9"]) {
-    const shared = { ...own, scopeId: room, audienceScopeId: room };
-    assert.equal((await w.call("GET", null, "", "alice", shared)).status, 403);
-  }
+  for (const room of ["group:G1", "channel:C9"])
+    assert.equal(
+      (await w.call("GET", null, "", "alice", { ...own, scopeId: room, audienceScopeId: room })).status,
+      403,
+    );
 });

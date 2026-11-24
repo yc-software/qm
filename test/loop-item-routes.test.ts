@@ -213,15 +213,11 @@ test("ingest needs an agent capability, not a portal session", async () => {
 test("a personal loop's items stay out of a private channel, a group DM and a cron posting elsewhere", async () => {
   const w = world();
   const loop = await inboxLoop(w);
-  for (const shared of [
-    { ...CAP, scopeId: "channel:C9", audienceScopeId: "channel:C9" },
-    { ...CAP, scopeId: "group:G1", audienceScopeId: "group:G1" },
-    { ...CAP, audienceScopeId: undefined },
-  ]) {
-    const body = { items: [ITEM] };
-    const post = await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body, capability: shared });
-    assert.equal(post.status, 403);
-    assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
+  for (const room of ["channel:C9", "group:G1", undefined]) {
+    const shared = { ...CAP, scopeId: room ?? CAP.scopeId, audienceScopeId: room };
+    const path = `/v1/loops/${loop.id}/items`;
+    assert.equal((await call(w, { method: "POST", path, body: { items: [ITEM] }, capability: shared })).status, 403);
+    assert.equal((await call(w, { method: "GET", path, capability: shared })).status, 403);
   }
 });
 
