@@ -10,7 +10,6 @@ import type {
 } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { postsInto, type ScopeMove } from "../triggers/trigger-store.ts";
-import type { ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
@@ -68,11 +67,7 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
-  retargetMovedDestinations(
-    move: ScopeMove,
-    members: readonly string[],
-    ownerScopes: readonly ScopeId[],
-  ): Promise<Loop[]>;
+  retargetMovedDestinations(move: ScopeMove, members: readonly string[]): Promise<Loop[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
