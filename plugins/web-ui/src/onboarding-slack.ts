@@ -102,7 +102,7 @@ export class OnboardingSlack extends LitElement {
       return;
     }
     popup.opener = null;
-    if (this.installAvailable === false) {
+    if (this.installAvailable === false && !this.unavailable) {
       popup.location.href = `${SLACK_SETTINGS}?setup=slack`;
       return;
     }
@@ -151,7 +151,7 @@ export class OnboardingSlack extends LitElement {
         : html`<button
             class="welcome-slack"
             type="button"
-            ?disabled=${this.busy || this.unavailable || this.installAvailable === undefined}
+            ?disabled=${this.busy || this.installAvailable === undefined}
             @click=${() => void this.install()}
           >
             ${slackMark(24)}<span

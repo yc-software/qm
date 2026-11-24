@@ -82,6 +82,8 @@ export function createManagedSlack(opts: {
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       });
+      if (response.status === 401 || response.status === 403)
+        throw new SlackInstallStartError("Slack installation isn't enabled for this workspace yet.");
       if (!response.ok) throw new Error(`Slack installation service is unavailable (HTTP ${response.status})`);
       const data = (await response.json()) as { url?: unknown };
       if (typeof data.url !== "string" || new URL(data.url).origin !== serviceUrl.origin) {
