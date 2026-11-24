@@ -1,6 +1,6 @@
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { scopeId, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
@@ -124,6 +124,16 @@ export interface PublishedApp {
   lastAccessAt?: number;
   appliedVersion?: number;
   versions: AppVersion[];
+}
+
+export function inPublisherLibrary(d: Pick<PublishedApp, "ownerScopeId" | "createdBy">): boolean {
+  return d.ownerScopeId === scopeId("personal", d.createdBy);
+}
+
+export function lentConnectors(
+  d: Pick<PublishedApp, "ownerScopeId" | "createdBy" | "connectors" | "public">,
+): string[] {
+  return !d.public && inPublisherLibrary(d) ? (d.connectors ?? []) : [];
 }
 
 export interface AppDraft {
