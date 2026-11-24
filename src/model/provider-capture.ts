@@ -21,7 +21,7 @@ export type CapturedAssistantMessage = AssistantMessage & { providerError?: Prov
 
 type CaptureOptions = Pick<StreamOptions, "fetch" | "onPayload" | "onProviderStreamEvent" | "signal">;
 
-const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses", "openai-codex-responses"]);
+const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses"]);
 const SERVED_TIER_EVENTS = new Set(["response.completed", "response.incomplete"]);
 
 function servedTierOf(api: string, data: unknown): string | undefined {
