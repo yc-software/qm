@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import type { Message } from "@earendil-works/pi-ai";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   createAgent,
   oneShot,
@@ -30,7 +32,7 @@ function countTempDirs(prefix: string): number {
 }
 
 test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
-  const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
+  const user = toPiMessage({ role: "user", text: "ship it" });
   assert.equal("usage" in user, false, "user seeds carry no usage (Pi UserMessage has none)");
 
   const asst = toPiMessage({ role: "assistant", text: "done" }) as {
@@ -42,11 +44,10 @@ test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compact
   assert.equal(asst.usage!.totalTokens, 0);
 });
 
-test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists", () => {
-  const liveMessages: unknown[] = [];
+test("seedRawMessagesIntoSession appends the reconstructed tool round (incl. toolResult) to Pi's context + persists", () => {
   const persisted: unknown[] = [];
   const stubSession = {
-    agent: { state: { messages: liveMessages } },
+    agent: { state: { messages: [] as unknown[] } },
     sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
   };
   const at = { sessionId: "s", createdAt: 1 };
@@ -59,7 +60,11 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
     ),
     storedItem({ kind: "AgentMessage", text: "done" }, { ...at, seq: 4 }),
   ];
-  seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
+  seedRawMessagesIntoSession(
+    stubSession as unknown as AgentSession,
+    reconstructMessagesFromHistory(history) as Message[],
+  );
+  const liveMessages = stubSession.agent.state.messages;
 
   assert.deepEqual(
     (liveMessages as Array<{ role: string }>).map((m) => m.role),
@@ -71,9 +76,8 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
   assert.match(toolResult.content[0]!.text, /pass: b/);
 });
 
-test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefully without Pi internals", () => {
-  seedRawMessagesIntoSession({ agent: { state: { messages: [] } } }, []);
-  assert.doesNotThrow(() => seedRawMessagesIntoSession({}, reconstructMessagesFromHistory([])));
+test("seedRawMessagesIntoSession fails loudly when Pi's session state is missing", () => {
+  assert.throws(() => seedRawMessagesIntoSession({} as AgentSession, []), TypeError);
 });
 
 test("agentConfigOptions and configRouteOptions map every Config knob the agent consumes, field by field", () => {

@@ -1,3 +1,4 @@
+import type { Message } from "@earendil-works/pi-ai";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
@@ -56,7 +57,7 @@ type TextBlock = { type: "text"; text: string };
 export async function restoreReplayImages(
   messages: PiReplayMessage[],
   load: ReplayImageLoader | undefined,
-): Promise<PiReplayMessage[]> {
+): Promise<Message[]> {
   const restored = new Map<object, ImageBlock | TextBlock>();
   const cached = new Map<string, LoadedImage | "over-budget" | null>();
   let remainingBytes = MAX_HISTORY_IMAGE_BYTES;
@@ -88,10 +89,9 @@ export async function restoreReplayImages(
       }
     }
   }
-  if (!restored.size) return messages;
   return messages.map((message) =>
     message.role === "user" && message.content.some((block) => restored.has(block))
       ? { ...message, content: message.content.map((block) => restored.get(block) ?? block) }
       : message,
-  ) as PiReplayMessage[];
+  ) as Message[];
 }

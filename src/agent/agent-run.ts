@@ -35,6 +35,7 @@ import {
   type Model,
   type ModelThinkingLevel,
   type ImageContent,
+  type Message,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
@@ -83,7 +84,6 @@ import {
   recordedMessageTimestamps,
   seedPriorTurns,
   legacyAssistant,
-  type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
 import { estimateHistoryTokens } from "./context-compaction.ts";
@@ -182,32 +182,15 @@ function continueAssistantTurn(session: AgentSession): Promise<void> {
   return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
 }
 
-interface PiSeedTarget {
-  agent?: { state?: { messages?: unknown[] } };
-  sessionManager?: { appendMessage?: (message: unknown) => unknown };
-}
-
-export function toPiMessage(m: SeededMessage): PiReplayMessage {
+export function toPiMessage(m: SeededMessage): Message {
   return m.role === "assistant"
     ? legacyAssistant([{ type: "text", text: m.text }], Date.now())
     : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
 }
 
-export function seedRawMessagesIntoSession(session: unknown, messages: readonly PiReplayMessage[]): void {
-  if (!messages.length) return;
-  const target = session as PiSeedTarget;
-  const liveMessages = target.agent?.state?.messages;
-  const appendMessage = target.sessionManager?.appendMessage?.bind(target.sessionManager);
-  for (const message of messages) {
-    if (Array.isArray(liveMessages)) liveMessages.push(message);
-    if (appendMessage) {
-      try {
-        appendMessage(message);
-      } catch (e) {
-        swallow("pi: replay message append", e);
-      }
-    }
-  }
+export function seedRawMessagesIntoSession(session: AgentSession, messages: readonly Message[]): void {
+  session.agent.state.messages = [...session.agent.state.messages, ...messages];
+  for (const message of messages) session.sessionManager.appendMessage(message);
 }
 
 const DOCUMENTS_DROPPED_RETRY_NOTE =
@@ -422,19 +405,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       throw err;
     }
 
-    if (reconstructed.length) {
-      try {
-        seedRawMessagesIntoSession(session, reconstructed);
-      } catch (err) {
-        console.error("[agent] failed to seed reconstructed history (continuing without it):", errMessage(err));
-      }
-    } else if (priorTurns?.length) {
-      try {
-        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns, []).map(toPiMessage));
-      } catch (err) {
-        console.error("[agent] failed to seed prior turns (continuing without them):", errMessage(err));
-      }
-    }
+    seedRawMessagesIntoSession(
+      session,
+      reconstructed.length ? reconstructed : seedPriorTurns(priorTurns ?? [], []).map(toPiMessage),
+    );
 
     session.agent.onPayload = async (payload, model) => {
       ref.modelCalls = (ref.modelCalls ?? 0) + 1;
