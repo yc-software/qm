@@ -33,10 +33,10 @@ import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
-import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
+import { projectIdFromGroupRef, projectScopeId, type Project } from "../projects/project-store.ts";
 
-import type { App, AppDeps, MoveSessionResult } from "./app-types.ts";
-import { carryChatAlong, chatMoveHold, newChatReaders, settleChatJobs } from "../sessions/session-move.ts";
+import type { App, AppDeps, HeldChat, MoveSessionsResult } from "./app-types.ts";
+import { carryChatsAlong, chatTrees, newChatReaders, runningJobs, settleChatJobs } from "../sessions/session-move.ts";
 import {
   SideChatAnchorError,
   SoulUpdateDeniedError,
@@ -123,7 +123,7 @@ export function createSessionMethods(
   | "deleteEphemeralSession"
   | "purgeExpiredEphemeralSessions"
   | "forkSession"
-  | "moveSession"
+  | "moveSessions"
   | "grant"
   | "revokeGrant"
   | "grantees"
@@ -1187,96 +1187,123 @@ export function createSessionMethods(
       });
     },
 
-    async moveSession(tenant, sessionId, principalId, targetScopeId, opts = {}) {
-      const viewed = await sessionForViewer(sessionId, principalId);
-      const source = viewed && (await deps.sessions.get(sessionId));
-      if (!viewed || !source || source.ephemeral) return { moved: false, reason: "not_found" };
-      if (source.scopeId === targetScopeId) return { moved: false, reason: "same_scope" };
-      const from = parseScopeId(source.scopeId);
-      const fromProject = from.kind === "group" ? projectIdFromGroupRef(from.ref) : null;
-      const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
-      if (
-        (source.scopeId !== personalScope(principalId) && !fromProject) ||
-        !topLevelWebChat ||
-        !(await mayWriteSession(principalId, source))
-      )
-        return { moved: false, reason: "unsupported_source" };
+    async moveSessions(tenant, principalId, sessionIds, targetScopeId, opts = {}) {
       const target = parseScopeId(targetScopeId);
       const projectId = target.kind === "group" ? projectIdFromGroupRef(target.ref) : null;
       const projects = deps.projects;
-      if (!projectId || !projects) return { moved: false, reason: "not_project" };
-      const descendants = await deps.sessions.descendantsOf([sessionId]);
-      const tree = [
-        source,
-        ...(descendants.length
-          ? await deps.sessions.getMany({ ids: descendants.map((d) => d.id), threadRefs: [] })
-          : []),
-      ];
-      await settleChatJobs(deps, tree, targetScopeId);
-      const result = await projects.withRosterLock(projectId, async (project): Promise<MoveSessionResult> => {
-        if (project.orgId !== orgIdOf()) return { moved: false, reason: "not_project" };
+      if (!projectId || !projects) return { outcome: "not_project" };
+      const held: HeldChat[] = [];
+      const access = new Map<string, Promise<boolean>>();
+      const sources = await Promise.all(
+        [...new Set(sessionIds)].map(async (sessionId): Promise<Session | null> => {
+          const viewed = await sessionForViewer(sessionId, principalId);
+          const source = viewed && (await deps.sessions.get(sessionId));
+          const refuse = (reason: "not_found" | "same_scope" | "unsupported_source") => {
+            held.push({ sessionId, reason });
+            return null;
+          };
+          if (!source || source.ephemeral) return refuse("not_found");
+          if (source.scopeId === targetScopeId) return refuse("same_scope");
+          const from = parseScopeId(source.scopeId);
+          const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref);
+          const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
+          if (
+            (source.scopeId !== personalScope(principalId) && !fromProject) ||
+            !topLevelWebChat ||
+            !(await mayWriteSession(principalId, source, access))
+          )
+            return refuse("unsupported_source");
+          return source;
+        }),
+      );
+      let trees = await chatTrees(
+        deps,
+        sources.filter((s): s is Session => s !== null),
+      );
+      await settleChatJobs(deps, trees);
+      const decide = async (project: Project): Promise<MoveSessionsResult> => {
+        if (project.orgId !== orgIdOf()) return { outcome: "not_project" };
         const members = await projects.members(target.ref);
-        if (!members?.includes(principalId)) return { moved: false, reason: "forbidden" };
-        if ((await deps.runs.activeForThreads(tree.map((s) => s.threadRef))).size)
-          return { moved: false, reason: "busy" };
-        const approvals =
-          (await deps.approvals?.selectEntries({
-            where: { field: "sessionId", anyOfFold: tree.map((s) => s.id) },
-          })) ?? [];
+        if (!members?.includes(principalId)) return { outcome: "forbidden" };
+        const all = trees.flat();
+        const [active, approvals, jobs, sourceMembers, people] = await Promise.all([
+          deps.runs.activeForThreads(all.map((s) => s.threadRef)),
+          deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: all.map((s) => s.id) } }) ?? [],
+          runningJobs(deps, trees),
+          Promise.all(
+            [...new Set(trees.map((tree) => tree[0]!.scopeId))].map(async (scope) => {
+              const from = parseScopeId(scope);
+              return [scope, from.kind === "group" ? ((await projects.members(from.ref)) ?? []) : null] as const;
+            }),
+          ),
+          deps.directory.getMany(members),
+        ]);
+        const pending = new Set<string>();
         for (const [, record] of approvals)
           if (
             await approvalRecordIsCurrent(
               record,
-              tree.find((s) => s.id === record.sessionId),
+              all.find((s) => s.id === record.sessionId),
             )
           )
-            return { moved: false, reason: "awaiting_approval" };
-        const held = await chatMoveHold(deps, tree, targetScopeId);
-        if (held.hold) return { moved: false, reason: "job_running", job: held.hold };
-        const sourceMembers = fromProject ? ((await projects.members(from.ref)) ?? []) : null;
-        const [newIds, people] = await Promise.all([
-          newChatReaders(deps, tenant, tree, members, sourceMembers),
-          deps.directory.getMany(members),
-        ]);
+            pending.add(record.sessionId);
+        trees = trees.filter((tree) => {
+          const sessionId = tree[0]!.id;
+          const job = jobs.get(sessionId);
+          if (tree.some((s) => active.has(s.threadRef))) held.push({ sessionId, reason: "busy" });
+          else if (tree.some((s) => pending.has(s.id))) held.push({ sessionId, reason: "awaiting_approval" });
+          else if (job) held.push({ sessionId, reason: "job_running", job });
+          else return true;
+          return false;
+        });
+        const scoped = new Map(sourceMembers.flatMap(([scope, ids]) => (ids ? [[scope, ids] as const] : [])));
         const nameOf = (id: string) => people.get(id)?.displayName;
-        const gains = newIds.map((id) => ({ principalId: id, displayName: nameOf(id) ?? id }));
-        if (opts.preview) return { moved: false, preview: true, gains };
+        const gains = (await newChatReaders(deps, tenant, trees, members, scoped)).map((id) => ({
+          principalId: id,
+          displayName: nameOf(id) ?? id,
+        }));
+        if (opts.preview) return { outcome: "preview", gains, held };
         if (gains.some((g) => !opts.audience?.includes(g.principalId)))
-          return { moved: false, reason: "confirm_audience", gains };
+          return { outcome: "confirm_audience", gains, held };
         const audience = members.map((id) => {
           const principal = deps.identity.classify(id);
           const displayName = nameOf(id);
           return displayName ? { ...principal, displayName } : principal;
         });
         const version = await projects.version(target.ref);
-        await carryChatAlong(
-          deps,
-          tenant,
-          {
-            tree,
-            to: targetScopeId,
-            members,
-            target: { groupRef: target.ref, channelName: project.name, audience, version },
-          },
-          held,
-        );
-        h.recordAudit({
-          at: Date.now(),
-          principalId,
-          action: "session.move",
-          resource: sessionId,
-          scopeLabel: targetScopeId,
-          detail: JSON.stringify({
-            from: source.scopeId,
-            to: targetScopeId,
-            sessions: tree.map((s) => s.id),
-            gains: gains.map((g) => g.principalId),
-          }),
+        await carryChatsAlong(deps, tenant, trees, targetScopeId, members, {
+          groupRef: target.ref,
+          channelName: project.name,
+          audience,
+          version,
         });
-        const stored = (await sessionForViewer(sessionId, principalId))!;
-        return { moved: true, session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
-      });
-      return result ?? { moved: false, reason: "not_project" };
+        for (const tree of trees)
+          h.recordAudit({
+            at: Date.now(),
+            principalId,
+            action: "session.move",
+            resource: tree[0]!.id,
+            scopeLabel: targetScopeId,
+            detail: JSON.stringify({
+              from: tree[0]!.scopeId,
+              to: targetScopeId,
+              sessions: tree.map((s) => s.id),
+              gains: gains.map((g) => g.principalId),
+            }),
+          });
+        const moved = await Promise.all(
+          trees.map(async (tree) => {
+            const stored = (await sessionForViewer(tree[0]!.id, principalId))!;
+            return { ...stored, canContinue: await canContinueOnWeb(principalId, stored, access) };
+          }),
+        );
+        return { outcome: "moved", sessions: moved, held };
+      };
+      if (opts.preview) {
+        const project = await projects.get(projectId);
+        return project ? decide(project) : { outcome: "not_project" };
+      }
+      return (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
     },
 
     async spawnSession(principalId, opts) {

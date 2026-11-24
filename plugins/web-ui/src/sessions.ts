@@ -45,8 +45,8 @@ import {
   detachSession,
   inheritedTranscript,
   ApiError,
-  moveSession,
-  previewSessionMove,
+  moveSessions,
+  previewSessionMoves,
   itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -1361,8 +1361,8 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
   const { moved, toast } = await runSessionMove(ids, {
     project: projectName(scopeId) ?? "the project",
     title: (id) => sessionsState.list.find((s) => s.id === id)?.title?.trim() || "Untitled chat",
-    preview: (id) => previewSessionMove(id, scopeId),
-    move: async (id, audience) => (await moveSession(id, scopeId, audience)).session,
+    preview: (ids) => previewSessionMoves(ids, scopeId),
+    move: (ids, audience) => moveSessions(ids, scopeId, audience),
     confirm: (question) => window.confirm(question),
     reason: (error) => {
       if (!(error instanceof ApiError)) reportHandledError("web:session_move", error);

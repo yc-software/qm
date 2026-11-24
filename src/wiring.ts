@@ -2508,7 +2508,6 @@ export function buildApp(
     ...(processes ? { processes } : {}),
     monitors,
     loops: loopStore,
-    sandboxResources,
     sandbox,
     files,
     approvals,

@@ -43,7 +43,9 @@ async function setup() {
     await built.sessions.setParentSession(child.id, parentId);
     return child;
   };
-  return { built, project, scope: projectScopeId(project.id), personal, subagent };
+  const move = (sid: string, principal: string, scope: string, opts?: { audience?: string[]; preview?: boolean }) =>
+    built.app.moveSessions(tenant, principal, [sid], scope as `group:${string}`, opts);
+  return { built, project, scope: projectScopeId(project.id), personal, subagent, move };
 }
 
 async function soloProject(built: Awaited<ReturnType<typeof setup>>["built"]) {
@@ -53,25 +55,22 @@ async function soloProject(built: Awaited<ReturnType<typeof setup>>["built"]) {
 }
 
 test("moving a chat where nobody new can read it re-homes the same chat without asking", async () => {
-  const { built, personal } = await setup();
+  const { built, personal, move } = await setup();
   const scope = await soloProject(built);
   const sid = await personal("owner", "web:owner:move-1", "Plan the launch checklist");
   await built.app.updateSession(sid, { actorId: "owner" }, { title: "Launch checklist", pinned: true });
 
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", scope, { preview: true }), {
-    moved: false,
-    preview: true,
-    gains: [],
-  });
-  const out = await built.app.moveSession(tenant, sid, "owner", scope);
-  assert.ok(out.moved);
-  assert.equal(out.session.id, sid, "the chat keeps its id and link");
-  assert.equal(out.session.scopeId, scope);
-  assert.equal(out.session.type, "group");
-  assert.equal(out.session.channelName, "Solo");
-  assert.equal(out.session.title, "Launch checklist");
-  assert.equal(out.session.pinned, true);
-  assert.equal(out.session.archived, undefined);
+  assert.deepEqual(await move(sid, "owner", scope, { preview: true }), { outcome: "preview", gains: [], held: [] });
+  const out = await move(sid, "owner", scope);
+  assert.ok(out.outcome === "moved" && out.sessions.length === 1);
+  const [session] = out.sessions;
+  assert.equal(session!.id, sid, "the chat keeps its id and link");
+  assert.equal(session!.scopeId, scope);
+  assert.equal(session!.type, "group");
+  assert.equal(session!.channelName, "Solo");
+  assert.equal(session!.title, "Launch checklist");
+  assert.equal(session!.pinned, true);
+  assert.equal(session!.archived, undefined);
   assert.equal((await built.sessions.listByScope("personal:owner")).length, 0, "nothing is left behind");
   const audits = (await built.auditLog.events(tenant)).filter((e) => e.action === "session.move");
   assert.equal(audits.length, 1);
@@ -80,32 +79,31 @@ test("moving a chat where nobody new can read it re-homes the same chat without 
 });
 
 test("broadening a chat's readers needs the user to confirm exactly who gains access", async () => {
-  const { built, project, scope, personal } = await setup();
+  const { built, project, scope, personal, move } = await setup();
   const sid = await personal("owner", "web:owner:move-confirm", "Private launch notes");
   const member = { principalId: "member", displayName: "Member" };
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", scope, { preview: true }), {
-    moved: false,
-    preview: true,
+  assert.deepEqual(await move(sid, "owner", scope, { preview: true }), {
+    outcome: "preview",
     gains: [member],
+    held: [],
   });
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", scope), {
-    moved: false,
-    reason: "confirm_audience",
-    gains: [member],
-  });
+  assert.deepEqual(await move(sid, "owner", scope), { outcome: "confirm_audience", gains: [member], held: [] });
   assert.equal(await built.app.getSessionForViewer(sid, { actorId: "member" }), null);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "outsider")).status, "ok");
-  const late = await built.app.moveSession(tenant, sid, "owner", scope, { audience: ["member"] });
+  const late = await move(sid, "owner", scope, { audience: ["member"] });
   assert.deepEqual(
     late,
-    { moved: false, reason: "confirm_audience", gains: [member, { principalId: "outsider", displayName: "Outsider" }] },
+    {
+      outcome: "confirm_audience",
+      gains: [member, { principalId: "outsider", displayName: "Outsider" }],
+      held: [],
+    },
     "someone who joined after the confirmation was shown is not let in",
   );
   assert.equal((await built.sessions.get(sid))!.scopeId, "personal:owner");
 
-  const out = await built.app.moveSession(tenant, sid, "owner", scope, { audience: ["member", "outsider"] });
-  assert.ok(out.moved);
+  assert.equal((await move(sid, "owner", scope, { audience: ["member", "outsider"] })).outcome, "moved");
   const view = await built.app.getSessionForViewer(sid, { actorId: "member" });
   assert.ok(view?.items.filter(isUserItem).some((item) => item.text?.includes("Private launch notes")));
   assert.deepEqual(
@@ -116,7 +114,7 @@ test("broadening a chat's readers needs the user to confirm exactly who gains ac
 });
 
 test("a chat's goal, schedules, watches, webhooks, subagents and their computers come along", async () => {
-  const { built, personal, subagent } = await setup();
+  const { built, personal, subagent, move } = await setup();
   const scope = await soloProject(built);
   const sid = await personal("owner", "web:owner:move-attached", "Keep an eye on the launch");
   const thread = (await built.sessions.get(sid))!.threadRef;
@@ -178,8 +176,7 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     isolation: { mode: "shared", sandboxId: child },
   });
 
-  const out = await built.app.moveSession(tenant, sid, "owner", scope);
-  assert.ok(out.moved);
+  assert.equal((await move(sid, "owner", scope)).outcome, "moved");
   assert.equal((await built.sessions.goals([sid])).get(sid)?.objective, "ship the launch");
 
   const movedCron = (await built.crons.get(cron.id))!;
@@ -221,6 +218,9 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
 test("only work that is running right now holds a move back", async () => {
   const { built, personal, subagent } = await setup();
   const scope = await soloProject(built);
+  const moveAll = (ids: string[]) => built.app.moveSessions(tenant, "owner", ids, scope);
+  const free = await personal("owner", "web:owner:move-free", "Idle work");
+  const other = await personal("owner", "web:owner:move-job", "Job work");
   const sid = await personal("owner", "web:owner:move-busy", "Busy work");
   const { threadRef: childThread } = await subagent(sid, "agent:main:subagent:move-busy-child");
   const actor = { id: "internal:owner", type: "internal" as const };
@@ -233,9 +233,6 @@ test("only work that is running right now holds a move back", async () => {
       text: "Keep going",
     },
   });
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", scope), { moved: false, reason: "busy" });
-
-  const other = await personal("owner", "web:owner:move-job", "Job work");
   await built.processes!.register({
     processId: "p-move-job",
     scopeId: "personal:owner",
@@ -246,43 +243,42 @@ test("only work that is running right now holds a move back", async () => {
     ttlMs: 600_000,
     sessionRef: (await built.sessions.get(other))!.threadRef,
   });
-  assert.deepEqual(await built.app.moveSession(tenant, other, "owner", scope), {
-    moved: false,
-    reason: "job_running",
-    job: { purpose: "Building the site" },
-  });
-  await built.processes!.markStatus("p-move-job", "exited");
-  assert.ok(
-    (await built.app.moveSession(tenant, other, "owner", scope)).moved,
-    "a finished job no longer holds it back",
+  const first = await moveAll([sid, other, free]);
+  assert.ok(first.outcome === "moved");
+  assert.deepEqual(
+    first.sessions.map((s) => s.id),
+    [free],
+    "one request moves what it can",
   );
+  assert.deepEqual(first.held, [
+    { sessionId: sid, reason: "busy" },
+    { sessionId: other, reason: "job_running", job: { purpose: "Building the site" } },
+  ]);
+  await built.processes!.markStatus("p-move-job", "exited");
+  const second = await moveAll([other]);
+  assert.ok(second.outcome === "moved" && second.sessions.length === 1, "a finished job no longer holds it back");
   assert.equal((await built.sessions.get(sid))!.scopeId, "personal:owner", "refused moves change nothing");
 });
 
 test("moves are refused for non-members, strangers, side chats, and non-project targets", async () => {
-  const { built, scope, personal } = await setup();
+  const { built, scope, personal, move } = await setup();
   const outsiders = await personal("outsider", "web:outsider:move", "Not a member here");
-  assert.deepEqual(await built.app.moveSession(tenant, outsiders, "outsider", scope), {
-    moved: false,
-    reason: "forbidden",
-  });
+  assert.deepEqual(await move(outsiders, "outsider", scope), { outcome: "forbidden" });
 
   const sid = await personal("owner", "web:owner:move-2", "Some private notes");
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "member", scope), { moved: false, reason: "not_found" });
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", "personal:owner"), {
-    moved: false,
-    reason: "same_scope",
+  assert.deepEqual(await move(sid, "member", scope), {
+    outcome: "moved",
+    sessions: [],
+    held: [{ sessionId: sid, reason: "not_found" }],
   });
-  assert.deepEqual(await built.app.moveSession(tenant, sid, "owner", "personal:member"), {
-    moved: false,
-    reason: "not_project",
-  });
+  assert.deepEqual(await move(sid, "owner", "personal:owner"), { outcome: "not_project" });
   const sideChat = await built.app.forkSession(sid, "owner", {
     sideChat: { entrySeq: 0, quote: "private notes", occurrence: 0 },
   });
-  assert.deepEqual(await built.app.moveSession(tenant, sideChat!.session.id, "owner", scope), {
-    moved: false,
-    reason: "unsupported_source",
+  assert.deepEqual(await move(sideChat!.session.id, "owner", scope), {
+    outcome: "moved",
+    sessions: [],
+    held: [{ sessionId: sideChat!.session.id, reason: "unsupported_source" }],
   });
 });
 
@@ -302,8 +298,8 @@ test("the move route binds the principal to the portal identity and maps refusal
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const move = async (id: string, principal: string, body: Record<string, unknown>) => {
-    const path = `/v1/sessions/${id}/move?nonce=${crypto.randomUUID()}`;
-    const payload = JSON.stringify({ principalId: principal, ...body });
+    const path = `/v1/sessions/move?nonce=${crypto.randomUUID()}`;
+    const payload = JSON.stringify({ principalId: principal, sessionIds: [id], ...body });
     return fetch(base + path, {
       method: "POST",
       headers: {
@@ -321,19 +317,24 @@ test("the move route binds the principal to the portal identity and maps refusal
     assert.equal(((await refused.json()) as { message: string }).message, "You're not a member of that project.");
     const preview = await move(sid, "owner", { scopeId: scope, preview: true });
     assert.equal(preview.status, 200);
-    assert.deepEqual(await preview.json(), { gains: [{ principalId: "member", displayName: "Member" }] });
+    assert.deepEqual(await preview.json(), { gains: [{ principalId: "member", displayName: "Member" }], held: [] });
     const unconfirmed = await move(sid, "owner", { scopeId: scope });
     assert.equal(unconfirmed.status, 409);
     assert.deepEqual(await unconfirmed.json(), {
       error: "confirm_audience",
       gains: [{ principalId: "member", displayName: "Member" }],
+      held: [],
       message: "Moving this chat lets Member read it. Confirm to move it.",
     });
     assert.equal((await move(sid, "owner", { scopeId: scope, audience: "member" })).status, 400);
     const ok = await move(sid, "owner", { scopeId: scope, audience: ["member"] });
     assert.equal(ok.status, 200);
-    const body = (await ok.json()) as { session: { scopeId: string } };
-    assert.equal(body.session.scopeId, scope);
+    const body = (await ok.json()) as { sessions: Array<{ scopeId: string }>; held: unknown[] };
+    assert.equal(body.sessions[0]!.scopeId, scope);
+    const again = await move(sid, "owner", { scopeId: scope });
+    assert.deepEqual(((await again.json()) as { held: unknown[] }).held, [
+      { sessionId: sid, reason: "same_scope", message: "That conversation is already in this project." },
+    ]);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

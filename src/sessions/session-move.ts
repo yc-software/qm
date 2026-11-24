@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { LoopStore } from "../loops/loop-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
-import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
+import type { ProcessRegistry } from "../processes/process-registry.ts";
 import { reconcileProcesses } from "../processes/reconcile.ts";
 import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
-import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { postsInto } from "../triggers/trigger-store.ts";
 import type { ChildIsolation, Principal, ScopeId, Session, SpawnMeta } from "../types.ts";
@@ -54,48 +53,49 @@ function newReaders(memberIds: readonly string[], readers: readonly (readonly st
 }
 
 export interface ChatMoveDeps {
-  sessions: Pick<SessionStore, "participantsOfMany" | "rehome">;
+  sessions: Pick<SessionStore, "descendantsOf" | "getMany" | "participantsOfMany" | "rehome">;
   processes?: ProcessRegistry;
   sandbox?: Sandbox;
-  sandboxResources?: Pick<SandboxResources, "getMany">;
   crons: Pick<CronStore, "rehome">;
   webhooks: Pick<WebhookStore, "rehome">;
   monitors?: Pick<MonitorStore, "rehome">;
   loops?: Pick<LoopStore, "ownedBy" | "update">;
 }
 
-export interface ChatMove {
-  tree: readonly Session[];
-  to: ScopeId;
-  members: readonly string[];
-  target: MoveTarget;
+export type ChatTree = readonly Session[];
+
+export interface JobHold {
+  purpose: string;
+  chat?: string;
 }
 
-type JobHold = { purpose: string; chat?: string };
-
-async function chatJobs(deps: ChatMoveDeps, tree: readonly Session[]): Promise<ProcessRecord[]> {
-  const threadRefs = new Set(tree.map((s) => s.threadRef));
-  return ((await deps.processes?.listByScope(tree[0]!.scopeId)) ?? []).filter(
-    (rec) => rec.kind === "background" && rec.status === "running" && rec.sessionRef && threadRefs.has(rec.sessionRef),
-  );
+export async function chatTrees(deps: ChatMoveDeps, roots: readonly Session[]): Promise<ChatTree[]> {
+  if (!roots.length) return [];
+  const descendants = await deps.sessions.descendantsOf(roots.map((s) => s.id));
+  const children = descendants.length
+    ? await deps.sessions.getMany({ ids: descendants.map((d) => d.id), threadRefs: [] })
+    : [];
+  const rootOf = new Map(descendants.map((d) => [d.id, d.rootId]));
+  return roots.map((root) => [root, ...children.filter((child) => rootOf.get(child.id) === root.id)]);
 }
 
-async function projectComputers(deps: ChatMoveDeps, ids: readonly string[], to: ScopeId): Promise<Set<string>> {
-  const computers = ids.length ? ((await deps.sandboxResources?.getMany([...new Set(ids)])) ?? []) : [];
-  return new Set(computers.filter((computer) => computer.ownerScopeId === to).map((computer) => computer.id));
+async function liveJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]) {
+  const threadRefs = new Set(trees.flatMap((tree) => tree.map((s) => s.threadRef)));
+  const scopes = [...new Set(trees.map((tree) => tree[0]!.scopeId))];
+  const jobs = await Promise.all(scopes.map((scope) => deps.processes?.listByScope(scope) ?? []));
+  return jobs
+    .flat()
+    .filter(
+      (rec) =>
+        rec.kind === "background" && rec.status === "running" && rec.sessionRef && threadRefs.has(rec.sessionRef),
+    );
 }
 
-export async function settleChatJobs(deps: ChatMoveDeps, tree: readonly Session[], to: ScopeId): Promise<void> {
+export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<void> {
   const { processes, sandbox } = deps;
   if (!processes || !sandbox || !supportsProcessSessions(sandbox)) return;
-  const jobs = await chatJobs(deps, tree);
-  const usable = await projectComputers(
-    deps,
-    jobs.flatMap((rec) => rec.sandboxId ?? []),
-    to,
-  );
   const hosts = new Map(
-    jobs.flatMap((rec) => (rec.sandboxId && !usable.has(rec.sandboxId) ? [[rec.sandboxId, rec.scopeId]] : [])),
+    (await liveJobs(deps, trees)).flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])),
   );
   await Promise.all(
     [...hosts].map(([sandboxId, scopeId]) =>
@@ -113,70 +113,75 @@ export async function settleChatJobs(deps: ChatMoveDeps, tree: readonly Session[
   );
 }
 
-export async function chatMoveHold(deps: ChatMoveDeps, tree: readonly Session[], to: ScopeId) {
-  const jobs = await chatJobs(deps, tree);
-  const childComputers = tree.flatMap((s) => s.spawnMeta?.isolation?.sandboxId ?? []);
-  const usable = await projectComputers(deps, [...jobs.flatMap((rec) => rec.sandboxId ?? []), ...childComputers], to);
-  const stranded = jobs.find((rec) => !rec.sandboxId || !usable.has(rec.sandboxId));
-  const chat = stranded && tree.find((s) => s.threadRef === stranded.sessionRef);
-  const hold: JobHold | undefined = stranded && {
-    purpose: stranded.purpose ?? stranded.command.replace(/^bg: /, ""),
-    ...(chat && chat !== tree[0] && chat.title ? { chat: chat.title } : {}),
-  };
-  return { hold, jobs, usable };
+export async function runningJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<Map<string, JobHold>> {
+  const holds = new Map<string, JobHold>();
+  const jobs = await liveJobs(deps, trees);
+  for (const tree of trees) {
+    const job = jobs.find((rec) => tree.some((s) => s.threadRef === rec.sessionRef));
+    if (!job) continue;
+    const chat = tree.find((s) => s.threadRef === job.sessionRef);
+    holds.set(tree[0]!.id, {
+      purpose: job.purpose ?? job.command.replace(/^bg: /, ""),
+      ...(chat && chat !== tree[0] && chat.title ? { chat: chat.title } : {}),
+    });
+  }
+  return holds;
 }
 
 export async function newChatReaders(
   deps: ChatMoveDeps,
   tenant: Tenant,
-  tree: readonly Session[],
+  trees: readonly ChatTree[],
   members: readonly string[],
-  sourceMembers: readonly string[] | null,
+  sourceMembers: ReadonlyMap<ScopeId, readonly string[]>,
 ): Promise<string[]> {
   const participants = await deps.sessions.participantsOfMany(
     tenant,
-    tree.map((s) => s.id),
+    trees.flatMap((tree) => tree.map((s) => s.id)),
   );
-  const readers = [...participants.values()].map((ids) =>
-    ids.filter((id) => !sourceMembers || sourceMembers.includes(id)),
-  );
+  const readers = trees.flatMap((tree) => {
+    const scopeMembers = sourceMembers.get(tree[0]!.scopeId);
+    return tree.map((s) => (participants.get(s.id) ?? []).filter((id) => !scopeMembers || scopeMembers.includes(id)));
+  });
   return newReaders(members, readers);
 }
 
-export async function carryChatAlong(
+export async function carryChatsAlong(
   deps: ChatMoveDeps,
   tenant: Tenant,
-  move: ChatMove,
-  { jobs, usable }: { jobs: readonly ProcessRecord[]; usable: ReadonlySet<string> },
+  trees: readonly ChatTree[],
+  to: ScopeId,
+  members: readonly string[],
+  target: MoveTarget,
 ): Promise<void> {
-  const { tree, to, members, target } = move;
-  const from = tree[0]!.scopeId;
-  const threadRefs = new Set(tree.map((s) => s.threadRef));
-  if (jobs.length)
-    await deps.processes?.rescope(
-      tenant,
-      jobs.map((rec) => rec.processId),
-      to,
-    );
-  const triggers = { threadRefs, from, to };
-  await Promise.all([deps.crons.rehome(triggers), deps.webhooks.rehome(triggers), deps.monitors?.rehome(triggers)]);
+  const bySource = new Map<ScopeId, Set<string>>();
+  for (const tree of trees)
+    for (const s of tree)
+      bySource.set(tree[0]!.scopeId, (bySource.get(tree[0]!.scopeId) ?? new Set()).add(s.threadRef));
   const loops = deps.loops;
-  if (loops)
-    await Promise.all(
-      (await loops.ownedBy(from))
-        .filter((loop) => postsInto(loop, threadRefs))
-        .map((loop) => loops.update(loop.id, { destination: null })),
-    );
-  const isolations = tree.flatMap((s) => s.spawnMeta?.isolation ?? []);
+  await Promise.all(
+    [...bySource].map(async ([from, threadRefs]) => {
+      const triggers = { threadRefs, from, to };
+      await Promise.all([deps.crons.rehome(triggers), deps.webhooks.rehome(triggers), deps.monitors?.rehome(triggers)]);
+      if (loops)
+        await Promise.all(
+          (await loops.ownedBy(from))
+            .filter((loop) => postsInto(loop, threadRefs))
+            .map((loop) => loops.update(loop.id, { destination: null })),
+        );
+    }),
+  );
+  const sessions = trees.flat();
+  const isolations = sessions.flatMap((s) => s.spawnMeta?.isolation ?? []);
   const own = new Set(isolations.flatMap((i) => (i.mode === "sandbox" && i.sandboxId ? [i.sandboxId] : [])));
-  const bound = new Set(isolations.flatMap((i) => (i.sandboxId && !usable.has(i.sandboxId) ? [i.sandboxId] : [])));
+  const bound = new Set(isolations.flatMap((i) => i.sandboxId ?? []));
   const computers = new Map([...bound].map((id) => [id, own.has(id) ? randomUUID() : null] as const));
   const spawnMeta = new Map(
-    tree.flatMap((s) => (s.spawnMeta ? [[s.id, rehomedSpawnMeta(s.spawnMeta, target, computers)] as const] : [])),
+    sessions.flatMap((s) => (s.spawnMeta ? [[s.id, rehomedSpawnMeta(s.spawnMeta, target, computers)] as const] : [])),
   );
   await deps.sessions.rehome(
     tenant,
-    tree.map((s) => s.id),
+    sessions.map((s) => s.id),
     { type: "group", scopeId: to, channelName: target.channelName },
     members,
     spawnMeta,

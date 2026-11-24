@@ -126,23 +126,26 @@ test("a project accepts working chats so the refusal can be explained, and ignor
   assert.ok(!target.classList.contains(SESSION_DROP_OVER_CLASS), "ending the drag clears every highlight");
 });
 
-function io(opts: { gains?: Record<string, string[]>; refuse?: Record<string, string>; confirm?: boolean }) {
+function io(opts: { gains?: string[]; refuse?: Record<string, string>; confirm?: boolean; fail?: string }) {
   const asked: string[] = [];
-  const moved: Array<{ id: string; audience: readonly string[] }> = [];
+  const moved: Array<{ ids: readonly string[]; audience: readonly string[] }> = [];
   const names: Record<string, string> = { ada: "Ada", grace: "Grace" };
+  const held = (ids: readonly string[]) =>
+    ids.flatMap((id) => (opts.refuse?.[id] ? [{ sessionId: id, message: opts.refuse[id] }] : []));
   return {
     asked,
     moved,
     io: {
       project: "Launch",
       title: (id: string) => `Chat ${id}`,
-      preview: async (id: string) => {
-        if (opts.refuse?.[id]) throw new Error(opts.refuse[id]);
-        return { gains: (opts.gains?.[id] ?? []).map((p) => ({ principalId: p, displayName: names[p]! })) };
-      },
-      move: async (id: string, audience: readonly string[]) => {
-        moved.push({ id, audience });
-        return { id, scopeId: "group:project:launch" } as CoreSession;
+      preview: async (ids: readonly string[]) => ({
+        gains: (opts.gains ?? []).map((p) => ({ principalId: p, displayName: names[p]! })),
+        held: held(ids),
+      }),
+      move: async (ids: readonly string[], audience: readonly string[]) => {
+        if (opts.fail) throw new Error(opts.fail);
+        moved.push({ ids, audience });
+        return { sessions: ids.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession), held: [] };
       },
       confirm: (question: string) => {
         asked.push(question);
@@ -157,40 +160,36 @@ test("a move that gives nobody new access goes ahead without asking", async () =
   const t = io({});
   const out = await runSessionMove(["a"], t.io);
   assert.deepEqual(t.asked, []);
-  assert.deepEqual(t.moved, [{ id: "a", audience: [] }]);
+  assert.deepEqual(t.moved, [{ ids: ["a"], audience: [] }]);
   assert.equal(out.toast, "Moved to Launch");
 });
 
-test("a multi-select drag asks once for everyone who gains access, and moves with that audience", async () => {
-  const t = io({ gains: { a: ["ada"], b: ["ada", "grace"] } });
+test("a multi-select drag asks once for everyone who gains access, and moves in one request with that audience", async () => {
+  const t = io({ gains: ["ada", "grace"] });
   const out = await runSessionMove(["a", "b"], t.io);
   assert.deepEqual(t.asked, [
     "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
   ]);
-  assert.deepEqual(t.moved, [
-    { id: "a", audience: ["ada", "grace"] },
-    { id: "b", audience: ["ada", "grace"] },
-  ]);
+  assert.deepEqual(t.moved, [{ ids: ["a", "b"], audience: ["ada", "grace"] }]);
   assert.equal(out.toast, "Moved 2 chats to Launch");
 });
 
 test("cancelling the confirmation moves nothing", async () => {
-  const t = io({ gains: { a: ["ada"] }, confirm: false });
+  const t = io({ gains: ["ada"], confirm: false });
   const out = await runSessionMove(["a", "b"], t.io);
   assert.equal(t.asked.length, 1);
   assert.deepEqual(t.moved, []);
   assert.equal(out.toast, null);
 });
 
-test("refused chats are named in the toast while the rest still move", async () => {
+test("held chats are named in the toast while the rest still move", async () => {
   const wait = "Wait for the agent to finish before moving this chat.";
   const t = io({ refuse: { busy: wait } });
   const out = await runSessionMove(["a", "busy"], t.io);
-  assert.deepEqual(
-    t.moved.map((m) => m.id),
-    ["a"],
-  );
+  assert.deepEqual(t.moved, [{ ids: ["a"], audience: [] }]);
   assert.equal(out.toast, `Moved 1 of 2 chats to Launch. "Chat busy" wasn't moved: ${wait}`);
   const alone = io({ refuse: { busy: wait } });
   assert.equal((await runSessionMove(["busy"], alone.io)).toast, wait, "a single refusal says why and nothing else");
+  const failed = io({ fail: "That project isn't available." });
+  assert.equal((await runSessionMove(["a"], failed.io)).toast, "That project isn't available.");
 });

@@ -103,11 +103,19 @@ export function projectDropHandlers(scopeId: string): ProjectDropHandlers {
   };
 }
 
+interface HeldMove {
+  sessionId: string;
+  message: string;
+}
+
 export interface SessionMoveIo {
   project: string;
   title(id: string): string;
-  preview(id: string): Promise<{ gains: readonly MoveAudienceMember[] }>;
-  move(id: string, audience: readonly string[]): Promise<CoreSession>;
+  preview(ids: readonly string[]): Promise<{ gains: readonly MoveAudienceMember[]; held: readonly HeldMove[] }>;
+  move(
+    ids: readonly string[],
+    audience: readonly string[],
+  ): Promise<{ sessions: readonly CoreSession[]; held: readonly HeldMove[] }>;
   confirm(question: string): boolean;
   reason(error: unknown): string;
 }
@@ -115,35 +123,34 @@ export interface SessionMoveIo {
 export async function runSessionMove(
   ids: readonly string[],
   io: SessionMoveIo,
-): Promise<{ moved: CoreSession[]; toast: string | null }> {
-  const held: string[] = [];
-  const hold = (id: string, error: unknown) => {
-    const why = io.reason(error);
-    held.push(ids.length === 1 ? why : `"${io.title(id)}" wasn't moved: ${why}`);
+): Promise<{ moved: readonly CoreSession[]; toast: string | null }> {
+  const explain = (held: readonly HeldMove[]) =>
+    held.map((h) => (ids.length === 1 ? h.message : `"${io.title(h.sessionId)}" wasn't moved: ${h.message}`));
+  const finish = (moved: readonly CoreSession[], notes: readonly string[]) => {
+    let summary = "";
+    if (moved.length === ids.length)
+      summary = moved.length === 1 ? `Moved to ${io.project}` : `Moved ${moved.length} chats to ${io.project}`;
+    else if (moved.length) summary = `Moved ${moved.length} of ${ids.length} chats to ${io.project}.`;
+    return { moved, toast: [summary, ...notes].filter(Boolean).join(" ") || null };
   };
-  const ready: string[] = [];
-  const readers = new Map<string, string>();
-  const previews = await Promise.allSettled(ids.map((id) => io.preview(id)));
-  previews.forEach((preview, i) => {
-    if (preview.status === "rejected") return hold(ids[i]!, preview.reason);
-    ready.push(ids[i]!);
-    for (const g of preview.value.gains) readers.set(g.principalId, g.displayName);
-  });
-  if (
-    ready.length &&
-    readers.size &&
-    !io.confirm(moveConfirmation(ready.map(io.title), io.project, [...readers.values()]))
-  )
-    return { moved: [], toast: held.length ? held.join(" ") : null };
-  const moved: CoreSession[] = [];
-  const moves = await Promise.allSettled(ready.map((id) => io.move(id, [...readers.keys()])));
-  moves.forEach((move, i) => {
-    if (move.status === "rejected") hold(ready[i]!, move.reason);
-    else moved.push(move.value);
-  });
-  let summary = "";
-  if (moved.length === ids.length)
-    summary = moved.length === 1 ? `Moved to ${io.project}` : `Moved ${moved.length} chats to ${io.project}`;
-  else if (moved.length) summary = `Moved ${moved.length} of ${ids.length} chats to ${io.project}.`;
-  return { moved, toast: [summary, ...held].filter(Boolean).join(" ") };
+  let preview: Awaited<ReturnType<SessionMoveIo["preview"]>>;
+  try {
+    preview = await io.preview(ids);
+  } catch (error) {
+    return finish([], [io.reason(error)]);
+  }
+  const notes = explain(preview.held);
+  const ready = ids.filter((id) => !preview.held.some((h) => h.sessionId === id));
+  const readers = preview.gains.map((g) => g.displayName);
+  if (!ready.length || (readers.length && !io.confirm(moveConfirmation(ready.map(io.title), io.project, readers))))
+    return finish([], notes);
+  try {
+    const out = await io.move(
+      ready,
+      preview.gains.map((g) => g.principalId),
+    );
+    return finish(out.sessions, [...notes, ...explain(out.held)]);
+  } catch (error) {
+    return finish([], [...notes, io.reason(error)]);
+  }
 }

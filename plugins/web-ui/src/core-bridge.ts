@@ -392,22 +392,24 @@ export interface MoveAudienceMember {
   displayName: string;
 }
 
-export async function previewSessionMove(id: string, scopeId: string): Promise<{ gains: MoveAudienceMember[] }> {
-  return api<{ gains: MoveAudienceMember[] }>(`/api/sessions/${encodeURIComponent(id)}/move`, {
-    method: "POST",
-    body: JSON.stringify({ scopeId, preview: true }),
-  });
+export interface HeldSessionMove {
+  sessionId: string;
+  message: string;
 }
 
-export async function moveSession(
-  id: string,
+export async function previewSessionMoves(
+  sessionIds: readonly string[],
+  scopeId: string,
+): Promise<{ gains: MoveAudienceMember[]; held: HeldSessionMove[] }> {
+  return api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, preview: true }) });
+}
+
+export async function moveSessions(
+  sessionIds: readonly string[],
   scopeId: string,
   audience: readonly string[],
-): Promise<{ session: CoreSession }> {
-  return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}/move`, {
-    method: "POST",
-    body: JSON.stringify({ scopeId, audience }),
-  });
+): Promise<{ sessions: CoreSession[]; held: HeldSessionMove[] }> {
+  return api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, audience }) });
 }
 
 export function forkCutSeq(

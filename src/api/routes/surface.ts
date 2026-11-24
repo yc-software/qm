@@ -36,7 +36,7 @@ import {
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
-import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { SideChatAnchorError, SoulUpdateDeniedError, type HeldChat, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
@@ -208,19 +208,18 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, out);
 }
 
-const MOVE_REFUSALS = {
-  not_found: { status: 404, message: "That conversation isn't available." },
-  same_scope: { status: 409, message: "That conversation is already in this project." },
-  unsupported_source: { status: 409, message: "Only your own web chats and project chats can be moved." },
-  not_project: { status: 404, message: "That project isn't available." },
-  forbidden: { status: 403, message: "You're not a member of that project." },
-  busy: { status: 409, message: "Wait for the agent to finish before moving this chat." },
-  awaiting_approval: { status: 409, message: "This chat is waiting for an approval. Answer it, then move the chat." },
+const HELD_MESSAGES = {
+  not_found: "That conversation isn't available.",
+  same_scope: "That conversation is already in this project.",
+  unsupported_source: "Only your own web chats and project chats can be moved.",
+  busy: "Wait for the agent to finish before moving this chat.",
+  awaiting_approval: "This chat is waiting for an approval. Answer it, then move the chat.",
 } as const;
 
-function jobRefusal(job: { purpose: string; chat?: string }): string {
-  const where = job.chat ? `in this chat's subagent "${job.chat}"` : "in this chat";
-  return `The background job "${job.purpose}" ${where} is still running on a computer the project can't use. Stop it or wait for it to finish, then move the chat.`;
+function heldMessage(held: HeldChat): string {
+  if (held.reason !== "job_running") return HELD_MESSAGES[held.reason];
+  const where = held.job.chat ? `in this chat's subagent "${held.job.chat}"` : "in this chat";
+  return `The background job "${held.job.purpose}" ${where} is still running. Stop it or wait for it to finish, then move the chat.`;
 }
 
 function audienceList(names: readonly string[]): string {
@@ -228,33 +227,49 @@ function audienceList(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-async function moveSession(ctx: ApiCtx): Promise<void> {
+function confirmMessage(count: number, gains: readonly { displayName: string }[]): string {
+  const names = audienceList(gains.map((g) => g.displayName));
+  return count === 1
+    ? `Moving this chat lets ${names} read it. Confirm to move it.`
+    : `Moving these chats lets ${names} read them. Confirm to move them.`;
+}
+
+const stringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((id) => typeof id === "string");
+
+async function moveSessions(ctx: ApiCtx): Promise<void> {
   const b = (isObj(ctx.body) ? ctx.body : {}) as {
     principalId?: unknown;
+    sessionIds?: unknown;
     scopeId?: unknown;
     audience?: unknown;
     preview?: unknown;
   };
   if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
-  if (b.audience !== undefined && (!Array.isArray(b.audience) || !b.audience.every((id) => typeof id === "string")))
+  if (!stringList(b.sessionIds) || !b.sessionIds.length)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "sessionIds must be a list of conversation ids" });
+  if (b.audience !== undefined && !stringList(b.audience))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "audience must be a list of principal ids" });
-  const out = await ctx.app.moveSession(tenantOf(ctx), ctx.params.id!, b.principalId, b.scopeId as ScopeId, {
-    ...(b.audience ? { audience: b.audience as string[] } : {}),
+  const out = await ctx.app.moveSessions(tenantOf(ctx), b.principalId, b.sessionIds, b.scopeId as ScopeId, {
+    ...(b.audience ? { audience: b.audience } : {}),
     ...(b.preview === true ? { preview: true } : {}),
   });
-  if (out.moved) return sendJson(ctx.res, 200, { session: out.session });
-  if ("preview" in out) return sendJson(ctx.res, 200, { gains: out.gains });
-  if (out.reason === "confirm_audience")
-    return sendJson(ctx.res, 409, {
-      error: out.reason,
-      gains: out.gains,
-      message: `Moving this chat lets ${audienceList(out.gains.map((g) => g.displayName))} read it. Confirm to move it.`,
+  if (out.outcome === "not_project" || out.outcome === "forbidden")
+    return sendJson(ctx.res, out.outcome === "forbidden" ? 403 : 404, {
+      error: out.outcome,
+      message: out.outcome === "forbidden" ? "You're not a member of that project." : "That project isn't available.",
     });
-  if (out.reason === "job_running")
-    return sendJson(ctx.res, 409, { error: out.reason, job: out.job, message: jobRefusal(out.job) });
-  const refusal = MOVE_REFUSALS[out.reason];
-  return sendJson(ctx.res, refusal.status, { error: out.reason, message: refusal.message });
+  const held = out.held.map((h) => ({ ...h, message: heldMessage(h) }));
+  if (out.outcome === "preview") return sendJson(ctx.res, 200, { gains: out.gains, held });
+  if (out.outcome === "confirm_audience")
+    return sendJson(ctx.res, 409, {
+      error: out.outcome,
+      gains: out.gains,
+      held,
+      message: confirmMessage(b.sessionIds.length, out.gains),
+    });
+  return sendJson(ctx.res, 200, { sessions: out.sessions, held });
 }
 
 function agentConversation(session: Session) {
@@ -1575,7 +1590,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
-    { method: "POST", path: "/v1/sessions/:id/move", browser: true, auth: "source", handle: moveSession },
+    { method: "POST", path: "/v1/sessions/move", browser: true, auth: "source", handle: moveSessions },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
     { method: "POST", path: "/v1/sessions/:id/goal/resume", browser: true, auth: "source", handle: resumeSessionGoal },

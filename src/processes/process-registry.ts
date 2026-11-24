@@ -57,7 +57,6 @@ export interface ProcessRegistry {
   listLive(now?: number): Promise<ProcessRecord[]>;
   getMany(tenant: Tenant, processIds: readonly string[]): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
-  rescope(tenant: Tenant, processIds: readonly string[], scopeId: string): Promise<void>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
   claimExpired(now?: number): Promise<ClaimedRow[]>;
@@ -262,16 +261,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
         processId,
       ]);
       return updated.length > 0;
-    },
-    async rescope(tenant, processIds, scopeId) {
-      await migrated();
-      await pg
-        .forTenant(tenant)
-        .q("UPDATE process_sessions SET scope_id = $3 WHERE tenant_id = $1 AND process_id = ANY($2::text[])", [
-          tenant.id,
-          [...processIds],
-          scopeId,
-        ]);
     },
     async claimExpired(now = Date.now()) {
       return claimRows({ q }, "claim_expired_process_sessions", [now]);
