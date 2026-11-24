@@ -168,7 +168,7 @@ export function createManagedSlack(opts: {
         console.warn(
           "[slack-managed] installation_mismatch",
           JSON.stringify({
-            tenant: boundTenant() ?? null,
+            tenant: tenantKey() || null,
             teamId,
             storedTeamId: stored?.teamId ?? null,
             storedInstallId: stored?.installId ?? null,
