@@ -1,18 +1,14 @@
-import { item } from "./item-fixture.ts";
-import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JSDOM } from "jsdom";
-import { testViteServer } from "./vite-server.ts";
-import type { Conversation } from "../src/conv-types.ts";
+import { harness, SESSION } from "./deep-link-boot-fixture.ts";
+import { item } from "./item-fixture.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => (resolve = done));
-  return { promise, resolve };
-}
+const deferred = () => {
+  let resolve!: () => void;
+  return { promise: new Promise<void>((done) => (resolve = done)), resolve };
+};
 
-async function until(check: () => boolean, label = "condition"): Promise<void> {
+async function until(check: () => boolean, label: string): Promise<void> {
   for (let i = 0; i < 200; i++) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -20,247 +16,111 @@ async function until(check: () => boolean, label = "condition"): Promise<void> {
   assert.fail(`${label} did not settle`);
 }
 
-test("swarm worker read-only view streams live run activity, goal progress, swarm strip, and follow-up runs", async () => {
-  const dom = new JSDOM('<!doctype html><div id="app"></div><main id="main"></main>', {
-    url: "http://localhost/",
-  });
-  Object.defineProperty(dom.window, "matchMedia", {
-    value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
-  });
-  const globals = {
-    window: dom.window,
-    document: dom.window.document,
-    location: dom.window.location,
-    history: dom.window.history,
-    localStorage: dom.window.localStorage,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    customElements: dom.window.customElements,
-    Node: dom.window.Node,
-    Event: dom.window.Event,
-    InputEvent: dom.window.InputEvent,
-    KeyboardEvent: dom.window.KeyboardEvent,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: clearTimeout,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    EventSource: undefined,
-  };
-  for (const [key, value] of Object.entries(globals))
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-
+test("swarm worker read-only view streams live activity, goal progress, swarm strip, and follow-up runs", async () => {
   const startedAt = Date.now() - 2000;
-  const row = {
+  const session = {
+    ...SESSION,
     type: "dm" as const,
     createdAt: startedAt - 1000,
-    id: "w1",
     threadRef: "swarm:root:worker1",
-    scopeId: "personal:owner",
+    surface: "swarm",
     title: "Swarm worker 79d954bf",
     canContinue: false,
     working: true,
     workingSince: startedAt,
   };
-  const initialItems = [
-    item("ToolCall", {
-      seq: 1,
-      createdAt: startedAt,
-      tool: "execute",
-      callId: "c1",
-      body: { command: "echo hi", purpose: "Checking initial state" },
-    }),
-  ];
-  let transcriptItems = initialItems;
-  const run1Done = deferred<void>();
-  const run2Done = deferred<void>();
+  const call = (seq: number, callId: string, purpose: string) =>
+    item("ToolCall", { seq, createdAt: startedAt + seq * 100, tool: "execute", callId, body: { purpose } });
+  const [c1, c2, c3] = [call(1, "c1", "Initial"), call(2, "c2", "Live output"), call(4, "c3", "Follow-up step")];
+  const goal = { objective: "Verify candidates", status: "active" as const, createdAt: startedAt, floor: "10m" };
+  let items = [c1];
   let phase: "run1" | "idle" | "run2" | "done" = "run1";
-  const liveToolCall = item("ToolCall", {
-    seq: 2,
-    createdAt: startedAt + 500,
-    tool: "execute",
-    callId: "c2",
-    body: { command: "ls -la", purpose: "Inspecting live worker output" },
-  });
-  const followUpToolCall = item("ToolCall", {
-    seq: 4,
-    createdAt: startedAt + 3000,
-    tool: "execute",
-    callId: "c3",
-    body: { command: "echo next", purpose: "Running follow-up worker step" },
-  });
-  const activeGoal = {
-    objective: "Verify all archival candidates",
-    status: "active" as const,
-    createdAt: startedAt,
-    floor: "10m",
-  };
+  const [run1, run2] = [deferred(), deferred()];
+  const finish = (reply: string) => Response.json({ status: "done", startedAt, result: { status: "ok", reply } });
 
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
-    const path = String(input);
-    if (path.includes("runtime-config")) {
-      return Response.json({
-        scopeId: row.scopeId,
-        models: ["gpt-5.6-sol"],
-        modelCatalog: { "gpt-5.6-sol": metadata("gpt-5.6-sol", "GPT-5.6 Sol") },
-        orgDefault: { modelId: "gpt-5.6-sol", revision: 0 },
-        effective: { modelId: "gpt-5.6-sol" },
-        scopeOverride: null,
-      });
-    }
-    if (path.includes("/api/runs/active")) {
-      if (phase === "run1") {
+  const h = await harness({
+    path: `/s/${session.id}`,
+    session,
+    listSessions: [session],
+    items,
+    api: (path) => {
+      if (path.includes("/api/runs/active")) {
+        if (phase === "run1")
+          return Response.json({
+            runId: "r1",
+            run: {
+              status: "running",
+              startedAt,
+              alive: true,
+              goal,
+              activity: [{ item: c1 }, { item: c2 }],
+              partial: "Live findings",
+            },
+            queued: [],
+          });
+        if (phase === "run2")
+          return Response.json({
+            runId: "r2",
+            run: { status: "running", startedAt: Date.now(), alive: true, goal, activity: [{ item: c3 }] },
+            queued: [],
+          });
+        return Response.json({ runId: null, run: null, queued: [] });
+      }
+      if (path.endsWith("/events")) return new Response(null, { status: 404 });
+      if (path === "/api/runs/r1")
+        return (phase === "run1" ? run1.promise : Promise.resolve()).then(() => finish("First summary"));
+      if (path === "/api/runs/r2")
+        return (phase === "run2" ? run2.promise : Promise.resolve()).then(() => finish("Second summary"));
+      if (path === `/api/sessions/${session.id}/swarm`) {
+        const self = {
+          id: "79d954bf",
+          parentId: "root",
+          sessionId: session.id,
+          sessionUrl: `/s/${session.id}`,
+          state: "ready",
+          depth: 1,
+        };
         return Response.json({
-          runId: "r-live-1",
-          run: {
-            status: "running",
-            startedAt,
-            alive: true,
-            goal: activeGoal,
-            activity: [{ item: initialItems[0] }, { item: liveToolCall }],
-            partial: "Streaming live findings from worker…",
-          },
-          queued: [],
+          id: "root",
+          self,
+          peers: [{ id: "root", sessionId: "r0", sessionUrl: "/s/r0", state: "ready", depth: 0 }, self],
         });
       }
-      if (phase === "run2") {
-        return Response.json({
-          runId: "r-live-2",
-          run: {
-            status: "running",
-            startedAt: Date.now(),
-            alive: true,
-            goal: activeGoal,
-            activity: [{ item: followUpToolCall }],
-          },
-          queued: [],
-        });
-      }
-      return Response.json({ runId: null, run: null, queued: [] });
-    }
-    if (path === "/api/runs/r-live-1/events" || path === "/api/runs/r-live-2/events") {
-      return new Response(null, { status: 404 });
-    }
-    if (path === "/api/runs/r-live-1") {
-      if (phase === "run1") await run1Done.promise;
-      return Response.json({
-        status: "done",
-        startedAt,
-        finishedAt: Date.now(),
-        result: { status: "ok", reply: "First worker summary" },
-      });
-    }
-    if (path === "/api/runs/r-live-2") {
-      if (phase === "run2") await run2Done.promise;
-      return Response.json({
-        status: "done",
-        startedAt,
-        finishedAt: Date.now(),
-        result: { status: "ok", reply: "Second worker summary" },
-      });
-    }
-    if (path === "/api/sessions/w1/swarm") {
-      return Response.json({
-        id: "root-id",
-        self: { id: "79d954bf-1111", parentId: "root-id", sessionId: "w1", state: "ready", depth: 1 },
-        peers: [
-          { id: "root-id", sessionId: "root-sess", sessionUrl: "/sessions/root-sess", state: "ready", depth: 0 },
-          {
-            id: "79d954bf-1111",
-            parentId: "root-id",
-            sessionId: "w1",
-            sessionUrl: "/sessions/w1",
-            state: "ready",
-            depth: 1,
-          },
-        ],
-      });
-    }
-    if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
-    if (path.startsWith("/api/sessions/w1")) {
-      return Response.json({ session: row, items: transcriptItems, earlierItems: 0, goal: activeGoal });
-    }
-    if (path.startsWith("/api/sessions?")) return Response.json({ sessions: [row] });
-    if (path === "/api/contexts") return Response.json({ contexts: [] });
-    throw new Error(`Unexpected request: ${path}`);
-  };
+      if (path.startsWith(`/api/sessions/${session.id}`) && !path.includes("/approvals"))
+        return Response.json({ session, items, earlierItems: 0, goal });
+      return undefined;
+    },
+  });
 
-  const vite = await testViteServer();
-  let conv: Conversation | undefined;
   try {
-    await vite.ssrLoadModule("/src/shell.ts");
-    const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { itemsToMessages } = await vite.ssrLoadModule("/src/core-bridge.ts");
-    const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
-    const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
-    seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
-    appState.me = { user: "owner", org: "test" };
-    appState.currentView = "chats";
-    sessionsState.list = [row];
-    const host = document.querySelector<HTMLElement>("#main")!;
-    appState.mainEl = host;
-    conv = createConversation({
-      pane: true,
-      ownsUrl: false,
-      container: () => host,
-      claimContainer: () => host,
-      visible: () => true,
-      density: () => "full",
-      onDensityChange() {},
-      ensureDeliveryStream() {},
-    }) as Conversation;
-
-    conv.mountReadOnly(row, itemsToMessages(initialItems, transcriptModel()));
-    conv.setGoal(activeGoal);
-
-    await until(
-      () =>
-        (host.textContent ?? "").includes("Inspecting live worker output") &&
-        (host.textContent ?? "").includes("Streaming live findings from worker"),
-      "live worker streaming",
-    );
-    assert.equal(host.querySelector("textarea"), null, "read-only worker view must not show a composer");
-    assert.equal(host.querySelector(".fork-btn"), null, "read-only worker view must not show fork buttons");
-
-    const goalEl = host.querySelector(".goal-strip");
-    assert.ok(goalEl, "read-only worker view should render the active goal strip");
-    assert.match(goalEl.textContent ?? "", /Verify all archival candidates/);
-    assert.equal(goalEl.querySelector("button"), null, "read-only goal strip should not render action buttons");
-
-    await until(() => Boolean(host.querySelector(".swarm-activity")), "swarm strip");
+    h.releaseSessions();
+    await h.boot();
+    await until(() => h.mainText().includes("Live output") && h.mainText().includes("Live findings"), "live streaming");
+    assert.equal(document.querySelector("textarea"), null);
+    assert.equal(document.querySelector(".fork-btn"), null);
+    const goalEl = document.querySelector(".goal-strip");
+    assert.match(goalEl?.textContent ?? "", /Verify candidates/);
+    assert.equal(goalEl?.querySelector("button"), null);
+    await until(() => Boolean(document.querySelector(".swarm-activity")), "swarm strip");
 
     phase = "idle";
-    transcriptItems = [
-      ...initialItems,
-      liveToolCall,
-      item("AgentMessage", { seq: 3, createdAt: Date.now(), text: "First worker summary" }),
-    ];
-    run1Done.resolve();
-    await until(() => (host.textContent ?? "").includes("First worker summary"), "first worker summary");
-    await until(() => !conv?.state.agent?.state.isStreaming, "idle after first run");
+    items = [c1, c2, item("AgentMessage", { seq: 3, createdAt: Date.now(), text: "First summary" })];
+    run1.resolve();
+    await until(
+      () => h.mainText().includes("First summary") && !h.visibleConversation().state.agent?.state.isStreaming,
+      "first summary",
+    );
 
     phase = "run2";
-    conv.resumeIfIdle();
-    await until(() => (host.textContent ?? "").includes("Running follow-up worker step"), "follow-up live run");
-
+    h.visibleConversation().resumeIfIdle();
+    await until(() => h.mainText().includes("Follow-up step"), "follow-up run");
     phase = "done";
-    transcriptItems = [
-      ...transcriptItems,
-      followUpToolCall,
-      item("AgentMessage", { seq: 5, createdAt: Date.now(), text: "Second worker summary" }),
-    ];
-    run2Done.resolve();
-    await until(() => (host.textContent ?? "").includes("Second worker summary"), "second worker summary");
+    items = [...items, c3, item("AgentMessage", { seq: 5, createdAt: Date.now(), text: "Second summary" })];
+    run2.resolve();
+    await until(() => h.mainText().includes("Second summary"), "second summary");
   } finally {
-    run1Done.resolve();
-    run2Done.resolve();
-    conv?.state.agent?.abort();
-    await conv?.state.agent?.waitForIdle();
-    conv?.composer.dispose();
-    conv?.dispose();
-    await vite.close();
-    globalThis.fetch = originalFetch;
-    dom.window.close();
+    run1.resolve();
+    run2.resolve();
+    await h.close();
   }
 });
