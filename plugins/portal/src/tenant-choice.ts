@@ -218,13 +218,7 @@ function workspacePicker(
 
 type Who = Pick<ChoiceClaims, "signIn" | "trusted" | "selfServe">;
 
-interface SelfServeArrival {
-  trusted: TrustedSignIn;
-  returnTo: string;
-  email: string | null;
-  selfServe: { subject: string; org: ExternalOrg };
-  exp: number;
-}
+type SelfServeArrival = ChoiceClaims & { trusted: TrustedSignIn; selfServe: { subject: string; org: ExternalOrg } };
 
 interface CardPage {
   title: string;
@@ -334,11 +328,14 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
 
   async function selfServed(res: ServerResponse, arrival: SelfServeArrival): Promise<void> {
     const { trusted, returnTo, email, selfServe } = arrival;
-    const { tenant, ready } = await deps.selfServe!({ subject: selfServe.subject, email }, selfServe.org);
+    const { tenant, ready } = await deps.selfServe!(
+      { subject: selfServe.subject, email: email ?? null },
+      selfServe.org,
+    );
     if (ready) return finish(res, { trusted }, returnTo, tenant);
     res.setHeader("set-cookie", [
       clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
-      setCookie("portal_tenant_choice", seal({ k: "choice", ...arrival }, deps.key), {
+      setCookie("portal_tenant_choice", seal(arrival, deps.key), {
         path: "/auth",
         maxAge: Math.max(arrival.exp - Math.floor(Date.now() / 1000), 0),
         secure: deps.secureCookies,
@@ -363,13 +360,10 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     const org = choice?.selfServe?.org;
     if (!choice?.trusted || !org || !deps.selfServe) return expired(res);
-    const { trusted, returnTo, email, exp } = choice;
     return selfServed(res, {
-      trusted,
-      returnTo,
-      email: email ?? null,
+      ...choice,
+      trusted: choice.trusted,
       selfServe: { subject: choice.selfServe!.subject, org },
-      exp,
     });
   }
 
@@ -414,6 +408,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
       if (orgs.length === 1)
         return selfServed(res, {
+          k: "choice",
           trusted: who,
           returnTo: identity.returnTo,
           email: identity.email,
@@ -459,9 +454,8 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       )
         return expired(res);
       return selfServed(res, {
+        ...choice,
         trusted: choice.trusted,
-        returnTo: choice.returnTo,
-        email: choice.email ?? null,
         selfServe: { subject: choice.selfServe.subject, org: offered.org as ExternalOrg },
         exp: Math.floor(Date.now() / 1000) + deps.ttlS,
       });
