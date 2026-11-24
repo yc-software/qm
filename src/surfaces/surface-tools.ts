@@ -458,8 +458,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!d.ok) return { ok: false, message: d.message };
       if (d.destination.type === "principal")
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
-      if (textOnly(d.destination) || inTranscript(d.destination))
-        return { ok: false, message: "Reactions aren't supported in this conversation." };
+      if (textOnly(d.destination)) return { ok: false, message: "Reactions aren't supported in this conversation." };
       return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "", seq);
     },
     edit: async (input: SurfaceEditInput) => {
@@ -481,8 +480,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (textOnly(d.destination) || inTranscript(d.destination))
-        return { ok: false, message: "Messages in this conversation can't be deleted." };
+      if (textOnly(d.destination)) return { ok: false, message: "Messages in this conversation can't be deleted." };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
     readThread: async (opts?: { limit?: number }) => {

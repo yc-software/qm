@@ -42,7 +42,7 @@ export function postedWith(queued: NewItem[], result: NewItem): NewItem[] {
 
 const PAGE = 50;
 
-export async function newestShownReply(
+async function newestShownReply(
   sessions: Pick<SessionStore, "getItems">,
   sessionId: string,
 ): Promise<Item | undefined> {

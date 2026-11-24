@@ -437,5 +437,31 @@ export function surfaceTool(kit: ToolKit) {
       ...kept,
     }) as unknown as typeof surface.parameters;
   }
+  if (transcript) {
+    const { action, text, channel, recipient, participants, sandbox_id, files } = surface.parameters.properties;
+    const offered = new Set(["post", "edit", "reach"]);
+    surface.description =
+      `Everything you do on ${surfaceLabel} goes through this tool: posting (the ONLY way your words reach ` +
+      "people; end the turn without a post and you stay silent), editing your latest message here, and reaching " +
+      "other people. Pick an `action`.";
+    surface.parameters = Type.Object({
+      action: Type.Union(
+        action.anyOf.filter((literal: { const: string }) => offered.has(literal.const)),
+        {
+          description:
+            "What to do: post (reply HERE, in this conversation), edit (rewrite your latest message here), reach " +
+            "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to leave this " +
+            "conversation).",
+        },
+      ),
+      text,
+      channel,
+      recipient,
+      participants,
+      sandbox_id,
+      files,
+      ref: Type.Optional(Type.String({ description: "edit: the ref of your latest message here." })),
+    }) as unknown as typeof surface.parameters;
+  }
   return { surface };
 }
