@@ -5,6 +5,7 @@ import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
+import { replyVersions, replyVersionsRow } from "./reply-versions.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -359,12 +360,14 @@ export function createChatSurface(
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
+  let versions = replyVersions([]);
   let slackReactions = collectReactions([], messageText);
   const slackOutbox = new SlackOutbox();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
 
   function prepareMessageRows(messages: AgentMessage[]): void {
     inlineSteers.clear();
+    versions = replyVersions(messages);
     const messageIndices = new Map(
       messages.map((message, index) => [(message as { entrySeq?: number }).entrySeq, index]),
     );
@@ -2113,6 +2116,7 @@ export function createChatSurface(
     const cacheable =
       !isStreaming &&
       !(message as { subagentMail?: SubagentMailRef }).subagentMail &&
+      !versions.earlier.has(message) &&
       !activityItems(work?.activity ?? []).some(
         (item) => item.kind === "SteeringMessage" || ["session", "sessions", "subagents"].includes(item.tool ?? ""),
       ) &&
@@ -2303,7 +2307,7 @@ export function createChatSurface(
       );
     }
     if (role === "assistant") {
-      const msg = message as AssistantMessage;
+      const msg = (versions.superseded.has(message) ? { ...message, content: [] } : message) as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
       const work = (msg as AssistantWork).work;
       const text = assistantDisplayText(messageText(msg)).trim();
@@ -2583,6 +2587,8 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
+    const earlier = versions.earlier.get(message);
+    if (earlier) parts.push(replyVersionsRow(message, earlier));
     const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
     const finishedWork = isStreaming || !answered ? undefined : (message as AssistantWork).work;
     if (finishedWork)
