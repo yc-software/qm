@@ -269,7 +269,8 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function collapsedBody(chat: CoreSession) {
     const preview = previews.get(chat.id);
-    const text = preview?.text || (chat.working ? "" : PREVIEW_NOTE[preview?.state ?? "loading"]);
+    const state = preview?.state ?? "loading";
+    const text = preview?.text || (chat.working && state !== "failed" ? "" : PREVIEW_NOTE[state]);
     return html`${text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing}${
       chat.working
         ? html`<div class="side-chat-working work-head">
@@ -296,9 +297,12 @@ export function createSideChatController(ctx: ConvCtx) {
       (result) => {
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
+        const working = new Set(chats.filter((chat) => chat.working).map((chat) => chat.id));
         chats = (result.sessions ?? []).toSorted(
           (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
         );
+        for (const chat of chats)
+          if (working.has(chat.id) && !chat.working && chat.id !== active?.id) void loadPreview(chat);
         redraw();
       },
       (cause) => {
@@ -317,7 +321,9 @@ export function createSideChatController(ctx: ConvCtx) {
       const state = conversation?.state;
       const live = state && liveTurnOf(state);
       if (live) chats = markWorking(chats, live);
-      void Promise.resolve(state?.agent?.waitForIdle()).then(() => sourceId === id && settle([chat]));
+      void Promise.resolve(state?.agent?.waitForIdle())
+        .catch((cause) => reportHandledError("web:side_chat_close", cause))
+        .then(() => sourceId === id && settle([chat]));
     }
     pendingQuote = null;
     pendingAnchor = null;
@@ -593,9 +599,7 @@ export function createSideChatController(ctx: ConvCtx) {
       const chat = chats.find((session) => session.threadRef === threadRef);
       if (chat) settle([chat]);
     },
-    catchUp() {
-      settle(chats.filter((chat) => chat.working && chat.id !== active?.id));
-    },
+    catchUp: refreshHighlights,
     select,
     dismissSelection,
     onScroll() {
