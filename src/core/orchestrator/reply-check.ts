@@ -5,7 +5,6 @@ import { reachEnqueue } from "../../reach/reach.ts";
 import { forModelContext } from "../../agent/context-compaction.ts";
 import type { Item } from "../../sessions/items.ts";
 import { enqueueDirectReply, type createSurfaceToolDeps, type SpineState } from "../../surfaces/surface-tools.ts";
-import { unshownTextNudge } from "../../surfaces/web-spine.ts";
 import type { DeliveryProvenance, Destination, Session } from "../../types.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import type { materializeInbound } from "../attachments.ts";
@@ -80,7 +79,6 @@ interface AddressedReplyTurn<R extends AgentTurnResult> {
     extras: { images?: InboundImages },
     continuation?: { history: Item[] },
   ) => Promise<R>;
-  unshownText?: () => string;
 }
 
 export async function deliverAddressedReply<R extends AgentTurnResult>(
@@ -106,7 +104,6 @@ export async function deliverAddressedReply<R extends AgentTurnResult>(
     filterHistory,
     historyWindow,
     runAgentTurn,
-    unshownText,
   } = turn;
   if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
     void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
@@ -172,18 +169,6 @@ export async function deliverAddressedReply<R extends AgentTurnResult>(
         }
       }
     }
-  }
-  const unposted = () =>
-    !!unshownText?.().trim() && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped;
-  if (unposted() && !input.cancel?.aborted && !result.pendingApprovals?.length) {
-    result = await runAgentTurn(
-      unshownTextNudge(surfaceName),
-      inbound.images.length ? { images: inbound.images } : {},
-      {
-        history: filterHistory(forModelContext((await historyWindow()).items)),
-      },
-    );
-    if (unposted()) console.error(`[orchestrator] turn ended with unshown text after nudge session=${session.id}`);
   }
   return result;
 }

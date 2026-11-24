@@ -105,10 +105,10 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
 test("each tool entry nudges the run stream once it is durable", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-nudge-")) }));
   const log: string[] = [];
-  const append = built.sessions.append.bind(built.sessions);
-  built.sessions.append = async (writer, entry) => {
-    const appended = await append(writer, entry);
-    log.push(appended.kind);
+  const appendMany = built.sessions.appendMany.bind(built.sessions);
+  built.sessions.appendMany = async (writer, entries) => {
+    const appended = await appendMany(writer, entries);
+    log.push(...appended.map((item) => item.kind));
     return appended;
   };
   try {

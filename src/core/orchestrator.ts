@@ -230,7 +230,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
-import { postedWith, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
+import { postedWith, spineReplies, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -1615,20 +1615,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnUserEntrySeq: undefined,
           ...(spineDm ? { transcript: [] } : {}),
         };
-        const publishPosted = (text: string): void => {
-          if (!input.runId) return;
-          deps.turnStream.publishBlockStart(input.runId);
-          deps.turnStream.publish(input.runId, text);
-        };
-        let unshownText = "";
-        const closingReply = (text: string): string => {
-          const shown = !spineWake && spine.surfaceOutboundCount === 0 ? text : "";
-          unshownText = shown ? "" : text;
-          if (!shown.trim()) return shown;
-          spine.surfaceOutboundCount += 1;
-          publishPosted(shown);
-          return shown;
-        };
+        const { publish: publishPosted, closingReply } = spineReplies({
+          runId: input.runId,
+          turnStream: deps.turnStream,
+          wake: spineWake,
+          spine,
+          sessionId: session.id,
+        });
         const turnKey = input.runId ?? randomUUID();
         const postKeys = turnPostKeys(turnKey);
         let spineFirstBlock = "";
@@ -1966,7 +1959,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rewrites =
           wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
         if (spineWake)
-          turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine")));
+          turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine"), history));
         else if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
@@ -2263,19 +2256,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let recordedRecall = false;
           const emit: AgentTurnInput["emit"] = async (entry) => {
             stall.progress();
+            const stamped = (entry: NewItem): NewItem => {
+              const body = { ...entry.body };
+              if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
+              if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
+              if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
+              if (rewrites && replacesReply(entry, emittedEntries)) body.supersedes = rewrites.seq;
+              return { ...entry, body };
+            };
             const stored = ((): NewItem => {
               if (
                 isAgentReply(entry) ||
                 entry.kind === "Elicitation" ||
                 ((entry.kind === "ToolResult" || entry.kind === "ToolCall") && entry.body?.blocked === "needs_approval")
-              ) {
-                const body = { ...entry.body };
-                if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
-                if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
-                if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
-                if (rewrites && replacesReply(entry, emittedEntries)) body.supersedes = rewrites.seq;
-                return { ...entry, body };
-              }
+              )
+                return stamped(entry);
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
               const body: Record<string, unknown> = { ...entry.body };
               const steered = entry.kind === "SteeringMessage";
@@ -2309,7 +2304,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...((syntheticPrompt || continuation) && !steered ? { hidden: true } : {}),
               };
             })();
-            const posted = spine.transcript ? postedWith(spine.transcript, stored) : [];
+            const posted = spine.transcript ? postedWith(spine.transcript, stored).map(stamped) : [];
             const persisted = await tracePhase("step.persist", () =>
               withManagedRosterVersion(() => deps.sessions.appendMany(writer, [stored, ...posted])),
             );
@@ -2629,7 +2624,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             filterHistory,
             historyWindow,
             runAgentTurn,
-            ...(spineDm ? { unshownText: () => unshownText } : {}),
           },
           result,
         );

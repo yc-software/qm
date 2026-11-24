@@ -75,17 +75,10 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
     !/Your reply replaces|anything you write is shown/.test(turns.at(-1)!.environment),
     "with both flags on, this one governs",
   );
-  const again = (await wake(`!edit ${posted!.seq} Done: the repo is small and tidy`)).at(-1)!;
-  assert.equal(again.body.supersedes, edited.seq, "a stale ref edits the newest version");
-  assert.equal(
-    (await wake(`!edit ${again.seq + 1} nope`)).length,
-    3,
-    "a ref that is not a posted message edits nothing",
-  );
-
-  const before = turns.length;
+  const again = (await wake(`!edit ${edited.seq} Done: the repo is small and tidy`)).at(-1)!;
+  assert.equal(again.body.supersedes, edited.seq, "an edit chains onto the newest version");
+  assert.equal((await wake(`!edit ${posted!.seq} nope`)).length, 3, "only the newest message can be edited");
   assert.equal((await wake()).length, 3, "text written on a wake is never a message");
-  assert.ok(turns.slice(before).some((turn) => turn.input.includes("was not shown to the person")));
 
   await typed("hello");
   assert.ok((await shown()).at(-1)!.text!.startsWith("You said: hello"), "an unposted answer to the person is shown");
