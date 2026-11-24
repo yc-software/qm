@@ -120,7 +120,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  genericChat?: { url: string; secret: string; label?: string; mark?: string };
+  genericChat?: { url: string; secret: string; label?: string; mark?: string; allowedOrigins?: readonly string[] };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -645,6 +645,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           genericChat: {
             url: env.GENERIC_CHAT_URL.trim(),
             secret: env.GENERIC_CHAT_SECRET.trim(),
+            ...(env.GENERIC_CHAT_ALLOWED_ORIGINS?.trim()
+              ? {
+                  allowedOrigins: env.GENERIC_CHAT_ALLOWED_ORIGINS.split(",")
+                    .map((origin) => origin.trim())
+                    .filter(Boolean),
+                }
+              : {}),
             ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
             ...(genericChatMark ? { mark: genericChatMark } : {}),
           },
