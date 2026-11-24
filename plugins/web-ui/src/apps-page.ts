@@ -309,9 +309,9 @@ function drawAppsPage(): void {
     appState.mainEl.replaceChildren(appsPageHost);
   }
   const viewer = appState.me?.user;
-  const pinned = (["yours", "shared"] as const)
-    .flatMap((tab) => filterApps(appList.filter(appPinned), { tab, scope: appScope, query: appQuery, viewer }))
-    .sort((a, b) => pinnedAppIds.indexOf(a.id) - pinnedAppIds.indexOf(b.id));
+  const pinned = APP_TABS.flatMap((tab) =>
+    filterApps(appList.filter(appPinned), { tab: tab.value, scope: appScope, query: appQuery, viewer }),
+  ).sort((a, b) => pinnedAppIds.indexOf(a.id) - pinnedAppIds.indexOf(b.id));
   const unpinned = appList.filter((d) => !appPinned(d));
   const rows = filterApps(unpinned, { tab: selectedAppTab, scope: appScope, query: appQuery, viewer, sort: "newest" });
   const allForTab = appList.filter((d) => appTab(d, viewer) === selectedAppTab && appInScope(d, appScope));
