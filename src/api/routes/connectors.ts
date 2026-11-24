@@ -27,7 +27,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { audit, isObj, livePersonTurn } from "./shared.ts";
+import { audit, isObj, livePersonTurn, resolveSelfRead } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
 
@@ -470,11 +470,15 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
 }
 
 async function oauthStatus(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+  const { res, deps } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const access = resolveSelfRead(ctx, {
+    botMessage: "bot turns cannot read connector status",
+    privateOnlyMessage: "connector status is only available in your own private conversation",
+  });
+  if (!access) return;
+  const { principalId } = access;
   audit(ctx, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
   return sendJson(res, 200, {
     principalId,
@@ -663,7 +667,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/connectors/oauth/status",
     browser: true,
     actor: "query.principalId",
-    auth: "source",
+    auth: "either",
     handle: oauthStatus,
   },
   {
