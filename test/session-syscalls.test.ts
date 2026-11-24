@@ -1052,13 +1052,16 @@ test("an undeliverable flagged message is settled without blocking the next one;
     scopeId: scope,
     request: { ...childRun.request, runId: childRun.id },
   });
+  const stray = await freshSession(
+    r.sessions,
+    (await r.sessions.getOrCreateByThread("agent:main:subagent:stray", "dm", scope, undefined, "web")).id,
+  );
   await r.mailbox.send({
     id: "poisoned",
     recipientId: r.room.id,
-    senderId: child.id,
+    senderId: stray.id,
     actor: { id: "U9", type: "internal", displayName: "Sam" },
-    audience: [],
-    text: "from an audience the parent no longer matches",
+    text: "from a subagent that is not the parent's child",
     createdAt: 1,
     wake: true,
     senderRunId: childRun.id,
@@ -1342,7 +1345,6 @@ test("read reports each child's latest tool step, last outcome, live descendants
     senderId: r.room.id,
     actor,
     text: "fyi",
-    audience: [actor],
     createdAt: Date.now(),
   });
   const finished = await claim("finisher");
@@ -2165,16 +2167,6 @@ test("peer wakes stop after a chain of eight, and read-only or private turns onl
   assert.equal((await r.runs.inFlightForThread(target.threadRef))[0]!.request.sessionMessageDepth, 8);
 });
 
-test("a peer wake cannot reach a conversation whose audience the sender cannot see", async () => {
-  const r = await rig();
-  const sender = await webPeer(r, "planner");
-  const shared = await webPeer(r, "shared", [actor, { id: "U2", type: "internal", displayName: "Blake" }]);
-  const out = await peerApi(r, sender).write({ peer: true, wake: true, target: shared.id, text: "hi" });
-  assert.ok(!out.ok);
-  assert.match(out.message, /outside the sender's authorized audience/);
-  assert.deepEqual(await r.runs.inFlightForThread(shared.threadRef), []);
-});
-
 test("read-only callers cannot steer writable children and preserve the floor when queuing", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "work" });
@@ -2288,60 +2280,48 @@ test("a refused helper start names who was refused where", async () => {
   assert.ok(message.includes(actor.id) && message.includes(scope), message);
 });
 
-test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
-  const r = await rig();
+test("a finished child still reaches a parent whose audience grew while it ran", async () => {
+  let grown = false;
+  const prepareRequest = async (request: OrchestratorInput) =>
+    grown
+      ? {
+          ...request,
+          conversation: { ...request.conversation, audience: [actor, { id: "new-member", type: "internal" as const }] },
+        }
+      : request;
+  const r = await rig({ prepareRequest });
   const opened = await r.syscallsFor(r.room).open({ task: "private research" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
+  const item = await r.sessions.append({ sessionId: child.id }, { kind: "AgentMessage", text: "private result" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
-  let expanded = true;
-  let attempts = 0;
-  const recover = async () => {
-    for (const pending of await r.runs.pendingReturns()) {
-      attempts++;
-      try {
-        if (
-          await deliverSubagentMail(
-            {
-              mailbox: r.mailbox,
-              sessions: r.sessions,
-              runs: r.runs,
-              maxAttempts: 3,
-              prepareRequest: async (request) => ({
-                ...request,
-                conversation: {
-                  ...request.conversation,
-                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
-                },
-              }),
-            },
-            pending,
-          )
-        )
-          await r.runs.markReturned(pending.id);
-      } catch (error) {
-        await r.runs.deferReturn(pending.id, 60_000);
-        throw error;
-      }
-    }
-  };
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  await assert.rejects(recover(), /audience/);
-  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
-  expanded = false;
-  for (let i = 0; i < 59; i++) {
-    t.mock.timers.tick(1_000);
-    await recover();
-  }
-  assert.equal(attempts, 1);
-  t.mock.timers.tick(1_000);
-  await recover();
-  assert.equal(attempts, 2);
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "private result",
+    sourceAssistantEntrySeq: item.seq,
+  });
+  grown = true;
+  await deliverSubagentMail(
+    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, prepareRequest },
+    (await r.runs.get(run!.id))!,
+  );
   assert.ok(await r.runs.getByDedupKey(`subagent-return:${run!.id}`));
+  const received = await r.syscallsFor(r.room).receive!();
+  assert.equal(received.length, 1);
+  assert.match(received[0]!.text, /private result/);
+  const joined = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: {
+      surface: "slack",
+      conversation: { ...conversation, audience: [actor, { id: "new-member", type: "internal" }] },
+      actor,
+      deliveryTarget: "D1",
+      timezone: "America/Los_Angeles",
+    },
+  });
+  assert.equal((await joined.receive!()).length, 1);
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -2517,7 +2497,6 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
     senderId: "sender",
     recipientId: "recipient",
     actor,
-    audience: [actor],
     text: "data",
     createdAt: 1,
   };
@@ -2576,42 +2555,6 @@ test("an empty mailbox check skips sender validation and a delivered message sti
   const mail = await peer.receive!();
   assert.equal(mail.length, 1);
   assert.equal(checks, 1);
-});
-
-test("queued results recheck source-entry visibility after a participant leaves", async () => {
-  const r = await rig();
-  const other: Principal = { id: "U2", type: "internal" };
-  const sharedScope = scopeId("group", "G1");
-  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-membership", "group", sharedScope);
-  for (const id of [actor.id, other.id]) await r.sessions.addParticipant(shared.id, id);
-  const sharedConversation: Conversation = { kind: "group", threadRef: shared.threadRef, audience: [actor, other] };
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const api = factory.forTurn({
-    session: shared,
-    scopeId: sharedScope,
-    request: { actor, conversation: sharedConversation },
-  });
-  const opened = await api.open({ task: "shared result" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const writer = { sessionId: child.id };
-  const entry = await r.sessions.append(writer, { kind: "AgentMessage", text: "OLD_PRIVATE_RESULT" });
-  const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, {
-    status: "ok",
-    reply: "OLD_PRIVATE_RESULT",
-    sourceAssistantEntrySeq: entry.seq,
-  });
-  await deliverSubagentMail(
-    { sessions: r.sessions, runs: r.runs, mailbox: r.mailbox, maxAttempts: 3 },
-    (await r.runs.get(run!.id))!,
-  );
-  assert.equal((await api.receive!()).length, 1);
-  await r.sessions.removeParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
-  assert.deepEqual(await api.receive!(), []);
-  assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
 
 test("coordinators and their children can delegate", async () => {
