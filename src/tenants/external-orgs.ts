@@ -76,7 +76,7 @@ const accountTrigger = (name: string, table: string, events: string) =>
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION %1$I.qm_external_org_account_check()$sql$, current_schema()); END $account$`;
 
 export const TENANT_EXTERNAL_ORG_ACCOUNT: PgMigrationDefinition = {
-  id: "0000-tenancy/external-org-account",
+  id: "0000-tenancy/workspace-company-id",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `DO $account$ BEGIN EXECUTE format($sql$${accountCheck}$sql$, current_schema()); END $account$`,
