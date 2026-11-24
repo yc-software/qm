@@ -101,6 +101,7 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
       displayText: ["Recording started", app, at].filter(Boolean).join(" · "),
       timezone,
       midTurn: "queue",
+      skipMemory: true,
       idempotencyKey: `${meeting.threadRef}:start`,
     },
   );
@@ -115,7 +116,7 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
 
 function transcriptionPrompt(started: Run, recent: string[]): string {
   const brief = (started.result?.reply ?? "").slice(0, PROMPT_CHARS / 2);
-  const tail = recent.join("\n").slice(-(PROMPT_CHARS - brief.length));
+  const tail = [...new Set(recent)].join("\n").slice(-(PROMPT_CHARS - brief.length));
   return [brief, tail].filter(Boolean).join("\n");
 }
 
@@ -201,6 +202,7 @@ async function stopMeeting(ctx: ApiCtx): Promise<void> {
       displayText: `Recording stopped · ${at}`,
       ...(timezone ? { timezone } : {}),
       midTurn: "queue",
+      skipMemory: true,
       idempotencyKey: `${meeting.threadRef}:stop`,
     },
   );

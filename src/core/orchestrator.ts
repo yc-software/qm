@@ -2698,7 +2698,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           cancelStopped,
           personConversationTurn,
           useMemory,
-          turnInput: input.displayText?.trim() || turnInput,
+          turnInput,
           reply,
           spine,
         });

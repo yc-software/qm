@@ -119,7 +119,10 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
   );
   const stop = await post(`/api/meetings/${id}/stop`, { endedAt: Date.UTC(2026, 10, 23, 18, 47) });
   assert.equal(stop.status, 202);
-  assert.deepEqual([turns[2]!.origin, turns[2]!.displayText], [{ kind: "human" }, "Recording stopped · 10:47 AM"]);
+  assert.deepEqual(
+    [turns[2]!.origin, turns[2]!.displayText, turns[0]!.skipMemory, turns[2]!.skipMemory],
+    [{ kind: "human" }, "Recording stopped · 10:47 AM", true, true],
+  );
   spoken.push("One more thing.");
   await speech(1_795_000_020_000);
   assert.equal(turns.length, 3);
