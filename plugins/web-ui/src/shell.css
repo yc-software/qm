@@ -3235,6 +3235,15 @@ qm-markdown .tok-in {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.reply-versions[open] {
+  margin-bottom: 8px;
+}
+.reply-versions :is(.text-foreground, th, td) {
+  color: inherit;
+}
+.reply-version-time {
+  font-weight: 600;
+}
 .session-action {
   flex: 0 1 auto;
   min-width: 0;

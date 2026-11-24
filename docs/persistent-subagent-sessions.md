@@ -20,6 +20,8 @@ A terminal child run produces a deduplicated internal result for its current par
 
 Terminal receipts live in the run store. A paginated sweep retries pending returns after restart and continues past blocked entries. Completion receipts are acknowledged only after durable inbox insertion and any required completion wake succeed. Inbox messages are consumed after their content is persisted to the recipient transcript; an acknowledgement failure can cause redelivery. Silent completions use a generic notice rather than borrowing text from a later child run.
 
+Behind the per-person `wake_reply_rewrite` feature flag (off by default), a turn that a completion, a subagent message, or another conversation's handoff starts in a web DM replaces the agent's last message instead of adding one. The closing reply carries `supersedes`, the seq of the agent's most recent own reply since the person last typed, and the turn is told to write that message again as it would have been written with everything now known. Both entries stay in the transcript and in model context; the web UI shows the latest. A turn that ends silently, is stopped, or receives a typed message while it runs replaces nothing, and so does a turn with no earlier reply to replace.
+
 ## Storage and scope
 
 The session migration adds parent and spawn metadata. The run migration adds terminal-return acknowledgements and an index restricted to unreturned terminal child runs. Signal replay uses the existing signal acknowledgement columns.

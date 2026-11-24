@@ -67,35 +67,28 @@ test("a wake's reply in a web DM replaces the agent's reply since the person las
   const { session, syscalls } = await conversation(built, threadRef, { surface: "web" });
   const peer = await conversation(built, "web:U1:wake-rewrite-peer", { surface: "web" });
   built.runtime.start();
-  const lastReply = async (wake: () => Promise<Run | null | undefined>) => {
+  const latestRun = () => built.runs.list({ threadRef, limit: 1 }).then(([run]) => run);
+  const replyTo = async (wake: () => Promise<Run | null | undefined>) => {
     await settle(async () => (await wake())?.status === "done");
     return (await built.sessions.getItems(session.id)).findLast(isAgentReply)!;
   };
   const subagentReply = async () => {
     const opened = await syscalls.open({ task: "Summarize the repo" });
     assert.ok(opened.ok);
-    const child = (await built.sessions.get(opened.sessionId))!;
-    return lastReply(async () => {
-      const [task] = await built.runs.list({ threadRef: child.threadRef, limit: 1 });
-      return task && built.runs.getByDedupKey(`subagent-return:${task.id}`);
-    });
+    const [task] = await built.runs.list({ threadRef: (await built.sessions.get(opened.sessionId))!.threadRef });
+    return replyTo(() => built.runs.getByDedupKey(`subagent-return:${task!.id}`));
   };
 
   const stacked = await subagentReply();
   assert.equal(stacked.body.supersedes, undefined, "flag off: the wake adds a message");
-
   await built.featureFlags.setEnabled("wake_reply_rewrite", scopeId("personal", "U1"), true, "test");
   const rewritten = await subagentReply();
   assert.equal(rewritten.body.supersedes, stacked.seq);
   assert.ok(rewritten.text!.includes(`"${stacked.text!.slice(0, 20)}`), "the model is told which message it replaces");
 
-  const sent = await peer.syscalls.write({ wake: true, target: session.id, text: "take this over" });
-  assert.ok(sent.ok);
-  const handedOver = await lastReply(async () => {
-    const [run] = await built.runs.list({ threadRef, limit: 1 });
-    return run?.request.sessionSenderId === peer.session.id ? run : undefined;
-  });
-  assert.equal(handedOver.body.supersedes, rewritten.seq, "a handoff replaces the previous rewrite");
+  assert.ok((await peer.syscalls.write({ wake: true, target: session.id, text: "take this over" })).ok);
+  const fromPeer = async () => [await latestRun()].find((run) => run?.request.sessionSenderId === peer.session.id);
+  assert.equal((await replyTo(fromPeer)).body.supersedes, rewritten.seq, "a handoff replaces the previous rewrite");
 
   await built.sessions.append(
     { sessionId: session.id },
@@ -103,7 +96,12 @@ test("a wake's reply in a web DM replaces the agent's reply since the person las
   );
   const afterTyping = await subagentReply();
   assert.equal(afterTyping.body.supersedes, undefined, "no reply since the person last typed, so nothing is replaced");
-  assert.equal((await subagentReply()).body.supersedes, afterTyping.seq);
+
+  const request = { ...(await latestRun())!.request, text: "!finish-silent" };
+  const quiet = await built.runs.enqueue({ sessionId: threadRef, request });
+  const silent = await replyTo(() => built.runs.get(quiet.run.id));
+  assert.deepEqual([silent.text, silent.body.supersedes], [null, undefined], "ending silently replaces nothing");
+  assert.equal((await subagentReply()).body.supersedes, afterTyping.seq, "the reply left in place is the one replaced");
 });
 
 test("a wake runs with a Slack bot's restrictions when either side does a bot's work, and never bot-flagged in a person's conversation", async () => {
