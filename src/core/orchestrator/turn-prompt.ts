@@ -152,8 +152,8 @@ export async function replyToRewrite(
   });
 }
 
-export const replacesReply = (entry: NewItem, emitted: readonly Item[]): boolean =>
-  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped && !emitted.some(typedBy);
+export const replacesReply = (entry: NewItem): boolean =>
+  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped;
 
 export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
   const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;

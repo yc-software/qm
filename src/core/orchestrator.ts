@@ -2245,7 +2245,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
                 if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
-                if (rewrites && replacesReply(entry, emittedEntries)) body.supersedes = rewrites.seq;
+                if (rewrites && replacesReply(entry)) body.supersedes = rewrites.seq;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
