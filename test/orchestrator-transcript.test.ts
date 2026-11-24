@@ -242,7 +242,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const latest = reqs.at(-1) as any;
   const footer = latest.promptEnvelope.messages.at(-1).content;
   assert.match(footer, /Delivered here since the user's last message/);
-  assert.match(footer, /\[cron\] from U-carol: /);
+  assert.match(footer, /\[cron id=\S+ session=\S+ fire=\S+\] from U-carol: /);
   assert.match(footer, /…$/m);
   assert.doesNotMatch(footer, /deploy digest ready/);
 });
