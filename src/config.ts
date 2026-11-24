@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { genericChatOriginOAuthSchema, type GenericChatOriginOAuth } from "./surfaces/generic-chat/client.ts";
 import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
@@ -120,7 +121,14 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  genericChat?: { url: string; secret: string; label?: string; mark?: string; allowedOrigins?: readonly string[] };
+  genericChat?: {
+    url: string;
+    secret: string;
+    label?: string;
+    mark?: string;
+    allowedOrigins?: readonly string[];
+    originOAuth?: GenericChatOriginOAuth;
+  };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -645,6 +653,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
           genericChat: {
             url: env.GENERIC_CHAT_URL.trim(),
             secret: env.GENERIC_CHAT_SECRET.trim(),
+            ...(env.GENERIC_CHAT_ORIGIN_OAUTH
+              ? { originOAuth: genericChatOriginOAuthSchema.parse(JSON.parse(env.GENERIC_CHAT_ORIGIN_OAUTH)) }
+              : {}),
             ...(env.GENERIC_CHAT_ALLOWED_ORIGINS?.trim()
               ? {
                   allowedOrigins: env.GENERIC_CHAT_ALLOWED_ORIGINS.split(",")
