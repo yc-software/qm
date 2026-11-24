@@ -124,7 +124,6 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     status = { configured: false, setupUnavailable: true, installAvailable: false };
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    assert.match(element.textContent ?? "", /isn't available for this workspace right now/);
     launchMessage = "Slack installation isn't enabled for this workspace yet.";
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();

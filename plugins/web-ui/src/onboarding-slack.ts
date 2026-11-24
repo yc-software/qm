@@ -12,7 +12,6 @@ const SLACK_SETTINGS = `${UI_BASE}/settings/slack-settings`;
 export class OnboardingSlack extends LitElement {
   static properties = {
     installAvailable: { state: true },
-    unavailable: { state: true },
     connected: { state: true },
     busy: { state: true },
     error: { state: true },
@@ -67,7 +66,7 @@ export class OnboardingSlack extends LitElement {
       this.installAvailable = status.installAvailable === true;
       this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
       this.unavailable = status.setupUnavailable === true && !this.installAvailable;
-      this.error = this.unavailable ? "Slack installation isn't available for this workspace right now." : "";
+      this.error = "";
     } catch {
       if (this.isConnected) {
         this.connected = false;
