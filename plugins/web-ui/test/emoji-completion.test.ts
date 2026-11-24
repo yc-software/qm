@@ -21,7 +21,7 @@ test("emoji completion converts names and accepts suggestions without sending", 
   const server = await testViteServer();
   try {
     const { html, render } = await server.ssrLoadModule("lit");
-    const { emojiCompletion } = await server.ssrLoadModule("/src/emoji-completion.ts");
+    const { completion: emojiCompletion } = await server.ssrLoadModule("/src/completion.ts");
     const root = dom.window.document.querySelector("#root")!;
     let draft = "";
     let sends = 0;

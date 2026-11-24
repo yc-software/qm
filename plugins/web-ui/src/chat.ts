@@ -169,6 +169,8 @@ import { slackPreviewText, slackWireToPlain, stripSlackDirectives } from "./slac
 import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
+import { installSlackMentions } from "./slack-mention";
+import type { Mentionable } from "./completion";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
   attachmentGallery,
@@ -245,6 +247,7 @@ import { reportHandledError } from "./browser-errors.ts";
 import { uiCanvasPanel } from "./ui-canvas";
 
 installMarkdownSanitizer();
+installSlackMentions();
 
 const detachedAgents = new WeakSet<Agent>();
 interface SubagentStop {
@@ -432,6 +435,16 @@ export function createChatSurface(
     const member = project?.members.find((m) => m.principalId === speakerId);
     if (member?.avatarUrl) return member;
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
+  }
+
+  function threadSpeakers(rows: readonly AgentMessage[]): Mentionable[] {
+    const speakers = new Map<string, Mentionable>();
+    for (const row of [...rows].reverse()) {
+      const { speaker, speakerId } = row as { speaker?: string; speakerId?: string };
+      if (speakerId && !speakers.has(speakerId))
+        speakers.set(speakerId, { principalId: speakerId, name: speaker?.trim() || speakerId });
+    }
+    return [...speakers.values()];
   }
 
   function speakerTime(message: AgentMessage): TemplateResult | typeof nothing {
@@ -1441,6 +1454,12 @@ export function createChatSurface(
     host.className = `custom-chat readonly-chat ${s.surface === "slack" ? "slack-thread-chat" : ""}`;
     chatState.host = host;
     readOnly.activate(s, container, sameSession, messages);
+    const slackReply = readOnly.slackReply();
+    if (slackReply) {
+      slackReply.app = chatState.assistantSpeakerLabel || brandName();
+      slackReply.broadcasts = s.type === "channel";
+      slackReply.participants = () => threadSpeakers([...agent.state.messages, ...readOnly.pendingSlackMessages()]);
+    }
     bindAgentLifecycle(agent, s.threadRef, normalStreamFn, onWork, {
       afterRefresh: () => void readOnly.refreshApprovals(),
     });
@@ -2179,7 +2198,7 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(displayText, slackSelf()) : markdown(displayText)}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2477,10 +2496,6 @@ export function createChatSurface(
         referrerpolicy="no-referrer"
       ></iframe>
     </section>`;
-  }
-
-  function slackSelf(): string {
-    return (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
   }
 
   function isReadOnlySlackView(): boolean {

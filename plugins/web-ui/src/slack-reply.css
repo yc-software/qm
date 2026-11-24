@@ -66,10 +66,3 @@ qm-slack-reply {
 .slack-reply-pill > .composer-error {
   grid-area: 2 / 1 / 3 / -1;
 }
-.slack-reply-pill > .emoji-completion {
-  position: absolute;
-  z-index: 50;
-  bottom: calc(100% + 8px);
-  left: 0;
-  max-width: 100%;
-}

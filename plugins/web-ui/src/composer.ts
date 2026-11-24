@@ -1,5 +1,5 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
-import { emojiCompletion } from "./emoji-completion";
+import { completion, completionRows, type CompletionRow } from "./completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
@@ -852,7 +852,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html` <div class="queued-chip queued-editing" role="listitem">
                 <textarea
                   class="queued-edit-input"
-                  ${emojiCompletion(queuedEdit.text)}
+                  ${completion(queuedEdit.text)}
                   aria-label="Edit queued message"
                   rows="3"
                   .value=${live(queuedEdit.text)}
@@ -1211,43 +1211,37 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const slash = currentSlashMenu();
     if (!slash.open) return nothing;
     if (slash.loading && slash.matches.length === 0) {
-      return html`<div class="slash-popover">
-        <div class="menu-title">Skills</div>
-        <div class="slash-empty">Loading skills…</div>
+      return html`<div class="completion-popover skills-completion slash-popover">
+        <div class="completion-title">Skills</div>
+        <div class="completion-empty">Loading skills…</div>
       </div>`;
     }
     const active = clampedActive(slash.matches.length);
+    const rows = slash.matches.map((m): CompletionRow & { skill: SkillItem } => ({
+      key: m.skill.name,
+      skill: m.skill,
+      lead: html`<span class="completion-glyph">${icon(Box, 14)}</span>`,
+      name: `/${m.skill.name}`,
+      match: m.start < 0 ? [0, 0] : [m.start + 1, m.end + 1],
+      detail: m.skill.description,
+      hint: m.skill.description,
+      tag: scopeBadge(m.skill.scope),
+    }));
     return html`
-      <div class="slash-popover" role="listbox" aria-label="Skills">
-        <div class="menu-title">Skills</div>
-        ${slash.matches.map((m, i) => slashRow(m, i === active, agent))}
+      <div class="completion-popover skills-completion slash-popover" role="listbox" aria-label="Skills">
+        ${completionRows({
+          id: "slash-skill",
+          sections: [{ title: "Skills", rows }],
+          active,
+          pick: (row) => acceptSkill(row.skill, agent),
+          point: (index) => {
+            if (index === active) return;
+            slashActiveIndex = index;
+            ctx.chat.drawActiveChat(agent);
+          },
+        })}
       </div>
     `;
-  }
-
-  function slashRow(m: SkillMatch, active: boolean, agent: Agent): TemplateResult {
-    return html`
-      <button
-        type="button"
-        role="option"
-        aria-selected=${active ? "true" : "false"}
-        class="slash-option ${active ? "active" : ""}"
-        ${tip(m.skill.description)}
-        @mousedown=${(e: Event) => e.preventDefault()}
-        @click=${() => acceptSkill(m.skill, agent)}
-      >
-        <span class="slash-icon">${icon(Box, 16)}</span>
-        <span class="slash-name">${highlightName(m)}</span>
-        <span class="slash-desc">${m.skill.description}</span>
-        <span class="slash-scope">${scopeBadge(m.skill.scope)}</span>
-      </button>
-    `;
-  }
-
-  function highlightName(m: SkillMatch): TemplateResult {
-    const { name } = m.skill;
-    if (m.start < 0 || m.end <= m.start) return html`${name}`;
-    return html`${name.slice(0, m.start)}<b>${name.slice(m.start, m.end)}</b>${name.slice(m.end)}`;
   }
 
   function scopeBadge(scope: string): string {
