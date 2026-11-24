@@ -165,7 +165,7 @@ function rehomedTrigger<T extends TriggerBase>(trigger: T, move: ScopeMove): T {
   const audienceMoves = destination?.audienceScopeId === move.from;
   return {
     ...trigger,
-    ...(trigger.ownerScopeId === move.from ? { ownerScopeId: move.to } : {}),
+    ownerScopeId: move.to,
     ...(destination && audienceMoves
       ? { destination: { ...withoutProject(destination), audienceScopeId: move.to } }
       : {}),
@@ -182,11 +182,12 @@ export async function rehomeTriggers<T extends TriggerBase>(
   tied: (trigger: T) => boolean,
   adjust: (moved: T, before: T) => T = (moved) => moved,
 ): Promise<string[]> {
-  const ids = (await backing.entries())
-    .filter(
-      ([, trigger]) =>
-        tied(trigger) && (trigger.ownerScopeId === move.from || trigger.destination?.audienceScopeId === move.from),
-    )
+  const ids = (
+    await backing.selectEntries({
+      where: { field: "ownerScopeId" as Extract<keyof T, string>, anyOfFold: [move.from] },
+    })
+  )
+    .filter(([, trigger]) => tied(trigger))
     .map(([id]) => id);
   if (ids.length)
     await backing.mutateMany(

@@ -415,6 +415,7 @@ export interface SessionStore {
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  participantsOfMany(tenant: Tenant, sessionIds: readonly string[]): Promise<Map<string, string[]>>;
   rehome(
     tenant: Tenant,
     sessionIds: readonly string[],

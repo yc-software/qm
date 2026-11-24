@@ -27,13 +27,8 @@ export function movableInto(sessions: readonly CoreSession[], ids: readonly stri
   });
 }
 
-const NAMED_READERS = 6;
-
 export function moveConfirmation(titles: readonly string[], project: string, readers: readonly string[]): string {
-  const named = readers.slice(0, NAMED_READERS);
-  const others = readers.length - named.length;
-  const people = others ? [...named, `${others} ${others === 1 ? "other" : "others"}`] : named;
-  const list = people.length > 1 ? `${people.slice(0, -1).join(", ")} and ${people.at(-1)}` : (people[0] ?? "");
+  const list = readers.length > 1 ? `${readers.slice(0, -1).join(", ")} and ${readers.at(-1)}` : (readers[0] ?? "");
   const one = titles.length === 1;
   const what = one ? `"${titles[0]}"` : `${titles.length} chats`;
   return `Move ${what} to ${project}? ${list} will be able to read ${one ? "it" : "them"}, including ${one ? "its" : "their"} earlier messages.`;
@@ -120,15 +115,12 @@ export async function runSessionMove(
   };
   const ready: string[] = [];
   const readers = new Map<string, string>();
-  for (const id of ids) {
-    try {
-      const { gains } = await io.preview(id);
-      ready.push(id);
-      for (const g of gains) readers.set(g.principalId, g.displayName);
-    } catch (error) {
-      hold(id, error);
-    }
-  }
+  const previews = await Promise.allSettled(ids.map((id) => io.preview(id)));
+  previews.forEach((preview, i) => {
+    if (preview.status === "rejected") return hold(ids[i]!, preview.reason);
+    ready.push(ids[i]!);
+    for (const g of preview.value.gains) readers.set(g.principalId, g.displayName);
+  });
   if (
     ready.length &&
     readers.size &&
@@ -136,13 +128,11 @@ export async function runSessionMove(
   )
     return { moved: [], toast: held.length ? held.join(" ") : null };
   const moved: CoreSession[] = [];
-  for (const id of ready) {
-    try {
-      moved.push(await io.move(id, [...readers.keys()]));
-    } catch (error) {
-      hold(id, error);
-    }
-  }
+  const moves = await Promise.allSettled(ready.map((id) => io.move(id, [...readers.keys()])));
+  moves.forEach((move, i) => {
+    if (move.status === "rejected") hold(ready[i]!, move.reason);
+    else moved.push(move.value);
+  });
   let summary = "";
   if (moved.length === ids.length)
     summary = moved.length === 1 ? `Moved to ${io.project}` : `Moved ${moved.length} chats to ${io.project}`;

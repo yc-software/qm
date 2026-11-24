@@ -206,6 +206,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
     },
 
+    async participantsOfMany(tenant, sessionIds) {
+      const rows = await db
+        .forTenant(tenant)
+        .q("SELECT session_id, principal_id FROM participants WHERE tenant_id = $1 AND session_id = ANY($2::text[])", [
+          tenant.id,
+          [...sessionIds],
+        ]);
+      const out = new Map<string, string[]>(sessionIds.map((id) => [id, []]));
+      for (const row of rows) out.get(row.session_id as string)?.push(row.principal_id as string);
+      return out;
+    },
+
     async rehome(tenant, sessionIds, target, memberIds, spawnMeta): Promise<void> {
       await db.forTenant(tenant).q(
         `WITH moved AS (

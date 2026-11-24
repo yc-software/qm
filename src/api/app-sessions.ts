@@ -22,7 +22,6 @@ import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/go
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import { reconcileProcesses } from "../processes/reconcile.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
@@ -37,8 +36,7 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps, MoveSessionResult } from "./app-types.ts";
-import { postsInto } from "../triggers/trigger-store.ts";
-import { newReaders, rehomedSpawnMeta } from "../sessions/session-move.ts";
+import { carryChatAlong, chatMoveHold, newChatReaders, settleChatJobs } from "../sessions/session-move.ts";
 import {
   SideChatAnchorError,
   SoulUpdateDeniedError,
@@ -1207,19 +1205,20 @@ export function createSessionMethods(
       const projectId = target.kind === "group" ? projectIdFromGroupRef(target.ref) : null;
       const projects = deps.projects;
       if (!projectId || !projects) return { moved: false, reason: "not_project" };
+      const descendants = await deps.sessions.descendantsOf([sessionId]);
+      const tree = [
+        source,
+        ...(descendants.length
+          ? await deps.sessions.getMany({ ids: descendants.map((d) => d.id), threadRefs: [] })
+          : []),
+      ];
+      await settleChatJobs(deps, tree, targetScopeId);
       const result = await projects.withRosterLock(projectId, async (project): Promise<MoveSessionResult> => {
         if (project.orgId !== orgIdOf()) return { moved: false, reason: "not_project" };
         const members = await projects.members(target.ref);
         if (!members?.includes(principalId)) return { moved: false, reason: "forbidden" };
-        const descendants = await deps.sessions.descendantsOf([sessionId]);
-        const tree = [
-          source,
-          ...(descendants.length
-            ? await deps.sessions.getMany({ ids: descendants.map((d) => d.id), threadRefs: [] })
-            : []),
-        ];
-        const threadRefs = new Set(tree.map((s) => s.threadRef));
-        if ((await deps.runs.activeForThreads([...threadRefs])).size) return { moved: false, reason: "busy" };
+        if ((await deps.runs.activeForThreads(tree.map((s) => s.threadRef))).size)
+          return { moved: false, reason: "busy" };
         const approvals =
           (await deps.approvals?.selectEntries({
             where: { field: "sessionId", anyOfFold: tree.map((s) => s.id) },
@@ -1232,112 +1231,34 @@ export function createSessionMethods(
             )
           )
             return { moved: false, reason: "awaiting_approval" };
-        const liveJobs = async () =>
-          ((await deps.processes?.listLive()) ?? []).filter(
-            (rec) => rec.kind === "background" && rec.sessionRef && threadRefs.has(rec.sessionRef),
-          );
-        let jobs = await liveJobs();
-        const childComputerIds = tree.flatMap((s) => s.spawnMeta?.isolation?.sandboxId ?? []);
-        const computerIds = [...new Set([...jobs.flatMap((rec) => rec.sandboxId ?? []), ...childComputerIds])];
-        const projectComputers = new Set(
-          (computerIds.length ? ((await deps.sandboxResources?.getMany(computerIds)) ?? []) : [])
-            .filter((computer) => computer.ownerScopeId === targetScopeId)
-            .map((computer) => computer.id),
-        );
-        const strandedIn = (list: typeof jobs) =>
-          list.filter((rec) => !rec.sandboxId || !projectComputers.has(rec.sandboxId));
-        if (strandedIn(jobs).length && deps.processes && deps.sandbox && supportsProcessSessions(deps.sandbox)) {
-          const sandbox = deps.sandbox;
-          const registry = deps.processes;
-          const hosts = new Map(
-            strandedIn(jobs).flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])),
-          );
-          await Promise.all(
-            [...hosts].map(([sandboxId, scopeId]) =>
-              (async () => {
-                const handle = await sandbox.provision(scopeId, { sandboxId });
-                try {
-                  await reconcileProcesses(sandbox, handle, registry, scopeId);
-                } finally {
-                  await sandbox
-                    .teardown(handle, { keepWarm: true })
-                    .catch(swallowAs("app sessions: release move job sandbox", undefined));
-                }
-              })().catch(swallowAs("app sessions: check a moving chat's jobs", undefined)),
-            ),
-          );
-          jobs = await liveJobs();
-        }
-        const stranded = strandedIn(jobs)[0];
-        if (stranded) {
-          const chat = tree.find((s) => s.threadRef === stranded.sessionRef);
-          return {
-            moved: false,
-            reason: "job_running",
-            job: {
-              purpose: stranded.purpose ?? stranded.command.replace(/^bg: /, ""),
-              ...(chat && chat.id !== sessionId && chat.title ? { chat: chat.title } : {}),
-            },
-          };
-        }
+        const held = await chatMoveHold(deps, tree, targetScopeId);
+        if (held.hold) return { moved: false, reason: "job_running", job: held.hold };
         const sourceMembers = fromProject ? ((await projects.members(from.ref)) ?? []) : null;
-        const readers = await Promise.all(
-          tree.map(async (s) =>
-            (await deps.sessions.participantsOf(s.id)).filter((id) => !sourceMembers || sourceMembers.includes(id)),
-          ),
-        );
-        const people = await deps.directory.getMany(members);
+        const [newIds, people] = await Promise.all([
+          newChatReaders(deps, tenant, tree, members, sourceMembers),
+          deps.directory.getMany(members),
+        ]);
         const nameOf = (id: string) => people.get(id)?.displayName;
-        const gains = newReaders(members, readers).map((id) => ({ principalId: id, displayName: nameOf(id) ?? id }));
+        const gains = newIds.map((id) => ({ principalId: id, displayName: nameOf(id) ?? id }));
         if (opts.preview) return { moved: false, preview: true, gains };
         if (gains.some((g) => !opts.audience?.includes(g.principalId)))
           return { moved: false, reason: "confirm_audience", gains };
-        const move = { threadRefs, from: source.scopeId, to: targetScopeId };
-        if (jobs.length && deps.processes)
-          await deps.processes.rescope(
-            tenant,
-            jobs.map((rec) => rec.processId),
-            targetScopeId,
-          );
-        await Promise.all([deps.crons.rehome(move), deps.webhooks.rehome(move), deps.monitors?.rehome(move)]);
-        for (const loop of (await deps.loops?.list()) ?? [])
-          if (loop.ownerScopeId === source.scopeId && postsInto(loop, threadRefs))
-            await deps.loops!.update(loop.id, { destination: null });
         const audience = members.map((id) => {
           const principal = deps.identity.classify(id);
           const displayName = nameOf(id);
           return displayName ? { ...principal, displayName } : principal;
         });
         const version = await projects.version(target.ref);
-        const freshComputers = new Map(
-          tree.flatMap((s) => {
-            const isolation = s.spawnMeta?.isolation;
-            if (!isolation?.sandboxId || projectComputers.has(isolation.sandboxId)) return [];
-            return [[isolation.sandboxId, isolation.mode === "sandbox" ? randomUUID() : null] as const];
-          }),
-        );
-        const spawnMeta = new Map(
-          tree.flatMap((s) =>
-            s.spawnMeta
-              ? [
-                  [
-                    s.id,
-                    rehomedSpawnMeta(
-                      s.spawnMeta,
-                      { groupRef: target.ref, channelName: project.name, audience, version },
-                      freshComputers,
-                    ),
-                  ] as const,
-                ]
-              : [],
-          ),
-        );
-        await deps.sessions.rehome(
+        await carryChatAlong(
+          deps,
           tenant,
-          tree.map((s) => s.id),
-          { type: "group", scopeId: targetScopeId, channelName: project.name },
-          members,
-          spawnMeta,
+          {
+            tree,
+            to: targetScopeId,
+            members,
+            target: { groupRef: target.ref, channelName: project.name, audience, version },
+          },
+          held,
         );
         h.recordAudit({
           at: Date.now(),

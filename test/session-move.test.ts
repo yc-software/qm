@@ -170,6 +170,13 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     conversation: { kind: "dm", threadRef: helperThread, audience: [actor] },
     isolation: { mode: "shared", sandboxId: "personal-computer" },
   });
+  const { id: grand, threadRef: grandThread } = await subagent(sid, "agent:main:subagent:move-grand");
+  await built.sessions.setSpawnMeta(grand, {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: grandThread, audience: [actor] },
+    isolation: { mode: "shared", sandboxId: child },
+  });
 
   const out = await built.app.moveSession(tenant, sid, "owner", scope);
   assert.ok(out.moved);
@@ -203,6 +210,11 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     (await built.sessions.get(helper))!.spawnMeta?.isolation,
     { mode: "shared" },
     "a subagent sharing the chat's personal computer follows the chat onto the project's",
+  );
+  assert.equal(
+    (await built.sessions.get(grand))!.spawnMeta?.isolation?.sandboxId,
+    movedChild.spawnMeta?.isolation?.sandboxId,
+    "one sharing a moved subagent's own computer follows it to the new one",
   );
 });
 

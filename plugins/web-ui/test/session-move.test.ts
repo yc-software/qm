@@ -56,7 +56,7 @@ test("the confirmation names the chat, the project, and everyone who gains acces
   );
   assert.equal(
     moveConfirmation(["One"], "Launch", ["A", "B", "C", "D", "E", "F", "G", "H"]),
-    'Move "One" to Launch? A, B, C, D, E, F and 2 others will be able to read it, including its earlier messages.',
+    'Move "One" to Launch? A, B, C, D, E, F, G and H will be able to read it, including its earlier messages.',
   );
 });
 
