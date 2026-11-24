@@ -198,7 +198,7 @@ export function createGenericChatApprovals(deps: {
       await postGenericChatMessage(
         deps,
         { ...where, ...(click.thread ? { thread: click.thread } : {}) },
-        { text, idempotencyKey: `action:${click.eventId}`, recipientUserId: click.userId },
+        { text, idempotencyKey: `action:${click.account}:${click.eventId}`, recipientUserId: click.userId },
       );
     };
 
@@ -223,7 +223,7 @@ export function createGenericChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `${GENERIC_CHAT}:action:${click.eventId}`,
+        idempotencyKey: `${GENERIC_CHAT}:action:${click.account}:${click.eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(

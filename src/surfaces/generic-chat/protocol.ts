@@ -11,6 +11,7 @@ const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const id = z.string().regex(ID);
+const originSchema = z.url().refine((value) => new URL(value).origin === value);
 export const genericChatMessageIdSchema = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
   id,
@@ -30,6 +31,7 @@ const eventSchema = z.object({
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
+  origin: originSchema.optional(),
   chat: z.object({
     id,
     kind: z.enum(["group", "dm"]),
@@ -96,6 +98,20 @@ export const TIMESTAMP_HEADER = "x-agent-app-request-timestamp";
 export const SIGNATURE_HEADER = "x-agent-app-signature";
 export const ACCOUNT_HEADER = "x-agent-app-account";
 
+export function genericChatAccount(id: string, origin: string): string {
+  return `${id}@${Buffer.from(origin).toString("base64url")}`;
+}
+
+export function parseGenericChatAccount(account: string): { id: string; origin?: string } | null {
+  const [id, encodedOrigin, ...rest] = account.split("@");
+  if (!id || !ID.test(id) || rest.length) return null;
+  if (encodedOrigin === undefined) return { id };
+  const origin = Buffer.from(encodedOrigin, "base64url").toString();
+  return originSchema.safeParse(origin).success && Buffer.from(origin).toString("base64url") === encodedOrigin
+    ? { id, origin }
+    : null;
+}
+
 export function signGenericChat(secret: string, timestamp: string, rawBody: string): string {
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }
@@ -138,7 +154,7 @@ export function parseGenericChatRef(ref: string): GenericChatRef | null {
     surface !== GENERIC_CHAT ||
     !account ||
     !chat ||
-    !ID.test(account) ||
+    !parseGenericChatAccount(account) ||
     !ID.test(chat) ||
     rest.length ||
     (kind !== "group" && kind !== "dm")
