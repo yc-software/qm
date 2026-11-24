@@ -36,7 +36,14 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId, type Project } from "../projects/project-store.ts";
 
 import type { App, AppDeps, HeldChat, MoveSessionsResult } from "./app-types.ts";
-import { carryChatsAlong, chatTrees, newChatReaders, runningJob, settleChatJobs } from "../sessions/session-move.ts";
+import {
+  carryChatsAlong,
+  chatTrees,
+  moveConfirmation,
+  newChatReaders,
+  runningJob,
+  settleChatJobs,
+} from "../sessions/session-move.ts";
 import {
   SideChatAnchorError,
   SoulUpdateDeniedError,
@@ -1195,10 +1202,7 @@ export function createSessionMethods(
       const held: HeldChat[] = [];
       const access = new Map<string, Promise<boolean>>();
       const ids = [...new Set(sessionIds)];
-      const [rows, readers] = await Promise.all([
-        deps.sessions.getMany({ ids, threadRefs: [] }),
-        deps.sessions.participantsOfMany(tenant, ids),
-      ]);
+      const rows = await deps.sessions.getManyForParticipant(ids, principalId);
       const memberships = await managedProjectMemberships(
         rows.map((row) => row.scopeId),
         principalId,
@@ -1211,9 +1215,7 @@ export function createSessionMethods(
             held.push({ sessionId, reason });
             return null;
           };
-          const visible =
-            source && readers.get(sessionId)?.includes(principalId) && memberships.get(source.scopeId) !== false;
-          if (!source || !visible || source.ephemeral) return refuse("not_found");
+          if (!source || memberships.get(source.scopeId) === false || source.ephemeral) return refuse("not_found");
           if (source.scopeId === targetScopeId) return refuse("same_scope");
           const from = parseScopeId(source.scopeId);
           const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref);
@@ -1280,7 +1282,16 @@ export function createSessionMethods(
           displayName: nameOf(id) ?? id,
         }));
         if (gains.some((g) => !opts.audience?.includes(g.principalId)))
-          return { outcome: "confirm_audience", gains, held };
+          return {
+            outcome: "confirm_audience",
+            gains,
+            held,
+            question: moveConfirmation(
+              trees.map((tree) => tree[0]!.title ?? "Untitled chat"),
+              project.name,
+              gains.map((g) => g.displayName),
+            ),
+          };
         const audience = members.map((id) => {
           const principal = deps.identity.classify(id);
           const displayName = nameOf(id);
@@ -1313,7 +1324,7 @@ export function createSessionMethods(
       let movedIds: string[] = [];
       const result = (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
       if (result.outcome !== "moved" || !movedIds.length) return result;
-      const moved = await deps.sessions.getMany({ ids: movedIds, threadRefs: [] });
+      const moved = await deps.sessions.getManyForParticipant(movedIds, principalId);
       const sessions = await Promise.all(
         moved.map(async (session) => ({
           ...session,

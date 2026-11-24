@@ -175,7 +175,7 @@ function withoutProject({ project: _project, ...destination }: Destination): Des
   return destination;
 }
 
-function threadsFrom(move: ScopeMove, scope: ScopeId): Set<string> {
+export function threadsFrom(move: ScopeMove, scope: ScopeId): Set<string> {
   return new Set([...move.threads].flatMap(([threadRef, from]) => (from === scope ? [threadRef] : [])));
 }
 

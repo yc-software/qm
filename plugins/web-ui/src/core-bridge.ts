@@ -398,7 +398,8 @@ export interface HeldSessionMove {
 }
 
 export type SessionMoveResult =
-  { sessions: CoreSession[]; held: HeldSessionMove[] } | { confirm: MoveAudienceMember[]; held: HeldSessionMove[] };
+  | { sessions: CoreSession[]; held: HeldSessionMove[] }
+  | { confirm: MoveAudienceMember[]; question: string; held: HeldSessionMove[] };
 
 export async function moveSessions(
   sessionIds: readonly string[],
@@ -410,10 +411,10 @@ export async function moveSessions(
   } catch (error) {
     const body =
       error instanceof ApiError
-        ? (error.body as { error?: string; gains?: MoveAudienceMember[]; held?: HeldSessionMove[] })
+        ? (error.body as { error?: string; message?: string; gains?: MoveAudienceMember[]; held?: HeldSessionMove[] })
         : null;
     if (body?.error !== "confirm_audience") throw error;
-    return { confirm: body.gains ?? [], held: body.held ?? [] };
+    return { confirm: body.gains ?? [], question: body.message ?? "", held: body.held ?? [] };
   }
 }
 

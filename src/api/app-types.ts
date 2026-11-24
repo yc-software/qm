@@ -987,5 +987,5 @@ export type HeldChat =
 export type MoveSessionsResult =
   | { outcome: "not_project" }
   | { outcome: "forbidden" }
-  | { outcome: "confirm_audience"; gains: MoveAudienceMember[]; held: HeldChat[] }
+  | { outcome: "confirm_audience"; gains: MoveAudienceMember[]; held: HeldChat[]; question: string }
   | { outcome: "moved"; sessions: Session[]; held: HeldChat[] };

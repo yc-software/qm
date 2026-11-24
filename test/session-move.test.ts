@@ -13,6 +13,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { projectScopeId } from "../src/projects/project-store.ts";
 import { isUserItem } from "../src/sessions/items.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
+import { moveConfirmation } from "../src/sessions/session-move.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -86,7 +87,13 @@ test("broadening a chat's readers needs the user to confirm exactly who gains ac
   const { built, project, scope, personal, move } = await setup();
   const sid = await personal("owner", "web:owner:move-confirm", "Private launch notes");
   const member = { principalId: "member", displayName: "Member" };
-  assert.deepEqual(await move(sid, "owner", scope), { outcome: "confirm_audience", gains: [member], held: [] });
+  assert.deepEqual(await move(sid, "owner", scope), {
+    outcome: "confirm_audience",
+    gains: [member],
+    held: [],
+    question:
+      'Move "Chat: Private launch notes" to Launch? Member will be able to read it, including its earlier messages.',
+  });
   assert.equal(await built.app.getSessionForViewer(sid, { actorId: "member" }), null);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "outsider")).status, "ok");
@@ -97,6 +104,8 @@ test("broadening a chat's readers needs the user to confirm exactly who gains ac
       outcome: "confirm_audience",
       gains: [member, { principalId: "outsider", displayName: "Outsider" }],
       held: [],
+      question:
+        'Move "Chat: Private launch notes" to Launch? Member and Outsider will be able to read it, including its earlier messages.',
     },
     "someone who joined after the confirmation was shown is not let in",
   );
@@ -337,7 +346,7 @@ test("the move route binds the principal to the portal identity and maps refusal
       error: "confirm_audience",
       gains: [{ principalId: "member", displayName: "Member" }],
       held: [],
-      message: "Moving this chat lets Member read it. Confirm to move it.",
+      message: 'Move "Chat: Route move" to Launch? Member will be able to read it, including its earlier messages.',
     });
     assert.equal((await move(sid, "owner", { scopeId: scope, audience: "member" })).status, 400);
     const ok = await move(sid, "owner", { scopeId: scope, audience: ["member"] });
@@ -352,4 +361,19 @@ test("the move route binds the principal to the portal identity and maps refusal
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("the confirmation names the chat, the project, and everyone who gains access", () => {
+  assert.equal(
+    moveConfirmation(["Launch plan"], "Launch", ["Ada"]),
+    'Move "Launch plan" to Launch? Ada will be able to read it, including its earlier messages.',
+  );
+  assert.equal(
+    moveConfirmation(["One", "Two"], "Launch", ["Ada", "Grace"]),
+    "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
+  );
+  assert.equal(
+    moveConfirmation(["One"], "Launch", ["A", "B", "C", "D", "E", "F", "G", "H"]),
+    'Move "One" to Launch? A, B, C, D, E, F, G and H will be able to read it, including its earlier messages.',
+  );
 });

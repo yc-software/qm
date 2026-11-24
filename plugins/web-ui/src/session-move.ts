@@ -35,13 +35,6 @@ export function movableInto(
   });
 }
 
-export function moveConfirmation(titles: readonly string[], project: string, readers: readonly string[]): string {
-  const list = readers.length > 1 ? `${readers.slice(0, -1).join(", ")} and ${readers.at(-1)}` : (readers[0] ?? "");
-  const one = titles.length === 1;
-  const what = one ? `"${titles[0]}"` : `${titles.length} chats`;
-  return `Move ${what} to ${project}? ${list} will be able to read ${one ? "it" : "them"}, including ${one ? "its" : "their"} earlier messages.`;
-}
-
 export function beginSessionMoveDrag(ids: readonly string[]): void {
   dragIds = ids.length ? ids : null;
   movableByTarget.clear();
@@ -133,8 +126,7 @@ export async function runSessionMove(
       notes.push(...explain(out.held));
       if ("sessions" in out) return finish(out.sessions, notes);
       ready = ready.filter((id) => !out.held.some((h) => h.sessionId === id));
-      const readers = out.confirm.map((g) => g.displayName);
-      if (!io.confirm(moveConfirmation(ready.map(io.title), io.project, readers))) return finish([], notes);
+      if (!io.confirm(out.question)) return finish([], notes);
       audience = out.confirm.map((g) => g.principalId);
     }
   } catch (error) {

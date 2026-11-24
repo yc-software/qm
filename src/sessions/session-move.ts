@@ -6,7 +6,7 @@ import type { ProcessRecord, ProcessRegistry } from "../processes/process-regist
 import { reconcileProcesses } from "../processes/reconcile.ts";
 import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
 import type { Tenant } from "../tenants/context.ts";
-import { postsInto } from "../triggers/trigger-store.ts";
+import { postsInto, threadsFrom } from "../triggers/trigger-store.ts";
 import type { ChildIsolation, Principal, ScopeId, Session, SpawnMeta } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { WebhookStore } from "../webhooks/webhook-store.ts";
@@ -123,6 +123,13 @@ export function runningJob(tree: ChatTree, jobs: readonly ProcessRecord[]): JobH
   };
 }
 
+export function moveConfirmation(titles: readonly string[], project: string, readers: readonly string[]): string {
+  const list = readers.length > 1 ? `${readers.slice(0, -1).join(", ")} and ${readers.at(-1)}` : (readers[0] ?? "");
+  const one = titles.length === 1;
+  const what = one ? `"${titles[0]}"` : `${titles.length} chats`;
+  return `Move ${what} to ${project}? ${list} will be able to read ${one ? "it" : "them"}, including ${one ? "its" : "their"} earlier messages.`;
+}
+
 export async function newChatReaders(
   deps: ChatMoveDeps,
   tenant: Tenant,
@@ -150,14 +157,12 @@ export async function carryChatsAlong(
   target: MoveTarget,
 ): Promise<void> {
   const threads = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!.scopeId] as const)));
-  const threadsFrom = (scope: ScopeId) =>
-    new Set([...threads].flatMap(([threadRef, from]) => (from === scope ? [threadRef] : [])));
   const move = { threads, to };
   const clearLoops = async (loops: Pick<LoopStore, "ownedBy" | "update">) => {
     const owned = await loops.ownedBy([...new Set(threads.values())]);
     await Promise.all(
       owned
-        .filter((loop) => postsInto(loop, threadsFrom(loop.ownerScopeId)))
+        .filter((loop) => postsInto(loop, threadsFrom(move, loop.ownerScopeId)))
         .map((loop) => loops.update(loop.id, { destination: null })),
     );
   };

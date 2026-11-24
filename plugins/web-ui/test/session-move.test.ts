@@ -5,7 +5,6 @@ import {
   beginSessionMoveDrag,
   endSessionMoveDrag,
   movableInto,
-  moveConfirmation,
   projectDropHandlers,
   registerSessionMoveHost,
   runSessionMove,
@@ -50,21 +49,6 @@ test("own web chats and project chats outside the project are offered; the serve
     "cron",
   ]);
   assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", movableFrom), []);
-});
-
-test("the confirmation names the chat, the project, and everyone who gains access", () => {
-  assert.equal(
-    moveConfirmation(["Launch plan"], "Launch", ["Ada"]),
-    'Move "Launch plan" to Launch? Ada will be able to read it, including its earlier messages.',
-  );
-  assert.equal(
-    moveConfirmation(["One", "Two"], "Launch", ["Ada", "Grace"]),
-    "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
-  );
-  assert.equal(
-    moveConfirmation(["One"], "Launch", ["A", "B", "C", "D", "E", "F", "G", "H"]),
-    'Move "One" to Launch? A, B, C, D, E, F, G and H will be able to read it, including its earlier messages.',
-  );
 });
 
 function fixture() {
@@ -141,7 +125,11 @@ function io(opts: { gains?: string[]; refuse?: Record<string, string>; confirm?:
         const held = ids.flatMap((id) => (opts.refuse?.[id] ? [{ sessionId: id, message: opts.refuse[id] }] : []));
         const gains = opts.gains ?? [];
         if (gains.some((p) => !audience.includes(p)))
-          return { confirm: gains.map((p) => ({ principalId: p, displayName: names[p]! })), held };
+          return {
+            confirm: gains.map((p) => ({ principalId: p, displayName: names[p]! })),
+            question: `Let ${gains.map((p) => names[p]).join(" and ")} read ${ids.length} chats?`,
+            held,
+          };
         const ready = ids.filter((id) => !opts.refuse?.[id]);
         moved.push({ ids: ready, audience });
         return { sessions: ready.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession), held };
@@ -163,12 +151,10 @@ test("a move that gives nobody new access goes ahead without asking", async () =
   assert.equal(out.toast, "Moved to Launch");
 });
 
-test("a multi-select drag asks once for everyone who gains access, and moves in one request with that audience", async () => {
+test("a multi-select drag shows the server's question once, then moves with that audience", async () => {
   const t = io({ gains: ["ada", "grace"] });
   const out = await runSessionMove(["a", "b"], t.io);
-  assert.deepEqual(t.asked, [
-    "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
-  ]);
+  assert.deepEqual(t.asked, ["Let Ada and Grace read 2 chats?"]);
   assert.deepEqual(t.moved, [{ ids: ["a", "b"], audience: ["ada", "grace"] }]);
   assert.equal(out.toast, "Moved 2 chats to Launch");
 });

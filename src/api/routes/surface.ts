@@ -222,18 +222,6 @@ function heldMessage(held: HeldChat): string {
   return `The background job "${held.job.purpose}" ${where} is still running. Stop it or wait for it to finish, then move the chat.`;
 }
 
-function audienceList(names: readonly string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
-function confirmMessage(count: number, gains: readonly { displayName: string }[]): string {
-  const names = audienceList(gains.map((g) => g.displayName));
-  return count === 1
-    ? `Moving this chat lets ${names} read it. Confirm to move it.`
-    : `Moving these chats lets ${names} read them. Confirm to move them.`;
-}
-
 const stringList = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((id) => typeof id === "string");
 
@@ -268,7 +256,7 @@ async function moveSessions(ctx: ApiCtx): Promise<void> {
       error: out.outcome,
       gains: out.gains,
       held,
-      message: confirmMessage(b.sessionIds.length, out.gains),
+      message: out.question,
     });
   return sendJson(ctx.res, 200, { sessions: out.sessions, held });
 }
