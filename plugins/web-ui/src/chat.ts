@@ -512,7 +512,7 @@ export function createChatSurface(
   }
 
   let readonlyApprove: ((decision: ApprovalDecision) => Promise<void>) | null = null;
-  let readOnlyView: { id: string; threadRef: string; session: CoreSession; anchorSeq: number | null } | null = null;
+  let readOnlyView: { id: string } | null = null;
   let followReadOnlySend = false;
 
   function teardownActiveChat(): void {
@@ -616,6 +616,54 @@ export function createChatSurface(
     chatState.agent.abort();
   }
 
+  function bindAgentLifecycle(
+    agent: Agent,
+    threadRef: string,
+    normalStreamFn: Agent["streamFn"],
+    onWork: (work: WorkBlock) => void,
+    hooks: {
+      onEvent?: (e: { type: string }) => void;
+      isWorking?: () => boolean;
+      beforeRefresh?: () => void;
+      afterRefresh?: (wasUnsaved: boolean) => void;
+    } = {},
+  ): void {
+    let listedWorking = false;
+    agent.subscribe((e) => {
+      hooks.onEvent?.(e);
+      scheduleStreamDraw(agent);
+      if (e.type === "agent_end" && !detachedAgents.has(agent))
+        sessionsState.list = clearWorking(sessionsState.list, threadRef);
+      const working = hooks.isWorking ? hooks.isWorking() : agent.state.isStreaming;
+      if (working !== listedWorking || e.type === "agent_end") {
+        listedWorking = working;
+        renderList();
+      }
+      if (e.type !== "agent_end") return;
+      void agent
+        .waitForIdle()
+        .then(async () => {
+          if (agent === chatState.agent) clearLiveWork();
+          const wasUnsaved = agent === chatState.agent && chatState.sessionId === null;
+          try {
+            await refreshSessions({ silent: true });
+          } catch (error) {
+            reportHandledError("web:sessions_refresh", error);
+          }
+          if (!detachedAgents.has(agent)) {
+            sessionsState.list = clearWorking(sessionsState.list, threadRef);
+            renderList();
+          }
+          if (agent !== chatState.agent) return;
+          hooks.beforeRefresh?.();
+          await refreshTranscriptFromItems(agent);
+          hooks.afterRefresh?.(wasUnsaved);
+          void followNextQueuedRun(agent, threadRef, normalStreamFn, onWork);
+        })
+        .catch((error: unknown) => reportHandledError("web:agent_idle", error));
+    });
+  }
+
   function mountContinuable(
     threadRef: string,
     sessionId: string | null,
@@ -689,44 +737,23 @@ export function createChatSurface(
     chatState.onWork = onWork;
     void ctx.composer.refreshRuntimeSelection(scopeId, agent);
 
-    let listedWorking = false;
     let titlePollStarted = false;
-    agent.subscribe((e) => {
-      if (!titlePollStarted && agent.state.isStreaming) {
-        titlePollStarted = true;
-        const row = sessionsState.list.find((r) => r.threadRef === threadRef);
-        if (!row?.title?.trim()) void settleNewSessionTitle(agent, threadRef);
-      }
-      scheduleStreamDraw(agent);
-      if (agent === chatState.agent && (agent.state.isStreaming || e.type === "agent_end"))
-        chatState.pendingSend = null;
-      if (e.type === "agent_end" && !detachedAgents.has(agent))
-        sessionsState.list = clearWorking(sessionsState.list, threadRef);
-      const working = agent.state.isStreaming || chatState.pendingSend !== null;
-      if (working !== listedWorking || e.type === "agent_end") {
-        listedWorking = working;
-        renderList();
-      }
-      if (e.type !== "agent_end") return;
-      void agent.waitForIdle().then(async () => {
-        if (agent === chatState.agent) clearLiveWork();
-        const wasUnsaved = agent === chatState.agent && chatState.sessionId === null;
-        try {
-          await refreshSessions({ silent: true });
-        } catch {
-          void 0;
+    bindAgentLifecycle(agent, threadRef, normalStreamFn, onWork, {
+      onEvent: (e) => {
+        if (!titlePollStarted && agent.state.isStreaming) {
+          titlePollStarted = true;
+          const row = sessionsState.list.find((r) => r.threadRef === threadRef);
+          if (!row?.title?.trim()) void settleNewSessionTitle(agent, threadRef);
         }
-        if (!detachedAgents.has(agent)) {
-          sessionsState.list = clearWorking(sessionsState.list, threadRef);
-          renderList();
-        }
-        if (agent !== chatState.agent) return;
-        adoptActiveSessionFromList(agent);
-        await refreshTranscriptFromItems(agent);
+        if (agent === chatState.agent && (agent.state.isStreaming || e.type === "agent_end"))
+          chatState.pendingSend = null;
+      },
+      isWorking: () => agent.state.isStreaming || chatState.pendingSend !== null,
+      beforeRefresh: () => adoptActiveSessionFromList(agent),
+      afterRefresh: (wasUnsaved) => {
         void ctx.composer.refreshRuntimeSelection(scopeId, agent, true);
-        void followNextQueuedRun(agent, threadRef, normalStreamFn, onWork);
         if (wasUnsaved && chatState.sessionId) void settleNewSessionTitle(agent, threadRef);
-      });
+      },
     });
 
     container.replaceChildren(chatState.host);
@@ -1513,13 +1540,13 @@ export function createChatSurface(
                               ];
                               chatState.earlierCount = remaining;
                               chatState.transcriptAnchorSeq = nextAnchor;
-                              if (readOnlyView?.id === s.id) readOnlyView.anchorSeq = nextAnchor;
                               chatState.inheritedMessages = [
                                 ...itemsToMessages(split.inherited, transcriptModel()),
                                 ...chatState.inheritedMessages,
                               ];
                               draw();
-                            } catch {
+                            } catch (error) {
+                              reportHandledError("web:earlier_messages", error);
                               btn.disabled = false;
                               btn.textContent = "Show earlier messages";
                             } finally {
@@ -1591,37 +1618,12 @@ export function createChatSurface(
       }
     };
 
-    let listedWorking = false;
-    agent.subscribe((e) => {
-      scheduleStreamDraw(agent);
-      if (e.type === "agent_end" && !detachedAgents.has(agent))
-        sessionsState.list = clearWorking(sessionsState.list, s.threadRef);
-      const working = agent.state.isStreaming;
-      if (working !== listedWorking || e.type === "agent_end") {
-        listedWorking = working;
-        renderList();
-      }
-      if (e.type !== "agent_end") return;
-      void agent.waitForIdle().then(async () => {
-        if (agent === chatState.agent) clearLiveWork();
-        try {
-          await refreshSessions({ silent: true });
-        } catch {
-          void 0;
-        }
-        if (!detachedAgents.has(agent)) {
-          sessionsState.list = clearWorking(sessionsState.list, s.threadRef);
-          renderList();
-        }
-        if (agent !== chatState.agent) return;
-        await refreshTranscriptFromItems(agent);
-        void refreshApprovals();
-        void followNextQueuedRun(agent, s.threadRef, normalStreamFn, onWork);
-      });
+    bindAgentLifecycle(agent, s.threadRef, normalStreamFn, onWork, {
+      afterRefresh: () => void refreshApprovals(),
     });
 
     readonlyRedraw = draw;
-    readOnlyView = { id: s.id, threadRef: s.threadRef, session: s, anchorSeq };
+    readOnlyView = { id: s.id };
     void refreshApprovals();
     draw();
     if (!priorHost) container.replaceChildren(host);
