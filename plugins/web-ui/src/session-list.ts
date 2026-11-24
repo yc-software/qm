@@ -307,24 +307,6 @@ export function conversationBackground(
   return row ? rowIndicators(row, null).background : null;
 }
 
-export function shouldStartProactiveOpener(state: {
-  started: boolean;
-  sessionId: string | null;
-  scopeId: string | null;
-  messageCount: number;
-  loaded: boolean;
-  sessions: readonly Pick<CoreSession, "id" | "surface">[];
-}): boolean {
-  return (
-    !state.started &&
-    state.sessionId === null &&
-    state.scopeId === null &&
-    state.messageCount === 0 &&
-    state.loaded &&
-    !state.sessions.some((session) => session.id && !automationRunLabel(session))
-  );
-}
-
 export function cronRowMeta(c: SessionBackgroundView["crons"][number]): string {
   const next = c.nextFireAt ? `next fire ${nextFireIn(c.nextFireAt)}` : "paused";
   if (!c.lastFire) return next;

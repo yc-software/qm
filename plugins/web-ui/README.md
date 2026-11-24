@@ -72,9 +72,8 @@ without printing its contents. Restart the web service after changing it.
 An organization can instead have its own starters, set with the org-scoped
 `activity-seeds` admin resource (`PUT /v1/admin/scopes/<org scope>/activity-seeds` with
 `{ "seeds": { "activities": [...], "apps": {...} } }`, or `{ "seeds": null }` to clear).
-Seeds reach only people the `company_welcome` feature flag covers (that person's
-personal scope or the whole organization); for them the organization's `activities`
-take the place of `WEB_UI_SUGGESTED_ACTIVITIES`, as the fallback and as the seeds the
+When seeds are set, the organization's `activities` take the place of
+`WEB_UI_SUGGESTED_ACTIVITIES` for everyone in it, as the fallback and as the seeds the
 generator starts from. Each entry needs an `id` (up to 64 characters, the longest id a
 dismissal accepts), a `title`, a `prompt` and an `icon`; an organization activity may
 carry a `source` shown beside its title. The `apps` lists add activities once the

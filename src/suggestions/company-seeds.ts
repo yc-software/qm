@@ -4,9 +4,8 @@ import {
   type ActivitySeeds,
   type SuggestedActivity,
 } from "../../plugins/chassis/src/suggested-activities.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
-import { scopeId, type ScopeId } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 
 const activity = {
   id: z.string().min(1).max(64, "must be at most 64 characters, the longest id a dismissal accepts"),
@@ -50,14 +49,11 @@ export function parseActivitySeeds(value: unknown): ActivitySeeds {
 
 export async function starterActivities(
   deps: {
-    featureFlags?: Pick<FeatureFlagStore, "enabled">;
     config?: Pick<ScopedConfigStore, "getActivitySeeds">;
     fallback: SuggestedActivity[];
   },
   org: ScopeId,
-  person: string,
 ): Promise<{ welcome?: ActivitySeeds; activities: SuggestedActivity[] }> {
-  const on = await deps.featureFlags?.enabled("company_welcome", scopeId("personal", person));
-  const welcome = on ? ((await deps.config?.getActivitySeeds(org)) ?? undefined) : undefined;
+  const welcome = (await deps.config?.getActivitySeeds(org)) ?? undefined;
   return welcome ? { welcome, activities: welcome.activities } : { activities: deps.fallback };
 }

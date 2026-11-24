@@ -225,11 +225,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let fastSelectionRevision = 0;
 
   function isUnsentNewChat(): boolean {
-    return (
-      !options.prepareSubmit &&
-      ctx.chat.state.sessionId === null &&
-      !(ctx.chat.state.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener)
-    );
+    return !options.prepareSubmit && ctx.chat.state.sessionId === null && !ctx.chat.state.agent?.state.messages.length;
   }
 
   function persistDraft(): void {
