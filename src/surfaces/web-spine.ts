@@ -31,41 +31,11 @@ export async function webDmSpine(
   return (await flags?.enabled("web_dm_spine", personalScope(actor.id))) === true;
 }
 
-export interface TranscriptPosts {
-  open(callId: string): void;
-  queue(items: NewItem[]): void;
-  take(callId: string): NewItem[];
-}
-
-export function createTranscriptPosts(): TranscriptPosts {
-  const calls = new Map<string, NewItem[] | undefined>();
-  let unclaimed: NewItem[] = [];
-  return {
-    open(callId) {
-      calls.set(callId, undefined);
-    },
-    queue(items) {
-      const waiting = [...calls].find(([, queued]) => !queued)?.[0];
-      if (waiting) calls.set(waiting, items);
-      else unclaimed.push(...items);
-    },
-    take(callId) {
-      const items = [...(calls.get(callId) ?? []), ...unclaimed];
-      calls.delete(callId);
-      unclaimed = [];
-      return items;
-    },
-  };
-}
-
-export function postedWith(transcript: TranscriptPosts, item: NewItem, surfaceTool: string): NewItem[] {
-  const action = item.body?.action;
-  if (item.kind === "ToolCall" && item.tool === surfaceTool && (action === "post" || action === "edit"))
-    transcript.open(item.callId);
-  if (item.kind !== "ToolResult") return [];
-  const posted = transcript.take(item.callId);
-  if (item.body?.interrupted === true) return [];
-  return posted.map((post) => ({ ...post, body: { ...post.body, callId: item.callId } }));
+export function postedWith(queued: NewItem[], result: NewItem): NewItem[] {
+  if (result.kind !== "ToolResult") return [];
+  const posted = queued.splice(0);
+  if (result.body?.interrupted === true) return [];
+  return posted.map((post) => ({ ...post, body: { ...post.body, callId: result.callId } }));
 }
 
 export async function latestVersion(
@@ -89,4 +59,4 @@ export function wakeTurnNote(latest: Item | undefined): string {
 }
 
 export const unshownTextNudge = (surfaceTool: string): string =>
-  `[system] Your text above was not shown to the person: here only the \`${surfaceTool}\` tool reaches them. \`edit\` your latest message if it should now read differently, or call finish_silently.`;
+  `[system] Your text above was not shown to the person: here only the \`${surfaceTool}\` tool reaches them. \`edit\` your latest message so it reads right now, \`post\` only if you are answering something they newly typed, or call finish_silently.`;

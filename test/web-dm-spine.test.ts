@@ -6,7 +6,6 @@ import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { isShownReply } from "../src/sessions/items.ts";
-import { createTranscriptPosts } from "../src/surfaces/web-spine.ts";
 import { scopeId } from "../src/types.ts";
 
 test("with web_dm_spine on, a web DM speaks by posting and a wake edits the posted message", async () => {
@@ -44,9 +43,8 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
   assert.ok(turns[0]!.systemPrompt.includes("as if everything now known had been known all along"));
   assert.ok(turns[0]!.systemPrompt.includes("You cannot execute commands yourself"));
   const items = await built.sessions.getItems(posted!.sessionId);
-  const call = items.find((item) => item.kind === "ToolCall" && item.callId === posted!.body.callId)!;
-  assert.deepEqual([call.tool, call.body.text], ["web", undefined], "the call leaves the text to the message");
-  assert.ok(items.find((item) => item.kind === "ToolResult" && item.callId === call.callId)!.seq < posted!.seq);
+  const result = items.find((item) => item.kind === "ToolResult" && item.callId === posted!.body.callId)!;
+  assert.equal(result.seq, posted!.seq - 1, "the message follows its call's result");
   assert.deepEqual(await built.deliveries.pending("web"), []);
 
   const session = (await built.sessions.getByThread(threadRef))!;
@@ -89,16 +87,4 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
   const plain = await typed("hello", "U2", "web:U2:plain");
   assert.deepEqual([plain.status, plain.reply?.startsWith("You said: hello")], ["ok", true], "flag off: unchanged");
   assert.ok(turns.at(-1)!.systemPrompt.includes("What you write IS your reply"));
-});
-
-test("a posted message is appended with its own call's result when calls overlap", () => {
-  const posts = createTranscriptPosts();
-  posts.open("a");
-  posts.open("b");
-  posts.queue([{ kind: "AgentMessage", text: "first" }]);
-  posts.queue([{ kind: "AgentMessage", text: "second" }]);
-  assert.deepEqual(
-    [posts.take("b"), posts.take("a"), posts.take("a")].map((items) => items.map((item) => item.text)),
-    [["second"], ["first"], []],
-  );
 });

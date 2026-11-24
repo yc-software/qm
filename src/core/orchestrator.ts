@@ -238,7 +238,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
-import { createTranscriptPosts, postedWith, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
+import { postedWith, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -1622,8 +1622,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           surfaceOutboundCount: 0,
           crossConversationPosts: 0,
           turnUserEntrySeq: undefined,
+          ...(spineDm ? { transcript: [] } : {}),
         };
-        const transcript = spineDm ? createTranscriptPosts() : undefined;
         const publishPosted = (text: string): void => {
           if (!input.runId) return;
           deps.turnStream.publishBlockStart(input.runId);
@@ -1665,7 +1665,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             !spineFirstBlockOpen ||
             resume ||
             approvalReplay ||
-            transcript
+            spineDm
           )
             return;
           spineFirstBlockOpen = false;
@@ -1711,7 +1711,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
-          ...(transcript ? { transcript } : {}),
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,
@@ -2321,7 +2320,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...((syntheticPrompt || continuation) && !steered ? { hidden: true } : {}),
               };
             })();
-            const posted = transcript ? postedWith(transcript, stored, surfaceName) : [];
+            const posted = spine.transcript ? postedWith(spine.transcript, stored) : [];
             const persisted = await tracePhase("step.persist", () =>
               withManagedRosterVersion(() => deps.sessions.appendMany(writer, [stored, ...posted])),
             );
@@ -2466,7 +2465,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
-            ...(transcript
+            ...(spineDm
               ? { surfacePrompt: { label: `the ${botName} web app`, mentionSyntax: "", transcript: true } }
               : {}),
             delegateWork,
@@ -2509,7 +2508,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
-            ...(transcript ? { closingReply } : {}),
+            ...(spineDm ? { closingReply } : {}),
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,
@@ -2641,7 +2640,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             filterHistory,
             historyWindow,
             runAgentTurn,
-            ...(transcript ? { unshownText: () => unshownText } : {}),
+            ...(spineDm ? { unshownText: () => unshownText } : {}),
           },
           result,
         );

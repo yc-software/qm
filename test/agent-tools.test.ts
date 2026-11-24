@@ -1191,6 +1191,26 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("a surface whose posts are transcript messages records a post's size and runs its step's calls in order", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = { current: fakeToolContext(), emit: sink(emitted), scopeLabel: "personal:U1" };
+  const web = createAgentTools(ref, {
+    surfaceTools: true,
+    surfaceName: "web",
+    surfacePrompt: { label: "the web app", mentionSyntax: "", transcript: true },
+  }).find((tool) => tool.name === "web")!;
+  assert.equal(web.executionMode, "sequential");
+  await call(web, { action: "post", text: "hello there" });
+  await call(web, { action: "edit", ref: "7", text: "hello" });
+  assert.deepEqual(
+    emitted.filter((e) => e.kind === "ToolCall").map((e) => [e.body.action, e.body.bytes, e.body.text]),
+    [
+      ["post", 11, undefined],
+      ["edit", 5, undefined],
+    ],
+  );
+});
+
 test("surface post/edit results carry the delivered ts and the ref they acted on", async () => {
   const emitted: Emitted[] = [];
   const ctx = fakeToolContext();

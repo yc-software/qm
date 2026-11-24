@@ -687,11 +687,7 @@ export function createMockAgent(): Agent {
         reply = `(posted ${sent})`;
       } else if (command0.startsWith("!post ")) {
         const msg = cmd.slice(cmd.indexOf("!post ") + "!post ".length);
-        await record({
-          kind: "ToolCall",
-          tool: turn.surfaceName ?? "slack",
-          body: { action: "post", bytes: msg.length },
-        });
+        await record({ kind: "ToolCall", tool: "slack", body: { action: "post", bytes: msg.length } });
         const r = await turn.tools.post(msg);
         await record({
           kind: "ToolResult",
@@ -728,11 +724,6 @@ export function createMockAgent(): Agent {
         const sp = rest.indexOf(" ");
         const editRef = sp === -1 ? rest : rest.slice(0, sp);
         const newText = sp === -1 ? "" : rest.slice(sp + 1);
-        await record({
-          kind: "ToolCall",
-          tool: turn.surfaceName ?? "slack",
-          body: { action: "edit", ref: editRef, bytes: newText.length },
-        });
         const r = await turn.tools.edit({ ref: editRef, text: newText });
         await record({
           kind: "ToolResult",

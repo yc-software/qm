@@ -50,12 +50,12 @@ import {
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
-import { latestVersion, type TranscriptPosts } from "./web-spine.ts";
+import { latestVersion } from "./web-spine.ts";
 import { sleep } from "../util/async.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { Item } from "../sessions/items.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
@@ -106,6 +106,7 @@ export interface SpineState {
   surfaceOutboundCount: number;
   crossConversationPosts: number;
   turnUserEntrySeq: number | undefined;
+  transcript?: NewItem[];
 }
 
 export interface SurfaceToolsContext {
@@ -125,7 +126,6 @@ export interface SurfaceToolsContext {
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
   postKeys: TurnPostKeys;
   spine: SpineState;
-  transcript?: TranscriptPosts;
 }
 
 function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
@@ -209,10 +209,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postProvenance,
     postKeys,
     spine,
-    transcript,
   } = ctx;
   if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
+  const { transcript } = spine;
   const inTranscript = (d: Destination) => !!transcript && d === currentDestination;
   const postToTranscript = (
     message: string,
@@ -225,10 +225,10 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       ...(currentDestination.persona ? { personaId: currentDestination.persona.id } : {}),
       ...(supersedes === undefined ? {} : { supersedes }),
     };
-    transcript!.queue([
+    transcript!.push(
       ...(message.trim() ? [{ kind: "AgentMessage" as const, text: message, body: shown }] : []),
       ...(files ? [{ kind: "AgentMessage" as const, variant: "files_delivered" as const, body: { files } }] : []),
-    ]);
+    );
     spine.surfaceOutboundCount += 1;
     return { ok: true, ...(files ? { attachments: files } : {}) };
   };

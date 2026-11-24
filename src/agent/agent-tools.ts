@@ -219,7 +219,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
-    ...(surfaceTools ? [surface] : [attach]),
+    ...(surfaceTools
+      ? [opts?.surfacePrompt?.transcript ? { ...surface, executionMode: "sequential" as const } : surface]
+      : [attach]),
     finishSilently,
     withdrawApproval,
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
