@@ -1,3 +1,4 @@
+import { PURPOSE_RUNTIME_RESOURCES } from "../api/routes/admin-resources.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import type { ScopeId } from "../types.ts";
 import type { ModelRoutes } from "./model-route.ts";
@@ -6,11 +7,10 @@ import type { ModelProvider } from "./provider-endpoints.ts";
 
 export interface MovedDefault {
   setting: string;
+  label: string;
   from: string;
   to: string;
 }
-
-const PURPOSES = ["fallback", "cron", "subagent", "appEdit"] as const;
 
 export async function moveGatewayDefaultsToProvider(
   config: ScopedConfigStore,
@@ -22,7 +22,7 @@ export async function moveGatewayDefaultsToProvider(
   if (!to) return [];
   const [base, ...purposes] = await Promise.all([
     config.getRuntimeSelectionDurable(org),
-    ...PURPOSES.map((purpose) => config.getPurposeRuntimeDurable(purpose)),
+    ...PURPOSE_RUNTIME_RESOURCES.map(({ purpose }) => config.getPurposeRuntimeDurable(purpose)),
   ]);
   const baseId = base?.modelId ?? routes.baseModelId();
   const uniqueIds = [...new Set([baseId, ...purposes.flatMap((selection) => (selection ? [selection.modelId] : []))])];
@@ -39,16 +39,16 @@ export async function moveGatewayDefaultsToProvider(
       modelId: to,
       ...(base?.effortLevel ? { effortLevel: base.effortLevel } : {}),
     });
-    moved.push({ setting: "base-model", from: baseId, to });
+    moved.push({ setting: "base-model", label: "Base model", from: baseId, to });
   }
-  for (const [i, purpose] of PURPOSES.entries()) {
+  for (const [i, { id, purpose, name }] of PURPOSE_RUNTIME_RESOURCES.entries()) {
     const selection = purposes[i];
     if (!selection || !gatewayIds.has(selection.modelId)) continue;
     await config.setPurposeRuntime(purpose, {
       modelId: to,
       ...(selection.effortLevel ? { effortLevel: selection.effortLevel } : {}),
     });
-    moved.push({ setting: `${purpose}-runtime`, from: selection.modelId, to });
+    moved.push({ setting: id, label: name, from: selection.modelId, to });
   }
   return moved;
 }

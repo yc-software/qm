@@ -49,8 +49,8 @@ test("saving a key for another provider moves the defaults that ran on the gatew
     moveGatewayDefaultsToProvider(config, routes(["openai"]), "openai", "org:o"),
   );
   assert.deepEqual(moved, [
-    { setting: "base-model", from: claude, to: gpt },
-    { setting: "fallback-runtime", from: claude, to: gpt },
+    { setting: "base-model", label: "Base model", from: claude, to: gpt },
+    { setting: "fallback-runtime", label: "Fallback model", from: claude, to: gpt },
   ]);
   assert.equal(store.get("cron")?.modelId, gpt);
 });
