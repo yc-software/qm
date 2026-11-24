@@ -106,7 +106,7 @@ export type ReadOnlyChatDeps = {
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
     runningSince?: number,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   setPins: (pins: SessionPin[]) => void;
 };
 
