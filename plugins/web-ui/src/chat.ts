@@ -1693,106 +1693,33 @@ export function createChatSurface(
       (!roSession && !ctx.inbox && appState.currentView !== "chats")
     )
       return;
-    if (roSession) {
-      const approvals = readOnly.approvals();
-      const currentMessages = visibleMessages(agent);
-      readOnly.confirmSlackMessages(currentMessages);
-      const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
-      const shownMessages = [
-        ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
-        ...currentMessages,
-        ...readOnly.pendingSlackMessages(),
-      ];
-      prepareMessageRows(shownMessages);
-      const chatSurface = chatSurfaceOf(roSession);
-      const slackReply = readOnly.slackReply();
-      const host = chatState.host;
-      transcriptViewport.beforeRender();
-      render(
-        html`
-          <div class="custom-chat-shell">
-            ${
-              roSession.surface === "slack"
-                ? chatHeader(
-                    roSession.type === "channel"
-                      ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
-                      : groupDmTitle(roSession),
-                    null,
-                    shownMessages,
-                    { shown: 3, named: true },
-                    openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
-                  )
-                : chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", shownMessages, {
-                    shown: 5,
-                    named: false,
-                  })
-            }
-            ${
-              slackReply
-                ? nothing
-                : html`<div class="readonly-banner">
-                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
-                  </div>`
-            }
-            ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
-            ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
-            <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
-              ${pinnedStrip()}
-              <div class="message-stack">
-                ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing}
-                ${
-                  shownMessages.length
-                    ? shownMessages.map((m, i) =>
-                        settledChatMessage(
-                          m,
-                          i - inheritedOffset,
-                          agent.state.isStreaming && m === agent.state.streamingMessage,
-                        ),
-                      )
-                    : nothing
-                }
-                ${
-                  !shownMessages.length && !agent.state.isStreaming
-                    ? html`<div class="empty compact">No readable messages in this conversation.</div>`
-                    : nothing
-                }
-                ${liveWorkStatus(agent)}
-                ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
-              </div>
-            </section>
-            <div class="chat-bottom-dock">
-              ${goalStrip(agent, { readOnly: true })} ${slackReply ?? nothing} ${scrollBottomButton()}
-            </div>
-          </div>
-        `,
-        host,
-      );
-      transcriptViewport.afterRender();
-      requestAnimationFrame(() => {
-        decorateTextCodeBlocks(host);
-        if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
-      });
-      return;
-    }
     for (const message of agent.state.messages) {
       const work = (message as AssistantWork).work;
       if (work?.pendingApprovals) work.pendingApprovals = unresolvedApprovals(work.pendingApprovals);
     }
-    adoptActiveSessionFromList(agent);
-    if (!ctx.visible()) {
-      postCurrentPaneState();
-      return;
+    if (!roSession) {
+      adoptActiveSessionFromList(agent);
+      if (!ctx.visible()) {
+        postCurrentPaneState();
+        return;
+      }
     }
     transcriptViewport.beforeRender();
     const currentMessages = visibleMessages(agent);
-    if (preserveConnectionScroll) {
-      connectionReturnMessageCount ??= currentMessages.length;
-      if (connectionReturnMessageCount !== currentMessages.length) preserveConnectionScroll = false;
+    if (roSession) {
+      readOnly.confirmSlackMessages(currentMessages);
+    } else {
+      if (preserveConnectionScroll) {
+        connectionReturnMessageCount ??= currentMessages.length;
+        if (connectionReturnMessageCount !== currentMessages.length) preserveConnectionScroll = false;
+      }
+      sideChats.sync();
     }
-    sideChats.sync();
-    const messages = chatState.inheritedExpanded
-      ? [...chatState.inheritedMessages, ...currentMessages]
-      : currentMessages;
+    const messages = [
+      ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
+      ...currentMessages,
+      ...(roSession ? readOnly.pendingSlackMessages() : []),
+    ];
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
@@ -1811,7 +1738,7 @@ export function createChatSurface(
     if (messages.length) {
       messageContent = messages.map(
         (m, i) =>
-          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${sideChats.markers(messageEntrySeqs(m), i - inheritedOffset + chatState.inheritedMessages.length)}`,
+          html`${settledChatMessage(m, i - inheritedOffset, agent.state.isStreaming && m === agent.state.streamingMessage)}${roSession ? nothing : sideChats.markers(messageEntrySeqs(m), i - inheritedOffset + chatState.inheritedMessages.length)}`,
       );
     }
     const tier = ctx.density();
@@ -1845,7 +1772,56 @@ export function createChatSurface(
         })
       : nothing;
     let content: TemplateResult;
-    if (ctx.inbox) {
+    if (roSession) {
+      const approvals = readOnly.approvals();
+      const chatSurface = chatSurfaceOf(roSession);
+      const slackReply = readOnly.slackReply();
+      const header =
+        roSession.surface === "slack"
+          ? chatHeader(
+              roSession.type === "channel"
+                ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
+                : groupDmTitle(roSession),
+              null,
+              messages,
+              { shown: 3, named: true },
+              openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
+            )
+          : chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
+              shown: 5,
+              named: false,
+            });
+      content = html`
+        <div class="custom-chat-shell">
+          ${header}
+          ${
+            slackReply
+              ? nothing
+              : html`<div class="readonly-banner">
+                  This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                </div>`
+          }
+          ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
+          ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
+          <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
+            ${pinnedStrip()}
+            <div class="message-stack">
+              ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent}
+              ${
+                !messages.length && !agent.state.isStreaming
+                  ? html`<div class="empty compact">No readable messages in this conversation.</div>`
+                  : nothing
+              }
+              ${liveWorkStatus(agent)}
+              ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
+            </div>
+          </section>
+          <div class="chat-bottom-dock">
+            ${goalStrip(agent, { readOnly: true })} ${slackReply ?? nothing} ${scrollBottomButton()}
+          </div>
+        </div>
+      `;
+    } else if (ctx.inbox) {
       content = assistantSidebar({
         context: ctx.inbox.context(),
         messages: html`${pinnedStrip()} ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing}
@@ -1933,10 +1909,15 @@ export function createChatSurface(
     requestAnimationFrame(() => {
       if (chatState.host !== host || chatState.agent !== agent || !host.isConnected) return;
       decorateTextCodeBlocks(host);
-      ctx.composer.resizeComposer();
-      scrollTranscript(opts.forceScroll);
+      if (roSession) {
+        if (opts.forceScroll) scrollToBottom();
+        transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
+      } else {
+        ctx.composer.resizeComposer();
+        scrollTranscript(opts.forceScroll);
+      }
     });
-    postCurrentPaneState();
+    if (!roSession) postCurrentPaneState();
   }
 
   function sessionTopbar(emptyChat = false): TemplateResult | typeof nothing {
