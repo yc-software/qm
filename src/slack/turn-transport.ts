@@ -91,7 +91,10 @@ export function createSlackTurnTransport(at: {
         await uploadAttachments(client, channel, threadTs, attachments, at.blobs);
         return {};
       } catch (err) {
-        console.error("[slack-plugin] file upload failed:", errMessage(err));
+        const files = attachments.map((a) => `${JSON.stringify(a.name)}:${a.mimetype}`).join(",");
+        console.error(
+          `[slack-plugin] attachment upload failed chat=${channel} files=${files} reason=${errMessage(err)}`,
+        );
         return { failureNote: uploadFailureNote(err) };
       }
     },

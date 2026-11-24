@@ -1,6 +1,6 @@
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 import type { IncomingAttachment, OutgoingAttachment } from "../types.ts";
-import { errText, swallow } from "../util/errors.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export interface InboundFile {
   id?: string;
@@ -52,39 +52,63 @@ export interface ProcessedInbound {
   issues: string[];
 }
 
+export interface InboundWhere {
+  surface: string;
+  account?: string;
+  chat: string;
+}
+
+export function unreadFilesNotice(issues: readonly string[]): string {
+  return `Some of your files didn't come through, so I haven't read them: ${issues.join("; ")}.`;
+}
+
 export async function processInboundFiles<F extends InboundFile>(
   files: readonly F[],
   download: (file: F) => Promise<Uint8Array>,
   stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
-  resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined,
-  unreadableHint = "",
+  opts: {
+    where: InboundWhere;
+    resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined;
+    unreadableHint?: string;
+  },
 ): Promise<ProcessedInbound> {
   const attachments: IncomingAttachment[] = [];
   const issues: string[] = [];
+  const { where, resolveAuthor, unreadableHint = "" } = opts;
+  const unreadable = (f: F, label: string, issue: string, reason: string) => {
+    issues.push(issue);
+    console.error(
+      `[${where.surface}] attachment unreadable${where.account ? ` account=${where.account}` : ""} chat=${where.chat} file=${JSON.stringify(label)} type=${f.mimetype || "unknown"}${typeof f.size === "number" ? ` bytes=${f.size}` : ""} reason=${reason}`,
+    );
+  };
   for (const f of files) {
     const label = f.name || f.title || "that file";
     if (attachments.length >= MAX_ATTACHMENTS_PER_TURN) {
-      issues.push(`skipped "${label}" — too many files at once (max ${MAX_ATTACHMENTS_PER_TURN})`);
+      unreadable(
+        f,
+        label,
+        `skipped "${label}" — too many files at once (max ${MAX_ATTACHMENTS_PER_TURN})`,
+        "too many files",
+      );
       continue;
     }
     if (isOversize(f)) {
-      issues.push(oversizeMsg(label));
+      unreadable(f, label, oversizeMsg(label), "too large");
       continue;
     }
     try {
       const bytes = await download(f);
       if (bytes.length > MAX_ATTACHMENT_BYTES) {
-        issues.push(oversizeMsg(label));
+        unreadable(f, label, oversizeMsg(label), "too large");
         continue;
       }
       const { blobId } = await stage(bytes);
       const author = resolveAuthor ? await resolveAuthor(f.user) : undefined;
       attachments.push(attachmentFromBytes(f, bytes, blobId, author));
     } catch (err) {
-      swallow(`inbound file "${label}"`, err);
       const detail =
         err instanceof BlobTooLargeError ? "that request was too large — try fewer or smaller files" : errText(err);
-      issues.push(`I couldn't read "${label}"${unreadableHint} (${detail})`);
+      unreadable(f, label, `I couldn't read "${label}"${unreadableHint} (${detail})`, errMessage(err));
     }
   }
   return { attachments, issues };

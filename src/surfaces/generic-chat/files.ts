@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { OutgoingAttachment } from "../../types.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, httpFailure } from "../../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../../util/network.ts";
 import {
   processInboundFiles,
@@ -40,7 +40,7 @@ async function fetchGenericChatFile(
 
 export function stageGenericChatFiles(
   client: GenericChatClient,
-  account: string,
+  where: Pick<GenericChatRef, "account" | "chat">,
   files: readonly GenericChatFile[],
   stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
   author?: string,
@@ -53,9 +53,9 @@ export function stageGenericChatFiles(
       mimetype: f.content_type,
       ...(f.size_bytes === undefined ? {} : { size: f.size_bytes }),
     })),
-    (f) => fetchGenericChatFile(client, account, f.id, send),
+    (f) => fetchGenericChatFile(client, where.account, f.id, send),
     stage,
-    () => author,
+    { where: { surface: "generic-chat", ...where }, resolveAuthor: () => author },
   );
 }
 
@@ -83,7 +83,7 @@ async function uploadFiles(
       body: form,
       signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
     });
-    if (!res.ok) throw new Error(`generic-chat file storage refused ${name}: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`generic-chat file storage refused ${name}: ${await httpFailure(res)}`);
     fileIds.push(file_id);
   }
   return fileIds;
@@ -97,7 +97,10 @@ export async function uploadGenericChatFiles(
   try {
     return { fileIds: await uploadFiles(deps, where, attachments) };
   } catch (e) {
-    console.error(`[generic-chat] file upload failed in chat ${where.chat}: ${errMessage(e)}`);
+    const files = attachments.map((a) => `${JSON.stringify(a.name)}:${a.mimetype}`).join(",");
+    console.error(
+      `[generic-chat] attachment upload failed account=${where.account} chat=${where.chat} files=${files} reason=${errMessage(e)}`,
+    );
     return { failureNote: UPLOAD_FAILED };
   }
 }

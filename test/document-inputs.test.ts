@@ -244,11 +244,11 @@ test("empty documents restore as empty content on every turn", async () => {
 });
 
 let stores = 0;
-function storeFor(data = Buffer.from("QUARTZ-731")) {
+function storeFor(data = Buffer.from("QUARTZ-731"), name = "sample.txt") {
   const artifact = {
     id: `doc${++stores}`,
-    name: "sample.txt",
-    mimetype: "text/plain",
+    name,
+    mimetype: mimeFromName(name),
     sizeBytes: data.length,
     sha256: createHash("sha256").update(data).digest("hex"),
     ownerScopeId: "user:owner",
@@ -271,6 +271,13 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
   } as AttachmentMeta;
   return { artifact, store, meta, opens: () => opens };
 }
+
+test("a scanned PDF is charged by its pages, not its bytes, so it is sent inline", async () => {
+  const scan = await readFile(new URL("./fixtures/documents/scanned.pdf", import.meta.url));
+  const { store, meta } = storeFor(Buffer.concat([scan, Buffer.alloc(100_000, "\n")]), "certificate.pdf");
+  const inputs = await loadDocumentInputs(store, [meta], () => true, { maxTokens: 10_000 });
+  assert.deepEqual([inputs.documents.map((d) => d.name), inputs.tokens], [["certificate.pdf"], 3_000]);
+});
 
 test("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
   const { store, meta, opens } = storeFor();
