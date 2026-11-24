@@ -12,9 +12,11 @@ export interface FailureLike {
 }
 
 export function providerBlockClause(result: FailureLike): string | undefined {
-  return result.errorCode === "refusal" && result.reason
-    ? `the model provider blocked the reply (${result.reason})`
-    : undefined;
+  if (!result.reason) return undefined;
+  if (result.errorCode === "refusal") return `the model provider blocked the reply (${result.reason})`;
+  if (result.errorCode === "account" || result.errorCode === "auth")
+    return `the model provider refused the model key (${result.reason}); whoever owns that key needs to fix its billing or access, or replace it`;
+  return undefined;
 }
 
 export function userFacingFailureText(result: FailureLike): string {

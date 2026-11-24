@@ -144,6 +144,7 @@ import {
   isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
+  turnErrorCode,
   turnFailureMessage,
   turnFailureItem,
 } from "./turn-error.ts";
@@ -2775,7 +2776,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tenant,
           {
             category: "turn",
-            code: budget ? "model_budget" : "error",
+            code: turnErrorCode(err),
             message: err instanceof ProviderTurnError ? err.raw : errMessage(err),
             scopeLabel: scopeId,
             sessionId: session.id,

@@ -22,6 +22,7 @@ export type ProviderErrorCode =
   | "rate_limit"
   | "refusal"
   | "auth"
+  | "account"
   | "context_too_long"
   | "not_found"
   | "model_unavailable"
@@ -97,6 +98,16 @@ export function isNonRetryable(err: unknown): boolean {
 
 export function isModelBudget(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && err.code === "model_budget";
+}
+
+const PROVIDER_DECISION_CODES = new Set<ProviderErrorCode>(["refusal", "account", "model_budget"]);
+
+export function isProviderDecision(err: unknown): err is ProviderTurnError {
+  return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
+}
+
+export function turnErrorCode(err: unknown): ProviderErrorCode | "error" {
+  return isProviderDecision(err) ? err.code : "error";
 }
 
 export function turnFailureMessage(err: unknown): string {
