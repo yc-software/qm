@@ -8,6 +8,7 @@ import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
 import type { Tenant } from "../tenants/context.ts";
 import {
   parseScopeId,
+  scopeId,
   type ChildIsolation,
   type Principal,
   type ScopeId,
@@ -179,15 +180,20 @@ export async function carryChatsAlong(
   members: readonly string[],
   target: MoveTarget,
   mover: string,
+  sourceMembers: ReadonlyMap<ScopeId, readonly string[]>,
 ): Promise<StoppedLoop[]> {
   const threads = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!.scopeId] as const)));
   const move = { threads, to };
+  const loopOwners = [
+    ...threads.values(),
+    ...[...sourceMembers.values()].flat().map((member) => scopeId("personal", member)),
+  ];
 
   const [, , , stopped = []] = await Promise.all([
     deps.crons.rehome(move),
     deps.webhooks.rehome(move),
     deps.monitors?.rehome(move),
-    deps.loops?.retargetMovedDestinations(move, members),
+    deps.loops?.retargetMovedDestinations(move, members, loopOwners),
   ]);
   const sessions = trees.flat();
   const isolations = sessions.flatMap((s) => s.spawnMeta?.isolation ?? []);

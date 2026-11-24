@@ -18,7 +18,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import type { PendingApprovalRecord } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord } from "../src/types.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
 async function setup() {
@@ -446,6 +446,33 @@ test("a loop whose owner can't read the destination project stops posting there,
   assert.equal(stillPosting.ownerScopeId, scope);
   assert.deepEqual(stillPosting.destination, { type: "web", target: thread, audienceScopeId: to });
   assert.equal((await built.loops.store.get(stopped.id))!.destination, undefined);
+});
+
+test("a personal loop that kept posting into a moved chat follows it on the next move", async () => {
+  const { built, scope, personal, move } = await setup();
+  const sid = await personal("owner", "web:owner:move-loop-twice", "Watch signups");
+  const thread = (await built.sessions.get(sid))!.threadRef;
+  const { loop } = await built.loops.store.create({
+    ownerScopeId: scopeId("personal", "owner"),
+    owner: "owner",
+    createdBy: "owner",
+    destination: { type: "web", target: thread, audienceScopeId: scopeId("personal", "owner") },
+    name: "Signup watch",
+    playbook: "Watch signups.",
+    successCondition: "Signups are watched.",
+  });
+  assert.equal((await move(sid, "owner", scope, { audience: ["member"] })).outcome, "moved");
+  assert.equal((await built.loops.store.get(loop.id))!.destination!.audienceScopeId, scope);
+
+  const solo = await built.app.createProject("owner", "Owner only");
+  assert.ok(solo);
+  const to = projectScopeId(solo.id);
+  const out = await move(sid, "owner", to);
+  assert.ok(out.outcome === "moved");
+  assert.deepEqual(out.stoppedLoops, []);
+  const after = (await built.loops.store.get(loop.id))!;
+  assert.equal(after.ownerScopeId, scopeId("personal", "owner"));
+  assert.deepEqual(after.destination, { type: "web", target: thread, audienceScopeId: to });
 });
 
 test("the confirmation names the chat, the project, and everyone who gains access", () => {

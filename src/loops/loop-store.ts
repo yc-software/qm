@@ -9,7 +9,7 @@ import type {
   ShipActionPolicy,
 } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { postsInto, threadsFrom, type ScopeMove } from "../triggers/trigger-store.ts";
+import { postsInto, type ScopeMove } from "../triggers/trigger-store.ts";
 import type { ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -68,7 +68,11 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
-  retargetMovedDestinations(move: ScopeMove, members: readonly string[]): Promise<Loop[]>;
+  retargetMovedDestinations(
+    move: ScopeMove,
+    members: readonly string[],
+    ownerScopes: readonly ScopeId[],
+  ): Promise<Loop[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
@@ -198,11 +202,12 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    async retargetMovedDestinations(move, members) {
+    async retargetMovedDestinations(move, members, ownerScopes) {
       const owned = await backing.selectEntries({
-        where: { field: "ownerScopeId", anyOfFold: [...new Set(move.threads.values())] },
+        where: { field: "ownerScopeId", anyOfFold: [...new Set(ownerScopes)] },
       });
-      const tied = owned.filter(([, loop]) => postsInto(loop, threadsFrom(move, loop.ownerScopeId as ScopeId)));
+      const moved = new Set(move.threads.keys());
+      const tied = owned.filter(([, loop]) => postsInto(loop, moved));
       const stays = (loop: Loop) => members.some((member) => samePerson(member, loop.owner));
       if (tied.length)
         await backing.mutateMany(
