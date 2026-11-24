@@ -82,6 +82,7 @@ setInterval(() => {}, 1000);
         failedOnce = true;
         return reply(503, { error: "busy" });
       }
+      if (log.length === 5) return reply(422, { error: "unreadable", message: "The audio could not be read." });
       return reply(200, { text: "hello" });
     }
     Object.assign(entry, JSON.parse(body));
@@ -119,6 +120,7 @@ setInterval(() => {}, 1000);
     assert.ok(speech.every((entry) => entry.type === "audio/webm" && entry.ebml === "1a45dfa3" && entry.bytes > 1000));
     const retried = speech.filter((entry) => entry.speaker === speech[0].speaker);
     assert.deepEqual(retried[0], retried[1], "a failed upload is retried with the same segment");
+    assert.equal(speech.filter((entry) => entry.at === speech[3].at).length, 1, "an unusable segment is not retried");
     for (const speaker of ["me", "others"]) {
       const at = [...new Set(speech.filter((entry) => entry.speaker === speaker).map((entry) => entry.at))];
       assert.ok(at.length >= 3, `${speaker} segments uploaded: ${at.length}`);

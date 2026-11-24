@@ -63,6 +63,8 @@ const elapsed = (since) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
+const plural = (count) => (count === 1 ? "1 audio segment" : `${count} audio segments`);
+
 function notify(title, body, action) {
   const notification = new Notification({
     title,
@@ -98,6 +100,7 @@ function render() {
     ...Object.entries(recording?.tracks ?? {}).map(([speaker, problem]) => `${trackNames[speaker]}: ${problem}`),
     ...(recording?.othersQuiet ? ["Computer audio: nothing heard for 2 minutes"] : []),
     ...(recording?.uploadProblem ? [`Upload retrying: ${recording.uploadProblem}`] : []),
+    ...(recording?.dropped ? [`Skipped ${plural(recording.dropped.count)}: ${recording.dropped.problem}`] : []),
     ...(detectionProblem ? [`Meeting detection unavailable: ${detectionProblem}`] : []),
   ];
   tray.setContextMenu(
@@ -164,7 +167,8 @@ async function call(current, run) {
     }
     if (response) {
       problem = `HTTP ${response.status}: ${await explain(response)}`;
-      if (response.status < 500 && response.status !== 408 && response.status !== 429) throw new Error(problem);
+      if (response.status < 500 && response.status !== 408 && response.status !== 429)
+        throw Object.assign(new Error(problem), { segmentOnly: ![401, 403, 404].includes(response.status) });
     }
     current.uploadProblem = problem;
     render();
@@ -209,6 +213,10 @@ function upload(current, speaker, at, bytes) {
     if (current.failure) return;
     try {
       await meeting(current);
+    } catch (error) {
+      return fail(current, error);
+    }
+    try {
       await call(current, (signal) =>
         request(
           `/api/meetings/${current.id}/speech?${new URLSearchParams({ speaker, at: String(at) })}`,
@@ -219,7 +227,9 @@ function upload(current, speaker, at, bytes) {
         ),
       );
     } catch (error) {
-      fail(current, error);
+      if (!error.segmentOnly) return fail(current, error);
+      current.dropped = { count: (current.dropped?.count ?? 0) + 1, problem: error.message };
+      render();
     }
   });
 }
@@ -279,7 +289,7 @@ async function startRecording(detected) {
   if (current.detected && !meetingNow) endMeetingSoon();
 }
 
-export function stopRecording() {
+function stopRecording() {
   const current = recording;
   if (!current) return Promise.resolve();
   current.stopping ??= (async () => {
@@ -307,7 +317,13 @@ export function stopRecording() {
     else
       notify(
         "Meeting recorded",
-        current.silent ? "Stopped after 15 minutes without speech. QM is writing notes." : "QM is writing notes.",
+        [
+          current.silent && "Stopped after 15 minutes without speech.",
+          "QM is writing notes.",
+          current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`,
+        ]
+          .filter(Boolean)
+          .join(" "),
         open,
       );
   })();
