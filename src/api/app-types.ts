@@ -89,7 +89,7 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
+import { lentConnectors, type PublishedApp, type AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
 import type {
@@ -150,6 +150,7 @@ export function appView(d: PublishedApp): AppView {
     ...(commit ? { commit } : {}),
     ...(parentCommit ? { parentCommit } : {}),
   }));
+  const connectors = lentConnectors(d);
   return {
     id: d.id,
     ownerScopeId: d.ownerScopeId,
@@ -162,7 +163,7 @@ export function appView(d: PublishedApp): AppView {
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
-    ...(d.connectors ? { connectors: d.connectors } : {}),
+    ...(connectors.length ? { connectors } : {}),
     public: d.public === true,
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),

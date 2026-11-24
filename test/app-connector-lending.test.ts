@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createApp } from "../src/api/app.ts";
+import { appView, createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createDeployStore, WITHDRAW_LOANS_MIGRATION, type PublishedApp } from "../src/deploy/deploy-store.ts";
 import { APP_TABLES } from "../src/deploy/page-views.ts";
@@ -246,6 +246,17 @@ test("moving the app out of its publisher's library withdraws the loan", async (
   assert.ok(h.audits.some((e) => e.action === "deploy_connectors" && e.detail?.includes("moved out of")));
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /outside its publisher's own library/);
   assert.equal((await h.lend(PUBLISHER, [])).status, 200, "withdrawing still works");
+});
+
+test("a loan left on an app outside its publisher's library is refused at use", async (t) => {
+  const h = await agent(t);
+  await h.lend(PUBLISHER, ["slack.com"]);
+  assert.equal((await h.broker(get("slack.com"))).status, 200, "in the publisher's own library the loan works");
+  await h.deployStore.setOwnerScope(h.d.id, scopeId("group", "home"));
+  const sent = h.upstream.length;
+  assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
+  assert.equal(h.upstream.length, sent, "nothing leaves");
+  assert.equal(appView((await h.app.getApp(h.d.id))!).connectors, undefined, "and the app lists no loan");
 });
 
 test("while the app borrows connectors, only the publisher can share it", async (t) => {

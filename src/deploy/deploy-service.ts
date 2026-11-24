@@ -19,6 +19,7 @@ import {
   appUrlOf,
   currentVersionOf,
   deployCurrentGitRef,
+  inPublisherLibrary,
   type DeployStore,
   type PublishedApp,
   type DeployEndpoint,
@@ -752,7 +753,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         throw new DeployAccessError("unknown_connector", `not a connected-app host: ${unknown.join(", ")}`);
       if (hosts.length && d.public)
         throw new DeployAccessError("forbidden", "a public app cannot borrow connectors; make it restricted first");
-      if (hosts.length && d.ownerScopeId !== scopeId("personal", d.createdBy))
+      if (hosts.length && !inPublisherLibrary(d))
         throw new DeployAccessError(
           "forbidden",
           "an app outside its publisher's own library cannot borrow connectors; move it back there first",
