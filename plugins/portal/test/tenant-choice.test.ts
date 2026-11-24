@@ -366,7 +366,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
       [selfServed[0]!.purpose, selfServed[0]!.issuer, selfServed[0]!.subject, selfServed[0]!.email, selfServed[0]!.org],
       ["trusted-self-serve", upstreamUrl, "idp-subject", "founder@acme.test", "org:acme"],
     );
-    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", partnerChatAccount: "4242" });
+    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme" });
 
     orgs = [
       { id: "42", name: "Acme" },
