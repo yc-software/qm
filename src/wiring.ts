@@ -2002,7 +2002,7 @@ export function buildApp(
   });
   const environments = createPostgresEnvironmentStore(databaseUrl);
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
-  const loopStore = createLoopStore(artifactMap<Loop>("loops"));
+  const loopStore = createLoopStore(artifactMap<Loop>("loops", ["ownerScopeId"]));
   const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {

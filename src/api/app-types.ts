@@ -837,7 +837,7 @@ export interface AppDeps {
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
-  loops?: Pick<LoopStore, "list" | "update">;
+  loops?: Pick<LoopStore, "ownedBy" | "update">;
   sandboxResources?: Pick<SandboxResources, "getMany">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;

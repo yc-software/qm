@@ -61,7 +61,7 @@ export interface ChatMoveDeps {
   crons: Pick<CronStore, "rehome">;
   webhooks: Pick<WebhookStore, "rehome">;
   monitors?: Pick<MonitorStore, "rehome">;
-  loops?: Pick<LoopStore, "list" | "update">;
+  loops?: Pick<LoopStore, "ownedBy" | "update">;
 }
 
 export interface ChatMove {
@@ -163,8 +163,8 @@ export async function carryChatAlong(
   const loops = deps.loops;
   if (loops)
     await Promise.all(
-      (await loops.list())
-        .filter((loop) => loop.ownerScopeId === from && postsInto(loop, threadRefs))
+      (await loops.ownedBy(from))
+        .filter((loop) => postsInto(loop, threadRefs))
         .map((loop) => loops.update(loop.id, { destination: null })),
     );
   const isolations = tree.flatMap((s) => s.spawnMeta?.isolation ?? []);
