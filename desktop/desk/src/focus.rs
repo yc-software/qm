@@ -454,13 +454,13 @@ mod tests {
 
     #[test]
     fn foreground_falls_back_to_the_front_process_and_reports_both_failures() {
-        let silent = || Err("AXFocusedApplication returned -25212".to_string());
+        let silent = || Err("accessibility reported no focused application (AXError -25212)".to_string());
         assert_eq!(foreground_from(Ok(7), || panic!("accessibility already answered")).unwrap(), 7);
         assert_eq!(foreground_from(silent(), || Ok(9)).unwrap(), 9);
         let failure = foreground_from(silent(), || Err("GetFrontProcess failed (status -600)".into())).unwrap_err();
         assert_eq!(
             failure.message,
-            "Cannot identify the foreground app: AXFocusedApplication returned -25212; GetFrontProcess failed (status -600)"
+            "Cannot identify the foreground app: accessibility reported no focused application (AXError -25212); GetFrontProcess failed (status -600)"
         );
     }
 

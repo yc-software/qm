@@ -386,7 +386,10 @@ pub(crate) fn system_focused_pid() -> Result<i32, String> {
     let mut focused: CFTypeRef = std::ptr::null();
     let status =
         unsafe { AXUIElementCopyAttributeValue(system.as_CFTypeRef(), cfs("AXFocusedApplication").as_concrete_TypeRef(), &mut focused) };
-    ax_result(status, focused).as_ref().and_then(pid_of).ok_or_else(|| format!("AXFocusedApplication returned {status}"))
+    ax_result(status, focused)
+        .as_ref()
+        .and_then(pid_of)
+        .ok_or_else(|| format!("accessibility reported no focused application (AXError {status})"))
 }
 
 fn text_of(v: &CFType) -> Option<String> {
