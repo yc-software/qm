@@ -2306,7 +2306,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             })();
             const posted = spine.transcript ? postedWith(spine.transcript, stored).map(stamped) : [];
             const persisted = await tracePhase("step.persist", () =>
-              withManagedRosterVersion(() => deps.sessions.appendMany(writer, [stored, ...posted])),
+              withManagedRosterVersion(async () =>
+                posted.length
+                  ? deps.sessions.appendMany(writer, [stored, ...posted])
+                  : [await deps.sessions.append(writer, stored)],
+              ),
             );
             const appended = persisted[0]!;
             emittedEntries.push(...persisted);
