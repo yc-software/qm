@@ -665,7 +665,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         {
           ...cronTriggerAuthority(cron),
           input: script.command,
-          fireKey: `cron-trial:${randomUUID()}`,
+          fireKey: `cron:trial-${randomUUID()}`,
           surface: "cron",
           ownerFire: ownerAuthored(cron),
           cronScript: script,

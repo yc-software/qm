@@ -125,6 +125,6 @@ test("a script's trial runs in the cron's scope from any room and keeps it only 
   const patched = await control.patchCron(found.cron.id, { script: { command: failing } }, elsewhere);
   assert.ok(!patched.ok);
   assert.deepEqual((await built.app.getCron(found.cron.id))?.script, { command: "echo row 7; exit 1" });
-  const trials = (await built.sessions.listByScope(HOME)).filter((s) => s.threadRef.startsWith("cron-trial:"));
+  const trials = (await built.sessions.listByScope(HOME)).filter((s) => s.threadRef.startsWith("cron:trial-"));
   assert.equal(trials.length, 4);
 });
