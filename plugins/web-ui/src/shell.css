@@ -12078,6 +12078,19 @@ h3.ambient-field-label {
 .top-banner.dev {
   background: var(--dev-accent);
 }
+.top-banner.notify {
+  background: color-mix(in oklch, var(--background), black 6%);
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.top-banner.notify .top-banner-action {
+  color: var(--foreground);
+  background: var(--secondary);
+  border-color: var(--border);
+}
+.top-banner.notify .top-banner-action:hover {
+  background: var(--accent);
+}
 .top-banner b {
   font-weight: 700;
 }
