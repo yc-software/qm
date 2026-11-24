@@ -12,7 +12,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, Ghost, ListEnd, Paperclip, Square, X, type IconNode } from "lucide";
 import {
   api,
   ApiError,
@@ -779,7 +779,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     });
   }
 
-  function sendButton(label: string, glyph: IconNode = ArrowUp): TemplateResult {
+  function sendButton(label: string, glyph: IconNode = ctx.chat.state.ephemeral ? Ghost : ArrowUp): TemplateResult {
     return html`<button
       class="send-btn"
       type="submit"

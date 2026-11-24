@@ -1861,6 +1861,7 @@ export function createChatSurface(
     const showSuggestions =
       !ctx.inbox &&
       emptyChat &&
+      !chatState.ephemeral &&
       !editingApp &&
       !welcome.hideSuggestions &&
       !glanceTier &&
