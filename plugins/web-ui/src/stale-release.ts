@@ -11,7 +11,7 @@ function editingOutsideComposers(): boolean {
 }
 
 export function reloadIntoServedRelease(): boolean {
-  if (!servedReleaseChanged() || document.visibilityState !== "visible") return false;
+  if (!servedReleaseChanged() || document.visibilityState !== "visible" || navigator.onLine === false) return false;
   if (editingOutsideComposers() || conversationsBusy()) return false;
   location.reload();
   return true;
