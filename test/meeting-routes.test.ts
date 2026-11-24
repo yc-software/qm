@@ -188,11 +188,15 @@ test("the meeting note carries the brief, lines heard, flags and the person's no
       body: JSON.stringify({ notes }),
     });
   assert.equal((await put(7)).status, 400);
+  pins.push({ id: "qm", text: "Pinned by QM", addedBy: "alice" });
   await put("Ask about churn");
   await put(" Ask about churn and hiring ");
   assert.deepEqual(
     pins.map((pin) => [pin.text, pin.addedBy]),
-    [["Ask about churn and hiring", "alice"]],
+    [
+      ["Pinned by QM", "alice"],
+      ["Ask about churn and hiring", "meeting-notes:alice"],
+    ],
   );
   const checkIn = (slot: number, status: string, reply: string) =>
     runs.set(`${thread}:check-in:${slot}`, { createdAt: slot, result: { status, reply }, request: {} as TurnRequest });

@@ -239,11 +239,11 @@ async function stopMeeting(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 202, {});
 }
 
+const notesAuthor = (user: string) => `meeting-notes:${user}`;
+
 async function notesPin(ctx: ApiCtx, sessionId: string) {
-  const user = ctx.actor!.p;
-  return (await ctx.deps.sessions!.listPins(sessionId)).find(
-    (pin) => pin.addedBy === user && pin.entrySeq === undefined,
-  );
+  const author = notesAuthor(ctx.actor!.p);
+  return (await ctx.deps.sessions!.listPins(sessionId)).find((pin) => pin.addedBy === author);
 }
 
 function heardLine(item: Pick<Item, "externalId" | "text">) {
@@ -296,7 +296,7 @@ async function saveNotes(ctx: ApiCtx): Promise<void> {
   if (!session) return sendJson(ctx.res, 404, { error: "not_found" });
   const old = await notesPin(ctx, session.id);
   if (old) await sessions.removePin(session.id, old.id);
-  if (notes) await sessions.addPin(session.id, { text: notes, addedBy: meeting.user });
+  if (notes) await sessions.addPin(session.id, { text: notes, addedBy: notesAuthor(meeting.user) });
   return sendJson(ctx.res, 200, { notes });
 }
 
