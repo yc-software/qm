@@ -214,7 +214,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
       audit(ctx, {
         principalId: grant.grantedBy!,
         action: "grant.create",
-        resource: `${grant.principalId}/org_admin`,
+        resource: `${grant.principalId}/${grant.role}`,
         scopeLabel: grant.scopeId,
       });
     return sendJson(res, 200, { ok: true });
@@ -294,7 +294,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
       if (granted)
         audit(
           { deps, tenant: bound },
-          { ...event, action: "grant.create", resource: `${grant.principalId}/org_admin` },
+          { ...event, action: "grant.create", resource: `${grant.principalId}/${grant.role}` },
         );
     });
     return sendJson(res, 200, { tenant, created });

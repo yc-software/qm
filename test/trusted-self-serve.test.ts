@@ -29,14 +29,14 @@ const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
 
-function start(databaseUrl: string, workspaceProvisionerUrl?: string, enabled = true) {
+function start(databaseUrl: string, extra: Parameters<typeof testConfig>[0] = {}, enabled = true) {
   const built = buildApp(
     testConfig({
       databaseUrl,
       dataDir: mkdtempSync(join(tmpdir(), "self-serve-")),
       orgId: "default-org",
       signingSecret,
-      ...(workspaceProvisionerUrl ? { workspaceProvisionerUrl } : {}),
+      ...extra,
     }),
   );
   const server = createServer(built.app, {
@@ -111,13 +111,13 @@ function provisioner(t: test.TestContext) {
   return { state, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/provision?x=1` };
 }
 
-async function shared(t: test.TestContext) {
+async function shared(t: test.TestContext, extra: Parameters<typeof testConfig>[0] = {}) {
   await bindBootTenant(async () => undefined);
   t.after(() => bindBootTenant(async () => TEST_TENANT));
   const db = await twoTenants();
   t.after(() => db.close());
   const provision = provisioner(t);
-  const s = withoutTenant(() => start(db.appDatabaseUrl, provision.url));
+  const s = withoutTenant(() => start(db.appDatabaseUrl, { workspaceProvisionerUrl: provision.url, ...extra }));
   t.after(s.close);
   const directory = createPostgresDirectoryStore(db.appDatabaseUrl);
   const isAdmin = (tenant: string, subject: string) =>
@@ -129,7 +129,7 @@ async function shared(t: test.TestContext) {
 }
 
 test("cofounders signing in at once share one new workspace and every one of them is an admin", async (t) => {
-  const { db, s, directory, isAdmin } = await shared(t);
+  const { db, s, directory, isAdmin } = await shared(t, { trustedOidcAdminRole: "owner" });
   const founders = ["founder-1", "founder-2", "founder-3", "founder-4"];
   const tenants = await withoutTenant(() =>
     Promise.all(
@@ -156,7 +156,8 @@ test("cofounders signing in at once share one new workspace and every one of the
   });
   const events = await withTenant(tenant, (token) => s.built.auditLog.events(token));
   assert.equal(events.filter((e) => e.action === "tenant.self_serve.create").length, 1);
-  assert.equal(events.filter((e) => e.action === "grant.create").length, founders.length);
+  const created = events.filter((e) => e.action === "grant.create").map((e) => e.resource);
+  assert.deepEqual(created.sort(), founders.map((subject) => `${trustedPrincipal(issuer, subject)}/owner`).sort());
   const again = await withoutTenant(() =>
     selfServeWorkspace(s.config, { subject: "founder-1", email: null }, { id: "42", name: "Renamed" }),
   );
@@ -187,7 +188,7 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
   const payload = claims();
   assert.equal((await withoutTenant(() => send(s.base, payload))).status, 200);
   assert.equal((await withoutTenant(() => send(s.base, payload))).status, 409);
-  const off = withoutTenant(() => start(db.appDatabaseUrl, undefined, false));
+  const off = withoutTenant(() => start(db.appDatabaseUrl, {}, false));
   t.after(off.close);
   const noProvisioner = withoutTenant(() => start(db.appDatabaseUrl));
   t.after(noProvisioner.close);
@@ -255,7 +256,7 @@ test("a member an admin demoted does not regain admin by self-serving again", as
 test("a deployment with a boot tenant never self-serves another workspace", async (t) => {
   const db = await twoTenants();
   t.after(() => db.close());
-  const s = start(db.appDatabaseUrl, provisioner(t).url);
+  const s = start(db.appDatabaseUrl, { workspaceProvisionerUrl: provisioner(t).url });
   t.after(s.close);
   assert.equal((await send(s.base, claims({ externalOrg: { id: "boot", name: "Boot" } }))).status, 403);
 });
@@ -328,7 +329,7 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
   t.after(() => bindBootTenant(async () => TEST_TENANT));
   const db = await twoTenants();
   t.after(() => db.close());
-  const s = withoutTenant(() => start(db.appDatabaseUrl, provisioner(t).url));
+  const s = withoutTenant(() => start(db.appDatabaseUrl, { workspaceProvisionerUrl: provisioner(t).url }));
   t.after(s.close);
   await db.owner.q("DELETE FROM tenants");
   assert.equal(
