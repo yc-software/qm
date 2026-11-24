@@ -2,7 +2,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
-import { json, logUnansweredCloses } from "../../chassis/src/http.ts";
+import { destroyIfRequestFailed, json, logUnansweredCloses } from "../../chassis/src/http.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
@@ -55,7 +55,7 @@ export async function startServer(options: {
   });
   const server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
-      if (err === req.errored) return void res.destroy();
+      if (destroyIfRequestFailed(req, res, err)) return;
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });
