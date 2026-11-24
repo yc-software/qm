@@ -27,7 +27,6 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
-import { captureProvision } from "./support/orchestrator-app.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -892,14 +891,19 @@ test("native admin tools use the authenticated handler, including its live autho
 
 test("a guest in the room: the person's turn mints presence without an internal audience, and the real admin routes refuse it", async () => {
   const s = await start();
-  const captured = captureProvision(s.built.sandbox);
   try {
-    await s.built.directory.replaceChannels(
-      ["C1", "C2"].map((channelId) => ({ channelId, name: channelId, isPrivate: false })),
-      ["C1", "C2"].map((channelId) => ({ channelId, principalId: "admin-alice" })),
-    );
-    const tokenFor = async (publishMembers: TurnRequest["conversation"]["publishMembers"], channel: string) => {
-      captured.opts = undefined;
+    const replies: Array<[number, string]> = [];
+    const provision = s.built.sandbox.provision.bind(s.built.sandbox);
+    s.built.sandbox.provision = async (owner, opts) => {
+      const cap = opts?.env?.AGENT_API_TOKEN;
+      if (cap) {
+        const res = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
+        replies.push([res.status, await res.text()]);
+      }
+      return provision(owner, opts);
+    };
+    const turnIn = async (channel: string, publishMembers: TurnRequest["conversation"]["publishMembers"]) => {
+      await selectDefaultSandbox(s.built, "admin-alice", `channel:${channel}`);
       const turn = await s.built.app.turn({
         surface: "test",
         actor: { externalId: "admin-alice" },
@@ -914,18 +918,18 @@ test("a guest in the room: the person's turn mints presence without an internal 
         origin: { kind: "human" },
       });
       assert.equal(turn.status, "ok", JSON.stringify(turn));
-      return captured.opts!.env!.AGENT_API_TOKEN!;
     };
-    const internal = await tokenFor([{ externalId: "admin-alice" }, { externalId: "U1" }], "C1");
-    const guest = await tokenFor(
-      [{ externalId: "admin-alice" }, { externalId: "visitor", isExternalGuest: true }],
-      "C2",
+    await s.built.directory.replaceChannels(
+      ["C1", "C2"].map((channelId) => ({ channelId, name: channelId, isPrivate: false })),
+      ["C1", "C2"].map((channelId) => ({ channelId, principalId: "admin-alice" })),
     );
-    const spend = (token: string) => fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": token } });
-    assert.equal((await spend(internal)).status, 200);
-    const refused = await spend(guest);
-    assert.equal(refused.status, 403);
-    assert.match(((await refused.json()) as any).message, /carry a person's own authority/);
+    await turnIn("C1", [{ externalId: "admin-alice" }, { externalId: "U1" }]);
+    await turnIn("C2", [{ externalId: "admin-alice" }, { externalId: "visitor", isExternalGuest: true }]);
+    assert.deepEqual(
+      replies.map(([status]) => status),
+      [200, 403],
+    );
+    assert.match(replies[1]![1], /carry a person's own authority/);
   } finally {
     await s.close();
   }
