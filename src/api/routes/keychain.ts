@@ -231,7 +231,7 @@ const startLogin = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }
   const drops = deps.secretDrops;
   if (!drops) return sendJson(res, 404, { error: "not_found" });
   const service = keychainService(requested);
-  const saved = (await kc.listByOwner(actorId)).some((meta) => meta.service === service);
+  const saved = (await kc.listByOwner(actorId)).some((meta) => meta.service === service && meta.kind === "file");
   if (!saved && capability && !personAtKeyboard(capability)) return sendJson(res, 200, {});
   if (!livePersonTurn(ctx)) return;
   return kc.withLoginLock(`${actorId}:${service}`, async () => {

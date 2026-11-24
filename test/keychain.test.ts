@@ -1329,7 +1329,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
     assert.equal((await save("swapped", later)).status, 403);
     assert.equal((await save("swapped", await capFor(owner, undefined, { botActor: true }))).status, 403);
-    assert.equal((await post("/v1/keychain/login-tickets", { service: "gh" }, later)).status, 403);
+    assert.deepEqual(await (await post("/v1/keychain/login-tickets", { service: "gh" }, later)).json(), {});
     assert.equal(await secret(), "first");
 
     const live = await capFor(owner, undefined, liveRunClaims(owner));
@@ -1357,8 +1357,15 @@ describe("/v1/keychain routes (capability-authed)", () => {
       return { status: response.status, body: (await response.json()) as { loginTicket?: string; message?: string } };
     };
     const unattended = { triggered: true, threadRef: "dm:cron" };
+    await built.keychain!.save({ ownerId: owner, service: "aws", secret: "env", origin: "test" });
     assert.deepEqual(await start(unattended), { status: 200, body: {} });
-    await built.keychain!.save({ ownerId: owner, service: "aws", secret: "saved", origin: "test" });
+    await built.keychain!.save({
+      ownerId: owner,
+      service: "aws",
+      target: ".aws/config",
+      secret: "file",
+      origin: "test",
+    });
     assert.equal((await start(unattended)).status, 403);
 
     const conversation = (threadRef: string) => liveRunClaims(owner, threadRef);

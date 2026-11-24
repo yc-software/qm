@@ -24,9 +24,9 @@ service and conversation in the secret-drop store and returns its id. The save s
 back as `loginTicket`, and the route redeems it once the save has landed, so it allows one
 replace of that service and survives a save that fails before then.
 
-The start refuses a run that isn't the owner's live turn when the owner already has a login
-for the service (403), and answers 200 without a ticket when there is none, because a new
-login saves without one. Under an advisory lock on owner and service, it also answers 409
+The start refuses a run that isn't the owner's live turn when the owner already has a file
+login for the service (403), and answers such a run 200 without a ticket when there is none,
+because a new login saves without one. Under an advisory lock on owner and service, it also answers 409
 `login_in_progress` while an unredeemed ticket another conversation minted for the same owner
 and service is under 15 minutes old, the longest device-code lifetime among the CLIs the
 skill covers. That keeps several conversations that hit the same expired login from each
