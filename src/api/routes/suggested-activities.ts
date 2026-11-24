@@ -35,7 +35,6 @@ export const suggestedActivityRoutes: Route[] = [
       const starters = await starterActivities(
         { ...deps, fallback: deps.web?.me.suggestedActivities ?? [] },
         orgScope(deps),
-        body.principalId,
       );
       return sendJson(
         res,

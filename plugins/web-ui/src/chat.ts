@@ -110,7 +110,6 @@ import {
   inheritedTranscript,
   loadInheritedTranscript,
   makeCoreStreamFn,
-  makeOpenerStreamFn,
   makeRunResumeStreamFn,
   type LocatedRun,
   resolveApproval,
@@ -188,7 +187,6 @@ import { htmlPreviewCard } from "./html-preview";
 import { audioPlayer, dataUrl, mediaFeed, mediaKind, openMediaViewer, videoThumb, type MediaItem } from "./media";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
 import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
-import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
@@ -213,7 +211,6 @@ import {
   conversationBackground,
   cronRowMeta,
   isAbandonedNewChat,
-  shouldStartProactiveOpener,
   markWorking,
   chatSurfaceOf,
   watchActivityLabel,
@@ -294,7 +291,6 @@ function nextChatCta(): string {
 }
 const connectedConnectors = new Set<string>();
 const redrawHooks = new Set<() => void>();
-let proactiveOpenerStarted = false;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -538,7 +534,6 @@ export function createChatSurface(
   function resetChatState(): void {
     dropAbandonedNewChat(null);
     teardownActiveChat();
-    proactiveOpenerStarted = false;
     chatState.rememberedThreadRef = null;
     chatState.rememberedSessionId = null;
     chatState.rememberedScopeId = null;
@@ -589,7 +584,7 @@ export function createChatSurface(
         nextThreadRef,
         sessionId: chatState.sessionId,
         pendingSend: chatState.pendingSend,
-        hasHumanMessage: (chatState.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener),
+        hasHumanMessage: Boolean(chatState.agent?.state.messages.length),
         draft: ctx.composer.state.draft || storedDraft(ref ?? ""),
         attachments: ctx.composer.state.attachments.length,
       })
@@ -750,8 +745,7 @@ export function createChatSurface(
     });
 
     container.replaceChildren(chatState.host);
-    const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
-    const runningSince = !opening && session?.working ? session.workingSince : undefined;
+    const runningSince = session?.working ? session.workingSince : undefined;
     if (runningSince !== undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
@@ -762,55 +756,8 @@ export function createChatSurface(
     }
     ctx.composer.focusComposerEnd();
     ctx.ensureDeliveryStream();
-    if (!opening && runningSince === undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
+    if (runningSince === undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork);
     consumeBackgroundPanelRequest();
-  }
-
-  function startProactiveOpenerIfNew(
-    agent: Agent,
-    threadRef: string,
-    normalStreamFn: Agent["streamFn"],
-    onWork: (work: WorkBlock) => void,
-    sessionId: string | null,
-    scopeId: string | null,
-    messages: ReturnType<typeof itemsToMessages>,
-  ): boolean {
-    if (ctx.inbox || hasWelcomeScreen(appState.me) || appEditSlug(threadRef, appState.me?.user)) return false;
-    if (
-      !shouldStartProactiveOpener({
-        started: proactiveOpenerStarted,
-        sessionId,
-        scopeId,
-        messageCount: messages.length,
-        loaded: sessionsState.loaded,
-        sessions: sessionsState.list,
-      })
-    )
-      return false;
-    proactiveOpenerStarted = true;
-    agent.state.messages = [{ role: "user", content: "", opener: true } as unknown as AgentMessage];
-    agent.streamFn = makeOpenerStreamFn(threadRef, agent, currentTurnOptions, onWork, runSlot);
-    void (async () => {
-      try {
-        await agent.continue();
-      } catch (err) {
-        if (agent === chatState.agent) ctx.composer.state.error = errMessage(err, "Could not start the conversation.");
-      } finally {
-        if (agent === chatState.agent) {
-          agent.streamFn = normalStreamFn;
-          const last = agent.state.messages[agent.state.messages.length - 1] as AssistantMessage | undefined;
-          if (
-            last?.role === "assistant" &&
-            (last.stopReason === "error" || last.stopReason === "aborted") &&
-            !messageText(last).trim()
-          ) {
-            agent.state.messages = [];
-          }
-          drawActiveChat(agent);
-        }
-      }
-    })();
-    return true;
   }
 
   function currentTurnOptions(): TurnOptions {
@@ -1724,14 +1671,13 @@ export function createChatSurface(
       ...(roSession ? readOnly.pendingSlackMessages() : []),
     ];
     prepareMessageRows(messages);
-    const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
     const welcome = welcomeLayout({
       me: appState.me,
       sessions: sessionsState.list,
       threadRef: chatState.threadRef,
       scopeId: chatState.scopeId,
-      isNewUser,
+      saved: Boolean(chatState.sessionId),
       empty: !messages.length,
       draft: Boolean(ctx.composer.state.draft),
     });
@@ -1887,7 +1833,7 @@ export function createChatSurface(
                 ${glanceTier ? nothing : liveWorkStatus(agent)}
                 ${emptyChat && chatState.ephemeral ? ephemeralEmptyTpl() : nothing}
                 ${
-                  emptyChat && !chatState.ephemeral && !isNewUser && !editingApp && !showWelcome
+                  emptyChat && !chatState.ephemeral && !editingApp && !showWelcome
                     ? html`<h1 class="chat-cta">${chatCta()}</h1>`
                     : nothing
                 }

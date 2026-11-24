@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isWelcomeConversation } from "../src/welcome-session.ts";
+import { isWelcomeConversation, welcomeLayout, welcomeThreadRef } from "../src/welcome-session.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
 
 const first: CoreSession = {
@@ -36,4 +36,25 @@ test("ideas chats never show the welcome or take the first welcome slot", () => 
   assert.equal(isWelcomeConversation([], "alex", ideas.threadRef, null), false);
   assert.equal(isWelcomeConversation([ideas], "alex", first.threadRef, null), true);
   assert.equal(isWelcomeConversation([ideas, first], "alex", first.threadRef, null), true);
+});
+
+test("everyone gets the welcome on /onboard and in their first chat, seeds or not", () => {
+  const me = { user: "alex", org: "acme" };
+  const busy = Array.from({ length: 30 }, (_, i) => ({
+    ...first,
+    id: `shared${i}`,
+    scopeId: "channel:C1",
+    threadRef: `slack:C1:${i}`,
+  }));
+  const view = { me, sessions: [...busy, first, later], scopeId: null, saved: false, empty: true, draft: false };
+  const onboard = welcomeLayout({ ...view, threadRef: welcomeThreadRef("alex") });
+  assert.deepEqual(onboard, { show: true, hideSuggestions: true, hideComposer: false });
+  assert.equal(welcomeLayout({ ...view, threadRef: "web:alex:new" }).show, false);
+  assert.equal(welcomeLayout({ ...view, threadRef: welcomeThreadRef("alex"), empty: false }).show, false);
+  assert.equal(welcomeLayout({ ...view, sessions: busy, threadRef: "web:alex:new" }).show, true);
+  assert.equal(welcomeLayout({ ...view, sessions: busy, threadRef: "web:alex:new", saved: true }).show, false);
+  const seeds = { activities: [{ id: "a", title: "A", prompt: "A", icon: "yc" }], apps: {} };
+  const seeded = welcomeLayout({ ...view, me: { ...me, welcome: seeds }, threadRef: welcomeThreadRef("alex") });
+  assert.deepEqual(seeded, { show: true, hideSuggestions: true, hideComposer: true });
+  assert.equal(welcomeLayout({ ...view, me: null, threadRef: welcomeThreadRef("alex") }).show, false);
 });

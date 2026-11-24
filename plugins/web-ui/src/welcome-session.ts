@@ -1,5 +1,5 @@
 import type { CoreSession } from "./core-bridge";
-import { hasWelcomeScreen, type Me } from "./shell-state.ts";
+import type { Me } from "./shell-state.ts";
 
 export const welcomeThreadRef = (user: string): string => `web:${user}:welcome:${crypto.randomUUID()}`;
 
@@ -34,18 +34,16 @@ export function welcomeLayout(view: {
   sessions: readonly CoreSession[];
   threadRef: string | null;
   scopeId: string | null;
-  isNewUser: boolean;
+  saved: boolean;
   empty: boolean;
   draft: boolean;
 }): { show: boolean; hideSuggestions: boolean; hideComposer: boolean } {
   const { me, threadRef, empty } = view;
-  const first = Boolean(me && isWelcomeConversation(view.sessions, me.user, threadRef, view.scopeId));
-  const seeded = Boolean(me?.welcome) && empty && (first || Boolean(threadRef?.startsWith(`web:${me?.user}:welcome:`)));
-  const standard = me && hasWelcomeScreen(me) ? first : view.isNewUser && empty;
-  const show = me?.welcome ? seeded : standard;
-  return {
-    show,
-    hideSuggestions: (view.isNewUser && hasWelcomeScreen(me)) || seeded,
-    hideComposer: seeded && !view.draft,
-  };
+  if (!me) return { show: false, hideSuggestions: false, hideComposer: false };
+  const requested = Boolean(threadRef?.startsWith(`web:${me.user}:welcome:`));
+  const first =
+    (!view.saved || Boolean(me.welcomeCohort)) &&
+    isWelcomeConversation(view.sessions, me.user, threadRef, view.scopeId);
+  const show = (requested || first) && (empty || Boolean(me.welcomeCohort));
+  return { show, hideSuggestions: show, hideComposer: show && empty && Boolean(me.welcome) && !view.draft };
 }

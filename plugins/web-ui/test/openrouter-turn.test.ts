@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { Context } from "@earendil-works/pi-ai";
-import { makeOpenerStreamFn } from "../src/core-bridge.ts";
+import { makeCoreStreamFn } from "../src/core-bridge.ts";
 import { getModelOptions } from "../src/model-options.ts";
 
 const realFetch = globalThis.fetch;
@@ -32,13 +32,10 @@ test("a web turn submits the fetched OpenRouter model selected by runtime config
     submitted.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Response.json({ status: "ok", reply: "ready" });
   }) as typeof fetch;
-  const agent = { state: { model, messages: [], tools: [] } } as unknown as Agent;
-  const stream = await makeOpenerStreamFn(
-    "web:alice:new",
-    agent,
-    () => ({ effortLevel: "high" }),
-    undefined,
-  )(model, {} as Context);
+  const agent = {
+    state: { model, messages: [{ role: "user", content: "hello", timestamp: 0 }], tools: [] },
+  } as unknown as Agent;
+  const stream = await makeCoreStreamFn("web:alice:new", agent, () => ({ effortLevel: "high" }))(model, {} as Context);
   await stream.result();
   assert.equal(submitted[0]?.model, "anthropic/claude-sonnet-4.5");
 });

@@ -394,8 +394,8 @@ export function forkCutSeq(
   floorSeq = -1,
 ): number | undefined {
   const isUser = (message: unknown): boolean => {
-    const m = message as { role?: string; opener?: boolean; resumeAnchor?: boolean } | undefined;
-    return (m?.role === "user" || m?.role === "user-with-attachments") && !m.opener && !m.resumeAnchor;
+    const m = message as { role?: string; resumeAnchor?: boolean } | undefined;
+    return (m?.role === "user" || m?.role === "user-with-attachments") && !m.resumeAnchor;
   };
   let base = floorSeq;
   let unsaved = 0;
@@ -1113,7 +1113,7 @@ export function makeCoreStreamFn(
     options?: { signal?: AbortSignal },
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, false, slot, onSendIssues);
+    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, slot, onSendIssues);
     return stream;
   };
   return fn as unknown as StreamFn;
@@ -1303,25 +1303,6 @@ function approvalFailureMessage(e: unknown): string {
   return errMessage(e);
 }
 
-export function makeOpenerStreamFn(
-  threadRef: string,
-  agent: Agent,
-  getTurnOptions: (() => TurnOptions) | undefined,
-  onWork: WorkObserver | undefined,
-  slot?: RunSlot,
-): StreamFn {
-  const fn = (
-    model: Model<Api>,
-    _context: Context,
-    options?: { signal?: AbortSignal },
-  ): AssistantMessageEventStream => {
-    const stream = createAssistantMessageEventStream();
-    void drive(stream, model, threadRef, agent, getTurnOptions, options?.signal, onWork, true, slot);
-    return stream;
-  };
-  return fn as unknown as StreamFn;
-}
-
 function turnRequestBody(
   threadRef: string,
   text: string,
@@ -1377,7 +1358,6 @@ async function drive(
   getTurnOptions?: () => TurnOptions,
   signal?: AbortSignal,
   onWork?: WorkObserver,
-  opener?: boolean,
   slot?: RunSlot,
   onSendIssues?: SendIssueObserver,
 ): Promise<void> {
@@ -1391,17 +1371,8 @@ async function drive(
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
 
-    const { text, attachments, idempotencyKey, issues, droppedIds, retryable } = opener
-      ? {
-          text: "",
-          attachments: [] as CoreAttachment[],
-          idempotencyKey: undefined,
-          issues: [] as string[],
-          droppedIds: [] as string[],
-          retryable: [] as Attachment[],
-        }
-      : await latestUserTurn(agent);
-    if (!opener && ((!text.trim() && attachments.length === 0) || retryable.length > 0)) {
+    const { text, attachments, idempotencyKey, issues, droppedIds, retryable } = await latestUserTurn(agent);
+    if ((!text.trim() && attachments.length === 0) || retryable.length > 0) {
       work.status = "failed";
       work.finishedAt = Date.now();
       notify();
@@ -1419,19 +1390,14 @@ async function drive(
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
         midTurn: "queue",
-        ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
 
     if (submit.runId) {
-      if (!opener) {
-        const userMessages = agent.state.messages.filter(
-          (message) =>
-            (message.role === "user" || message.role === "user-with-attachments") &&
-            !(message as { opener?: boolean }).opener,
-        );
-        captureMessage(submit.runId, userMessages.length === 1);
-      }
+      const userMessages = agent.state.messages.filter(
+        (message) => message.role === "user" || message.role === "user-with-attachments",
+      );
+      captureMessage(submit.runId, userMessages.length === 1);
       const message = agent.state.messages.find((message) => idempotencyKey && sendKeyOf(message) === idempotencyKey);
       if (message) (message as unknown as HistoryUserMessage).runId = submit.runId;
       await followRun(stream, partial, submit.runId, signal, notify, undefined, slot, gen);

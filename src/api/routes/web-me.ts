@@ -59,7 +59,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
-    starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
+    starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps)),
     deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);

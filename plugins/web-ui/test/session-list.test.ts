@@ -11,7 +11,6 @@ import {
   sidebarSessions,
   applySessionState,
   isAbandonedNewChat,
-  shouldStartProactiveOpener,
   bumpActivity,
   chatBrowseStatusMatches,
   clearWorking,
@@ -645,34 +644,6 @@ test("a new chat with anything worth keeping is not abandoned", () => {
   assert.equal(isAbandonedNewChat({ ...base, sessionId: "s1" }), false, "saved session");
   assert.equal(isAbandonedNewChat({ ...base, nextThreadRef: "web:alice:t1" }), false, "remounting the same chat");
   assert.equal(isAbandonedNewChat({ ...base, threadRef: null }), false, "no chat mounted");
-});
-
-test("first personal chat opens proactively even when background suggestions already ran", () => {
-  const first = {
-    started: false,
-    sessionId: null,
-    scopeId: null,
-    messageCount: 0,
-    loaded: true,
-    sessions: [],
-  };
-  assert.equal(shouldStartProactiveOpener(first), true);
-  assert.equal(
-    shouldStartProactiveOpener({
-      ...first,
-      sessions: [{ ...saved("refresh", "cron:refresh:fire:1"), surface: "cron" }],
-    }),
-    true,
-  );
-  assert.equal(shouldStartProactiveOpener({ ...first, sessions: [pending("web:alice:draft")] }), true);
-  for (const threadRef of ["web:alice:previous", "dm:D123:123.456", "ch:C123:123.456"]) {
-    assert.equal(shouldStartProactiveOpener({ ...first, sessions: [saved("previous", threadRef)] }), false);
-  }
-  assert.equal(shouldStartProactiveOpener({ ...first, started: true }), false);
-  assert.equal(shouldStartProactiveOpener({ ...first, loaded: false }), false);
-  assert.equal(shouldStartProactiveOpener({ ...first, sessionId: "existing" }), false);
-  assert.equal(shouldStartProactiveOpener({ ...first, scopeId: "channel:C123" }), false);
-  assert.equal(shouldStartProactiveOpener({ ...first, messageCount: 1 }), false);
 });
 
 test("sidebar excludes attached subagents including pinned and orphaned children", () => {
