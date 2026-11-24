@@ -37,6 +37,29 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
   return target.href;
 }
 
+const RETRY_WINDOW_MS = 30 * 60_000;
+const UNFINISHED_ATTEMPTS = 3;
+
+async function unfinishedAttempts(ctx: ApiCtx, key: string, userId: string, toolkit: string) {
+  const query = new URLSearchParams({
+    user_ids: userId,
+    toolkit_slugs: toolkit,
+    order_by: "created_at",
+    order_direction: "desc",
+    limit: String(UNFINISHED_ATTEMPTS),
+  });
+  const data = await request(ctx, key, `/connected_accounts?${query}`);
+  const recent = (Array.isArray(data.items) ? data.items : []).map((item) => ({
+    status: String(item?.status),
+    reason: typeof item?.status_reason === "string" ? item.status_reason : null,
+    createdAt: String(item?.created_at),
+  }));
+  const failing = recent.filter(
+    (item) => item.status !== "ACTIVE" && Date.now() - Date.parse(item.createdAt) < RETRY_WINDOW_MS,
+  );
+  return failing.length >= UNFINISHED_ATTEMPTS ? failing : null;
+}
+
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
   if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx, true);
@@ -74,6 +97,13 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
   }
   const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
+    const failing = ctx.capability ? await unfinishedAttempts(ctx, access.key, userId, toolkit) : null;
+    if (failing)
+      return sendJson(ctx.res, 429, {
+        error: "connect_attempts_unfinished",
+        attempts: failing,
+        message: `The person's last ${UNFINISHED_ATTEMPTS} ${toolkit} connect links in the past ${RETRY_WINDOW_MS / 60_000} minutes did not finish, so no new link was created. Do not send another link; ask what they saw when they tried. They can still retry by hand from QM's web settings.`,
+      });
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
       toolkits: { enable: [toolkit] },
