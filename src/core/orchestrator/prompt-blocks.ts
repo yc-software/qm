@@ -1,3 +1,4 @@
+import type { ClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
 import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
@@ -142,7 +143,18 @@ export function shownPlace(surface: string | undefined, ctx: GatewayContext | un
   };
 }
 
-export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
+const CLIENT_LINES: Record<ClientSurface, string> = {
+  desktop: "Sent from the QM desktop app.",
+  browser: "Sent from a web browser.",
+  ios: "Sent from the QM iOS app.",
+};
+
+export function renderGatewayContext(
+  surface: string | undefined,
+  ctx?: GatewayContext,
+  dmWith?: string,
+  client?: ClientSurface,
+): string {
   const gateway = (surface ?? "").trim();
   const { location } = shownPlace(surface, ctx, dmWith !== undefined);
   const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details });
@@ -155,6 +167,7 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   else if (place && location) lines.push(`${place}, in ${location}.`);
   else if (place) lines.push(`${place} conversation.`);
   else if (location) lines.push(`In ${location}.`);
+  if (client) lines.push(CLIENT_LINES[client]);
   if (details.length) {
     lines.push("Identifiers for this conversation (use these if you need to act on it directly):");
     for (const [k, v] of details) lines.push(`- ${k}: ${v}`);

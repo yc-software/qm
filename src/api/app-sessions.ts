@@ -720,7 +720,7 @@ export function createSessionMethods(
       if (!id) return null;
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
-      const { clientTools: _clientTools, ...row } = withoutStoredFacts(session);
+      const row = withoutStoredFacts(session);
       const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },

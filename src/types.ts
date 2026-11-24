@@ -139,7 +139,6 @@ export interface SpawnMeta {
 }
 
 export interface Session {
-  clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;
   scopeId: ScopeId;

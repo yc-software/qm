@@ -41,7 +41,8 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope, resolveSelfRead, selfReadAudience } from "./shared.ts";
+import { audit, isObj, orgScope, resolveSelfRead } from "./shared.ts";
+import { selfReadAudience } from "../../auth/self-read-audience.ts";
 import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,

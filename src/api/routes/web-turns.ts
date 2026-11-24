@@ -9,7 +9,7 @@ import type { TurnRequest } from "../../types.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
-import { postRunSignal, postTurn } from "./turns.ts";
+import { CLIENT_RESULT_MAX_BODY_BYTES, postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
 import { ownsWebThread } from "../../directory/person.ts";
 import { type ApiCtx, type Route, tenantOf } from "./route.ts";
@@ -299,7 +299,7 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
     ...ctx,
     body: {
       kind,
-      ...(kind === "client_result" ? { callId: p.callId, result: p.result, desktopClientId: p.desktopClientId } : {}),
+      ...(kind === "client_result" ? { callId: p.callId, result: p.result } : {}),
       ...(text !== undefined ? { text } : {}),
       ...(request ? { request } : {}),
       ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
@@ -343,7 +343,7 @@ export const webTurnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     browser: "embed",
     actor: "person",
     auth: "source",
-    maxBodyBytes: 6_000_000,
+    maxBodyBytes: CLIENT_RESULT_MAX_BODY_BYTES,
     handle: webRunSignal,
   },
 ];

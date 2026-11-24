@@ -115,6 +115,8 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["DELETE /api/ephemeral", "/v1/web/ephemeral"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
+  ["POST /api/desktop/calls/:callId/claim", "/v1/web/desktop/calls/:callId/claim"],
+  ["POST /api/desktop/calls/:callId/result", "/v1/web/desktop/calls/:callId/result"],
   ["GET /api/deliveries/events", "/v1/web/events"],
   ["GET /me", "/v1/web/me"],
   ["GET /api/push", "/v1/web/push"],

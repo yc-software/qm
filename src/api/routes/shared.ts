@@ -8,11 +8,12 @@ import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
+import { selfReadAudience, type SelfReadAudience } from "../../auth/self-read-audience.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
-import { personAtKeyboard, selfReadAudience, type SelfReadAudience } from "../artifact-share.ts";
+import { personAtKeyboard } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -70,8 +71,6 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   });
   return false;
 }
-
-export { selfReadAudience, type SelfReadAudience };
 
 export function resolveSelfRead(
   ctx: ApiCtx,

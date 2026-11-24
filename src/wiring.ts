@@ -2289,6 +2289,7 @@ export function buildApp(
     advisoryLock,
     admittedWork,
     sessionStateBus,
+    uiState,
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,

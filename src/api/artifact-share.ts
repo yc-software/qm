@@ -5,8 +5,6 @@ import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId, type ScopeKind } from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { ownPrivateConversation } from "../directory/person.ts";
 
 export const SHARED_SKILL_TRIGGER_REFUSAL =
   "a skill in a shared scope can only be changed by a person, not an automated trigger";
@@ -158,23 +156,3 @@ export type ShareArtifactResult =
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };
-
-export type SelfReadAudience = { inOwnPrivate: boolean; roomScope?: ScopeId };
-
-export function selfReadAudience(
-  capability: CapabilityClaims | null | undefined,
-  principalId: string,
-): SelfReadAudience {
-  if (!capability) return { inOwnPrivate: true };
-  const audience =
-    capability.audienceScopeId ??
-    capability.destination?.audienceScopeId ??
-    (capability.triggered === true ? undefined : capability.scopeId);
-  if (ownPrivateConversation(principalId, capability.scopeId, audience)) {
-    return { inOwnPrivate: true };
-  }
-  return {
-    inOwnPrivate: false,
-    roomScope: audience && parseScopeId(audience).kind !== "personal" ? audience : undefined,
-  };
-}
