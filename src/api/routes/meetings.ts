@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { reportBackendError } from "../../../plugins/chassis/src/error-reporting.ts";
 import { overheardItem } from "../../agent/replay.ts";
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
@@ -14,6 +15,8 @@ import { meetingThread, webTurnBase } from "./web-turns.ts";
 const CHECK_IN_MS = 120_000;
 const PROMPT_CHARS = 1_000;
 const PROMPT_LINES = 12;
+const START_WAIT_MS = 10_000;
+const START_POLL_MS = 100;
 
 const CHECK_IN =
   "Meeting check-in. Reply only with something worth a glance mid-meeting: a claim you checked that is wrong or materially off (what was said, what is true, the source), or context the person would want right now. One or two lines, no summaries. Otherwise end with finish_silently.";
@@ -102,6 +105,11 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
     },
   );
   if (refused) return sendJson(ctx.res, 403, { error: "refused", message: refused });
+  for (let waited = 0; waited < START_WAIT_MS; waited += START_POLL_MS) {
+    const started = await ctx.deps.runs!.getByDedupKey(`${meeting.threadRef}:start`);
+    if (!started || started.turnUserSeq !== null || started.status === "done" || started.status === "failed") break;
+    await sleep(START_POLL_MS);
+  }
   return sendJson(ctx.res, 201, { path: `/s/${encodeURIComponent(spawned.session.id)}` });
 }
 
