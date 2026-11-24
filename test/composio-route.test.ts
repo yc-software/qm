@@ -1474,7 +1474,7 @@ test("API-key apps ask for a key and MCP-server apps are left to connectors, nev
     item("gmail", "OAUTH2"),
     item("notion", "OAUTH2", "API_KEY"),
     item("granola_mcp", "DCR_OAUTH"),
-    item("openai", "API_KEY"),
+    item("openai", "API_KEY", "NO_AUTH"),
     item("acme", "BASIC"),
   ];
   f.replies.push({ items: catalog });
