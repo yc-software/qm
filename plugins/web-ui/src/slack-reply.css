@@ -6,7 +6,12 @@ qm-slack-reply {
   width: min(var(--content-w), 100%);
   box-sizing: border-box;
   margin: 0 auto;
-  padding: 12px var(--composer-inset) 20px;
+  padding: 12px var(--composer-inset) max(20px, calc(10px + env(safe-area-inset-bottom)));
+}
+@container chat (max-width: 860px) {
+  .slack-reply-box {
+    padding-inline: 8px;
+  }
 }
 .slack-reply-box .welcome-slack {
   max-width: none;
@@ -14,25 +19,15 @@ qm-slack-reply {
 }
 .slack-reply-pill {
   position: relative;
-  z-index: 1;
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) 32px;
   align-items: end;
   gap: 10px;
-  width: min(var(--content-w), calc(100% - 32px));
   box-sizing: border-box;
-  margin: 0 auto max(18px, calc(10px + env(safe-area-inset-bottom)));
   padding: 7px 7px 7px 11px;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--background);
-  anchor-name: --qm-composer;
-}
-@container chat (max-width: 470px) {
-  .slack-reply-pill {
-    width: calc(100% - 16px);
-    margin-bottom: calc(8px + env(safe-area-inset-bottom));
-  }
 }
 .slack-reply-pill > .inbox-avatar {
   grid-area: 1 / 1;

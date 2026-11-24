@@ -3516,7 +3516,7 @@ qm-markdown .tok-in {
   min-width: 0;
   anchor-scope: --qm-composer;
 }
-.chat-bottom-dock .composer-wrap {
+.chat-bottom-dock :is(.composer-wrap, .slack-reply-pill) {
   anchor-name: --qm-composer;
 }
 .scroll-bottom-btn {
