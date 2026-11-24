@@ -6,6 +6,7 @@ import { createSandboxResources, type SandboxDefault, type SandboxResource } fro
 import { createSandboxRouter, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import {
+  tenantEgressProxyUrl,
   tenantNamePrefix,
   tenantSandboxChoice,
   tenantSuperserveSandbox,
@@ -27,10 +28,17 @@ const deployment = { backend: "sprites" as const, scopeBackends: { personal: "mo
 
 before(() => bindBootTenant(async () => undefined));
 
-function fakeBackend(name: string, provisioned: string[]): Sandbox {
+function fakeBackend(name: string, provisioned: string[], honorsTenantProxy = false): Sandbox {
   const handle = (): SandboxHandle => ({ id: `${name}-box`, rootDir: "/w" });
   return {
-    profile: { backend: name, writablePersistence: "resident_disk", processSessions: false },
+    profile: {
+      backend: name,
+      writablePersistence: "resident_disk",
+      processSessions: false,
+      get egressEnforcement() {
+        return honorsTenantProxy && tenantEgressProxyUrl() ? ("domain" as const) : ("none" as const);
+      },
+    },
     provision: async () => (provisioned.push(name), handle()),
     run: async () => ({ stdout: name, stderr: "", code: 0, timedOut: false }),
     readFile: async () => null,
@@ -98,7 +106,7 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
     const [a, b] = db.tenants;
     const provisioned: string[] = [];
     const backends: Partial<Record<SandboxBackendName, Sandbox>> = {
-      sprites: fakeBackend("sprites", provisioned),
+      sprites: fakeBackend("sprites", provisioned, true),
       superserve: fakeBackend("superserve", provisioned),
     };
     const resources = createSandboxResources({
@@ -125,6 +133,9 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
         withTenant(a, () => router.provision(scope, { scratch: { key: "k" } })),
         /sandbox backend superserve can't send this organization's sandbox traffic through its egress proxy/,
       );
+      await set(a, { egressProxyUrl: "https://proxy.example.com" });
+      await withTenant(a, () => router.provision(scope, { scratch: { key: "k" } }));
+      assert.equal(provisioned.at(-1), "sprites");
     } finally {
       await set(a, moved);
     }

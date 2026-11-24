@@ -43,7 +43,8 @@ import {
   type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
-import { TenantKeyedMap, tenantModalNamePrefix } from "./tenant-sandbox-shape.ts";
+import { TenantKeyedMap, tenantEgressProxyUrl, tenantModalNamePrefix } from "./tenant-sandbox-shape.ts";
+import { createModalEgress, egressReplaceFailed, type ModalEgressRecord } from "./modal-egress.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -68,7 +69,7 @@ const swallowGone = (error: unknown): void => {
 };
 const SNAPSHOT_PRUNE = ["./.qm-hydrated", ...HOME_SNAPSHOT_PRUNE];
 
-export interface StoredModalSandbox extends SnapshotBookkeeping {
+export interface StoredModalSandbox extends SnapshotBookkeeping, ModalEgressRecord {
   sandboxId: string;
   hydrationPending?: boolean;
   nativeSnapshotId?: string;
@@ -105,7 +106,8 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
 }
 
 export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
-  const client = opts.client;
+  const egress = createModalEgress(opts.egressProxyUrl);
+  const client = egress.client(opts.client);
   const deploymentPrefix = opts.namePrefix ?? "qm";
   const namePrefix = (): Promise<string> => tenantModalNamePrefix(deploymentPrefix);
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -226,12 +228,16 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
-      if (!adopted) throw err;
+      if (!adopted || egress.stale({})) throw err;
       if ((await store.get(scope))?.hydrationPending)
         throw new Error("Modal home hydration is incomplete; refusing to adopt the replacement", { cause: err });
       await assertHydrated(adopted);
       sessionByName.set(name, adopted);
-      const merged = await store.merge(scope, { sandboxId: adopted.sandboxId, lastActivityMs: Date.now() });
+      const merged = await store.merge(scope, {
+        sandboxId: adopted.sandboxId,
+        lastActivityMs: Date.now(),
+        egressPolicy: egress.createdPolicy(adopted.sandboxId),
+      });
       if (!merged) {
         await store.put(scope, {
           sandboxId: adopted.sandboxId,
@@ -251,6 +257,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       createdAtMs: Date.now(),
       lastActivityMs: Date.now(),
       orgId: configOrgId(),
+      egressPolicy: egress.createdPolicy(session.sandboxId),
     });
     const terminateOrphan = (): Promise<unknown> =>
       session.terminate().then(
@@ -299,16 +306,30 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         return { session, coldStart: false };
       };
 
-      const stored = await store.get(scope);
+      let stored = await store.get(scope);
       if (stored?.hydrationPending)
         throw new Error(
           "Modal home hydration was interrupted; use computer restart to discard the incomplete replacement and retry the retained checkpoint",
         );
+      const found = stored ? null : await client.fromName(name);
+      if (found) {
+        await assertHydrated(found);
+        stored = {
+          sandboxId: found.sandboxId,
+          createdAtMs: Date.now(),
+          lastActivityMs: Date.now(),
+          orgId: configOrgId(),
+        };
+        await store.put(scope, stored);
+        sessionByName.set(name, found);
+      }
+      const egressStale = egress.stale(stored);
       const stale =
-        allowRotation &&
         !!stored &&
-        Date.now() - stored.createdAtMs > rotateAfterMs &&
-        Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
+        (egressStale ||
+          (allowRotation &&
+            Date.now() - stored.createdAtMs > rotateAfterMs &&
+            Date.now() >= (rotationHoldUntil.get(scope) ?? 0)));
 
       const cached = cachedFor(name, stored?.sandboxId);
       if (cached && !stale) return { session: cached, coldStart: false };
@@ -339,6 +360,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await snapshotHome(scope, session);
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
+              if (egressStale) throw egressReplaceFailed(e);
               reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope);
               rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
@@ -350,6 +372,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await session.terminate();
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
+              if (egressStale) throw egressReplaceFailed(e);
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
               rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
@@ -363,21 +386,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
           await store.delete(scope).catch(swallowAs("modal-sandbox: forget retired sandbox", undefined));
       }
 
-      if (!stored) {
-        const found = await client.fromName(name);
-        if (found) {
-          await assertHydrated(found);
-          await store.put(scope, {
-            sandboxId: found.sandboxId,
-            createdAtMs: Date.now(),
-            lastActivityMs: Date.now(),
-            orgId: configOrgId(),
-          });
-          sessionByName.set(name, found);
-          return { session: found, coldStart: false };
-        }
-      }
-
       onStatus?.("Creating the sandbox…");
       return createHydrated(scope, name);
     });
@@ -388,6 +396,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
+      if (await egress.retireStaleScratch(sessionByName.get(name), active)) sessionByName.delete(name);
       if (active === 0 && !sessionByName.has(name)) {
         const session = await client.create({ tags: tags("scratch") });
         sessionByName.set(name, session);
@@ -478,7 +487,9 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     writablePersistence: "provider_managed",
     sizesMemory: true,
     processSessions: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    get egressEnforcement() {
+      return tenantEgressProxyUrl(opts.egressProxyUrl) ? ("domain" as const) : ("none" as const);
+    },
     spec: {
       os: "Debian 12 — Modal sandbox (24h max lifetime; home checkpoints have limited retention; publish durable work to git or Files)",
       runtimes: ["Node 24", "Python 3"],
@@ -754,11 +765,11 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
+      const proxy = egress.proxyUrl();
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
+      const env = proxy && provOpts?.egressToken ? forceThroughProxyEnv(proxy, provOpts.egressToken, turnEnv) : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,

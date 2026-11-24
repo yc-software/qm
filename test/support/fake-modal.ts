@@ -17,6 +17,7 @@ interface FakeRecord {
   state: "running" | "terminated";
   home: string;
   createdAt: number;
+  egressProxyUrl?: string;
 }
 
 export interface FakeModal {
@@ -31,6 +32,8 @@ export interface FakeModal {
   failTerminateOnce(): void;
   execScripts(): string[];
   tagsOf(sandboxId: string): Record<string, string>;
+  egressOf(sandboxId: string): string | undefined;
+  newest(): string;
   createUntracked(tags: Record<string, string>): string;
   cleanup(): void;
 }
@@ -117,7 +120,7 @@ export function installFakeModal(): FakeModal {
     },
   });
 
-  const spawn = (name: string | undefined, tags: Record<string, string>): FakeRecord => {
+  const spawn = (name: string | undefined, tags: Record<string, string>, egressProxyUrl?: string): FakeRecord => {
     const id = `sb-${nextId++}`;
     const r: FakeRecord = {
       sandboxId: id,
@@ -126,6 +129,7 @@ export function installFakeModal(): FakeModal {
       state: "running",
       home: join(root, id),
       createdAt: ++clock,
+      ...(egressProxyUrl ? { egressProxyUrl } : {}),
     };
     mkdirSync(r.home, { recursive: true });
     records.set(id, r);
@@ -140,7 +144,7 @@ export function installFakeModal(): FakeModal {
           throw new ModalNameConflictError(opts.name, "sandbox with this name already exists");
         }
       }
-      return session(spawn(opts.name, opts.tags ?? {}));
+      return session(spawn(opts.name, opts.tags ?? {}, opts.egressProxyUrl));
     },
     async fromId(sandboxId): Promise<ModalSession> {
       const r = records.get(sandboxId);
@@ -195,6 +199,8 @@ export function installFakeModal(): FakeModal {
       if (!r) throw new Error(`fake-modal: no sandbox ${sandboxId}`);
       return { ...r.tags };
     },
+    egressOf: (sandboxId) => records.get(sandboxId)?.egressProxyUrl,
+    newest: () => [...records.values()].at(-1)!.sandboxId,
     createUntracked: (tags) => spawn(undefined, tags).sandboxId,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";
+import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createSpritesSandbox, type StoredSprite } from "../src/sandbox/sprites-sandbox.ts";
 import {
   TenantKeyedMap,
@@ -17,6 +18,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { scopeId } from "../src/types.ts";
+import { installFakeModal } from "./support/fake-modal.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN } from "./support/fake-sprites.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
@@ -117,13 +119,85 @@ describeTwoTenants("per-tenant sandbox shape", (db) => {
         baseUrl: fake.baseUrl,
         egressProxyUrl: "https://deployment-proxy.example.com",
       });
-      const kept = await withTenant(b, () => deploymentWide.provision(scope, { egressToken: "t" }));
+      const kept = await withTenant(b, () =>
+        deploymentWide.provision(scopeId("personal", "other@example.com"), { egressToken: "t" }),
+      );
       assert.equal(new URL(kept.env!.HTTPS_PROXY!).hostname, "deployment-proxy.example.com");
       await switchA(moved);
       const reopened = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
       assert.equal(reopened.env?.HTTPS_PROXY, undefined);
       assert.deepEqual(fake.policy(ha.id), []);
     } finally {
+      fake.cleanup();
+    }
+  });
+
+  test("a Modal tenant's own egress proxy locks its sandboxes to it, and switching it replaces the sandbox but keeps its home", async () => {
+    const [a, b] = db.tenants;
+    const switchA = async (settings: object) => {
+      await db.owner.q("UPDATE tenants SET settings = $2::jsonb WHERE id = $1", [a, JSON.stringify(settings)]);
+      await withTenant(a, () => loadTenantSettings(db.app));
+    };
+    const fake = installFakeModal();
+    const sandboxFor = (namePrefix: string, egressProxyUrl?: string) =>
+      createModalSandbox({
+        client: fake.client,
+        advisoryLock: testAdvisoryLock(),
+        namePrefix,
+        store: db.maps.map<StoredModalSandbox>("modal_sandbox_bodies"),
+        ...(egressProxyUrl ? { egressProxyUrl } : {}),
+      });
+    const live = (id: string) => fake.current(id)!.sandboxId;
+    try {
+      const sandbox = sandboxFor("qmm");
+      const before = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      await withTenant(a, () => sandbox.run(before, "echo kept > ~/note"));
+      const opened = live(before.id);
+      assert.equal(fake.egressOf(opened), undefined);
+      await switchA({ ...moved, egressProxyUrl: "https://proxy.example.com" });
+      fake.failTerminateOnce();
+      await assert.rejects(
+        withTenant(a, () => sandbox.provision(scope, { egressToken: "t" })),
+        /has to be replaced to apply its organization's egress setting/,
+      );
+      const locked = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      const lockedId = live(locked.id);
+      assert.notEqual(lockedId, opened);
+      assert.equal(fake.egressOf(live(locked.id)), "https://proxy.example.com");
+      assert.equal(new URL(locked.env!.HTTPS_PROXY!).hostname, "proxy.example.com");
+      assert.equal((await withTenant(a, () => sandbox.run(locked, "cat ~/note"))).stdout.trim(), "kept");
+      assert.equal(
+        withTenant(a, () => sandbox.profile.egressEnforcement),
+        "domain",
+      );
+      const again = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      assert.equal(live(again.id), lockedId);
+      const scratch = await withTenant(a, () => sandbox.provision(scope, { scratch: { key: "k" }, egressToken: "t" }));
+      assert.ok(scratch.scratch);
+      assert.equal(fake.egressOf(fake.newest()), "https://proxy.example.com");
+      const hb = await withTenant(b, () => sandbox.provision(scope, { egressToken: "t" }));
+      assert.equal(fake.egressOf(live(hb.id)), undefined);
+      assert.equal(hb.env?.HTTPS_PROXY, undefined);
+      assert.equal(
+        withTenant(b, () => sandbox.profile.egressEnforcement),
+        "none",
+      );
+      const deploymentWide = sandboxFor("qmd", "https://deployment-proxy.example.com");
+      const kept = await withTenant(b, () => deploymentWide.provision(scope, { egressToken: "t" }));
+      assert.equal(fake.egressOf(live(kept.id)), "https://deployment-proxy.example.com");
+      await switchA(moved);
+      const reopened = await withTenant(a, () => sandbox.provision(scope, { egressToken: "t" }));
+      assert.notEqual(live(reopened.id), lockedId);
+      assert.equal(fake.egressOf(live(reopened.id)), undefined);
+      assert.equal(reopened.env?.HTTPS_PROXY, undefined);
+      assert.equal((await withTenant(a, () => sandbox.run(reopened, "cat ~/note"))).stdout.trim(), "kept");
+      await switchA({ ...moved, egressProxyUrl: "http://proxy.example.com:3128" });
+      await assert.rejects(
+        withTenant(a, () => sandbox.provision(scope, { egressToken: "t" })),
+        /https URL on port 443 or an IP address/,
+      );
+    } finally {
+      await switchA(moved);
       fake.cleanup();
     }
   });

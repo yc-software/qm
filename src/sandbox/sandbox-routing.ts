@@ -65,7 +65,6 @@ export interface RoutingSandboxOptions {
 }
 
 const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
-const TENANT_EGRESS_PROXY: ReadonlySet<SandboxBackendName> = new Set(["sprites"]);
 
 function requireTenantSeparation(name: SandboxBackendName): void {
   if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
@@ -172,7 +171,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const resource = await resourceFor(scope, provOpts?.sandboxId);
       const backend = resource?.backend ?? (provOpts?.scratch ? await resources.defaultBackend() : defaultBackend);
       const sandbox = backendFor(backend);
-      if (!TENANT_EGRESS_PROXY.has(backend) && (await tenantOwnEgressProxyUrl()))
+      if ((await tenantOwnEgressProxyUrl()) && sandbox.profile.egressEnforcement !== "domain")
         throw new Error(
           `sandbox backend ${backend} can't send this organization's sandbox traffic through its egress proxy; use a backend that can`,
         );
