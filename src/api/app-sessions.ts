@@ -1213,24 +1213,35 @@ export function createSessionMethods(
         const descendants = await deps.sessions.descendantsOf([sessionId]);
         const tree = [
           source,
-          ...(await Promise.all(descendants.map((d) => deps.sessions.get(d.id)))).filter((s): s is Session => !!s),
+          ...(descendants.length
+            ? await deps.sessions.getMany({ ids: descendants.map((d) => d.id), threadRefs: [] })
+            : []),
         ];
         const threadRefs = new Set(tree.map((s) => s.threadRef));
-        const inFlight = await Promise.all(tree.map((s) => deps.runs.inFlightForThread(s.threadRef)));
-        if (inFlight.some((runs) => runs.length)) return { moved: false, reason: "busy" };
+        if ((await deps.runs.activeForThreads([...threadRefs])).size) return { moved: false, reason: "busy" };
         const approvals =
           (await deps.approvals?.selectEntries({
             where: { field: "sessionId", anyOfFold: tree.map((s) => s.id) },
           })) ?? [];
         for (const [, record] of approvals)
-          if (await approvalRecordIsCurrent(record)) return { moved: false, reason: "awaiting_approval" };
+          if (
+            await approvalRecordIsCurrent(
+              record,
+              tree.find((s) => s.id === record.sessionId),
+            )
+          )
+            return { moved: false, reason: "awaiting_approval" };
         const jobs = ((await deps.processes?.listLive()) ?? []).filter(
           (rec) => rec.kind === "background" && rec.sessionRef && threadRefs.has(rec.sessionRef),
         );
-        const computers = await Promise.all(
-          jobs.map((rec) => (rec.sandboxId ? deps.sandboxResources?.get(rec.sandboxId).catch(() => null) : null)),
+        const childComputerIds = tree.flatMap((s) => s.spawnMeta?.isolation?.sandboxId ?? []);
+        const computerIds = [...new Set([...jobs.flatMap((rec) => rec.sandboxId ?? []), ...childComputerIds])];
+        const projectComputers = new Set(
+          (computerIds.length ? ((await deps.sandboxResources?.getMany(computerIds)) ?? []) : [])
+            .filter((computer) => computer.ownerScopeId === targetScopeId)
+            .map((computer) => computer.id),
         );
-        const stranded = jobs.find((_, i) => computers[i]?.ownerScopeId !== targetScopeId);
+        const stranded = jobs.find((rec) => !rec.sandboxId || !projectComputers.has(rec.sandboxId));
         if (stranded) {
           const chat = tree.find((s) => s.threadRef === stranded.sessionRef);
           return {
@@ -1248,12 +1259,9 @@ export function createSessionMethods(
             (await deps.sessions.participantsOf(s.id)).filter((id) => !sourceMembers || sourceMembers.includes(id)),
           ),
         );
-        const gains = await Promise.all(
-          newReaders(members, readers).map(async (id) => ({
-            principalId: id,
-            displayName: (await deps.directory.get(id).catch(() => null))?.displayName ?? id,
-          })),
-        );
+        const people = await deps.directory.getMany(members);
+        const nameOf = (id: string) => people.get(id)?.displayName;
+        const gains = newReaders(members, readers).map((id) => ({ principalId: id, displayName: nameOf(id) ?? id }));
         if (opts.preview) return { moved: false, preview: true, gains };
         if (gains.some((g) => !opts.audience?.includes(g.principalId)))
           return { moved: false, reason: "confirm_audience", gains };
@@ -1268,21 +1276,19 @@ export function createSessionMethods(
         for (const loop of (await deps.loops?.list()) ?? [])
           if (loop.ownerScopeId === source.scopeId && postsInto(loop, threadRefs))
             await deps.loops!.update(loop.id, { destination: null });
-        const audience = await Promise.all(
-          members.map(async (id) => {
-            const principal = deps.identity.classify(id);
-            const displayName = (await deps.directory.get(id).catch(() => null))?.displayName;
-            return displayName ? { ...principal, displayName } : principal;
+        const audience = members.map((id) => {
+          const principal = deps.identity.classify(id);
+          const displayName = nameOf(id);
+          return displayName ? { ...principal, displayName } : principal;
+        });
+        const version = await projects.version(target.ref);
+        const freshComputers = new Map(
+          tree.flatMap((s) => {
+            const isolation = s.spawnMeta?.isolation;
+            if (!isolation?.sandboxId || projectComputers.has(isolation.sandboxId)) return [];
+            return [[isolation.sandboxId, isolation.mode === "sandbox" ? randomUUID() : null] as const];
           }),
         );
-        const version = await projects.version(target.ref);
-        const childComputers = new Map<string, string>();
-        for (const s of tree) {
-          const id = s.spawnMeta?.isolation?.sandboxId;
-          if (!id || childComputers.has(id)) continue;
-          const computer = await deps.sandboxResources?.get(id).catch(() => null);
-          if (computer?.ownerScopeId !== targetScopeId) childComputers.set(id, randomUUID());
-        }
         const spawnMeta = new Map(
           tree.flatMap((s) =>
             s.spawnMeta
@@ -1292,7 +1298,7 @@ export function createSessionMethods(
                     rehomedSpawnMeta(
                       s.spawnMeta,
                       { groupRef: target.ref, channelName: project.name, audience, version },
-                      childComputers,
+                      freshComputers,
                     ),
                   ] as const,
                 ]

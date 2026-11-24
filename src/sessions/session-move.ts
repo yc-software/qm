@@ -1,4 +1,4 @@
-import type { Principal, SpawnMeta } from "../types.ts";
+import type { ChildIsolation, Principal, SpawnMeta } from "../types.ts";
 
 export interface MoveTarget {
   groupRef: string;
@@ -10,10 +10,14 @@ export interface MoveTarget {
 export function rehomedSpawnMeta(
   meta: SpawnMeta,
   target: MoveTarget,
-  computers: ReadonlyMap<string, string>,
+  computers: ReadonlyMap<string, string | null>,
 ): SpawnMeta {
   const { isPrivate: _isPrivate, isMpim: _isMpim, teamIds: _teamIds, ...conversation } = meta.conversation;
   const { scopeVersion: _scopeVersion, isolation, ...rest } = meta;
+  const unbound = (child: ChildIsolation): ChildIsolation => {
+    const { sandboxId: _sandboxId, ...kept } = child;
+    return kept;
+  };
   const computer = isolation?.sandboxId ? computers.get(isolation.sandboxId) : undefined;
   return {
     ...rest,
@@ -27,7 +31,12 @@ export function rehomedSpawnMeta(
     },
     sessionParticipantIds: target.audience.map((principal) => principal.id),
     ...(target.version ? { scopeVersion: target.version } : {}),
-    ...(isolation ? { isolation: computer ? { ...isolation, sandboxId: computer } : isolation } : {}),
+    ...(isolation
+      ? {
+          isolation:
+            computer === undefined ? isolation : computer ? { ...isolation, sandboxId: computer } : unbound(isolation),
+        }
+      : {}),
   };
 }
 

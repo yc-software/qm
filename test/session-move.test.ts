@@ -163,6 +163,13 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     conversation: { kind: "dm", threadRef: childThread, audience: [actor] },
     isolation: { mode: "sandbox", sandboxId: child },
   });
+  const { id: helper, threadRef: helperThread } = await subagent(sid, "agent:main:subagent:move-helper");
+  await built.sessions.setSpawnMeta(helper, {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: helperThread, audience: [actor] },
+    isolation: { mode: "shared", sandboxId: "personal-computer" },
+  });
 
   const out = await built.app.moveSession(tenant, sid, "owner", scope);
   assert.ok(out.moved);
@@ -191,6 +198,11 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     movedChild.spawnMeta?.isolation?.sandboxId,
     child,
     "an own-computer subagent gets a fresh computer in the project the next time it runs",
+  );
+  assert.deepEqual(
+    (await built.sessions.get(helper))!.spawnMeta?.isolation,
+    { mode: "shared" },
+    "a subagent sharing the chat's personal computer follows the chat onto the project's",
   );
 });
 

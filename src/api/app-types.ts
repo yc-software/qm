@@ -838,7 +838,7 @@ export interface AppDeps {
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   loops?: Pick<LoopStore, "list" | "update">;
-  sandboxResources?: Pick<SandboxResources, "get">;
+  sandboxResources?: Pick<SandboxResources, "getMany">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
