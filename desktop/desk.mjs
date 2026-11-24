@@ -134,8 +134,8 @@ export function watchMicrophone(onApps, onFailure) {
   };
 }
 
-export function startWhisper(model) {
-  const proc = spawn(binary, ["whisper", model], { stdio: ["pipe", "pipe", "pipe"] });
+export function startWhisper(models) {
+  const proc = spawn(binary, ["whisper", ...models], { stdio: ["pipe", "pipe", "pipe"] });
   const waiting = [];
   let stderr = "";
   let failure;

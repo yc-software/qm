@@ -1,14 +1,13 @@
-import { app, Menu, nativeImage, Notification, systemPreferences, Tray } from "electron";
+import { app, Menu, Notification, systemPreferences } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { startWhisper, watchMicrophone } from "./desk.mjs";
+import { pillLevel, registerPill, showPill } from "./pill.mjs";
 import { registerRecorder, startCapture } from "./recorder.mjs";
-import { downloadModel } from "./transcription.mjs";
+import { discardCorruptModels, downloadModel } from "./transcription.mjs";
 
-const directory = path.dirname(fileURLToPath(import.meta.url));
 const meetingApps = [
   ["us.zoom.", "Zoom"],
   ["com.microsoft.teams", "Microsoft Teams"],
@@ -46,12 +45,12 @@ export function meetingApp(apps) {
 
 let request;
 let openNotes;
+let publish;
 let enabled = false;
 let automatic = false;
 let local = true;
 let model;
 let checks = 0;
-let tray;
 let stopWatching;
 let detectionProblem;
 let meetingNow;
@@ -61,11 +60,6 @@ let notes;
 const notices = new Set();
 
 const settingsPath = () => path.join(app.getPath("userData"), "meetings.json");
-const elapsed = (since) => {
-  const seconds = Math.floor((Date.now() - since) / 1000);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-};
-
 const plural = (count) => (count === 1 ? "1 audio segment" : `${count} audio segments`);
 
 function notify(title, body, action) {
@@ -83,30 +77,12 @@ function notify(title, body, action) {
   notification.show();
 }
 
-function showTime() {
-  tray?.setTitle(recording ? `● ${elapsed(recording.startedAt)}` : "");
-  tray?.setToolTip(recording ? `QM is recording (${elapsed(recording.startedAt)})` : "QM");
-}
-
-function render() {
-  for (const item of meetingMenu()) {
-    const live = Menu.getApplicationMenu()?.getMenuItemById(item.id);
-    if (live)
-      Object.assign(live, { visible: item.visible, enabled: item.enabled, ...(item.checked && { checked: true }) });
-  }
-  showTime();
-  if (!tray) return;
-  let status = "Not recording";
-  if (recording?.stopping) status = "Saving the meeting…";
-  else if (recording)
-    status = `Recording since ${new Date(recording.startedAt).toLocaleTimeString([], { timeStyle: "short" })}`;
-  const problems = [
-    ...Object.entries(recording?.tracks ?? {}).map(([speaker, problem]) => `${trackNames[speaker]}: ${problem}`),
-    ...(recording?.othersQuiet ? ["Computer audio: nothing heard for 2 minutes"] : []),
-    ...(recording?.uploadProblem ? [`Upload retrying: ${recording.uploadProblem}`] : []),
-    ...(recording?.dropped ? [`Skipped ${plural(recording.dropped.count)}: ${recording.dropped.problem}`] : []),
-    ...(detectionProblem ? [`Meeting detection unavailable: ${detectionProblem}`] : []),
-    ...(local && model && !model.file
+function problems(current) {
+  return [
+    ...Object.entries(current.tracks).map(([speaker, problem]) => `${trackNames[speaker]}: ${problem}`),
+    ...(current.othersQuiet ? ["Computer audio: nothing heard for 2 minutes"] : []),
+    ...(current.uploadProblem ? [`Upload retrying: ${current.uploadProblem}`] : []),
+    ...(current.local && model && !model.file
       ? [
           model.problem
             ? `Transcription model: ${model.problem}`
@@ -114,20 +90,36 @@ function render() {
         ]
       : []),
   ];
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: status, enabled: false },
-      ...problems.map((label) => ({ label, enabled: false })),
-      { type: "separator" },
-      ...meetingMenu(),
-      { type: "separator" },
-      {
-        label: "Record Meetings Automatically",
-        type: "checkbox",
-        checked: automatic,
-        click: (item) => void saveSettings({ automatic: item.checked }),
-      },
-    ]),
+}
+
+export const meetingState = () =>
+  recording
+    ? {
+        recording: true,
+        startedAt: recording.startedAt,
+        stopping: Boolean(recording.stopping),
+        ...(recording.path ? { path: recording.path } : {}),
+      }
+    : { recording: false };
+
+function render() {
+  for (const item of meetingMenu()) {
+    const live = Menu.getApplicationMenu()?.getMenuItemById(item.id);
+    if (live)
+      Object.assign(live, {
+        visible: item.visible,
+        enabled: item.enabled,
+        ...(item.type && { checked: item.checked }),
+      });
+  }
+  publish?.(meetingState());
+  showPill(
+    recording && {
+      startedAt: recording.startedAt,
+      stopping: Boolean(recording.stopping),
+      line: recording.line,
+      problem: problems(recording)[0],
+    },
   );
 }
 
@@ -249,8 +241,18 @@ async function transcribeHere(current, pcm) {
       signal.addEventListener("abort", quit, { once: true });
     }),
   ]);
-  current.whisper ??= startWhisper(file);
-  return current.whisper.transcribe(pcm, current.prompt ?? "");
+  const whisper = (current.whisper ??= startWhisper(file));
+  try {
+    return await whisper.transcribe(pcm, current.prompt ?? "");
+  } catch (error) {
+    if (error.segmentOnly) throw error;
+    whisper.discarded ??= discardCorruptModels().then((discarded) => {
+      if (discarded) model = current.whisper = undefined;
+      return discarded;
+    });
+    if (!(await whisper.discarded)) throw error;
+    return transcribeHere(current, pcm);
+  }
 }
 
 function upload(current, speaker, at, bytes) {
@@ -281,11 +283,15 @@ function upload(current, speaker, at, bytes) {
           body,
         ),
       );
-      current.prompt = (await response.json()).prompt;
+      const heard = await response.json();
+      current.prompt = heard.prompt;
+      if (heard.text) {
+        current.line = heard.text;
+        render();
+      }
     } catch (error) {
       if (!error.segmentOnly) return fail(current, error);
       current.dropped = { count: (current.dropped?.count ?? 0) + 1, problem: error.message };
-      render();
     }
   });
 }
@@ -297,8 +303,8 @@ function trackProblem(current, speaker, problem) {
   else notify(`${trackNames[speaker]} is not being recorded`, problem);
 }
 
-async function startRecording(detected) {
-  if (recording || !enabled) return;
+function startRecording(detected) {
+  if (recording || !enabled) return undefined;
   const current = {
     id: randomUUID(),
     startedAt: Date.now(),
@@ -332,61 +338,68 @@ async function startRecording(detected) {
           "QM has heard nothing from your computer for 2 minutes. If others are talking, allow QM in System Settings › Privacy & Security › Screen & System Audio Recording.",
         );
     }
-    showTime();
   }, 1000);
+  meeting(current).catch((error) => fail(current, error));
   render();
+  void capture(current);
+  return current;
+}
+
+async function capture(current) {
   if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("microphone") !== "granted")
     await systemPreferences.askForMediaAccess("microphone");
   if (recording !== current || current.stopping) return;
   current.capturing = Date.now();
-  current.stopCapture = startCapture(
-    (speaker, at, bytes) => upload(current, speaker, at, bytes),
-    (speaker, problem) => trackProblem(current, speaker, problem),
-    current.local,
-  );
+  current.stopCapture = startCapture({
+    segment: (speaker, at, bytes) => upload(current, speaker, at, bytes),
+    track: (speaker, problem) => trackProblem(current, speaker, problem),
+    level: (speaker, level) => pillLevel(speaker, level),
+    local: current.local,
+  });
   if (current.detected && !meetingNow) endMeetingSoon();
 }
 
-function stopRecording() {
+export function stopRecording() {
   const current = recording;
   if (!current) return Promise.resolve();
-  current.stopping ??= (async () => {
-    clearTimeout(meetingEnded);
-    clearInterval(current.ticker);
-    const endedAt = Date.now();
-    render();
-    await current.stopCapture?.();
-    await Promise.all(Object.values(current.uploads));
-    current.whisper?.stop();
-    if (current.created && !current.failure) {
-      try {
-        await current.created;
-        await call(current, (signal) =>
-          request(`/api/meetings/${current.id}/stop`, "POST", signal, "application/json", { endedAt }),
-        );
-      } catch (error) {
-        current.failure = error.message;
-      }
-    }
-    recording = undefined;
-    render();
-    const open = current.path && { label: "Open Notes", run: () => openNotes(current.path) };
-    if (current.failure) notify("Meeting recording failed", current.failure, open);
-    else if (!current.created) notify("Recording stopped", "No speech was heard, so nothing was saved.");
-    else
-      notify(
-        "Meeting recorded",
-        [
-          current.silent && "Stopped after 15 minutes without speech.",
-          "QM is writing notes.",
-          current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`,
-        ]
-          .filter(Boolean)
-          .join(" "),
-        open,
-      );
-  })();
+  if (current.stopping) return current.stopping;
+  clearTimeout(meetingEnded);
+  clearInterval(current.ticker);
+  current.stopping = finishRecording(current, Date.now());
+  render();
   return current.stopping;
+}
+
+async function finishRecording(current, endedAt) {
+  await current.stopCapture?.();
+  await Promise.all(Object.values(current.uploads));
+  current.whisper?.stop();
+  if (!current.failure) {
+    try {
+      await current.created;
+      await call(current, (signal) =>
+        request(`/api/meetings/${current.id}/stop`, "POST", signal, "application/json", { endedAt }),
+      );
+    } catch (error) {
+      current.failure = error.message;
+    }
+  }
+  recording = undefined;
+  render();
+  const open = current.path && { label: "Open Notes", run: () => openNotes(current.path) };
+  if (current.failure) notify("Meeting recording failed", current.failure, open);
+  else
+    notify(
+      "Meeting recorded",
+      [
+        current.silent && "Stopped after 15 minutes without speech.",
+        "QM is writing notes.",
+        current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      open,
+    );
 }
 
 export async function quitRecording() {
@@ -415,12 +428,25 @@ function microphoneChanged(apps) {
   meetingNow = name;
   if (began && !recording) {
     if (automatic) {
-      void startRecording(name);
-      notify(`Recording your ${name} meeting`, "Stop it from the QM menu bar item.");
+      const current = startRecording(name);
+      notify(`Taking notes on your ${name} meeting`, "Stop it from the recording pill at the bottom of your screen.", {
+        label: "Open Notes",
+        run: () =>
+          void current?.created.then(
+            () => openNotes(current.path),
+            () => {},
+          ),
+      });
     } else
-      notify("Meeting detected", `${name} is using the microphone.`, {
-        label: "Record",
-        run: () => void startRecording(name),
+      notify(`${name} meeting detected`, `${name} is using the microphone.`, {
+        label: "Take Notes",
+        run: () => {
+          const current = startRecording(name);
+          void current?.created.then(
+            () => openNotes(current.path),
+            () => {},
+          );
+        },
       });
   }
 }
@@ -466,12 +492,31 @@ export function meetingMenu() {
       enabled: !recording,
       click: () => void saveSettings({ local: false }),
     },
+    {
+      id: "meeting-automatic",
+      label: "Record Meetings Automatically",
+      type: "checkbox",
+      checked: automatic,
+      visible: enabled,
+      enabled: true,
+      click: (item) => void saveSettings({ automatic: item.checked }),
+    },
   ];
 }
 
+export async function startMeeting() {
+  if (!enabled) await refreshMeetings();
+  if (!enabled) throw new Error("Meeting recording is not enabled for this account.");
+  if (recording) throw new Error("A meeting is already being recorded.");
+  const current = startRecording();
+  await current.created;
+  return { path: current.path };
+}
+
 export function configureMeetings(options) {
-  ({ request, openNotes } = options);
+  ({ request, openNotes, publish } = options);
   registerRecorder();
+  registerPill({ open: () => recording?.path && openNotes(recording.path), stop: () => void stopRecording() });
 }
 
 export async function refreshMeetings() {
@@ -489,17 +534,13 @@ export async function refreshMeetings() {
   if (enabled) {
     ({ automatic, local } = await readSettings());
     if (local) void prepareModel();
-    tray = new Tray(
-      nativeImage.createFromPath(path.join(directory, "assets/qm.png")).resize({ width: 16, height: 16 }),
-    );
     stopWatching = watchMicrophone(microphoneChanged, (problem) => {
+      if (!detectionProblem) notify("Meeting detection unavailable", problem);
       detectionProblem = problem;
-      render();
     });
   } else {
     stopWatching?.();
-    tray?.destroy();
-    tray = stopWatching = detectionProblem = meetingNow = notes = undefined;
+    stopWatching = detectionProblem = meetingNow = notes = undefined;
   }
   render();
 }

@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld("qmDesktop", {
     call: (args, clientId, deadline) => ipcRenderer.invoke("qm:computer-call", args, clientId, deadline),
     stop: (clientId) => ipcRenderer.invoke("qm:computer-stop", clientId),
   },
+  meetings: {
+    start: () => ipcRenderer.invoke("qm:meeting-start"),
+    stop: () => ipcRenderer.invoke("qm:meeting-stop"),
+    state: () => ipcRenderer.invoke("qm:meeting-state"),
+    onState: (callback) => ipcRenderer.on("qm:meeting-state", (_event, state) => callback(state)),
+  },
 });
 
 window.addEventListener("DOMContentLoaded", () => {

@@ -34,6 +34,7 @@ const waitFor = async (check) => {
   await writeFile(wav, Buffer.concat([header, Buffer.from(samples.buffer)]));
   await writeFile(path.join(directory, "meetings.json"), JSON.stringify({ automatic: true, local: false }));
   await writeFile(path.join(directory, "ggml-large-v3-turbo-q5_0.bin"), "model");
+  await writeFile(path.join(directory, "ggml-silero-v5.1.2.bin"), "vad");
   const desk = path.join(directory, "desk.mjs");
   await writeFile(
     desk,
@@ -150,10 +151,19 @@ setInterval(() => {}, 1000);
     await new Promise((resolve) => main.webContents.once("did-finish-load", resolve));
     assert.equal(main.webContents.getURL(), `${origin}/meetings/${create.id}`);
     menuItem("Transcribe on This Mac").click();
-    menuItem("Start Recording").click();
-    await waitFor(() => log.some((entry) => entry.action === "speech" && entry.id !== create.id));
+    const { path: notesPath } = await main.webContents.executeJavaScript("qmDesktop.meetings.start()");
     const manual = log.findLast((entry) => entry.action === "create");
+    assert.equal(notesPath, `/meetings/${manual.id}`);
     assert.equal(manual.app, undefined);
+    const { startedAt, ...state } = await main.webContents.executeJavaScript("qmDesktop.meetings.state()");
+    assert.ok(startedAt <= Date.now());
+    assert.deepEqual(state, { recording: true, stopping: false, path: notesPath });
+    const pillWindow = () =>
+      BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith("/pill.html"));
+    await waitFor(pillWindow);
+    const pill = pillWindow();
+    const line = () => pill.webContents.executeJavaScript("document.getElementById('line').textContent");
+    while ((await line()) !== "hello") await new Promise((resolve) => setTimeout(resolve, 100));
     app.on("will-quit", () => {
       server.close();
       rmSync(directory, { recursive: true, force: true });
@@ -171,7 +181,7 @@ setInterval(() => {}, 1000);
         return app.exit(1);
       }
       console.log(
-        `PASS: detected Zoom, created the meeting lazily, uploaded ${speech.length} segments in order per track, retried a 503, stopped after the meeting ended, opened notes; a manual recording transcribed on this Mac, sent only text with the server's prompt, and flushed and stopped on quit`,
+        `PASS: detected Zoom, created the meeting, uploaded ${speech.length} segments in order per track, retried a 503, stopped after the meeting ended, opened notes; a recording started from the page showed its latest line in the pill, transcribed on this Mac, sent only text with the server's prompt, and flushed and stopped on quit`,
       );
     });
     app.quit();

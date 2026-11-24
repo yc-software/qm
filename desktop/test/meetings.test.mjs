@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { mock, test } from "node:test";
 import vm from "node:vm";
 
 const context = { window: {} };
+const electronApp = {};
 vm.runInNewContext(await readFile(new URL("../segments.js", import.meta.url), "utf8"), context);
 
 function segments(loud, until = 40_000) {
@@ -40,15 +43,14 @@ test("segments end at the first pause after ten seconds, at thirty seconds other
 test("meeting detection counts only listed meeting apps, including browser helpers", async () => {
   mock.module("electron", {
     namedExports: {
-      app: {},
+      app: electronApp,
       net: {},
       Menu: {},
-      nativeImage: {},
       Notification: class {},
       systemPreferences: {},
-      Tray: class {},
     },
   });
+  mock.module("../pill.mjs", { namedExports: { pillLevel() {}, registerPill() {}, showPill() {} } });
   mock.module("../desk.mjs", { namedExports: { startWhisper() {}, watchMicrophone() {} } });
   mock.module("../recorder.mjs", { namedExports: { registerRecorder() {}, startCapture() {} } });
   const { meetingApp } = await import("../meetings.mjs");
@@ -64,4 +66,13 @@ test("meeting detection counts only listed meeting apps, including browser helpe
   assert.equal(meetingApp([{ bundle_id: "com.apple.WebKit.GPU", pid: 5 }]), "Safari");
   assert.equal(meetingApp([{ bundle_id: "com.qm.desktop.helper", pid: 6 }]), undefined);
   assert.equal(meetingApp([]), undefined);
+});
+
+test("a corrupt transcription model is discarded so the next recording downloads it again", async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), "qm-models-"));
+  electronApp.getPath = () => folder;
+  await writeFile(path.join(folder, "ggml-large-v3-turbo-q5_0.bin"), "truncated");
+  const { discardCorruptModels } = await import("../transcription.mjs");
+  assert.equal(await discardCorruptModels(), true);
+  assert.deepEqual(await readdir(folder), []);
 });

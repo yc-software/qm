@@ -39,10 +39,14 @@ export function registerRecorder() {
     current.track(speaker, problem);
   });
   handle("qm:recorder-done", (current) => current.finished());
+  ipcMain.on("qm:recorder-level", (event, speaker, level) => {
+    if (ours(event.sender) && event.senderFrame?.url === pageUrl && speakers.has(speaker) && Number.isFinite(level))
+      active.level(speaker, level);
+  });
   handle("qm:recorder-local", (current) => current.local);
 }
 
-export function startCapture(segment, track, local) {
+export function startCapture({ segment, track, level, local }) {
   const window = new BrowserWindow({
     show: false,
     webPreferences: {
@@ -56,7 +60,7 @@ export function startCapture(segment, track, local) {
     },
   });
   const done = Promise.withResolvers();
-  active = { window, segment, track, local, finished: done.resolve };
+  active = { window, segment, track, level, local, finished: done.resolve };
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("render-process-gone", (_event, details) => {

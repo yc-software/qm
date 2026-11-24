@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'" />
+    <title>QM recording</title>
+    <link rel="stylesheet" href="pill.css" />
+    <script src="pill.js" defer></script>
+  </head>
+  <body>
+    <main id="pill" title="Open meeting notes">
+      <span class="clock"><span class="dot"></span><span id="time">0:00</span></span>
+      <span id="wave" class="wave"></span>
+      <span id="line" class="line">Listening…</span>
+      <button id="stop" class="stop" title="Stop recording" aria-label="Stop recording"></button>
+    </main>
+  </body>
+</html>

@@ -6,7 +6,16 @@ import { callComputer, registerComputerRuntime, stopComputer } from "./runtime.m
 import { registerComputerPermissions, showComputerPermissions, focusComputerPermissions } from "./permissions.mjs";
 import { createLogin, loginCallback } from "./login.mjs";
 import { startUpdates } from "./updates.mjs";
-import { configureMeetings, isRecording, meetingMenu, quitRecording, refreshMeetings } from "./meetings.mjs";
+import {
+  configureMeetings,
+  isRecording,
+  meetingMenu,
+  meetingState,
+  quitRecording,
+  refreshMeetings,
+  startMeeting,
+  stopRecording,
+} from "./meetings.mjs";
 import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
@@ -166,7 +175,7 @@ function openNotes(pathname) {
   if (url.origin !== new URL(target).origin) return;
   if (!mainWindow) return void showInstance(url.href);
   mainWindow.show();
-  void mainWindow.loadURL(url.href);
+  if (mainWindow.webContents.getURL() !== url.href) void mainWindow.loadURL(url.href);
 }
 
 async function showInstance(url) {
@@ -423,6 +432,18 @@ async function start() {
     if (!Number.isFinite(deadline)) throw new Error("Invalid computer deadline");
     return callComputer(args, deskOwner(event, clientId), deadline);
   });
+  ipcMain.handle("qm:meeting-start", (event) => {
+    assertWorkspace(event);
+    return startMeeting();
+  });
+  ipcMain.handle("qm:meeting-stop", (event) => {
+    assertWorkspace(event);
+    return stopRecording();
+  });
+  ipcMain.handle("qm:meeting-state", (event) => {
+    assertWorkspace(event);
+    return meetingState();
+  });
   ipcMain.handle("qm:current-instance", (event) => {
     assertSetup(event);
     return { url: target ?? "", status: loginStatus };
@@ -520,7 +541,13 @@ async function start() {
       { role: "windowMenu" },
     ]),
   );
-  configureMeetings({ request: instanceRequest, openNotes });
+  configureMeetings({
+    request: instanceRequest,
+    openNotes,
+    publish: (state) => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.webContents.send("qm:meeting-state", state);
+    },
+  });
   app.on("activate", () => {
     if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
