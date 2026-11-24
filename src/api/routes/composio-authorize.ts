@@ -56,7 +56,7 @@ function directConnectRefusal(toolkit: string, app: CatalogApp): Record<string, 
     error: "connect_api_key",
     toolkit,
     fields: app.keyFields,
-    message: `${app.name} uses an API key, so QM does not connect it through Composio. Ask for the key with a keychain drop (the secret-drop skill) using these fields, then call ${app.name}'s API directly with that credential.`,
+    message: `${app.name} takes an API key or password instead of a sign-in, so QM does not connect it through Composio. Ask for the key with a keychain drop (the secret-drop skill) using these fields, then call ${app.name}'s API directly with that credential.`,
   };
 }
 

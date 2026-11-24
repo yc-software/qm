@@ -538,7 +538,7 @@ export class OnboardingWelcome extends LitElement {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           service: service.name,
-          purpose: `Save your ${service.name} API key so QM can use ${service.name} for you.`,
+          purpose: `Give QM your ${service.name} credentials so it can use ${service.name} for you.`,
           fields: service.keyFields,
         }),
       });
