@@ -48,8 +48,8 @@ A turn token says a person is at the keyboard only while its turn is running. Ea
 core verifies such a token it reads the turn's run, and once that run has ended, or the
 token belongs to an earlier attempt, core treats the token like an owner's scheduled fire:
 it keeps the owner's authority, but person-only steps refuse it. What a turn hands on on
-purpose doesn't rely on that claim and keeps working, such as a sign-in saved later with
-its login ticket or a background job's credential save when it exits.
+purpose doesn't rely on that claim and keeps working, such as a background job's credential
+save when it exits.
 
 Deploy the updated verifier to every core and worker, and any separately deployed
 egress proxy, before enabling no expiry. Older verifiers reject `exp: 0`.

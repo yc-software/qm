@@ -299,7 +299,7 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
+import { createSecretDropStore, LOGIN_TICKET_SWEEP, type SecretDropStore } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -1394,7 +1394,8 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
+  pgArtifactMap.pool.registerMigration(LOGIN_TICKET_SWEEP);
+  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;

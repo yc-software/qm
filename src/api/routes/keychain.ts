@@ -2,7 +2,6 @@ import {
   connectorHandle,
   credentialHandle,
   KeychainError,
-  keychainService,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -25,7 +24,6 @@ import {
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
-import type { SecretDropResult } from "../../credentials/secret-drop.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
@@ -100,21 +98,7 @@ const keychainRoute =
     }
   };
 
-function loginTicketRefusal(
-  ticket: SecretDropResult,
-  ownerId: string,
-  service: string,
-  threadRef: string | undefined,
-): string | null {
-  if (!ticket.ok) return ticket.reason;
-  if (ticket.rec.kind !== "login") return "not a login ticket";
-  if (!samePerson(ticket.rec.ownerId, ownerId)) return "another person's ticket";
-  if (ticket.rec.service !== service) return `a ticket for ${ticket.rec.service}`;
-  if (ticket.rec.threadRef !== threadRef) return "a ticket from another conversation";
-  return null;
-}
-
-const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }) => {
+const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, botActor }) => {
   const { res, deps, tenant, body } = ctx;
   const b = body as {
     service?: unknown;
@@ -127,7 +111,6 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     accountLabel?: unknown;
     origin?: unknown;
     expiresAt?: unknown;
-    loginTicket?: unknown;
   };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -189,58 +172,26 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     origin: typeof b.origin === "string" ? b.origin : `agent-session:${scopeId}`,
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   };
-  const service = keychainService(b.service);
-  const ticketId = typeof b.loginTicket === "string" ? b.loginTicket : undefined;
-  const store = async () => {
-    const ticket = ticketId && deps.secretDrops ? await deps.secretDrops.peek(ticketId) : null;
-    const refusal = ticket && loginTicketRefusal(ticket, actorId, service, threadRef);
-    if (refusal) console.warn(`[keychain] loginTicket not used for ${service}: ${refusal}`);
-    const signedIn = ticket !== null && refusal === null;
-    let meta = await kc.create(input);
-    if (!meta) {
-      if (!signedIn && !livePersonTurn(ctx)) return;
-      meta = await kc.save(input);
-    }
-    if (signedIn) {
-      const spent = await deps.secretDrops!.redeem(ticketId!);
-      if (!spent.ok)
-        console.warn(`[keychain] loginTicket for ${service} was not spent after the save: ${spent.reason}`);
-    }
-    audit(
-      { deps, tenant },
-      {
-        principalId: actorId,
-        action: "keychain.save",
-        resource: `${meta.service}:${meta.id}`,
-        scopeLabel: scopeId,
-      },
-    );
-    return sendJson(res, 200, { credential: meta });
-  };
-  return ticketId ? kc.withLoginTicket(ticketId, store) : store();
-});
-
-const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef }) => {
-  const { res, deps, tenant, body } = ctx;
-  const { service } = body as { service?: unknown };
-  if (typeof service !== "string" || !service.trim())
-    return sendJson(res, 400, { error: "bad_request", message: "service required" });
-  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
-  if (!livePersonTurn(ctx)) return;
-  const { dropId } = await deps.secretDrops.mint({
-    kind: "login",
-    ownerId: actorId,
-    service: keychainService(service),
-    purpose: "login",
-    requestedBy: actorId,
-    ...(threadRef ? { threadRef } : {}),
-    requiresToken: true,
-  });
+  let meta = await kc.create(input);
+  if (!meta) {
+    if (botActor === true)
+      return sendJson(res, 403, {
+        error: "forbidden",
+        message:
+          "work a bot started can't replace a saved login; its owner can sign in again from their own conversation",
+      });
+    meta = await kc.save(input);
+  }
   audit(
     { deps, tenant },
-    { principalId: actorId, action: "keychain.login.start", resource: keychainService(service), scopeLabel: scopeId },
+    {
+      principalId: actorId,
+      action: "keychain.save",
+      resource: `${meta.service}:${meta.id}`,
+      scopeLabel: scopeId,
+    },
   );
-  return sendJson(res, 200, { loginTicket: dropId });
+  return sendJson(res, 200, { credential: meta });
 });
 
 const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {
@@ -431,7 +382,6 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const ownerSurfaceUser =
     humanOrigin && samePerson(runRequest?.actor.id, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
   const { ask, existing } = await kc.createAsk({
-    ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
     requesterId: actorId,
     requesterScopeId: capability.scopeId,
@@ -502,7 +452,6 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
-  { method: "POST", path: "/v1/keychain/login-tickets", actor: "system", auth: "either", handle: startLogin },
   {
     method: "POST",
     path: "/v1/keychain/credentials/:id/writer",

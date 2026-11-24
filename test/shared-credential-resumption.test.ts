@@ -82,7 +82,6 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     requesterScopeId: scope,
     requesterThreadRef: requests[0]!.conversation.threadRef,
     requesterDestination: automationOrigin(requests[0]!)?.destination,
-    triggered: true,
     purpose: cron.action!,
   });
   const approved = await k.approveAsk({
@@ -134,7 +133,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
-  test(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {
+  test(`shared asks in ${scope} deduplicate by job across actors and stop asking for a job the owner turned down`, async () => {
     let now = 1_000_000;
     const k = keychain(() => now++);
     const credential = await k.save({ ownerId: "U_OWNER", service: "dummy", secret: "fake", envKey: "DUMMY_TOKEN" });
@@ -143,11 +142,10 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
       requesterId: "U_OWNER",
       requesterScopeId: scope,
       purpose: "read dummy account",
-      triggered: true,
     };
     const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
     const second = await k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:one" });
-    const live = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "live-thread" });
+    const live = await k.createAsk({ ...base, requesterThreadRef: "live-thread" });
     assert.equal(new Set([first.ask.id, second.ask.id, live.ask.id]).size, 3);
     const retry = await k.createAsk({ ...base, requesterId: "U_OTHER", requesterThreadRef: "cron:first:fire:two" });
     assert.equal(retry.existing, true);
@@ -159,8 +157,6 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
       k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:three" }),
       (error: KeychainError) => error.status === 409,
     );
-    const revived = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "cron:first:fire:four" });
-    assert.notEqual(revived.ask.id, first.ask.id);
     assert.equal((await k.getAsk(second.ask.id))?.status, "pending");
     now += ASK_TTL_MS + 1;
     await assert.rejects(

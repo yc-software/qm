@@ -233,10 +233,8 @@ async function finishExecutionFiles(
           notes.push(`deleted all of its credential files (${deleted.join(", ")}); the saved login was left unchanged`);
           return;
         }
-        const { overruled, withheld } = await saves[index]!(remaining);
-        const removed = deleted.filter(
-          (path) => !overruled.includes(path) && !withheld.some((entry) => entry.path === path),
-        );
+        const { overruled } = await saves[index]!(remaining);
+        const removed = deleted.filter((path) => !overruled.includes(path));
         if (removed.length)
           notes.push(
             `deleted ${removed.join(", ")}; the saved login no longer includes ${removed.length === 1 ? "it" : "them"}`,
@@ -244,10 +242,6 @@ async function finishExecutionFiles(
         if (overruled.length)
           notes.push(
             `could not save its changes to ${overruled.join(", ")} because another command saved changes to ${overruled.length === 1 ? "it" : "them"} first; rerun it if they are needed`,
-          );
-        if (withheld.length)
-          notes.push(
-            `could not save its changes to ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes; the saved login keeps its stored version`,
           );
       }),
     );

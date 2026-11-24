@@ -21,9 +21,8 @@ it for all of them. Asking the person twice for the same expiry is a mistake on 
   `execute.credentials` and run the CLI's identity check (AWS:
   `aws sts get-caller-identity --profile <profile>`). Another conversation may have renewed
   the login while you waited.
-- **A subagent or unattended run does not start a sign-in.** Report the expired login to
-  whoever started you. The conversation the person is in starts one sign-in and relays one
-  code.
+- **A subagent does not start a sign-in.** Report the expired login to whoever started
+  you. The conversation that started you runs one sign-in and relays one code.
 - **Don't send a second code until you know why the first approval didn't stick**, and tell
   the person what happened.
 
@@ -55,16 +54,13 @@ to a directory that stays on your computer, and step 3 saves it.
 
 ## Steps
 
-1. In the person's own turn, make a fresh directory and start the sign-in with the script
-   shipped with this skill, under the absolute directory the skill read reported. It gets a
-   one-time ticket that lets step 3 replace this service's existing login even after the turn
-   ends. Then start the login with `execute(background:true)` with every config location
-   pointed into the directory. Copy in any config the CLI needs first (for AWS, the
-   `[profile …]`/`[sso-session …]` blocks in `.aws/config`); everything under that
+1. Make a fresh directory, then start the login with `execute(background:true)` with every
+   config location pointed into the directory. Copy in any config the CLI needs first (for
+   AWS, the `[profile …]`/`[sso-session …]` blocks in `.aws/config`); everything under that
    directory becomes the saved login.
 
    ```bash
-   d=$(mktemp -d) && node <skill dir>/scripts/save-login.mjs aws "$d" --start && echo "$d"
+   d=$(mktemp -d) && echo "$d"
    in_d() { env HOME="$d" XDG_CONFIG_HOME="$d/.config" XDG_DATA_HOME="$d/.local/share" XDG_STATE_HOME="$d/.local/state" XDG_CACHE_HOME="$d/.cache" "$@"; }
    in_d aws sso login --profile work --use-device-code --no-browser
    in_d gh auth login --hostname github.com --git-protocol https --web
@@ -79,7 +75,8 @@ to a directory that stays on your computer, and step 3 saves it.
    `background` action `send_input`. Use its `watch` or `poll` action with the returned
    `process_id`; never stop the job while the person is approving.
 
-3. When it exits successfully, save the directory with the same script:
+3. When it exits successfully, save the directory with the script shipped with this skill,
+   under the absolute directory the skill read reported:
 
    ```bash
    node <skill dir>/scripts/save-login.mjs aws "$d" --label "work (123456789012)"
@@ -89,9 +86,7 @@ to a directory that stays on your computer, and step 3 saves it.
    prints the credential handle. It also removes a directory that holds no usable login.
    Never remove the directory yourself; if the save fails, run the script again.
    Saving the same service again replaces that entry in place: its id, handle, owner and
-   grants stay the same. A replace needs the ticket from step 1 or the person's own running
-   turn; without either the script removes the directory and says so, and the sign-in
-   starts again from step 1 in the person's own turn.
+   grants stay the same.
 
 4. Use the login only by naming the handle in `credentials` on `execute` (including `background:true`), including to check that it works. The files are staged in a private home for
    that command or job, and refreshes the CLI writes are saved back when it ends.
