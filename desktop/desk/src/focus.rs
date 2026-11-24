@@ -211,7 +211,7 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     })();
     let restoration = (|| {
         check_current()?;
-        if !matches!(frontmost(), Some(pid) if pid == original || pid == target) {
+        if !matches!(foreground()?, pid if pid == original || pid == target) {
             return Ok(());
         }
         if frontmost() != Some(original) && !original_app.activateWithOptions(NSApplicationActivationOptions::empty()) {
@@ -223,13 +223,13 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
             std::thread::sleep(Duration::from_millis(8));
         }
         check_current()?;
-        if frontmost() != Some(original) {
+        if foreground()? != original {
             return Err(Failure::new(ErrorCode::ActionFailed, "Original foreground app did not return after activation"));
         }
         if let Some((id, original_window)) = original_window {
             restore_order(target, id, &original_window)?;
         }
-        if frontmost() == Some(original) {
+        if foreground()? == original {
             transition.verify_keyboard_owner()?;
         }
         check_current()
