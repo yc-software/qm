@@ -43,7 +43,7 @@ async function setup() {
     await built.sessions.setParentSession(child.id, parentId);
     return child;
   };
-  const move = (sid: string, principal: string, scope: string, opts?: { audience?: string[]; preview?: boolean }) =>
+  const move = (sid: string, principal: string, scope: string, opts?: { audience?: string[] }) =>
     built.app.moveSessions(tenant, principal, [sid], scope as `group:${string}`, opts);
   return { built, project, scope: projectScopeId(project.id), personal, subagent, move };
 }
@@ -60,7 +60,6 @@ test("moving a chat where nobody new can read it re-homes the same chat without 
   const sid = await personal("owner", "web:owner:move-1", "Plan the launch checklist");
   await built.app.updateSession(sid, { actorId: "owner" }, { title: "Launch checklist", pinned: true });
 
-  assert.deepEqual(await move(sid, "owner", scope, { preview: true }), { outcome: "preview", gains: [], held: [] });
   const out = await move(sid, "owner", scope);
   assert.ok(out.outcome === "moved" && out.sessions.length === 1);
   const [session] = out.sessions;
@@ -68,9 +67,10 @@ test("moving a chat where nobody new can read it re-homes the same chat without 
   assert.equal(session!.scopeId, scope);
   assert.equal(session!.type, "group");
   assert.equal(session!.channelName, "Solo");
-  assert.equal(session!.title, "Launch checklist");
-  assert.equal(session!.pinned, true);
-  assert.equal(session!.archived, undefined);
+  const view = (await built.app.getSessionForViewer(sid, { actorId: "owner" }))!.session;
+  assert.equal(view.title, "Launch checklist");
+  assert.equal(view.pinned, true);
+  assert.equal(view.archived, undefined);
   assert.equal((await built.sessions.listByScope("personal:owner")).length, 0, "nothing is left behind");
   const audits = (await built.auditLog.events(tenant)).filter((e) => e.action === "session.move");
   assert.equal(audits.length, 1);
@@ -82,11 +82,6 @@ test("broadening a chat's readers needs the user to confirm exactly who gains ac
   const { built, project, scope, personal, move } = await setup();
   const sid = await personal("owner", "web:owner:move-confirm", "Private launch notes");
   const member = { principalId: "member", displayName: "Member" };
-  assert.deepEqual(await move(sid, "owner", scope, { preview: true }), {
-    outcome: "preview",
-    gains: [member],
-    held: [],
-  });
   assert.deepEqual(await move(sid, "owner", scope), { outcome: "confirm_audience", gains: [member], held: [] });
   assert.equal(await built.app.getSessionForViewer(sid, { actorId: "member" }), null);
 
@@ -315,9 +310,6 @@ test("the move route binds the principal to the portal identity and maps refusal
     const refused = await move(outsiders, "outsider", { scopeId: scope });
     assert.equal(refused.status, 403);
     assert.equal(((await refused.json()) as { message: string }).message, "You're not a member of that project.");
-    const preview = await move(sid, "owner", { scopeId: scope, preview: true });
-    assert.equal(preview.status, 200);
-    assert.deepEqual(await preview.json(), { gains: [{ principalId: "member", displayName: "Member" }], held: [] });
     const unconfirmed = await move(sid, "owner", { scopeId: scope });
     assert.equal(unconfirmed.status, 409);
     assert.deepEqual(await unconfirmed.json(), {

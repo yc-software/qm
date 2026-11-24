@@ -466,7 +466,7 @@ export interface App {
     principalId: string,
     sessionIds: readonly string[],
     targetScopeId: ScopeId,
-    opts?: { audience?: readonly string[]; preview?: boolean },
+    opts?: { audience?: readonly string[] },
   ): Promise<MoveSessionsResult>;
   listFilesForViewer(
     tenant: Tenant,
@@ -987,6 +987,5 @@ export type HeldChat =
 export type MoveSessionsResult =
   | { outcome: "not_project" }
   | { outcome: "forbidden" }
-  | { outcome: "preview"; gains: MoveAudienceMember[]; held: HeldChat[] }
   | { outcome: "confirm_audience"; gains: MoveAudienceMember[]; held: HeldChat[] }
   | { outcome: "moved"; sessions: Session[]; held: HeldChat[] };

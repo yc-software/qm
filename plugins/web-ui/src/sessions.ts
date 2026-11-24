@@ -46,7 +46,6 @@ import {
   inheritedTranscript,
   ApiError,
   moveSessions,
-  previewSessionMoves,
   itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -1361,7 +1360,6 @@ async function moveSessionsToProject(ids: readonly string[], scopeId: string): P
   const { moved, toast } = await runSessionMove(ids, {
     project: projectName(scopeId) ?? "the project",
     title: (id) => sessionsState.list.find((s) => s.id === id)?.title?.trim() || "Untitled chat",
-    preview: (ids) => previewSessionMoves(ids, scopeId),
     move: (ids, audience) => moveSessions(ids, scopeId, audience),
     confirm: (question) => window.confirm(question),
     reason: (error) => {

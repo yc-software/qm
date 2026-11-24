@@ -397,19 +397,24 @@ export interface HeldSessionMove {
   message: string;
 }
 
-export async function previewSessionMoves(
-  sessionIds: readonly string[],
-  scopeId: string,
-): Promise<{ gains: MoveAudienceMember[]; held: HeldSessionMove[] }> {
-  return api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, preview: true }) });
-}
+export type SessionMoveResult =
+  { sessions: CoreSession[]; held: HeldSessionMove[] } | { confirm: MoveAudienceMember[]; held: HeldSessionMove[] };
 
 export async function moveSessions(
   sessionIds: readonly string[],
   scopeId: string,
   audience: readonly string[],
-): Promise<{ sessions: CoreSession[]; held: HeldSessionMove[] }> {
-  return api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, audience }) });
+): Promise<SessionMoveResult> {
+  try {
+    return await api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, audience }) });
+  } catch (error) {
+    const body =
+      error instanceof ApiError
+        ? (error.body as { error?: string; gains?: MoveAudienceMember[]; held?: HeldSessionMove[] })
+        : null;
+    if (body?.error !== "confirm_audience") throw error;
+    return { confirm: body.gains ?? [], held: body.held ?? [] };
+  }
 }
 
 export function forkCutSeq(

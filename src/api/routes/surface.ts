@@ -243,7 +243,6 @@ async function moveSessions(ctx: ApiCtx): Promise<void> {
     sessionIds?: unknown;
     scopeId?: unknown;
     audience?: unknown;
-    preview?: unknown;
   };
   if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
@@ -251,17 +250,19 @@ async function moveSessions(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "sessionIds must be a list of conversation ids" });
   if (b.audience !== undefined && !stringList(b.audience))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "audience must be a list of principal ids" });
-  const out = await ctx.app.moveSessions(tenantOf(ctx), b.principalId, b.sessionIds, b.scopeId as ScopeId, {
-    ...(b.audience ? { audience: b.audience } : {}),
-    ...(b.preview === true ? { preview: true } : {}),
-  });
+  const out = await ctx.app.moveSessions(
+    tenantOf(ctx),
+    b.principalId,
+    b.sessionIds,
+    b.scopeId as ScopeId,
+    b.audience ? { audience: b.audience } : {},
+  );
   if (out.outcome === "not_project" || out.outcome === "forbidden")
     return sendJson(ctx.res, out.outcome === "forbidden" ? 403 : 404, {
       error: out.outcome,
       message: out.outcome === "forbidden" ? "You're not a member of that project." : "That project isn't available.",
     });
   const held = out.held.map((h) => ({ ...h, message: heldMessage(h) }));
-  if (out.outcome === "preview") return sendJson(ctx.res, 200, { gains: out.gains, held });
   if (out.outcome === "confirm_audience")
     return sendJson(ctx.res, 409, {
       error: out.outcome,

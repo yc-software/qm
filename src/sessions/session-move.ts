@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { LoopStore } from "../loops/loop-store.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
-import type { ProcessRegistry } from "../processes/process-registry.ts";
+import type { ProcessRecord, ProcessRegistry } from "../processes/process-registry.ts";
 import { reconcileProcesses } from "../processes/reconcile.ts";
 import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -91,12 +91,11 @@ async function liveJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]) {
     );
 }
 
-export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<void> {
+export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<ProcessRecord[]> {
+  const jobs = await liveJobs(deps, trees);
   const { processes, sandbox } = deps;
-  if (!processes || !sandbox || !supportsProcessSessions(sandbox)) return;
-  const hosts = new Map(
-    (await liveJobs(deps, trees)).flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])),
-  );
+  if (!jobs.length || !processes || !sandbox || !supportsProcessSessions(sandbox)) return jobs;
+  const hosts = new Map(jobs.flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])));
   await Promise.all(
     [...hosts].map(([sandboxId, scopeId]) =>
       (async () => {
@@ -111,21 +110,17 @@ export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTre
       })().catch(swallowAs("session move: check a moving chat's jobs", undefined)),
     ),
   );
+  return liveJobs(deps, trees);
 }
 
-export async function runningJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<Map<string, JobHold>> {
-  const holds = new Map<string, JobHold>();
-  const jobs = await liveJobs(deps, trees);
-  for (const tree of trees) {
-    const job = jobs.find((rec) => tree.some((s) => s.threadRef === rec.sessionRef));
-    if (!job) continue;
-    const chat = tree.find((s) => s.threadRef === job.sessionRef);
-    holds.set(tree[0]!.id, {
-      purpose: job.purpose ?? job.command.replace(/^bg: /, ""),
-      ...(chat && chat !== tree[0] && chat.title ? { chat: chat.title } : {}),
-    });
-  }
-  return holds;
+export function runningJob(tree: ChatTree, jobs: readonly ProcessRecord[]): JobHold | undefined {
+  const job = jobs.find((rec) => tree.some((s) => s.threadRef === rec.sessionRef));
+  if (!job) return undefined;
+  const chat = tree.find((s) => s.threadRef === job.sessionRef);
+  return {
+    purpose: job.purpose ?? job.command.replace(/^bg: /, ""),
+    ...(chat && chat !== tree[0] && chat.title ? { chat: chat.title } : {}),
+  };
 }
 
 export async function newChatReaders(

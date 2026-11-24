@@ -1,4 +1,4 @@
-import type { CoreSession, MoveAudienceMember } from "./core-bridge";
+import type { CoreSession, HeldSessionMove, SessionMoveResult } from "./core-bridge";
 
 export const SESSION_DROP_OVER_CLASS = "session-drop-over";
 
@@ -103,19 +103,10 @@ export function projectDropHandlers(scopeId: string): ProjectDropHandlers {
   };
 }
 
-interface HeldMove {
-  sessionId: string;
-  message: string;
-}
-
 export interface SessionMoveIo {
   project: string;
   title(id: string): string;
-  preview(ids: readonly string[]): Promise<{ gains: readonly MoveAudienceMember[]; held: readonly HeldMove[] }>;
-  move(
-    ids: readonly string[],
-    audience: readonly string[],
-  ): Promise<{ sessions: readonly CoreSession[]; held: readonly HeldMove[] }>;
+  move(ids: readonly string[], audience: readonly string[]): Promise<SessionMoveResult>;
   confirm(question: string): boolean;
   reason(error: unknown): string;
 }
@@ -124,7 +115,7 @@ export async function runSessionMove(
   ids: readonly string[],
   io: SessionMoveIo,
 ): Promise<{ moved: readonly CoreSession[]; toast: string | null }> {
-  const explain = (held: readonly HeldMove[]) =>
+  const explain = (held: readonly HeldSessionMove[]) =>
     held.map((h) => (ids.length === 1 ? h.message : `"${io.title(h.sessionId)}" wasn't moved: ${h.message}`));
   const finish = (moved: readonly CoreSession[], notes: readonly string[]) => {
     let summary = "";
@@ -133,23 +124,19 @@ export async function runSessionMove(
     else if (moved.length) summary = `Moved ${moved.length} of ${ids.length} chats to ${io.project}.`;
     return { moved, toast: [summary, ...notes].filter(Boolean).join(" ") || null };
   };
-  let preview: Awaited<ReturnType<SessionMoveIo["preview"]>>;
+  const notes: string[] = [];
+  let ready = ids;
+  let audience: readonly string[] = [];
   try {
-    preview = await io.preview(ids);
-  } catch (error) {
-    return finish([], [io.reason(error)]);
-  }
-  const notes = explain(preview.held);
-  const ready = ids.filter((id) => !preview.held.some((h) => h.sessionId === id));
-  const readers = preview.gains.map((g) => g.displayName);
-  if (!ready.length || (readers.length && !io.confirm(moveConfirmation(ready.map(io.title), io.project, readers))))
-    return finish([], notes);
-  try {
-    const out = await io.move(
-      ready,
-      preview.gains.map((g) => g.principalId),
-    );
-    return finish(out.sessions, [...notes, ...explain(out.held)]);
+    for (;;) {
+      const out = await io.move(ready, audience);
+      notes.push(...explain(out.held));
+      if ("sessions" in out) return finish(out.sessions, notes);
+      ready = ready.filter((id) => !out.held.some((h) => h.sessionId === id));
+      const readers = out.confirm.map((g) => g.displayName);
+      if (!io.confirm(moveConfirmation(ready.map(io.title), io.project, readers))) return finish([], notes);
+      audience = out.confirm.map((g) => g.principalId);
+    }
   } catch (error) {
     return finish([], [...notes, io.reason(error)]);
   }

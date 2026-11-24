@@ -36,7 +36,7 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId, type Project } from "../projects/project-store.ts";
 
 import type { App, AppDeps, HeldChat, MoveSessionsResult } from "./app-types.ts";
-import { carryChatsAlong, chatTrees, newChatReaders, runningJobs, settleChatJobs } from "../sessions/session-move.ts";
+import { carryChatsAlong, chatTrees, newChatReaders, runningJob, settleChatJobs } from "../sessions/session-move.ts";
 import {
   SideChatAnchorError,
   SoulUpdateDeniedError,
@@ -1194,15 +1194,26 @@ export function createSessionMethods(
       if (!projectId || !projects) return { outcome: "not_project" };
       const held: HeldChat[] = [];
       const access = new Map<string, Promise<boolean>>();
+      const ids = [...new Set(sessionIds)];
+      const [rows, readers] = await Promise.all([
+        deps.sessions.getMany({ ids, threadRefs: [] }),
+        deps.sessions.participantsOfMany(tenant, ids),
+      ]);
+      const memberships = await managedProjectMemberships(
+        rows.map((row) => row.scopeId),
+        principalId,
+      );
+      const byId = new Map(rows.map((row) => [row.id, row]));
       const sources = await Promise.all(
-        [...new Set(sessionIds)].map(async (sessionId): Promise<Session | null> => {
-          const viewed = await sessionForViewer(sessionId, principalId);
-          const source = viewed && (await deps.sessions.get(sessionId));
+        ids.map(async (sessionId): Promise<Session | null> => {
+          const source = byId.get(sessionId);
           const refuse = (reason: "not_found" | "same_scope" | "unsupported_source") => {
             held.push({ sessionId, reason });
             return null;
           };
-          if (!source || source.ephemeral) return refuse("not_found");
+          const visible =
+            source && readers.get(sessionId)?.includes(principalId) && memberships.get(source.scopeId) !== false;
+          if (!source || !visible || source.ephemeral) return refuse("not_found");
           if (source.scopeId === targetScopeId) return refuse("same_scope");
           const from = parseScopeId(source.scopeId);
           const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref);
@@ -1220,16 +1231,15 @@ export function createSessionMethods(
         deps,
         sources.filter((s): s is Session => s !== null),
       );
-      await settleChatJobs(deps, trees);
+      const jobs = await settleChatJobs(deps, trees);
       const decide = async (project: Project): Promise<MoveSessionsResult> => {
         if (project.orgId !== orgIdOf()) return { outcome: "not_project" };
         const members = await projects.members(target.ref);
         if (!members?.includes(principalId)) return { outcome: "forbidden" };
         const all = trees.flat();
-        const [active, approvals, jobs, sourceMembers, people] = await Promise.all([
+        const [active, approvals, sourceMembers, people] = await Promise.all([
           deps.runs.activeForThreads(all.map((s) => s.threadRef)),
           deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: all.map((s) => s.id) } }) ?? [],
-          runningJobs(deps, trees),
           Promise.all(
             [...new Set(trees.map((tree) => tree[0]!.scopeId))].map(async (scope) => {
               const from = parseScopeId(scope);
@@ -1249,7 +1259,7 @@ export function createSessionMethods(
             pending.add(record.sessionId);
         trees = trees.filter((tree) => {
           const sessionId = tree[0]!.id;
-          const job = jobs.get(sessionId);
+          const job = runningJob(tree, jobs);
           if (tree.some((s) => active.has(s.threadRef))) held.push({ sessionId, reason: "busy" });
           else if (tree.some((s) => pending.has(s.id))) held.push({ sessionId, reason: "awaiting_approval" });
           else if (job) held.push({ sessionId, reason: "job_running", job });
@@ -1262,7 +1272,6 @@ export function createSessionMethods(
           principalId: id,
           displayName: nameOf(id) ?? id,
         }));
-        if (opts.preview) return { outcome: "preview", gains, held };
         if (gains.some((g) => !opts.audience?.includes(g.principalId)))
           return { outcome: "confirm_audience", gains, held };
         const audience = members.map((id) => {
@@ -1291,18 +1300,15 @@ export function createSessionMethods(
               gains: gains.map((g) => g.principalId),
             }),
           });
-        const moved = await Promise.all(
-          trees.map(async (tree) => {
-            const stored = (await sessionForViewer(tree[0]!.id, principalId))!;
-            return { ...stored, canContinue: await canContinueOnWeb(principalId, stored, access) };
-          }),
+        const moved = await deps.sessions.getMany({ ids: trees.map((tree) => tree[0]!.id), threadRefs: [] });
+        const sessions = await Promise.all(
+          moved.map(async (session) => ({
+            ...session,
+            canContinue: await canContinueOnWeb(principalId, session, access),
+          })),
         );
-        return { outcome: "moved", sessions: moved, held };
+        return { outcome: "moved", sessions, held };
       };
-      if (opts.preview) {
-        const project = await projects.get(projectId);
-        return project ? decide(project) : { outcome: "not_project" };
-      }
       return (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
     },
 

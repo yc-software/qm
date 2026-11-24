@@ -130,22 +130,21 @@ function io(opts: { gains?: string[]; refuse?: Record<string, string>; confirm?:
   const asked: string[] = [];
   const moved: Array<{ ids: readonly string[]; audience: readonly string[] }> = [];
   const names: Record<string, string> = { ada: "Ada", grace: "Grace" };
-  const held = (ids: readonly string[]) =>
-    ids.flatMap((id) => (opts.refuse?.[id] ? [{ sessionId: id, message: opts.refuse[id] }] : []));
   return {
     asked,
     moved,
     io: {
       project: "Launch",
       title: (id: string) => `Chat ${id}`,
-      preview: async (ids: readonly string[]) => ({
-        gains: (opts.gains ?? []).map((p) => ({ principalId: p, displayName: names[p]! })),
-        held: held(ids),
-      }),
       move: async (ids: readonly string[], audience: readonly string[]) => {
         if (opts.fail) throw new Error(opts.fail);
-        moved.push({ ids, audience });
-        return { sessions: ids.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession), held: [] };
+        const held = ids.flatMap((id) => (opts.refuse?.[id] ? [{ sessionId: id, message: opts.refuse[id] }] : []));
+        const gains = opts.gains ?? [];
+        if (gains.some((p) => !audience.includes(p)))
+          return { confirm: gains.map((p) => ({ principalId: p, displayName: names[p]! })), held };
+        const ready = ids.filter((id) => !opts.refuse?.[id]);
+        moved.push({ ids: ready, audience });
+        return { sessions: ready.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession), held };
       },
       confirm: (question: string) => {
         asked.push(question);
