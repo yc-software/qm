@@ -158,13 +158,22 @@ export async function recentPrincipalDeliveryNote(
   if (!recent.length) return "";
   const lines = recent.map((d) => {
     const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
-    const trigger = d.provenance?.trigger ? ` [${d.provenance.trigger}]` : "";
+    const p = d.provenance;
+    const title = p?.sourceTitle?.trim();
+    const meta = [
+      p?.trigger,
+      p?.sourceId ? `id=${p.sourceId}` : undefined,
+      title ? `title=${JSON.stringify(title)}` : undefined,
+      p?.sourceSessionId ? `session=${p.sourceSessionId}` : undefined,
+      p?.fireKey ? `fire=${p.fireKey}` : undefined,
+    ].filter(Boolean);
+    const tag = meta.length ? ` [${meta.join(" ")}]` : "";
     const flattened = d.text.trim().replace(/\s+/g, " ");
     const text =
       flattened.length > DELIVERY_NOTE_ITEM_MAX_CHARS
         ? `${flattened.slice(0, DELIVERY_NOTE_ITEM_MAX_CHARS)}…`
         : flattened;
-    return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${trigger}${from}: ${text}`;
+    return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${tag}${from}: ${text}`;
   });
   return ["Delivered here since the user's last message (delivery events, not your turns):", ...lines].join("\n");
 }
