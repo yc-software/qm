@@ -9,7 +9,14 @@ import type {
   SessionStore,
 } from "./session-store.ts";
 import { AGENT_REPLY_ITEM, msOf, TENANT } from "./items.ts";
-import { BOT_VISIBLE, LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTIVITY } from "./session-rows.ts";
+import {
+  BOT_VISIBLE,
+  LIST_COLUMNS,
+  NOT_AUTOMATION_SURFACE,
+  OWN_CHAT,
+  rowToParticipantSession,
+  USER_ACTIVITY,
+} from "./session-rows.ts";
 
 const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
@@ -42,8 +49,10 @@ export function createSessionParticipants(
   const participantSessions: SessionStore["listByParticipant"] = async (principalId, opts) => {
     const limit = opts?.limit === undefined ? undefined : Math.max(0, Math.floor(opts.limit));
     const rows = await q(
-      participantSessionsSql(` AND NOT s.ephemeral${BOT_VISIBLE(opts?.botActor)}`, LIST_COLUMNS) +
-        (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
+      participantSessionsSql(
+        ` AND NOT s.ephemeral AND ${NOT_AUTOMATION_SURFACE("s")}${BOT_VISIBLE(opts?.botActor)}`,
+        LIST_COLUMNS,
+      ) + (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
       limit === undefined ? [principalId] : [principalId, limit],
     );
     return rows.map(rowToParticipantSession);
@@ -56,7 +65,7 @@ export function createSessionParticipants(
          FROM participants p
         CROSS JOIN LATERAL (
           SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
-            FROM sessions s WHERE s.id = p.session_id AND NOT s.ephemeral OFFSET 0
+            FROM sessions s WHERE s.id = p.session_id AND NOT s.ephemeral AND ${NOT_AUTOMATION_SURFACE("s")} OFFSET 0
         ) s
         WHERE p.principal_id = $1
         GROUP BY s.scope_id`,
