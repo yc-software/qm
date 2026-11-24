@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn } from "../core/turn-origin.ts";
+import { automationDestination, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -41,34 +41,26 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const surfaceOrigin = run.request.surfaceOrigin;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
-  const automationDestination =
-    origin.kind === "automation" &&
-    origin.destination &&
-    !run.request.surfaceTools &&
-    run.request.approval?.approved === true
-      ? origin.destination
-      : undefined;
-  if (!automationDestination && (!target || !surface)) return null;
+  const autoDest = run.request.approval?.approved === true ? automationDestination(run.request) : undefined;
+  if (!autoDest && (!target || !surface)) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  const webTranscript = automationDestination ? undefined : webTranscriptNote(run, surface!, failed);
-  const destination: Destination = automationDestination
-    ? automationDestination
-    : {
-        type: surface!,
-        target: target!,
-        ...(surfaceOrigin
-          ? {
-              account: {
-                id: surfaceOrigin.author.account,
-                workspace: surfaceOrigin.workspace,
-                ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
-              },
-            }
-          : {}),
-        ...(editRef ? { editRef } : {}),
-        ...(webTranscript ? { webTranscript } : {}),
-      };
+  const webTranscript = autoDest ? undefined : webTranscriptNote(run, surface!, failed);
+  const destination: Destination = autoDest ?? {
+    type: surface!,
+    target: target!,
+    ...(surfaceOrigin
+      ? {
+          account: {
+            id: surfaceOrigin.author.account,
+            workspace: surfaceOrigin.workspace,
+            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+          },
+        }
+      : {}),
+    ...(editRef ? { editRef } : {}),
+    ...(webTranscript ? { webTranscript } : {}),
+  };
   const idempotencyKey = `run:${run.id}`;
   const provenance = turnDeliveryProvenance({
     origin,

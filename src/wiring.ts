@@ -11,8 +11,7 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore, triggerApprovalCardRoute } from "./surfaces/approval-store.ts";
-import { TRIGGER_APPROVAL_SURFACES } from "./triggers/run-trigger.ts";
+import { createApprovalStore } from "./surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -2134,16 +2133,19 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const triggerApprovalRoute = triggerApprovalCardRoute(
-    slackApprovalCardRoute,
-    genericChatApprovalCardRoute,
-    GENERIC_CHAT,
+  const approvals = createApprovalStore(
+    artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]),
+    deliveries,
+    { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
+    async (request, sessionId) => {
+      const generic = genericChatApprovalCardRoute(request);
+      if (generic) return generic;
+      if (request.origin?.kind === "automation" && request.origin.destination?.type === "web") return undefined;
+      const home = (await sessions.get(sessionId))?.surface;
+      if (home === "web" || home === "swarm") return undefined;
+      return slackApprovalCardRoute(request);
+    },
   );
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
-    slack: slackApprovalCardRoute,
-    [GENERIC_CHAT]: genericChatApprovalCardRoute,
-    ...Object.fromEntries(TRIGGER_APPROVAL_SURFACES.map((surface) => [surface, triggerApprovalRoute])),
-  });
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({

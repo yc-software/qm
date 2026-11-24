@@ -87,8 +87,6 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
   );
 }
 
-export const TRIGGER_APPROVAL_SURFACES = ["cron", "loop", "webhook", "monitor", "keychain-ask", "secret-drop"] as const;
-
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
 export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
 

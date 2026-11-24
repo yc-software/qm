@@ -1,5 +1,6 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { samePerson } from "../directory/person.ts";
+import { automationDestination } from "../core/turn-origin.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { turnFailureText } from "../surfaces/turn-flow.ts";
 import type { WornPersona } from "../types.ts";
@@ -293,8 +294,7 @@ export function createApprovals(deps: {
     };
 
     const delegated = isSubagentThreadRef(ctx.turn.conversation.threadRef);
-    const automationDestination = ctx.turn.origin?.kind === "automation" ? ctx.turn.origin.destination : undefined;
-    const deliversElsewhere = Boolean(automationDestination && !ctx.turn.surfaceTools);
+    const deliversElsewhere = Boolean(automationDestination(ctx.turn));
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
     const decided: ApprovalDecisionRecord = { decision: selected, by: clickerId, at: Date.now(), state: "done" };

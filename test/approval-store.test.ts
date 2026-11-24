@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createApprovalStore as createRoutedApprovalStore,
-  triggerApprovalCardRoute,
-} from "../src/surfaces/approval-store.ts";
+import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
 import { genericChatApprovalCardRoute } from "../src/surfaces/generic-chat/approvals.ts";
 import { GENERIC_CHAT } from "../src/surfaces/generic-chat/protocol.ts";
@@ -148,19 +145,36 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
 });
 
-test("triggerApprovalCardRoute routes background approvals to Slack DM or generic chat and keeps web threads inline", () => {
-  const route = triggerApprovalCardRoute(slackApprovalCardRoute, genericChatApprovalCardRoute, GENERIC_CHAT);
-  const base = {
-    surface: "cron",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "cron:c1:1", audience: [{ externalId: "U1" }] },
-    text: "run",
-  };
-  assert.deepEqual(route(base), { type: "principal", target: "U1", audienceScopeId: "personal:U1", onBehalfOf: "U1" });
-  assert.equal(route({ ...base, conversation: { ...base.conversation, threadRef: "web:U1:s1" } }), undefined);
-  assert.deepEqual(
-    route({ ...base, origin: { kind: "automation", destination: { type: GENERIC_CHAT, target: "acc:room" } } }),
-    { type: GENERIC_CHAT, target: "acc:room" },
+test("automation approvals route through the fallback route and generic-chat destinations", async () => {
+  const deliveries = createDeliveryStore();
+  const store = createRoutedApprovalStore(
+    testMap<PendingApprovalRecord>(),
+    deliveries,
+    { slack: slackApprovalCardRoute },
+    (req) => genericChatApprovalCardRoute(req) ?? slackApprovalCardRoute(req),
   );
-  assert.equal(route({ ...base, actor: { externalId: "system:channel:C1" } }), undefined);
+  const auto = {
+    ...record("cron:c1:1"),
+    request: {
+      ...record("cron:c1:1").request!,
+      surface: "cron",
+      origin: { kind: "automation" as const },
+    },
+  };
+  await store.put("a-cron", auto);
+  await store.put("a-chat", {
+    ...auto,
+    request: {
+      ...auto.request,
+      origin: { kind: "automation" as const, destination: { type: GENERIC_CHAT, target: "acc:room" } },
+    },
+  });
+  assert.deepEqual(
+    (await deliveries.pending("principal")).map((d) => [d.destination.commandApprovalId, d.destination.target]),
+    [["a-cron", "U1"]],
+  );
+  assert.deepEqual(
+    (await deliveries.pending(GENERIC_CHAT)).map((d) => [d.destination.commandApprovalId, d.destination.target]),
+    [["a-chat", "acc:room"]],
+  );
 });
