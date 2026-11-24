@@ -2247,7 +2247,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 recordedRecall = true;
                 if (snapshot.record) body.rosterSnapshot = snapshot.record;
                 if (guidance) body.guidanceSnapshot = guidance.record;
-                if (environment) body.environment = environment;
+                if (environment) body.environment ??= environment;
                 if (appSource.record) body.appSource = appSource.record;
                 if (recall.text) body.memoryRecall = recall.record;
                 if (!continuation && recallOutcomes.length) body.memoryRecallOutcomes = recallOutcomes;
