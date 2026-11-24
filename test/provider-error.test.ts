@@ -66,15 +66,6 @@ test("providerTurnError maps documented status, type and code without reading er
     [failed({ status: 401, type: "authentication_error" }), "auth", false],
     [failed({ status: 400, code: "cyber_policy" }), "refusal", false],
     [failed({ status: 402, type: "billing_error", code: "insufficient_credits" }), "account", false],
-    [
-      failed({
-        status: 400,
-        type: "invalid_request_error",
-        body: { error: { message: "Your credit balance is too low" } },
-      }),
-      "account",
-      false,
-    ],
     [failed({ status: 429, type: "rate_limit_error" }), "rate_limit", true],
     [failed({ status: 404, type: "not_found_error" }), "not_found", false],
     [failed({ status: 404, code: "model_not_found" }), "not_found", false],

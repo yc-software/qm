@@ -8,7 +8,6 @@ const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const REFUSAL_STOP_REASONS = new Set(["refusal", "content_filter"]);
 const POLICY_CODES = new Set(["cyber_policy"]);
 const ACCOUNT_CODES = new Set(["insufficient_credits", "insufficient_quota"]);
-const ANTHROPIC_LOW_CREDIT = "credit balance is too low";
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 export interface ContextUsage {
@@ -26,19 +25,10 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
 type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
-  const { status, type, code, body } = failed.providerError ?? {};
-  if (
-    (failed.rawStopReason !== undefined && REFUSAL_STOP_REASONS.has(failed.rawStopReason)) ||
-    (code && POLICY_CODES.has(code))
-  )
+  const { status, type, code } = failed.providerError ?? {};
+  if ((failed.rawStopReason && REFUSAL_STOP_REASONS.has(failed.rawStopReason)) || (code && POLICY_CODES.has(code)))
     return "refusal";
-  if (
-    type === "billing_error" ||
-    status === 402 ||
-    (code && ACCOUNT_CODES.has(code)) ||
-    (type === "invalid_request_error" && providerBodyMessage(body)?.includes(ANTHROPIC_LOW_CREDIT))
-  )
-    return "account";
+  if (type === "billing_error" || status === 402 || (code && ACCOUNT_CODES.has(code))) return "account";
   if (type === "model_unavailable") return "model_unavailable";
   if (type === "request_too_large" || status === 413) return "context_too_long";
   if (type === "invalid_request_error" && status === 400 && nearWindow(usage)) return "context_too_long";
