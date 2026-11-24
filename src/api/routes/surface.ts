@@ -295,12 +295,8 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
     });
   }
   const { inOwnPrivate, roomScope } = selfReadAudience(capability, capability.actorId);
-  const fireScope = inOwnPrivate ? "accessible" : roomScope;
-  const found = await app.getSessionForViewer(
-    ctx.params.id!,
-    fireScope ? { ...capability, fireScope } : capability,
-    window,
-  );
+  const fireScope = inOwnPrivate ? "accessible" : (roomScope ?? "none");
+  const found = await app.getSessionForViewer(ctx.params.id!, { ...capability, fireScope }, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),

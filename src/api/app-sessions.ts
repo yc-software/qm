@@ -457,8 +457,19 @@ export function createSessionMethods(
       const participantSession = await sessionForViewer(sessionId, principalId);
       const found =
         participantSession ??
-        (viewer.fireScope ? await accessibleFireSession(sessionId, principalId, viewer.fireScope) : null);
+        (viewer.fireScope && viewer.fireScope !== "none"
+          ? await accessibleFireSession(sessionId, principalId, viewer.fireScope)
+          : null);
       if (!found || !sessionVisibleTo(viewer, found)) return null;
+      if (
+        viewer.fireScope &&
+        viewer.fireScope !== "accessible" &&
+        found.origin &&
+        fireOrigins.has(found.origin) &&
+        (viewer.fireScope === "none" || found.scopeId !== viewer.fireScope)
+      ) {
+        return null;
+      }
       const readTranscript = (opts: { limit?: number; beforeSeq?: number; sinceSeq?: number }) =>
         participantSession
           ? transcripts.forViewer(sessionId, principalId, opts)
