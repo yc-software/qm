@@ -156,16 +156,35 @@ export function createManagedSlack(opts: {
         const ready = active.get(tenantKey())?.installId === input.installId;
         return sendJson(res, ready ? 200 : 202, { ok: true, ready });
       }
+      const body = input.body as Record<string, unknown> | undefined;
+      const bodyTeam =
+        body && typeof body === "object" && !Array.isArray(body)
+          ? (body.team_id ?? (body.team as { id?: unknown } | undefined)?.id)
+          : undefined;
       if (!stored || stored.installId !== input.installId || (!!opts.appId && stored.appId !== opts.appId)) {
+        let teamId: string | null = null;
+        if (typeof bodyTeam === "string") teamId = bodyTeam;
+        else if (typeof input.teamId === "string") teamId = input.teamId;
+        console.warn(
+          "[slack-managed] installation_mismatch",
+          JSON.stringify({
+            tenant: tenantKey() || null,
+            teamId,
+            storedTeamId: stored?.teamId ?? null,
+            storedInstallId: stored?.installId ?? null,
+            inputInstallId: input.installId,
+            storedAppId: stored?.appId ?? null,
+            optsAppId: opts.appId ?? null,
+          }),
+        );
         return sendJson(res, 409, { error: "installation_mismatch" });
       }
-      const body = input.body as Record<string, unknown> | undefined;
       if (
         !body ||
         typeof body !== "object" ||
         Array.isArray(body) ||
         body.api_app_id !== stored.appId ||
-        (body.team_id ?? (body.team as { id?: unknown } | undefined)?.id) !== stored.teamId
+        bodyTeam !== stored.teamId
       ) {
         return sendJson(res, 400, { error: "workspace_mismatch" });
       }
