@@ -194,12 +194,6 @@ async function mintControlPlaneTokens(
       ...(!external && conversation.kind !== "dm"
         ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
         : {}),
-      ...(conversation.kind === "dm" ||
-      conversation.kind === "group" ||
-      conversation.isPrivate === true ||
-      conversation.isMpim === true
-        ? { privateScope: true }
-        : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...presence,
       ...runBinding,
