@@ -1,7 +1,7 @@
 import type { Tenant } from "../tenants/context.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
-import type { TurnResult } from "../types.ts";
+import type { TurnOrigin, TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, spokenByPerson } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
@@ -160,6 +160,11 @@ export interface RunStore {
   onTerminal(listener: (run: Run) => void): void;
 
   get(runId: string): Promise<Run | null>;
+
+  requestSources(
+    tenant: Tenant,
+    runIds: readonly string[],
+  ): Promise<Map<string, { actorId: string; origin?: Pick<TurnOrigin, "kind">; surface?: string }>>;
 
   activeForThread(sessionId: string): Promise<Run | null>;
 

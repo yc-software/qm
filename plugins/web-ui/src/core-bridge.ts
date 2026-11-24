@@ -579,6 +579,7 @@ export type AssistantWork = AssistantMessage & {
   viaTitle?: string;
   viaId?: string;
   personaId?: string;
+  supersedes?: number;
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -2437,6 +2438,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
       const stopped = e.body.stopped === true;
+      const before = out.length;
       if (typeof e.body.via === "string" && text.trim()) {
         spillHeldPosts();
         flushWork("", e.createdAt);
@@ -2455,6 +2457,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         }
       }
       tagPersona(e, out.slice(turn.start));
+      if (typeof e.body.supersedes === "number" && out.length > before)
+        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes;
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

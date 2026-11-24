@@ -26,6 +26,11 @@ export const FEATURES = {
     personalOnly: true,
     hint: "After each reply in the web app, predicts the selected people's likely next message and shows it in their empty composer; Tab fills it in. Each suggestion is one extra model call on their conversation. Turning it on applies on their next page load.",
   },
+  wake_reply_rewrite: {
+    label: "Rewrite the last reply on subagent wakes (experimental)",
+    personalOnly: true,
+    hint: "In web conversations, when a subagent or another conversation starts a turn on behalf of one of the selected people, the agent's reply replaces the latest reply it wrote for that person since anyone last typed, instead of adding another message. In a shared chat, such as a project chat, a reply written for someone else is never replaced, and everyone there sees the result. Reports from crons and webhooks and replies to watch fires are never replaced. The replaced reply stays in the transcript; the iOS app and shared links still show every version. Applies from the next such turn.",
+  },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   team_scopes: { label: "Team scopes" },

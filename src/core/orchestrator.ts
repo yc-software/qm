@@ -76,7 +76,7 @@ import { promptChanges, systemPromptSnapshot, turnFrameNote } from "./orchestrat
 import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
-import { isPollSurface } from "../triggers/run-trigger.ts";
+import { firedByPoll } from "../triggers/run-trigger.ts";
 import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
@@ -195,7 +195,14 @@ import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
 import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
-import { addConversationBlocks, appendTurnGuidance, finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
+import {
+  addConversationBlocks,
+  appendTurnGuidance,
+  finishSystemPrompt,
+  replacesReply,
+  replyToRewrite,
+  wakeTurnEvent,
+} from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
@@ -1107,6 +1114,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await deps.sessions.get(input.sessionSenderId)
           : null;
       const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
+      const wakeTurn = !!wakingChild && input.envelopeWrapped === true;
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
@@ -1474,8 +1482,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           conversation,
           tenant,
           orgMemoryWritable,
-          automatedTurn,
-          childWake,
           ephemeral,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
@@ -1934,6 +1940,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
+        const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
+        if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2077,7 +2085,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnInput = `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${baseText}`;
         }
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
-        const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const isPollFire = firedByPoll(input);
         const replyOptional = isPollFire || childWake;
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
@@ -2239,6 +2247,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
                 if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
+                if (rewrites && replacesReply(entry)) body.supersedes = rewrites.seq;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;
