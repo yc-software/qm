@@ -29,7 +29,7 @@ export const FEATURES = {
   wake_reply_rewrite: {
     label: "Rewrite the last reply on subagent wakes (experimental)",
     personalOnly: true,
-    hint: "In the selected people's web DMs, when a subagent or another conversation starts a turn, the agent's reply replaces its latest reply since the person last typed instead of adding another message. The replaced reply stays in the transcript. Applies from the next such turn.",
+    hint: "In the web app, when a subagent or another conversation starts a turn on behalf of one of the selected people, the agent's reply replaces its latest reply since that person last typed instead of adding another message. In a shared chat, such as a project chat, nothing is replaced once someone else has typed, and everyone there sees the result. Reports from crons and webhooks and replies to watch fires are never replaced. The replaced reply stays in the transcript. Applies from the next such turn.",
   },
   web_dm_spine: {
     label: "Web DM post and edit (experimental)",
