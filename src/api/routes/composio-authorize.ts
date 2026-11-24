@@ -10,7 +10,7 @@ import { personAtKeyboard } from "../artifact-share.ts";
 import { refuseWithoutPerson, sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
 import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
-import { isToolkitId } from "../../mcp/connector-apps.ts";
+import { connectLink, isToolkitId } from "../../mcp/connector-apps.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -46,13 +46,15 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
     return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (!isToolkitId(toolkit)) return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
   const external = (await externalApps(ctx)).find((app) => app.toolkit === toolkit);
-  if (external)
+  if (external) {
+    const connectUrl = connectLink(external, ctx.deps.portalUrl);
     return sendJson(ctx.res, 409, {
       error: "connect_elsewhere",
-      connectUrl: external.connectUrl,
+      connectUrl,
       connector: external.connector,
-      message: `${external.name} connects at ${external.connectUrl}, not through this API. Give the person that link; once it is connected, use the ${external.connector} connector's tools for ${external.name}.`,
+      message: `${external.name} connects at ${connectUrl}, not through this API. Give the person that link; once it is connected, use the ${external.connector} connector's tools for ${external.name}.`,
     });
+  }
   if (!access.key) return composioUnavailable(ctx, 403);
   if (callbackUrl !== undefined) {
     try {

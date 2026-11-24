@@ -10,6 +10,7 @@ export interface ConnectionService {
   popularity: number;
   logoUrl?: string;
   connectUrl?: string;
+  returnParam?: string;
   connected?: boolean;
   stale?: boolean;
 }

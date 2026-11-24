@@ -10,6 +10,7 @@ export interface McpServerApp {
   toolkit: string;
   name: string;
   connectUrl: string;
+  returnParam?: string;
 }
 
 export interface McpServer {
@@ -38,6 +39,7 @@ export interface McpServer {
   attestActor?: boolean;
   attestAudience?: AttestAudience;
   apps?: McpServerApp[];
+  appStatusTool?: string;
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;
