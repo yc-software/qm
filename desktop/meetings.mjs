@@ -44,7 +44,6 @@ export function meetingApp(apps) {
 
 let request;
 let openNotes;
-let menuChanged;
 let enabled = false;
 let automatic = false;
 let checks = 0;
@@ -84,7 +83,10 @@ function showTime() {
 }
 
 function render() {
-  menuChanged();
+  for (const item of meetingMenu()) {
+    const live = Menu.getApplicationMenu()?.getMenuItemById(item.id);
+    if (live) Object.assign(live, { visible: item.visible, enabled: item.enabled });
+  }
   showTime();
   if (!tray) return;
   let status = "Not recording";
@@ -315,17 +317,33 @@ function microphoneChanged(apps) {
 }
 
 export function meetingMenu() {
-  if (!enabled) return [];
   return [
-    recording
-      ? { label: "Stop Recording", enabled: !recording.stopping, click: () => void stopRecording() }
-      : { label: "Start Recording", click: () => void startRecording() },
-    { label: "Open Meeting Notes", enabled: Boolean(notes), click: () => openNotes(notes) },
+    {
+      id: "meeting-start",
+      label: "Start Recording",
+      visible: enabled && !recording,
+      enabled: true,
+      click: () => void startRecording(),
+    },
+    {
+      id: "meeting-stop",
+      label: "Stop Recording",
+      visible: Boolean(recording),
+      enabled: !recording?.stopping,
+      click: () => void stopRecording(),
+    },
+    {
+      id: "meeting-notes",
+      label: "Open Meeting Notes",
+      visible: enabled,
+      enabled: Boolean(notes),
+      click: () => openNotes(notes),
+    },
   ];
 }
 
 export function configureMeetings(options) {
-  ({ request, openNotes, menuChanged } = options);
+  ({ request, openNotes } = options);
   registerRecorder();
 }
 

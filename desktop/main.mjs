@@ -440,89 +440,87 @@ async function start() {
       return { error: error.message };
     }
   });
-  const setMenu = () =>
-    Menu.setApplicationMenu(
-      Menu.buildFromTemplate([
-        {
-          label: "QM",
-          submenu: [
-            { role: "about" },
-            { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
-            {
-              label: "Computer Access…",
-              visible: process.platform === "darwin",
-              click: () => {
-                void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
-              },
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "QM",
+        submenu: [
+          { role: "about" },
+          { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
+          {
+            label: "Computer Access…",
+            visible: process.platform === "darwin",
+            click: () => {
+              void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
             },
-            { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
-            {
-              label: "Open in Browser",
-              click: () => {
-                if (target) openExternal(target);
-              },
+          },
+          { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
+          {
+            label: "Open in Browser",
+            click: () => {
+              if (target) openExternal(target);
             },
-            { type: "separator" },
-            { role: "hide" },
-            { role: "hideOthers" },
-            { role: "unhide" },
-            { type: "separator" },
-            { role: "quit" },
-          ],
-        },
-        {
-          label: "File",
-          submenu: [
-            {
-              label: "New Session",
-              accelerator: "CmdOrCtrl+N",
-              click: () => {
-                const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
-                if (window && !window.isDestroyed() && workspaceWindows.has(window)) {
-                  window.show();
-                  window.webContents.send("qm:new-session");
-                }
-              },
+          },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
+        ],
+      },
+      {
+        label: "File",
+        submenu: [
+          {
+            label: "New Session",
+            accelerator: "CmdOrCtrl+N",
+            click: () => {
+              const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
+              if (window && !window.isDestroyed() && workspaceWindows.has(window)) {
+                window.show();
+                window.webContents.send("qm:new-session");
+              }
             },
-            ...meetingMenu(),
-          ],
-        },
-        { role: "editMenu" },
-        {
-          label: "View",
-          submenu: [
-            {
-              label: "Back",
-              accelerator: "Alt+Left",
-              click: () => {
-                const contents = BrowserWindow.getFocusedWindow()?.webContents;
-                if (contents?.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
-              },
+          },
+          ...meetingMenu(),
+        ],
+      },
+      { role: "editMenu" },
+      {
+        label: "View",
+        submenu: [
+          {
+            label: "Back",
+            accelerator: "Alt+Left",
+            click: () => {
+              const contents = BrowserWindow.getFocusedWindow()?.webContents;
+              if (contents?.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
             },
-            {
-              label: "Forward",
-              accelerator: "Alt+Right",
-              click: () => {
-                const contents = BrowserWindow.getFocusedWindow()?.webContents;
-                if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
-              },
+          },
+          {
+            label: "Forward",
+            accelerator: "Alt+Right",
+            click: () => {
+              const contents = BrowserWindow.getFocusedWindow()?.webContents;
+              if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
             },
-            { role: "reload" },
-            { role: "forceReload" },
-            { role: "toggleDevTools" },
-            { type: "separator" },
-            { role: "resetZoom" },
-            { role: "zoomIn" },
-            { role: "zoomOut" },
-            { type: "separator" },
-            { role: "togglefullscreen" },
-          ],
-        },
-        { role: "windowMenu" },
-      ]),
-    );
-  configureMeetings({ request: instanceRequest, openNotes, menuChanged: setMenu });
-  setMenu();
+          },
+          { role: "reload" },
+          { role: "forceReload" },
+          { role: "toggleDevTools" },
+          { type: "separator" },
+          { role: "resetZoom" },
+          { role: "zoomIn" },
+          { role: "zoomOut" },
+          { type: "separator" },
+          { role: "togglefullscreen" },
+        ],
+      },
+      { role: "windowMenu" },
+    ]),
+  );
+  configureMeetings({ request: instanceRequest, openNotes });
   app.on("activate", () => {
     if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
