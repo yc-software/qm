@@ -61,7 +61,7 @@ export function createManagedSlack(opts: {
         redirect: "error",
       });
       if (response.status === 404) return undefined;
-      if (!response.ok) throw new Error("Slack setup status is unavailable");
+      if (!response.ok) throw new Error(`Slack setup status is unavailable (HTTP ${response.status})`);
       const data = (await response.json()) as Record<string, unknown>;
       if ([data.companyOwned, data.appReady, data.connected].some((v) => typeof v !== "boolean"))
         throw new Error("Invalid Slack setup status");
@@ -72,16 +72,17 @@ export function createManagedSlack(opts: {
       };
     },
     async start(step: "setup" | "install" = "install", origin?: string): Promise<{ url: string }> {
+      const token = credential();
       if (!(await opts.store.enableManaged()))
         throw new SlackInstallStartError("Disconnect your own Slack app before installing the managed app.");
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/start", serviceUrl), {
         method: "POST",
-        headers: { authorization: `Bearer ${credential()}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ step, tenant: boundTenant(), ...(origin ? { origin } : {}) }),
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       });
-      if (!response.ok) throw new Error("Slack installation service is unavailable");
+      if (!response.ok) throw new Error(`Slack installation service is unavailable (HTTP ${response.status})`);
       const data = (await response.json()) as { url?: unknown };
       if (typeof data.url !== "string" || new URL(data.url).origin !== serviceUrl.origin) {
         throw new Error("Slack installation service returned an invalid URL");

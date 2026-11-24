@@ -22,7 +22,7 @@ type SlackSetupStatus = {
   };
 };
 
-async function fixture(t: test.TestContext, token: string | undefined = "SENTINEL-bridge") {
+async function fixture(t: test.TestContext, withToken = true) {
   const map = testMap();
   const store = createSlackInstallationStore(
     "test",
@@ -33,7 +33,7 @@ async function fixture(t: test.TestContext, token: string | undefined = "SENTINE
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({
     serviceUrl: "https://bridge.example",
-    ...(token ? { token } : {}),
+    ...(withToken ? { token: "SENTINEL-bridge" } : {}),
     store,
     fetchImpl: (async (url: URL, init: RequestInit) => {
       calls.push({ path: url.pathname, body: init.body as string | undefined });
@@ -135,7 +135,7 @@ test("shared app status links the settings Add to Slack page only while setup st
 });
 
 test("a workspace without a Slack service credential is reported unavailable and start explains why", async (t) => {
-  const f = await fixture(t, undefined);
+  const f = await fixture(t, false);
   const status = (await (await f.request()).json()) as SlackSetupStatus;
   assert.equal(status.installAvailable, false);
   const start = await f.request("POST", { step: "install" });
