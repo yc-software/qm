@@ -56,8 +56,20 @@ fn synthetic_focus(pid: i32, window: u32, subtype: i16) -> Result<(), Failure> {
     Ok(())
 }
 
+fn foreground_from(accessibility: Result<i32, String>, front_process: impl FnOnce() -> Result<i32, String>) -> Result<i32, Failure> {
+    accessibility.or_else(|accessibility| {
+        front_process().map_err(|process| {
+            Failure::new(ErrorCode::ActionFailed, format!("Cannot identify the foreground app: {accessibility}; {process}"))
+        })
+    })
+}
+
+fn foreground() -> Result<i32, Failure> {
+    foreground_from(crate::mac::system_focused_pid(), crate::intervention::front_process_pid)
+}
+
 fn frontmost() -> Option<i32> {
-    crate::mac::system_focused_pid()
+    foreground().ok()
 }
 
 type Update = unsafe extern "C" fn(i32) -> i32;
@@ -350,9 +362,7 @@ pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    let original = crate::intervention::refresh_focus(
-        frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?,
-    )?;
+    let original = crate::intervention::refresh_focus(foreground()?)?;
     let state = activation.retained.ensure(target)?;
     if !state.ready(window)? {
         activation.activated.borrow_mut().retain(|(pid, _)| *pid != target);
@@ -384,7 +394,7 @@ impl Focus {
             return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
         }
         retained.ensure(target)?;
-        let original = frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?;
+        let original = foreground()?;
         let keyboard_owner = crate::intervention::keyboard_focus_pid()?;
         let intervention = crate::intervention::Intervention::begin(target, original, keyboard_owner)?;
         let activation = Rc::new(Activation { selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()), retained });
@@ -441,6 +451,18 @@ impl Drop for Focus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreground_falls_back_to_the_front_process_and_reports_both_failures() {
+        let silent = || Err("AXFocusedApplication returned -25212".to_string());
+        assert_eq!(foreground_from(Ok(7), || panic!("accessibility already answered")).unwrap(), 7);
+        assert_eq!(foreground_from(silent(), || Ok(9)).unwrap(), 9);
+        let failure = foreground_from(silent(), || Err("GetFrontProcess failed (status -600)".into())).unwrap_err();
+        assert_eq!(
+            failure.message,
+            "Cannot identify the foreground app: AXFocusedApplication returned -25212; GetFrontProcess failed (status -600)"
+        );
+    }
 
     #[test]
     fn activation_tracks_effective_owner_and_balanced_cleanup_targets() {

@@ -377,13 +377,16 @@ fn pid_of(element: &El) -> Option<i32> {
     (unsafe { AXUIElementGetPid(element.as_CFTypeRef(), &mut pid) } == 0 && pid > 0).then_some(pid)
 }
 
-pub(crate) fn system_focused_pid() -> Option<i32> {
+pub(crate) fn system_focused_pid() -> Result<i32, String> {
     let system = unsafe { AXUIElementCreateSystemWide() };
     if system.is_null() {
-        return None;
+        return Err("the system-wide accessibility element is unavailable".into());
     }
     let system = unsafe { CFType::wrap_under_create_rule(system) };
-    pid_of(&attr(&system, "AXFocusedApplication")?)
+    let mut focused: CFTypeRef = std::ptr::null();
+    let status =
+        unsafe { AXUIElementCopyAttributeValue(system.as_CFTypeRef(), cfs("AXFocusedApplication").as_concrete_TypeRef(), &mut focused) };
+    ax_result(status, focused).as_ref().and_then(pid_of).ok_or_else(|| format!("AXFocusedApplication returned {status}"))
 }
 
 fn text_of(v: &CFType) -> Option<String> {
