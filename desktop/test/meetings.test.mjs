@@ -39,9 +39,17 @@ test("segments end at the first pause after ten seconds, at thirty seconds other
 
 test("meeting detection counts only listed meeting apps, including browser helpers", async () => {
   mock.module("electron", {
-    namedExports: { app: {}, Menu: {}, nativeImage: {}, Notification: class {}, systemPreferences: {}, Tray: class {} },
+    namedExports: {
+      app: {},
+      net: {},
+      Menu: {},
+      nativeImage: {},
+      Notification: class {},
+      systemPreferences: {},
+      Tray: class {},
+    },
   });
-  mock.module("../desk.mjs", { namedExports: { watchMicrophone() {} } });
+  mock.module("../desk.mjs", { namedExports: { startWhisper() {}, watchMicrophone() {} } });
   mock.module("../recorder.mjs", { namedExports: { registerRecorder() {}, startCapture() {} } });
   const { meetingApp } = await import("../meetings.mjs");
   assert.equal(meetingApp([{ bundle_id: "us.zoom.xos", pid: 1 }]), "Zoom");

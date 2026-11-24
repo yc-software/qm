@@ -6,7 +6,7 @@ import { isOverheard } from "../../sessions/items.ts";
 import type { Run } from "../../runs/run-store.ts";
 import { scopeId, type TurnRequest } from "../../types.ts";
 import { uuidSchema } from "../../util/ids.ts";
-import { sendJson } from "../http.ts";
+import { readRawBody, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { isObj } from "./shared.ts";
 import { transcribeUpload, voiceKey } from "./voice.ts";
@@ -15,6 +15,7 @@ import { meetingThread, webTurnBase } from "./web-turns.ts";
 const CHECK_IN_MS = 120_000;
 const PROMPT_CHARS = 1_000;
 const PROMPT_LINES = 12;
+const TEXT_BYTES = 64_000;
 const START_WAIT_MS = 10_000;
 const START_POLL_MS = 100;
 
@@ -28,9 +29,10 @@ interface Meeting {
 
 async function meetingsEnabled(ctx: ApiCtx): Promise<boolean> {
   const user = ctx.actor?.p;
+  ctx.res.setHeader("cache-control", "no-store");
   return Boolean(
     user &&
-    voiceKey(ctx) &&
+    !ctx.actor?.imp &&
     ctx.deps.sessions &&
     ctx.deps.runs &&
     (await ctx.deps.featureFlags?.enabled("meeting_recorder", scopeId("personal", user))),
@@ -106,18 +108,40 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
     },
   );
   if (refused) return sendJson(ctx.res, 403, { error: "refused", message: refused });
+  let started: Run | null = null;
   for (let waited = 0; waited < START_WAIT_MS; waited += START_POLL_MS) {
-    const started = await ctx.deps.runs!.getByDedupKey(`${meeting.threadRef}:start`);
+    started = await ctx.deps.runs!.getByDedupKey(`${meeting.threadRef}:start`);
     if (!started || started.turnUserSeq !== null || started.status === "done" || started.status === "failed") break;
     await sleep(START_POLL_MS);
   }
-  return sendJson(ctx.res, 201, { path: `/s/${encodeURIComponent(spawned.session.id)}` });
+  return sendJson(ctx.res, 201, {
+    path: `/s/${encodeURIComponent(spawned.session.id)}`,
+    prompt: started ? transcriptionPrompt(started, []) : "",
+  });
 }
 
 function transcriptionPrompt(started: Run, recent: string[]): string {
   const brief = (started.result?.reply ?? "").slice(0, PROMPT_CHARS / 2);
   const tail = [...new Set(recent)].join("\n").slice(-(PROMPT_CHARS - brief.length));
   return [brief, tail].filter(Boolean).join("\n");
+}
+
+async function heardText(ctx: ApiCtx, prompt: string): Promise<string | null | undefined> {
+  if (ctx.req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+    const key = voiceKey(ctx);
+    if (key) return transcribeUpload(ctx, key, prompt, "meeting");
+    sendJson(ctx.res, 403, {
+      error: "transcription_unavailable",
+      message: "This server has no OpenAI key, so meetings can only be transcribed on the Mac.",
+    });
+    return undefined;
+  }
+  const body: unknown = await readRawBody(ctx.req, TEXT_BYTES)
+    .then(JSON.parse)
+    .catch(() => undefined);
+  if (isObj(body) && typeof body.text === "string") return body.text.trim();
+  sendJson(ctx.res, 400, { error: "bad_request", message: "A segment transcribed on the Mac needs its text." });
+  return undefined;
 }
 
 async function meetingSpeech(ctx: ApiCtx): Promise<void> {
@@ -139,9 +163,10 @@ async function meetingSpeech(ctx: ApiCtx): Promise<void> {
   const recent = (await sessions.getItems(session.id, { limit: PROMPT_LINES, messagesOnly: true }))
     .filter(isOverheard)
     .map((item) => item.text ?? "");
-  const text = await transcribeUpload(ctx, voiceKey(ctx)!, transcriptionPrompt(started, recent), "meeting");
+  const text = await heardText(ctx, transcriptionPrompt(started, recent));
   if (text === undefined) return;
-  if (!text) return sendJson(ctx.res, 200, { text: "" });
+  const prompt = transcriptionPrompt(started, text ? [...recent, text] : recent);
+  if (!text) return sendJson(ctx.res, 200, { text: "", prompt });
   const stored = await sessions.appendDelivery(
     { sessionId: session.id },
     overheardItem({
@@ -152,7 +177,7 @@ async function meetingSpeech(ctx: ApiCtx): Promise<void> {
     }),
   );
   if (stored) await afterSpeech(ctx, meeting, session.id, started);
-  return sendJson(ctx.res, 200, { text });
+  return sendJson(ctx.res, 200, { text, prompt });
 }
 
 async function afterSpeech(ctx: ApiCtx, meeting: Meeting, sessionId: string, started: Run): Promise<void> {

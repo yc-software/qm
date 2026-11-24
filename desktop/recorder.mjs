@@ -39,9 +39,10 @@ export function registerRecorder() {
     current.track(speaker, problem);
   });
   handle("qm:recorder-done", (current) => current.finished());
+  handle("qm:recorder-local", (current) => current.local);
 }
 
-export function startCapture(segment, track) {
+export function startCapture(segment, track, local) {
   const window = new BrowserWindow({
     show: false,
     webPreferences: {
@@ -55,7 +56,7 @@ export function startCapture(segment, track) {
     },
   });
   const done = Promise.withResolvers();
-  active = { window, segment, track, finished: done.resolve };
+  active = { window, segment, track, local, finished: done.resolve };
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("render-process-gone", (_event, details) => {

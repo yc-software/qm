@@ -134,6 +134,46 @@ export function watchMicrophone(onApps, onFailure) {
   };
 }
 
+export function startWhisper(model) {
+  const proc = spawn(binary, ["whisper", model], { stdio: ["pipe", "pipe", "pipe"] });
+  const waiting = [];
+  let stderr = "";
+  let failure;
+  const end = (problem) => {
+    failure ??= problem;
+    for (const reply of waiting.splice(0)) reply.reject(new Error(failure));
+  };
+  proc.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-2000)));
+  proc.stdin.on("error", () => {});
+  proc.on("error", (error) => end(error.message));
+  proc.on("exit", (code, signal) =>
+    end(stderr.trim().split("\n").at(-1) || `desk whisper exited with ${code ?? signal}`),
+  );
+  createInterface({ input: proc.stdout }).on("line", (line) => {
+    const reply = waiting.shift();
+    try {
+      const { text, error } = JSON.parse(line);
+      if (error) reply?.reject(Object.assign(new Error(error), { segmentOnly: true }));
+      else reply?.resolve(text);
+    } catch (error) {
+      reply?.reject(new Error(`Unreadable desk whisper line: ${error.message}`));
+    }
+  });
+  return {
+    transcribe(pcm, prompt) {
+      if (failure) return Promise.reject(new Error(failure));
+      const reply = Promise.withResolvers();
+      waiting.push(reply);
+      proc.stdin.write(`${JSON.stringify({ pcm: Buffer.from(pcm).toString("base64"), prompt })}\n`);
+      return reply.promise;
+    },
+    stop: () => {
+      failure ??= "Transcription stopped";
+      proc.kill("SIGTERM");
+    },
+  };
+}
+
 export const desk = {
   request: (cmd, owner, deadline) => request(cmd.type === "act" ? { ...cmd, pace: paced } : cmd, owner, deadline),
   stop,

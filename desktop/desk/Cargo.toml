@@ -13,9 +13,11 @@ signal-hook = "0.3"
 sha2 = "0.10"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 html2text = { version = "0.17", default-features = false }
+whisper-rs = "0.16"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+whisper-rs = { version = "0.16", features = ["metal"] }
 core-foundation = "0.10"
 core-graphics = { version = "0.24", features = ["highsierra", "elcapitan"] }
 foreign-types = "0.5"
@@ -32,3 +34,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 opt-level = "z"
 lto = true
 strip = true
+
+[profile.release.package.whisper-rs-sys]
+opt-level = 3

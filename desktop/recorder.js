@@ -2,6 +2,16 @@
   const { recorderHost: host, createSegmenter } = window;
   const loudness = 0.015;
   const tracks = [];
+  const local = host.local();
+  const encode = async (blob) => {
+    if (!(await local)) return new Uint8Array(await blob.arrayBuffer());
+    try {
+      const audio = await new OfflineAudioContext(1, 1, 16_000).decodeAudioData(await blob.arrayBuffer());
+      return new Uint8Array(Float32Array.from(audio.getChannelData(0)).buffer);
+    } catch {
+      return new Uint8Array();
+    }
+  };
 
   async function capture(speaker, open) {
     let stream;
@@ -36,8 +46,7 @@
       recorder.stop();
       sent = sent.then(async () => {
         await stopped;
-        if (segment.speech)
-          await host.segment(speaker, segment.at, new Uint8Array(await new Blob(chunks).arrayBuffer()));
+        if (segment.speech) await host.segment(speaker, segment.at, await encode(new Blob(chunks)));
       });
     };
     let current = begin();

@@ -38,7 +38,7 @@ export const FEATURES = {
   meeting_recorder: {
     label: "Meeting recorder",
     personalOnly: true,
-    hint: "Lets the selected people's QM desktop app record their meetings into a private conversation, where QM briefs them, checks claims and writes the meeting up. Their microphone and computer audio go to OpenAI for transcription, which needs the instance's OpenAI key, and are not kept. The desktop app ignores meetings while this is off.",
+    hint: "Lets the selected people's QM desktop app record their meetings into a private conversation, where QM briefs them, checks claims and writes the meeting up. Their Mac transcribes the microphone and computer audio itself and sends only text, unless they choose OpenAI transcription in the app, which sends the audio to OpenAI, needs the instance's OpenAI key, and keeps none of it. The desktop app ignores meetings while this is off.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },

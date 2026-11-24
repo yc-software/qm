@@ -32,16 +32,25 @@ const waitFor = async (check) => {
   header.write("data", 36);
   header.writeUInt32LE(samples.byteLength, 40);
   await writeFile(wav, Buffer.concat([header, Buffer.from(samples.buffer)]));
-  await writeFile(path.join(directory, "meetings.json"), JSON.stringify({ automatic: true }));
+  await writeFile(path.join(directory, "meetings.json"), JSON.stringify({ automatic: true, local: false }));
+  await writeFile(path.join(directory, "ggml-large-v3-turbo-q5_0.bin"), "model");
   const desk = path.join(directory, "desk.mjs");
   await writeFile(
     desk,
     `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+if (process.argv[2] === "whisper")
+  createInterface({ input: process.stdin }).on("line", (line) => {
+    const { pcm, prompt } = JSON.parse(line);
+    console.log(JSON.stringify({ text: \`heard \${Buffer.from(pcm, "base64").length / 4} samples after \${prompt}\` }));
+  });
+else {
 const line = (apps) => console.log(JSON.stringify({ type: "microphone", apps }));
 line([]);
 setTimeout(() => line([{ bundle_id: "us.zoom.xos", pid: 42 }]), 1000);
 setTimeout(() => line([{ bundle_id: "com.qm.desktop.helper", pid: 43 }]), 30000);
 setInterval(() => {}, 1000);
+}
 `,
   );
   await chmod(desk, 0o700);
@@ -75,6 +84,7 @@ setInterval(() => {}, 1000);
         type: req.headers["content-type"],
         ebml: body.subarray(0, 4).toString("hex"),
         bytes: body.length,
+        text: req.headers["content-type"] === "application/json" ? JSON.parse(body).text : undefined,
       });
       log.push(entry);
 
@@ -83,7 +93,7 @@ setInterval(() => {}, 1000);
         return reply(503, { error: "busy" });
       }
       if (log.length === 5) return reply(422, { error: "unreadable", message: "The audio could not be read." });
-      return reply(200, { text: "hello" });
+      return reply(200, { text: "hello", prompt: "the brief" });
     }
     Object.assign(entry, JSON.parse(body));
     log.push(entry);
@@ -92,7 +102,7 @@ setInterval(() => {}, 1000);
       stopped.resolve(entry);
       return reply(202, {});
     }
-    reply(201, { path: `/meetings/${entry.id}` });
+    reply(201, { path: `/meetings/${entry.id}`, prompt: "the brief" });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -139,6 +149,7 @@ setInterval(() => {}, 1000);
     const main = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().startsWith(origin));
     await new Promise((resolve) => main.webContents.once("did-finish-load", resolve));
     assert.equal(main.webContents.getURL(), `${origin}/meetings/${create.id}`);
+    menuItem("Transcribe on This Mac").click();
     menuItem("Start Recording").click();
     await waitFor(() => log.some((entry) => entry.action === "speech" && entry.id !== create.id));
     const manual = log.findLast((entry) => entry.action === "create");
@@ -147,12 +158,20 @@ setInterval(() => {}, 1000);
       server.close();
       rmSync(directory, { recursive: true, force: true });
       const last = log.at(-1);
-      if (last.action !== "stop" || last.id !== manual.id) {
+      const local = log.filter((entry) => entry.action === "speech" && entry.id === manual.id);
+      const heard = local.map((entry) => Number(entry.text?.split(" ")[1]));
+      if (
+        last.action !== "stop" ||
+        last.id !== manual.id ||
+        !local.every((entry) => entry.type === "application/json") ||
+        !heard.some((samples) => samples > 16_000 * 9) ||
+        !local.some((entry) => entry.text.endsWith("after the brief"))
+      ) {
         console.error("Quitting did not flush and stop the recording", JSON.stringify(log, null, 1));
         return app.exit(1);
       }
       console.log(
-        `PASS: detected Zoom, created the meeting lazily, uploaded ${speech.length} segments in order per track, retried a 503, stopped after the meeting ended, opened notes; a manual recording flushed and stopped on quit`,
+        `PASS: detected Zoom, created the meeting lazily, uploaded ${speech.length} segments in order per track, retried a 503, stopped after the meeting ended, opened notes; a manual recording transcribed on this Mac, sent only text with the server's prompt, and flushed and stopped on quit`,
       );
     });
     app.quit();

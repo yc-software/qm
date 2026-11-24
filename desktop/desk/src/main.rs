@@ -18,6 +18,7 @@ mod tree;
 mod capture;
 #[cfg(target_os = "macos")]
 mod pasteboard;
+mod whisper;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -52,7 +53,8 @@ const USAGE: &str = "usage:
   desk observe <app> [--png out.png]
   desk act <app> '<actions json>' [--png out.png]
   desk serve            JSON lines on stdin/stdout (see PROTOCOL.md)
-  desk microphone       one JSON line whenever the apps using audio input change";
+  desk microphone       one JSON line whenever the apps using audio input change
+  desk whisper <model>  transcribe JSON lines of 16 kHz PCM on stdin to JSON lines of text";
 
 fn main() {
     if let Err(e) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -69,6 +71,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let cmd = match args.first().map(String::as_str) {
         Some("serve") => return serve(&mut desk),
         Some("microphone") => return microphone::watch(),
+        Some("whisper") => return whisper::serve(&arg(1)?),
         Some("permissions") => Command::Permissions { prompt: args.iter().any(|a| a == "--prompt") },
         Some("apps") => Command::Apps,
         Some("observe") => Command::Observe { app: arg(1)?, screenshot: png.is_some(), diff: false },

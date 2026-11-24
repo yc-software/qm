@@ -32,7 +32,7 @@ const app = {
   },
 } as unknown as App;
 
-const server = createServer(app, {
+const deps = {
   signingSecret: "meeting-route-signing-secret-0123456789",
   replayDedupe: { claim: async () => true },
   ...browserSessionDeps,
@@ -52,7 +52,8 @@ const server = createServer(app, {
     getByDedupKey: async (key: string) => runs.get(key) ?? null,
     inFlightForThread: async () => (pending ? [{ status: "pending" }] : []),
   },
-} as unknown as ServerDeps);
+};
+const server = createServer(app, deps as unknown as ServerDeps);
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 test.after(() => server.close());
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -86,7 +87,10 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
     app: "Zoom",
     timezone: "America/Los_Angeles",
   });
-  assert.deepEqual([start.status, await start.json()], [201, { path: "/s/meeting-session" }]);
+  assert.deepEqual(
+    [start.status, await start.json()],
+    [201, { path: "/s/meeting-session", prompt: "Weekly sync with Dana Kowalczyk" }],
+  );
   assert.deepEqual(
     [turns[0]!.origin, turns[0]!.displayText, turns[0]!.conversation.threadRef, Boolean(turns[0]!.conversationHeader)],
     [{ kind: "human" }, "Recording started · Zoom · 10:02 AM", thread, true],
@@ -95,7 +99,10 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
   pending = true;
   const speech = (at: number) =>
     post(`/api/meetings/${id}/speech?speaker=others&at=${at}`, "audio", { "content-type": "audio/webm" });
-  assert.deepEqual(await (await speech(1_795_000_000_000)).json(), { text: "Dana said revenue tripled." });
+  assert.deepEqual(await (await speech(1_795_000_000_000)).json(), {
+    text: "Dana said revenue tripled.",
+    prompt: "Weekly sync with Dana Kowalczyk\nDana said revenue tripled.",
+  });
   assert.equal(String(prompts[0]).includes("Dana Kowalczyk"), true);
   assert.deepEqual(appended, [
     {
@@ -107,7 +114,10 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
   ]);
   assert.equal(turns.length, 1);
   pending = false;
-  assert.deepEqual(await (await speech(1_795_000_005_000)).json(), { text: "" });
+  assert.deepEqual(await (await speech(1_795_000_005_000)).json(), {
+    text: "",
+    prompt: "Weekly sync with Dana Kowalczyk\nDana said revenue tripled.",
+  });
   spoken.push("Dana said revenue tripled.");
   await speech(1_795_000_000_000);
   assert.equal(appended.length, 1);
@@ -139,4 +149,21 @@ test("a segment OpenAI rejects is dropped, and a refused key ends the recording"
   const speech = () => post(`/api/meetings/${id}/speech?speaker=me&at=1`, "audio", { "content-type": "audio/webm" });
   assert.deepEqual([(await speech()).status, (await speech()).status], [422, 403]);
   assert.equal((await post(`/api/meetings/${"-".repeat(36)}/stop`, { endedAt: 1 })).status, 400);
+});
+
+test("text transcribed on the Mac is stored without an OpenAI key, which audio still needs", async (t) => {
+  const keyless = createServer(app, { ...deps, openaiApiKey: undefined } as unknown as ServerDeps);
+  await new Promise<void>((resolve) => keyless.listen(0, "127.0.0.1", resolve));
+  t.after(() => keyless.close());
+  const speech = (body: unknown, type = "application/json") =>
+    fetch(
+      `http://127.0.0.1:${(keyless.address() as AddressInfo).port}/api/meetings/${id}/speech?speaker=me&at=1795000030000`,
+      { method: "POST", headers: { ...headers, "content-type": type }, body: JSON.stringify(body) },
+    );
+  const reply = (await (await speech({ text: " Margins are flat. " })).json()) as { text: string; prompt: string };
+  assert.deepEqual([reply.text, appended.at(-1)!.text], ["Margins are flat.", "Margins are flat."]);
+  assert.equal(reply.prompt.endsWith("\nMargins are flat."), true);
+  const refused = await speech("audio", "audio/webm");
+  assert.deepEqual([(await speech({})).status, refused.status], [400, 403]);
+  assert.equal(((await refused.json()) as { error: string }).error, "transcription_unavailable");
 });

@@ -4,8 +4,9 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { watchMicrophone } from "./desk.mjs";
+import { startWhisper, watchMicrophone } from "./desk.mjs";
 import { registerRecorder, startCapture } from "./recorder.mjs";
+import { downloadModel } from "./transcription.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const meetingApps = [
@@ -47,6 +48,8 @@ let request;
 let openNotes;
 let enabled = false;
 let automatic = false;
+let local = true;
+let model;
 let checks = 0;
 let tray;
 let stopWatching;
@@ -88,7 +91,8 @@ function showTime() {
 function render() {
   for (const item of meetingMenu()) {
     const live = Menu.getApplicationMenu()?.getMenuItemById(item.id);
-    if (live) Object.assign(live, { visible: item.visible, enabled: item.enabled });
+    if (live)
+      Object.assign(live, { visible: item.visible, enabled: item.enabled, ...(item.checked && { checked: true }) });
   }
   showTime();
   if (!tray) return;
@@ -102,6 +106,13 @@ function render() {
     ...(recording?.uploadProblem ? [`Upload retrying: ${recording.uploadProblem}`] : []),
     ...(recording?.dropped ? [`Skipped ${plural(recording.dropped.count)}: ${recording.dropped.problem}`] : []),
     ...(detectionProblem ? [`Meeting detection unavailable: ${detectionProblem}`] : []),
+    ...(local && model && !model.file
+      ? [
+          model.problem
+            ? `Transcription model: ${model.problem}`
+            : `Downloading transcription model: ${model.progress}%`,
+        ]
+      : []),
   ];
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -114,16 +125,42 @@ function render() {
         label: "Record Meetings Automatically",
         type: "checkbox",
         checked: automatic,
-        click: (item) => void saveAutomatic(item.checked),
+        click: (item) => void saveSettings({ automatic: item.checked }),
       },
     ]),
   );
 }
 
-async function saveAutomatic(value) {
-  automatic = value;
+function prepareModel() {
+  model ??= { progress: 0 };
+  model.ready ??= (async () => {
+    for (let delay = 5000; local; delay = Math.min(delay * 2, 300_000)) {
+      try {
+        model.file = await downloadModel((share) => {
+          const progress = Math.floor(share * 100);
+          if (progress === model.progress) return;
+          model.progress = progress;
+          render();
+        });
+        model.problem = undefined;
+        render();
+        return model.file;
+      } catch (error) {
+        model.problem = error.message;
+        render();
+      }
+      await sleep(delay);
+    }
+    model = undefined;
+  })();
+  return model.ready;
+}
+
+async function saveSettings(change) {
+  ({ automatic, local } = { automatic, local, ...change });
+  if (local) void prepareModel();
   try {
-    await writeFile(`${settingsPath()}.tmp`, JSON.stringify({ automatic }));
+    await writeFile(`${settingsPath()}.tmp`, JSON.stringify({ automatic, local }));
     await rename(`${settingsPath()}.tmp`, settingsPath());
   } catch (error) {
     notify("Meeting setting not saved", error.message);
@@ -131,12 +168,13 @@ async function saveAutomatic(value) {
   render();
 }
 
-async function readAutomatic() {
+async function readSettings() {
   try {
-    return JSON.parse(await readFile(settingsPath(), "utf8")).automatic === true;
+    const saved = JSON.parse(await readFile(settingsPath(), "utf8"));
+    return { automatic: saved.automatic === true, local: saved.local !== false };
   } catch (error) {
     if (error.code !== "ENOENT") console.error("QM could not read meeting settings", error);
-    return false;
+    return { automatic: false, local: true };
   }
 }
 
@@ -187,7 +225,7 @@ function meeting(current) {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
   ).then(async (response) => {
-    current.path = (await response.json()).path;
+    ({ path: current.path, prompt: current.prompt } = await response.json());
     notes = current.path;
     render();
   });
@@ -198,6 +236,21 @@ function fail(current, error) {
   if (current.failure) return;
   current.failure = error.message;
   void stopRecording();
+}
+
+async function transcribeHere(current, pcm) {
+  if (!pcm.length) throw Object.assign(new Error("The audio could not be decoded"), { segmentOnly: true });
+  const { signal } = current.controller;
+  const file = await Promise.race([
+    prepareModel(),
+    new Promise((_, reject) => {
+      const quit = () => reject(new Error("QM quit before the transcription model was ready"));
+      if (signal.aborted) quit();
+      signal.addEventListener("abort", quit, { once: true });
+    }),
+  ]);
+  current.whisper ??= startWhisper(file);
+  return current.whisper.transcribe(pcm, current.prompt ?? "");
 }
 
 function upload(current, speaker, at, bytes) {
@@ -217,15 +270,18 @@ function upload(current, speaker, at, bytes) {
       return fail(current, error);
     }
     try {
-      await call(current, (signal) =>
+      const body = current.local ? { text: await transcribeHere(current, bytes) } : bytes;
+      if (body.text === "") return;
+      const response = await call(current, (signal) =>
         request(
           `/api/meetings/${current.id}/speech?${new URLSearchParams({ speaker, at: String(at) })}`,
           "POST",
           signal,
-          "audio/webm",
-          bytes,
+          current.local ? "application/json" : "audio/webm",
+          body,
         ),
       );
+      current.prompt = (await response.json()).prompt;
     } catch (error) {
       if (!error.segmentOnly) return fail(current, error);
       current.dropped = { count: (current.dropped?.count ?? 0) + 1, problem: error.message };
@@ -248,6 +304,7 @@ async function startRecording(detected) {
     startedAt: Date.now(),
     app: detected,
     detected: Boolean(detected),
+    local,
     lastSpeech: Date.now(),
     tracks: {},
     uploads: { me: Promise.resolve(), others: Promise.resolve() },
@@ -285,6 +342,7 @@ async function startRecording(detected) {
   current.stopCapture = startCapture(
     (speaker, at, bytes) => upload(current, speaker, at, bytes),
     (speaker, problem) => trackProblem(current, speaker, problem),
+    current.local,
   );
   if (current.detected && !meetingNow) endMeetingSoon();
 }
@@ -299,6 +357,7 @@ function stopRecording() {
     render();
     await current.stopCapture?.();
     await Promise.all(Object.values(current.uploads));
+    current.whisper?.stop();
     if (current.created && !current.failure) {
       try {
         await current.created;
@@ -389,6 +448,24 @@ export function meetingMenu() {
       enabled: Boolean(notes),
       click: () => openNotes(notes),
     },
+    {
+      id: "meeting-local",
+      label: "Transcribe on This Mac",
+      type: "radio",
+      checked: local,
+      visible: enabled,
+      enabled: !recording,
+      click: () => void saveSettings({ local: true }),
+    },
+    {
+      id: "meeting-openai",
+      label: "Transcribe with OpenAI",
+      type: "radio",
+      checked: !local,
+      visible: enabled,
+      enabled: !recording,
+      click: () => void saveSettings({ local: false }),
+    },
   ];
 }
 
@@ -410,7 +487,8 @@ export async function refreshMeetings() {
   if (check !== checks || recording || next === enabled) return;
   enabled = next;
   if (enabled) {
-    automatic = await readAutomatic();
+    ({ automatic, local } = await readSettings());
+    if (local) void prepareModel();
     tray = new Tray(
       nativeImage.createFromPath(path.join(directory, "assets/qm.png")).resize({ width: 16, height: 16 }),
     );

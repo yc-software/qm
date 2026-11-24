@@ -19,6 +19,8 @@ open -a Calculator
 
 `desk microphone` runs until stopped and prints `{"type":"microphone","apps":[{"bundle_id":"us.zoom.xos","pid":123}]}` whenever the set of processes using audio input changes. It reads CoreAudio process objects, which need macOS 14.2 or later.
 
+`desk whisper <model>` loads a whisper.cpp model (on the GPU through Metal on macOS) and answers each stdin line `{"pcm":"<base64 16 kHz mono f32le>","prompt":"…"}` with `{"text":"…"}`, or `{"error":"…"}` when that segment cannot be transcribed. Building it needs CMake.
+
 Run alone, macOS grants permissions to the terminal that launches desk, so switch your terminal on under System Settings > Privacy & Security > Accessibility and Screen Recording, then restart it.
 
 App listing shows regular Mac apps. Explicit names, bundle IDs, and full application paths can also target accessory apps with an accessible, visible window. Background-only processes are excluded; observation and control remain subject to macOS permissions and app support.
