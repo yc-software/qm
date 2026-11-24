@@ -14,9 +14,13 @@ export const externalOrgSchema = z
     name: z.string().trim().min(1),
     partnerChatAccount: z.string().min(1).optional(),
   })
-  .strip();
+  .strip()
+  .refine((org) => org.partnerChatAccount === undefined || org.partnerChatAccount === org.id, {
+    message: "an external organization has exactly one id",
+  })
+  .transform(({ id, name }) => ({ id, name }));
 
-type ExternalOrg = z.infer<typeof externalOrgSchema>;
+type ExternalOrg = z.output<typeof externalOrgSchema>;
 
 interface ExternalOrgTenant {
   tenant: string;

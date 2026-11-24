@@ -50,3 +50,32 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
     `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
   ],
 };
+
+const accountCheck = `CREATE OR REPLACE FUNCTION qm_external_org_account_check()
+  RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE bound uuid := CASE WHEN TG_TABLE_NAME = 'tenants' THEN NEW.id ELSE NEW.tenant END;
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id
+      WHERE t.id = bound AND t.settings ? 'partnerChatAccount' AND t.settings->>'partnerChatAccount' IS DISTINCT FROM o.org_id
+    ) THEN
+      RAISE EXCEPTION 'tenant %% partnerChatAccount differs from its external organization id', bound USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+  END $f$`;
+
+export const TENANT_EXTERNAL_ORG_ACCOUNT: PgMigrationDefinition = {
+  id: "0000-tenancy/external-org-account",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $account$ BEGIN EXECUTE format($sql$${accountCheck}$sql$, current_schema()); END $account$`,
+    `REVOKE ALL ON FUNCTION qm_external_org_account_check() FROM PUBLIC`,
+    `DROP TRIGGER IF EXISTS tenants_external_org_account ON tenants`,
+    `CREATE CONSTRAINT TRIGGER tenants_external_org_account AFTER INSERT OR UPDATE OF settings ON tenants
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION qm_external_org_account_check()`,
+    `DROP TRIGGER IF EXISTS tenant_external_orgs_account ON tenant_external_orgs`,
+    `CREATE CONSTRAINT TRIGGER tenant_external_orgs_account AFTER INSERT OR UPDATE ON tenant_external_orgs
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION qm_external_org_account_check()`,
+  ],
+};

@@ -52,15 +52,12 @@ function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
     const { id, name, partnerChatAccount } = entry as Record<string, unknown>;
     const org = { id: orgText(id), name: orgText(name), partnerChatAccount: orgText(partnerChatAccount) };
     if (!org.id || !org.name || orgs.has(org.id)) continue;
-    orgs.set(org.id, {
-      id: org.id,
-      name: org.name,
-      ...(org.partnerChatAccount ? { partnerChatAccount: org.partnerChatAccount } : {}),
-    });
+    if (org.partnerChatAccount !== undefined && org.partnerChatAccount !== org.id) continue;
+    orgs.set(org.id, { id: org.id, name: org.name });
   }
   if (orgs.size < raw.length)
     console.warn(
-      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need a unique id and a name)`,
+      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need one unique id and a name)`,
     );
   return [...orgs.values()];
 }
