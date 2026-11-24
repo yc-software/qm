@@ -892,7 +892,7 @@ test("native admin tools use the authenticated handler, including its live autho
   }
 });
 
-test("a guest in the room: the person's turn mints presence without an internal audience, and the real admin routes refuse it", async () => {
+test("a guest in the room: the person's turn mints neither presence nor an internal audience, and the real admin routes refuse it", async () => {
   const s = await start();
   try {
     const replies: Array<[number, string]> = [];

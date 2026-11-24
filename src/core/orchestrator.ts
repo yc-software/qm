@@ -549,9 +549,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const internalAudience = allInternal && !external;
-      const liveTurn = authorizationOrigin.kind === "human" || ownerFireTurn;
+      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && internalAudience;
       const liveAuthorTurn =
-        (!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn);
+        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
+        internalAudience;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -1731,7 +1732,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn && internalAudience ? { liveAuthor: true } : {}),
+          ...(livePersonTurn ? { liveAuthor: true } : {}),
           ...(triggeredTurn ? { triggered: true } : {}),
         };
         const baseTools = createToolContext({
