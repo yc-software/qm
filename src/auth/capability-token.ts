@@ -74,6 +74,18 @@ export type ScopeAuthorizationClaims = Pick<
   "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "liveActor" | "members"
 >;
 
+export function scopeAuthorizationClaims(c: ScopeAuthorizationClaims): ScopeAuthorizationClaims {
+  return {
+    actorId: c.actorId,
+    scopeId: c.scopeId,
+    ...(c.scopeVersion ? { scopeVersion: c.scopeVersion } : {}),
+    ...(c.botActor ? { botActor: true } : {}),
+    ...(c.internalAudience ? { internalAudience: true } : {}),
+    ...(c.liveActor ? { liveActor: true } : {}),
+    ...(c.members ? { members: c.members } : {}),
+  };
+}
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {

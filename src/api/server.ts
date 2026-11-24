@@ -22,7 +22,7 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, scopeAuthorizationClaims, type CapabilityClaims } from "../auth/capability-token.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -174,15 +174,7 @@ async function verifyCapability(
   if (
     !(capability.externalSlack
       ? tenant !== undefined && (await externalSlackCapabilityAllowed(tenant, capability, deps))
-      : await app.authorizesCapabilityScope({
-          actorId: capability.actorId,
-          scopeId: capability.scopeId,
-          ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-          ...(capability.botActor ? { botActor: true } : {}),
-          ...(capability.internalAudience ? { internalAudience: true } : {}),
-          ...(capability.liveActor ? { liveActor: true } : {}),
-          ...(capability.members ? { members: capability.members } : {}),
-        }))
+      : await app.authorizesCapabilityScope(scopeAuthorizationClaims(capability)))
   ) {
     sendJson(res, 403, {
       error: "forbidden",
