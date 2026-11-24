@@ -16,7 +16,7 @@ import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { reportFailure } from "../util/errors.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { sessionOrigin, windowedTranscript, type SessionOrigin } from "../sessions/session-store.ts";
+import { windowedTranscript, type SessionOrigin } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -167,7 +167,7 @@ export function createSessionMethods(
     fireScope: "accessible" | ScopeId,
   ): Promise<Session | null> => {
     const session = await deps.sessions.get(sessionId);
-    if (!session || !fireOrigins.has(session.origin ?? sessionOrigin(session.threadRef))) return null;
+    if (!session?.origin || !fireOrigins.has(session.origin)) return null;
     if (fireScope !== "accessible" && session.scopeId !== fireScope) return null;
     return (await canUseContext(principalId, session.scopeId)) ? session : null;
   };
