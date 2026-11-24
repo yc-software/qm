@@ -4,6 +4,7 @@ export const SESSION_DROP_OVER_CLASS = "session-drop-over";
 
 export interface SessionMoveHost {
   sessions(): readonly CoreSession[];
+  movableFrom(scopeId: string): boolean;
   move(ids: readonly string[], scopeId: string): Promise<void>;
 }
 
@@ -19,11 +20,18 @@ export function sessionsToMove(selected: ReadonlySet<string>, draggedId: string)
   return selected.has(draggedId) && selected.size > 1 ? [...selected] : [draggedId];
 }
 
-export function movableInto(sessions: readonly CoreSession[], ids: readonly string[], scopeId: string): string[] {
+export function movableInto(
+  sessions: readonly CoreSession[],
+  ids: readonly string[],
+  scopeId: string,
+  movableFrom: (scopeId: string) => boolean,
+): string[] {
   const byId = new Map(sessions.map((s) => [s.id, s]));
   return ids.filter((id) => {
     const s = byId.get(id);
-    return Boolean(s && s.scopeId !== scopeId);
+    return Boolean(
+      s && s.scopeId !== scopeId && s.surface === "web" && !s.parentSessionId && !s.sideChat && movableFrom(s.scopeId),
+    );
   });
 }
 
@@ -51,7 +59,7 @@ function droppable(scopeId: string): string[] {
   const target = host;
   let ids = movableByTarget.get(scopeId);
   if (!ids) {
-    ids = movableInto(target.sessions(), dragIds, scopeId);
+    ids = movableInto(target.sessions(), dragIds, scopeId, (from) => target.movableFrom(from));
     movableByTarget.set(scopeId, ids);
   }
   return ids;

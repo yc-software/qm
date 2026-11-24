@@ -36,13 +36,20 @@ test("dragging a selected row carries the whole selection; other rows move alone
   assert.deepEqual(sessionsToMove(new Set(), "a"), ["a"]);
 });
 
-test("every dragged chat outside the project is offered to the server, which decides and explains", () => {
+const movableFrom = (scopeId: string) => scopeId === "personal:me" || scopeId.startsWith("group:project:");
+
+test("own web chats and project chats outside the project are offered; the server explains what it holds back", () => {
   const all = sessions.map((s) => s.id);
-  assert.deepEqual(
-    movableInto(sessions, [...all, "missing"], "group:project:launch"),
-    all.filter((id) => id !== "c"),
-  );
-  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch"), []);
+  assert.deepEqual(movableInto(sessions, [...all, "missing"], "group:project:launch", movableFrom), [
+    "a",
+    "b",
+    "busy",
+    "parent",
+    "other",
+    "goal",
+    "cron",
+  ]);
+  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", movableFrom), []);
 });
 
 test("the confirmation names the chat, the project, and everyone who gains access", () => {
@@ -70,6 +77,7 @@ function fixture() {
   const moves: Array<{ ids: readonly string[]; scopeId: string }> = [];
   registerSessionMoveHost({
     sessions: () => sessions,
+    movableFrom,
     move: async (ids, scopeId) => {
       moves.push({ ids, scopeId });
     },

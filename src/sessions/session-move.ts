@@ -160,9 +160,13 @@ export async function carryChatAlong(
     );
   const triggers = { threadRefs, from, to };
   await Promise.all([deps.crons.rehome(triggers), deps.webhooks.rehome(triggers), deps.monitors?.rehome(triggers)]);
-  for (const loop of (await deps.loops?.list()) ?? [])
-    if (loop.ownerScopeId === from && postsInto(loop, threadRefs))
-      await deps.loops!.update(loop.id, { destination: null });
+  const loops = deps.loops;
+  if (loops)
+    await Promise.all(
+      (await loops.list())
+        .filter((loop) => loop.ownerScopeId === from && postsInto(loop, threadRefs))
+        .map((loop) => loops.update(loop.id, { destination: null })),
+    );
   const isolations = tree.flatMap((s) => s.spawnMeta?.isolation ?? []);
   const own = new Set(isolations.flatMap((i) => (i.mode === "sandbox" && i.sandboxId ? [i.sandboxId] : [])));
   const bound = new Set(isolations.flatMap((i) => (i.sandboxId && !usable.has(i.sandboxId) ? [i.sandboxId] : [])));
