@@ -16,7 +16,12 @@ import {
   type BridgedTool,
   type SteerIntake,
 } from "./turn-support.ts";
-import { createInlineDocuments, withDocumentsAt, withNativeDocuments, type DocumentModel } from "./document-inputs.ts";
+import {
+  createInlineDocuments,
+  withNativeDocuments,
+  type DocumentBlock,
+  type DocumentModel,
+} from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +39,6 @@ import {
   type AssistantMessage,
   type Model,
   type ModelThinkingLevel,
-  type ImageContent,
   type Message,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -522,10 +526,16 @@ export function createAgent(opts?: AgentOptions): Agent {
         const currentModel = () => entry.agentSession.model as DocumentModel;
         const inline = createInlineDocuments(openingTokens, currentModel().contextWindow, turn.cancel);
         const openingDocuments = await inline.blocks(turn.documents ?? [], currentModel());
-        if (continueTurn) {
-          const state = entry.agentSession.agent.state;
-          state.messages = withDocumentsAt(state.messages, userEntry?.createdAt, openingDocuments);
-        }
+        if (continueTurn)
+          inline.carry(
+            entry.agentSession.agent.state.messages.findLast(
+              (message) => message.role === "user" && message.timestamp === userEntry?.createdAt,
+            ),
+            openingDocuments,
+          );
+        const piContext = entry.agentSession.agent.transformContext;
+        entry.agentSession.agent.transformContext = async (messages, signal) =>
+          piContext ? piContext(inline.context(messages), signal) : inline.context(messages);
 
         const callUsage: Array<LlmCallUsage | null> = [];
         let thinkTail: Promise<unknown> = Promise.resolve();
@@ -533,7 +543,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         const toolAbort = new AbortController();
         let steerWake = new AbortController();
         entry.ref.steered = steerWake.signal;
-        const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        const pendingSteers: Array<SteerIntake & { prompt: string; documents: DocumentBlock[] }> = [];
         const unrecordedPrompts = new Set<string>();
         const retractedMessages = new Set<unknown>();
         const checked = { retry: [] as string[], prod: [] as string[] };
@@ -558,13 +568,16 @@ export function createAgent(opts?: AgentOptions): Agent {
           const role = (message as { role?: string }).role;
           if (role === "assistant") steps.assistant(message as AssistantMessage);
           else if (role === "toolResult") steps.toolResult(message as ToolResultMessage);
-          else if (role === "user" && !triggerSeen) triggerSeen = true;
-          else if (role === "user") {
+          else if (role === "user" && !triggerSeen) {
+            triggerSeen = true;
+            inline.carry(message as Message, openingDocuments);
+          } else if (role === "user") {
             steps.flush();
-            const text = textFromContent((message as { content?: unknown[] }).content?.slice(0, 1));
+            const text = textFromContent((message as { content?: unknown }).content);
             if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            inline.carry(message as Message, steer?.documents ?? []);
             if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
               steerWake = new AbortController();
               entry.ref.steered = steerWake.signal;
@@ -662,20 +675,21 @@ export function createAgent(opts?: AgentOptions): Agent {
                       speakerId: prepared?.speakerId,
                       authorName: prepared?.authorName,
                       withheld: prepared?.withheld,
+                      documents: steeredDocuments,
                       acknowledge,
                     };
                     pendingSteers.push(steer);
                     if (ts) steeredSeen.add(ts);
                     entry.ref.silentRequested = false;
                     try {
-                      await entry.agentSession.steer(prompt, [
-                        ...(prepared?.images ?? []).map((image) => ({
+                      await entry.agentSession.steer(
+                        prompt,
+                        prepared?.images?.map((image) => ({
                           type: "image" as const,
                           mimeType: image.mimeType,
                           data: image.dataBase64,
                         })),
-                        ...(steeredDocuments as ImageContent[]),
-                      ]);
+                      );
                       steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
@@ -772,7 +786,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          entry.agentSession.agent.state.messages = inline.stubbed(entry.agentSession.agent.state.messages);
+          inline.stub();
           const outcome = await reprompt(DOCUMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")
@@ -789,14 +803,13 @@ export function createAgent(opts?: AgentOptions): Agent {
           return attemptRefusalFallback(failure);
         };
         try {
-          const attached = [
-            ...(turn.images ?? []).map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType })),
-            ...(openingDocuments as ImageContent[]),
-          ];
+          const images = turn.images?.length
+            ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
+            : undefined;
           wallClock = await raceTurnWallClock(
             continueTurn
               ? continueAssistantTurn(entry.agentSession)
-              : entry.agentSession.prompt(modelPrompt, attached.length ? { images: attached } : undefined),
+              : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
             {
               capMs: raceCapMs(),
               extendMs: floorCap.extendMs,

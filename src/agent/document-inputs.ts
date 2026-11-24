@@ -63,8 +63,14 @@ export async function documentBlocks(
 export function createInlineDocuments(promptTokens: number, contextWindow = 128_000, signal?: AbortSignal) {
   const budget = { remaining: Math.min(100_000, Math.max(0, contextWindow - promptTokens - 8192)) };
   const placed = new Map<DocumentBlock, DocumentInput>();
+  const carried = new Map<number, DocumentBlock[]>();
+  let stubbed = false;
+  const sent = (blocks: DocumentBlock[]): DocumentBlock[] =>
+    stubbed
+      ? [{ type: "text", text: documentsDroppedNote([...new Set(blocks.map((block) => placed.get(block)!))]) }]
+      : blocks;
   return {
-    count: () => new Set(placed.values()).size,
+    count: () => new Set([...carried.values()].flat().map((block) => placed.get(block))).size,
     async blocks(documents: readonly DocumentInput[], model: DocumentModel): Promise<DocumentBlock[]> {
       if (!documents.length) return [];
       const intro: DocumentBlock = {
@@ -80,31 +86,24 @@ export function createInlineDocuments(promptTokens: number, contextWindow = 128_
         }
       return blocks;
     },
-    stubbed<M extends { role?: string; content?: unknown }>(messages: readonly M[]): M[] {
+    carry(message: { timestamp?: number } | undefined, blocks: DocumentBlock[]): void {
+      if (!blocks.length) return;
+      if (message?.timestamp === undefined)
+        console.error("[pi] the message that carried this turn's documents is not in context");
+      else carried.set(message.timestamp, blocks);
+    },
+    stub(): void {
+      stubbed = true;
+    },
+    context<M extends { role: string; timestamp?: number; content?: unknown }>(messages: M[]): M[] {
+      if (!carried.size) return messages;
       return messages.map((message) => {
-        if (message.role !== "user" || !Array.isArray(message.content)) return message;
-        const content = message.content as DocumentBlock[];
-        const documents = [...new Set(content.flatMap((block) => placed.get(block) ?? []))];
-        if (!documents.length) return message;
-        const note: DocumentBlock = { type: "text", text: documentsDroppedNote(documents) };
-        return { ...message, content: [...content.filter((block) => !placed.has(block)), note] };
+        const blocks = message.role === "user" ? carried.get(message.timestamp ?? NaN) : undefined;
+        if (!blocks) return message;
+        return { ...message, content: [...(message.content as DocumentBlock[]), ...sent(blocks)] };
       });
     },
   };
-}
-
-export function withDocumentsAt<M extends { role?: string; timestamp?: number; content?: unknown }>(
-  messages: M[],
-  timestamp: number | undefined,
-  blocks: readonly DocumentBlock[],
-): M[] {
-  if (!blocks.length) return messages;
-  const at = messages.findLastIndex((message) => message.role === "user" && message.timestamp === timestamp);
-  if (at < 0) {
-    console.error(`[pi] the message that carried this turn's documents (at ${timestamp}) is not in context`);
-    return messages;
-  }
-  return messages.with(at, { ...messages[at]!, content: [...(messages[at]!.content as DocumentBlock[]), ...blocks] });
 }
 
 function nativeFileBlock(block: Record<string, unknown>): Record<string, unknown> {
