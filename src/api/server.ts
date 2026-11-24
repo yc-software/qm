@@ -53,7 +53,7 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
 import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { internalLivePerson, personAtKeyboard } from "./artifact-share.ts";
+import { internalLivePerson, internalPerson } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
@@ -197,9 +197,7 @@ async function verifyCapability(
     });
     return null;
   }
-  return personAtKeyboard(capability) &&
-    capability.internalAudience === true &&
-    !(await runIsActive({ deps, capability }))
+  return internalPerson(capability) && !(await runIsActive({ deps, capability }))
     ? {
         ...capability,
         triggered: true,

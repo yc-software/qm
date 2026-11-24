@@ -57,9 +57,9 @@ import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
   authorPublishesSkill,
+  internalPerson,
   isArtifactType,
   personAtKeyboard,
-  internalPerson,
   SHARED_SKILL_TRIGGER_REFUSAL,
   type SkillEditor,
   splitToScope,
@@ -834,8 +834,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     else if (personaScope) {
       if (
         capability.memory?.write &&
-        personAtKeyboard(capability) &&
-        capability.internalAudience === true &&
+        internalPerson(capability) &&
         (await ctx.app.managesScope(capability.actorId, personaScope))
       )
         write = personaScope;
@@ -909,9 +908,7 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
     turnAuthority(
       capability.actorId,
       capability.memory,
-      personAtKeyboard(capability) &&
-        capability.internalAudience === true &&
-        !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+      internalPerson(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
     ),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
