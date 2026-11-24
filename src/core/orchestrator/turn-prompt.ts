@@ -147,8 +147,9 @@ export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): s
   if (!rewrites)
     return `${started} To end it without posting, call \`finish_silently\` and write no text; anything you write is shown to the person.`;
   return (
-    `${started} Your reply replaces your last message to the person, the one beginning "${snippet(rewrites.text ?? "", 60)}", which they may not have read. ` +
-    "Write the whole message they should find when they return: keep what still holds, fold in what is new, drop what is no longer true, and keep one list of what is waiting on them. Keep it as short as the news allows." +
+    `${started} Your reply replaces your last message to the person, the one beginning "${snippet(rewrites.text ?? "", 60)}", which they may not have read; they will see only the new one. ` +
+    "Write the message you would have written then had you known everything you know now: keep what still holds, leave out what no longer does, and keep one list of what is waiting on them. " +
+    "Do not label it an update, describe what changed, or say who reported what. Keep it as short as that allows." +
     (childWake ? " To leave that message as it is, call `finish_silently` and write no text." : "")
   );
 }
