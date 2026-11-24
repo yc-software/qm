@@ -20,11 +20,13 @@ import {
   type CoreSession,
 } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
-import { openSession, openSessionInto, refreshSessions } from "./sessions";
+import { openSession, openSessionInto, refreshSessions, syncWorkingPulse } from "./sessions";
+import { liveWorkDuration } from "./live-work-duration";
+import { liveTurnThreadRef } from "./working-dot";
 import type { Conversation, ConvCtx } from "./conv-types";
 import { messageEntrySeqs } from "./message-link";
 import { icon } from "./icons";
-import { brandMark, brandName } from "./ui";
+import { brandMark, brandName, sheenLabel, workingWave } from "./ui";
 import { errMessage } from "../../chassis/src/errors";
 import { reportHandledError } from "./browser-errors";
 
@@ -49,7 +51,8 @@ export function createSideChatController(ctx: ConvCtx) {
   let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, { text: string }>();
+  const previews = new Map<string, { text: string; state: "loading" | "ready" | "failed" }>();
+  const sent = new Map<string, number>();
   let previewFrame: number | null = null;
   let error = "";
   let epoch = 0;
@@ -224,12 +227,12 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function loadPreview(session: CoreSession) {
     const id = sourceId;
-    const preview = { text: previews.get(session.id)?.text ?? "Loading…" };
+    const preview = { ...(previews.get(session.id) ?? { text: "", state: "loading" as const }) };
     previews.set(session.id, preview);
     try {
       const page = await fetchTranscript(session.id, { tailTurns: 1 });
       const { items } = page;
-      if (sourceId !== id || previews.get(session.id) !== preview) return;
+      if (sourceId !== id || previews.get(session.id) !== preview) return false;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
       else refreshCachedTranscript(session.id);
       const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
@@ -243,27 +246,54 @@ export function createSideChatController(ctx: ConvCtx) {
             part.kind === "text" && !retractedReason(part.item) ? [part.item.text!] : [],
           ),
         );
-      preview.text = replies.join("\n\n") || "No reply yet.";
+      preview.text = replies.join("\n\n");
+      preview.state = "ready";
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
-      if (sourceId !== id || previews.get(session.id) !== preview) return;
-      preview.text = "Could not load preview. Open the side chat to retry.";
+      if (sourceId !== id || previews.get(session.id) !== preview) return false;
+      preview.state = "failed";
     }
     if (previewFrame === null)
       previewFrame = window.requestAnimationFrame(() => {
         previewFrame = null;
         if (sourceId === id) redraw();
       });
+    return true;
   }
 
-  function refreshHighlights() {
+  function collapsedBody(chat: CoreSession) {
+    const preview = previews.get(chat.id);
+    const since = chat.working ? chat.workingSince : sent.get(chat.id);
+    if (!chat.working && since === undefined) {
+      const text =
+        preview?.state === "failed"
+          ? "Could not load preview. Open the side chat to retry."
+          : preview?.text || (preview?.state === "ready" ? "No reply." : "Loading…");
+      return html` <div class="side-chat-preview">${markdown(text)}</div> `;
+    }
+    return html`${preview?.text ? html` <div class="side-chat-preview">${markdown(preview.text)}</div> ` : nothing}
+      <div class="side-chat-working work-head">
+        <span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>${sheenLabel("Working", true)}${
+          since === undefined
+            ? nothing
+            : html`<span class="work-elapsed"
+                >${liveWorkDuration({ status: "working", startedAt: since, activity: [] })}</span
+              >`
+        }
+      </div>`;
+  }
+
+  function refreshHighlights(settle = false) {
     const id = sourceId;
     if (!id) return;
     void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
       (result) => {
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
-        chats = (result.sessions ?? []).toSorted(
+        const listed = result.sessions ?? [];
+        if (settle) for (const row of listed) sent.delete(row.id);
+        const unlisted = chats.filter((chat) => sent.has(chat.id) && !listed.some((row) => row.id === chat.id));
+        chats = [...listed, ...unlisted].toSorted(
           (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
         );
         redraw();
@@ -279,6 +309,12 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function close() {
     if (active) {
+      const live = liveTurnThreadRef({
+        mountedThreadRef: conversation?.state.threadRef ?? null,
+        isStreaming: Boolean(conversation?.state.agent?.state.isStreaming),
+        pendingSend: conversation?.state.pendingSend ?? null,
+      });
+      if (live) sent.set(active.id, Date.now());
       void loadPreview(active);
       refreshHighlights();
     }
@@ -314,6 +350,7 @@ export function createSideChatController(ctx: ConvCtx) {
     paintHighlights();
     chats = [];
     previews.clear();
+    sent.clear();
     error = "";
     busy = false;
     refreshHighlights();
@@ -401,6 +438,7 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function show(session: CoreSession, creating = false) {
     if (!creating) close();
+    sent.delete(session.id);
     active = session;
     includeExcerpt = true;
     maximized = false;
@@ -555,8 +593,11 @@ export function createSideChatController(ctx: ConvCtx) {
     onDelivery(threadRef: string) {
       const chat = chats.find((session) => session.threadRef === threadRef);
       if (!chat) return;
-      void loadPreview(chat);
-      refreshHighlights();
+      void loadPreview(chat).then((current) => current && refreshHighlights(true));
+    },
+    catchUp() {
+      const inFlight = chats.filter((chat) => chat.id !== active?.id && (chat.working || sent.has(chat.id)));
+      if (inFlight.length) void Promise.all(inFlight.map(loadPreview)).then(() => refreshHighlights(true));
     },
     select,
     dismissSelection,
@@ -687,11 +728,7 @@ export function createSideChatController(ctx: ConvCtx) {
                 ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
                 ${active?.id !== chat.id ? html`<b class="side-chat-more" aria-hidden="true">…</b>` : nothing}
               </button>
-              ${
-                active?.id === chat.id
-                  ? this.card()
-                  : html` <div class="side-chat-preview">${markdown(previews.get(chat.id)?.text || "Loading…")}</div> `
-              }
+              ${active?.id === chat.id ? this.card() : collapsedBody(chat)}
             </div>`,
         )}
         ${pending && !matches.some((chat) => chat.id === active?.id) ? this.card() : nothing}

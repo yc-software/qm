@@ -884,6 +884,7 @@ export function createChatSurface(
   let catchingUp = false;
 
   function catchUp(): void {
+    sideChats.catchUp();
     if (readOnlyView) return onDelivery(readOnlyView.threadRef);
     const { agent, threadRef, normalStreamFn, onWork } = chatState;
     if (!agent || agent.state.isStreaming || !threadRef || catchingUp) return;

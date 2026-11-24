@@ -12,7 +12,7 @@ async function until(check: () => boolean): Promise<void> {
   assert.fail("Side chat did not reach the expected state");
 }
 
-test("opening a side chat whose turn is still running never shows the turn as finished", async () => {
+test("a side chat whose turn is still running shows as working, collapsed or open", async () => {
   const startedAt = Date.now() - 180_000;
   const source: CoreSession = {
     id: "source",
@@ -35,6 +35,8 @@ test("opening a side chat whose turn is still running never shows the turn as fi
   const sideItems = [...items, item("UserMessage", { seq: 1, createdAt: startedAt, text: "Why?" }), ...work];
   const input = { runId: "r1", seq: 1, text: "Why?", createdAt: startedAt };
   const run = { status: "running", alive: true, startedAt, input, activity: work.map((entry) => ({ item: entry })) };
+  let listedWorking = true;
+  let listRequests = 0;
   let releaseRun!: () => void;
   const runKnown = new Promise<void>((resolve) => (releaseRun = resolve));
   const h = await harness({
@@ -43,6 +45,10 @@ test("opening a side chat whose turn is still running never shows the turn as fi
     listSessions: [source, side],
     items,
     api(path) {
+      if (path === "/api/sessions/source/side-chats")
+        return Response.json({
+          sessions: [listedWorking ? side : { ...side, working: false, workingSince: undefined }],
+        });
       if (path.startsWith("/api/sessions/side?")) return Response.json({ session: side, items: sideItems });
       if (path.includes("/api/runs/active") && path.includes("side"))
         return runKnown.then(() => Response.json({ runId: "r1", run: { ...run, result: null }, queued: [] }));
@@ -55,8 +61,10 @@ test("opening a side chat whose turn is still running never shows the turn as fi
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    await until(() => !/Loading/.test(document.querySelector(".side-chat-preview")?.textContent ?? "Loading"));
-    document.querySelector<HTMLElement>(".side-chat-preview")!.click();
+    const collapsed = () => document.querySelector<HTMLElement>(".side-chat-card.collapsed");
+    await until(() => /Working\s*3m/.test(collapsed()?.querySelector(".side-chat-working")?.textContent ?? ""));
+    assert.doesNotMatch(collapsed()!.textContent ?? "", /No reply|Loading/, "a running side chat shows its work");
+    collapsed()!.querySelector<HTMLElement>(".side-chat-working")!.click();
     const panel = () => document.querySelector<HTMLElement>(".side-chat-panel");
     await until(() => panel()?.textContent?.includes("Why?") === true);
     const head = () => panel()?.querySelector("summary.work-head")?.textContent ?? "";
@@ -65,6 +73,21 @@ test("opening a side chat whose turn is still running never shows the turn as fi
       assert.match(head(), /Reproduce the import error[\s\S]*3m/, "the running step and its elapsed time show");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    listedWorking = false;
+    listRequests = h.requests.filter((path) => path === "/api/sessions/source/side-chats").length;
+    panel()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => h.requests.filter((path) => path === "/api/sessions/source/side-chats").length > listRequests);
+    for (let i = 0; i < 10; i++) {
+      assert.match(collapsed()?.querySelector(".side-chat-working")?.textContent ?? "", /Working/);
+      assert.doesNotMatch(collapsed()!.textContent ?? "", /No reply|Loading/, "a collapsed live turn keeps working");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    sideItems.push(item("AgentMessage", { seq: 4, createdAt: Date.now(), text: "The import needs a durable queue." }));
+    h.visibleConversation().onDelivery(side.threadRef);
+    await until(
+      () => collapsed()?.querySelector(".side-chat-preview")?.textContent?.includes("durable queue") === true,
+    );
+    await until(() => !collapsed()?.querySelector(".side-chat-working"));
   } finally {
     releaseRun();
     await h.close();
