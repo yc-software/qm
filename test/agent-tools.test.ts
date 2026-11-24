@@ -1219,12 +1219,12 @@ test("a surface whose posts are transcript messages records a post's size, runs 
   const ends = (r: unknown) => (r as { terminate?: boolean }).terminate === true;
   assert.ok(ends(await call(web, { action: "post", text: "hello there" })), "a post ends the turn");
   assert.ok(ends(await call(web, { action: "edit", ref: "7", text: "hello" })), "an edit ends the turn");
-  assert.ok(!ends(await call(web, { action: "post", text: "x", channel: "C1" })), "a refused post does not");
   await call(
     tools.find((tool) => tool.name === "finish_silently")!,
     {},
   );
   assert.ok(!emitted.some((e) => String(e.text).includes("child finding")));
+  assert.ok(!ends(await call(web, { action: "post", text: "x", channel: "C1" })), "a refused post does not");
   assert.deepEqual(
     emitted
       .filter((e) => e.kind === "ToolCall" && e.tool === "web")

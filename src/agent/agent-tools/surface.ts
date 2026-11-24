@@ -19,13 +19,16 @@ export function surfaceTool(kit: ToolKit) {
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
-    description:
-      `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
-      "reach people; end the turn without a post and you stay silent), " +
-      (textOnly ? "" : "reacting, editing/deleting your own messages, ") +
-      "reading threads, checking what's new, searching" +
-      (textOnly ? ". This conversation takes text messages only." : ".") +
-      " Pick an `action`.",
+    description: transcript
+      ? `Everything you do on ${surfaceLabel} goes through this tool: posting (the ONLY way your words reach ` +
+        "people; end the turn without a post and you stay silent), editing your latest message here, and reaching " +
+        "other people. Pick an `action`."
+      : `Everything you do on ${surfaceLabel} goes through this tool — posting (the ONLY way your words ` +
+        "reach people; end the turn without a post and you stay silent), " +
+        (textOnly ? "" : "reacting, editing/deleting your own messages, ") +
+        "reading threads, checking what's new, searching" +
+        (textOnly ? ". This conversation takes text messages only." : ".") +
+        " Pick an `action`.",
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -39,14 +42,17 @@ export function surfaceTool(kit: ToolKit) {
           Type.Literal("search"),
         ],
         {
-          description:
-            "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
-            "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
-            "leave this conversation), " +
-            (textOnly ? "" : "react (emoji on a message), edit/delete (revise/retract your OWN message), ") +
-            "read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages)." +
-            (textOnly ? " There is no way to react, edit, delete, or attach files here." : ""),
+          description: transcript
+            ? "What to do: post (reply HERE, in this conversation), edit (rewrite your latest message here), reach " +
+              "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to leave this " +
+              "conversation)."
+            : "What to do: post (reply HERE, in this conversation — the normal way to answer), reach " +
+              "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
+              "leave this conversation), " +
+              (textOnly ? "" : "react (emoji on a message), edit/delete (revise/retract your OWN message), ") +
+              "read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
+              "changed), search (find messages)." +
+              (textOnly ? " There is no way to react, edit, delete, or attach files here." : ""),
         },
       ),
       text: Type.Optional(
@@ -92,8 +98,9 @@ export function surfaceTool(kit: ToolKit) {
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
-          description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread, or the ts your own post/edit result returned).",
+          description: transcript
+            ? "edit: the ref of your latest message here."
+            : "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread, or the ts your own post/edit result returned).",
         }),
       ),
       limit: Type.Optional(
@@ -418,49 +425,22 @@ export function surfaceTool(kit: ToolKit) {
     },
   });
 
-  if (textOnly) {
-    const {
-      sandbox_id: _s,
-      files: _f,
-      emoji: _e,
-      ref: _r,
-      source: _src,
-      action,
-      ...kept
-    } = surface.parameters.properties;
-    const unsupported = new Set(["react", "edit", "delete"]);
+  const narrowed = {
+    transcript: {
+      actions: ["react", "delete", "read_thread", "whats_new", "search"],
+      params: ["emoji", "limit", "query", "source", "since", "ts", "broadcast"],
+    },
+    textOnly: { actions: ["react", "edit", "delete"], params: ["sandbox_id", "files", "emoji", "ref", "source"] },
+  };
+  const unsupported = (transcript && narrowed.transcript) || (textOnly && narrowed.textOnly) || undefined;
+  if (unsupported) {
+    const { action, ...rest } = surface.parameters.properties;
     surface.parameters = Type.Object({
       action: Type.Union(
-        action.anyOf.filter((literal: { const: string }) => !unsupported.has(literal.const)),
+        action.anyOf.filter((literal: { const: string }) => !unsupported.actions.includes(literal.const)),
         { description: action.description },
       ),
-      ...kept,
-    }) as unknown as typeof surface.parameters;
-  }
-  if (transcript) {
-    const { action, text, channel, recipient, participants, sandbox_id, files } = surface.parameters.properties;
-    const offered = new Set(["post", "edit", "reach"]);
-    surface.description =
-      `Everything you do on ${surfaceLabel} goes through this tool: posting (the ONLY way your words reach ` +
-      "people; end the turn without a post and you stay silent), editing your latest message here, and reaching " +
-      "other people. Pick an `action`.";
-    surface.parameters = Type.Object({
-      action: Type.Union(
-        action.anyOf.filter((literal: { const: string }) => offered.has(literal.const)),
-        {
-          description:
-            "What to do: post (reply HERE, in this conversation), edit (rewrite your latest message here), reach " +
-            "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to leave this " +
-            "conversation).",
-        },
-      ),
-      text,
-      channel,
-      recipient,
-      participants,
-      sandbox_id,
-      files,
-      ref: Type.Optional(Type.String({ description: "edit: the ref of your latest message here." })),
+      ...Object.fromEntries(Object.entries(rest).filter(([name]) => !unsupported.params.includes(name))),
     }) as unknown as typeof surface.parameters;
   }
   return { surface };
