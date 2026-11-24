@@ -3,7 +3,7 @@ import { authoredNow, reauthored } from "../cron/authority.ts";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, scriptTrialRefusal } from "../cron/script.ts";
-import { selfReadAudience } from "./routes/shared.ts";
+import { selfReadAudience } from "../auth/self-read-audience.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput, WebhookPatch } from "../webhooks/webhook-store.ts";
 import { asOrgAdmin, personOrOwningBot, type CapabilityClaims } from "../auth/capability-token.ts";
