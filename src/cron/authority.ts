@@ -15,7 +15,7 @@ export function reauthored(
   return trigger.taskAuthor ? { taskAuthor: null } : {};
 }
 
-export function ownerAuthored(trigger: Pick<TriggerBase, "taskAuthor">): boolean {
+export function ownerAuthored(trigger: { taskAuthor?: "automation" | null }): boolean {
   return trigger.taskAuthor !== "automation";
 }
 

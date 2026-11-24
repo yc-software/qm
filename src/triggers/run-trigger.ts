@@ -63,6 +63,7 @@ export interface TriggerSpec extends Pick<
   personaId?: string;
   ownerFire?: boolean;
   cronScript?: CronScript;
+  cronScriptTrial?: boolean;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -321,6 +322,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
       },
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.cronScriptTrial ? { cronScriptTrial: true } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),

@@ -344,6 +344,7 @@ export function createTurnMethods(
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
+        ...(req.cronScriptTrial && origin.kind === "automation" ? { cronScriptTrial: true } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
         ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
           ? { personaId: req.personaId }
