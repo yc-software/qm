@@ -97,16 +97,13 @@ export async function provisionWorkspace(
 }
 
 export interface SelfServe {
-  workspace(
-    issuer: string,
-    subject: string,
-    org: ExternalOrg,
-  ): Promise<{ tenant: string; created: boolean; provisioned: boolean }>;
+  workspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
 }
 
 export function createSelfServe(
   pg: Pick<PgPool, "q">,
   provision: (request: WorkspaceProvisionRequest) => Promise<string>,
+  prepare?: (tenant: string) => Promise<unknown>,
 ): SelfServe {
   return {
     async workspace(issuer, subject, org) {
@@ -122,13 +119,17 @@ export function createSelfServe(
           issuer,
           externalOrg: org,
         };
-        const key = await provision(request).catch((error: unknown) => {
+        const setUp = async (): Promise<string> => {
+          await prepare?.(workspace.tenant);
+          return provision(request);
+        };
+        const key = await setUp().catch((error: unknown) => {
           reportFailure("self-serve workspace provisioning", error, workspace.tenant);
           throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
         });
         await markSelfServeProvisioned(pg, workspace.tenant, key);
       }
-      return { tenant: workspace.tenant, created: workspace.created, provisioned: !workspace.provisioned };
+      return { tenant: workspace.tenant, created: workspace.created };
     },
   };
 }

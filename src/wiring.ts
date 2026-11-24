@@ -358,7 +358,7 @@ import {
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
-import { claimThenBind } from "./tenants/claim.ts";
+import { claimThenBind, inTenant } from "./tenants/claim.ts";
 import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
@@ -1893,6 +1893,7 @@ export function buildApp(
     ? createSelfServe(
         createPgPool(databaseUrl),
         provisionWorkspace.bind(null, config.workspaceProvisionerUrl, provisionerSigningKey(config.signingSecret!)),
+        (tenant) => inTenant(tenant, () => sandboxResources.skipLegacyImport()),
       )
     : undefined;
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {

@@ -3,23 +3,22 @@ import pg from "pg";
 import { loadConfig } from "../config.ts";
 import { pgConnectionOptions } from "../persistence/pg-pool.ts";
 import { inTenant } from "../tenants/claim.ts";
-import { errMessage } from "../util/errors.ts";
+import { errText, swallow } from "../util/errors.ts";
 import type { ScopeId } from "../types.ts";
 import { buildApp } from "../wiring.ts";
 const CANDIDATES = `
-  WITH gone AS (
+  WITH excluded AS (
     SELECT l.alias_id FROM user_links l JOIN users u ON u.id = l.user_id AND u.tenant_id = l.tenant_id
-     WHERE u.offboarded_at IS NOT NULL
+     WHERE u.offboarded_at IS NOT NULL OR u.kind <> 'person'
   )
   SELECT DISTINCT x.scope,
          EXISTS (SELECT 1 FROM sandbox_defaults d WHERE d.id = x.scope) AS has_default
     FROM (
-      SELECT 'personal:' || primary_alias AS scope FROM users
-       WHERE primary_alias LIKE 'oidc:%' AND kind = 'person' AND offboarded_at IS NULL
+      SELECT 'personal:' || primary_alias AS scope FROM users WHERE primary_alias LIKE 'oidc:%'
       UNION SELECT 'personal:' || principal_id FROM admin_grants WHERE principal_id LIKE 'oidc:%'
       UNION SELECT scope_id FROM sessions WHERE scope_id LIKE 'personal:oidc:%'
     ) x
-   WHERE substr(x.scope, 10) NOT IN (SELECT alias_id FROM gone)
+   WHERE substr(x.scope, 10) NOT IN (SELECT alias_id FROM excluded)
    ORDER BY x.scope`;
 
 const { values } = parseArgs({
@@ -38,9 +37,12 @@ async function inTenantTx<T>(tenant: string, work: () => Promise<T>): Promise<T>
   await client.query("BEGIN READ ONLY");
   try {
     await client.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
-    return await work();
-  } finally {
+    const result = await work();
     await client.query("ROLLBACK");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch((rollback: unknown) => swallow("backfill rollback", rollback));
+    throw error;
   }
 }
 
@@ -76,14 +78,16 @@ try {
           }
           let created = 0;
           for (const scope of missing) {
+            line.scope = scope;
             const ensured = await resources.ensureDefault(scope);
             if (ensured?.created) created++;
           }
+          delete line.scope;
           totals.created += created;
           line.created = created;
         } catch (error) {
           totals.failed++;
-          line.error = errMessage(error);
+          line.error = errText(error);
         }
       });
     }

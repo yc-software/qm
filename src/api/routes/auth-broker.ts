@@ -272,17 +272,15 @@ async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAs
   }
   return claims as TrustedAssertion;
 }
-async function setUpFounderComputer(
+async function setUpDefaultComputer(
   ctx: Pick<ApiCtx, "deps" | "tenant">,
   principalId: string,
-  freshWorkspace: boolean,
   by: string,
 ): Promise<void> {
   const resources = ctx.deps.sandboxResources;
   if (!resources) return;
   const scope = personalScope(principalId);
   try {
-    if (freshWorkspace) await resources.skipLegacyImport();
     const ensured = await resources.ensureDefault(scope);
     if (ensured?.created)
       audit(ctx, { principalId: by, action: "sandbox.default", resource: ensured.resource.id, scopeLabel: scope });
@@ -305,7 +303,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
     const admin = deps.admin;
-    const { tenant, created, provisioned } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
+    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
     await withTenant(tenant, async (bound) => {
       const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
       if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
@@ -316,7 +314,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
           { deps, tenant: bound },
           { ...event, action: "grant.create", resource: `${grant.principalId}/${grant.role}` },
         );
-      await setUpFounderComputer({ deps, tenant: bound }, grant.principalId, provisioned, by.principalId);
+      await setUpDefaultComputer({ deps, tenant: bound }, grant.principalId, by.principalId);
     });
     return sendJson(res, 200, { tenant, created });
   } catch (error) {

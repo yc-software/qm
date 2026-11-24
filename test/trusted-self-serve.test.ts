@@ -1,5 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import test from "node:test";
+import pg from "pg";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -94,15 +95,17 @@ function provisioner(t: test.TestContext) {
     failing: false,
     reply: { settings: { modelGatewayKey: "own-key" } } as unknown,
     calls: [] as Array<{ body: Record<string, unknown>; signed: boolean }>,
+    onCall: async (_body: Record<string, unknown>): Promise<unknown> => undefined,
   };
   const server = createHttpServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
-    req.on("end", () => {
+    req.on("end", async () => {
       const ts = Number(req.headers["x-timestamp"]);
       const key = provisionerSigningKey(signingSecret);
       const signed = req.headers["x-signature"] === signRequest(key, ts, `POST\n${req.url}\n${raw}`);
       state.calls.push({ body: JSON.parse(raw) as Record<string, unknown>, signed });
+      await state.onCall(JSON.parse(raw) as Record<string, unknown>);
       res.writeHead(state.failing ? 500 : 200, { "content-type": "application/json" });
       res.end(state.failing ? "{}" : JSON.stringify(state.reply));
     });
@@ -341,7 +344,16 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
 });
 
 test("each person enrolled by self-serve gets a default computer at setup that boots on first use", async (t) => {
-  const { s } = await shared(t);
+  const { s, db, provision } = await shared(t);
+  provision.state.onCall = async (body) => {
+    const client = new pg.Client(db.ownerDatabaseUrl);
+    await client.connect();
+    await client.query(
+      "INSERT INTO sessions(tenant_id, id, type, scope_id, thread_ref, created_at) VALUES ($1, 'imported', 'dm', 'personal:imported', 'web:imported', 1) ON CONFLICT DO NOTHING",
+      [body.tenant],
+    );
+    await client.end();
+  };
   const founders = ["founder-1", "founder-2"];
   const [tenant] = (await withoutTenant(() =>
     Promise.all(
@@ -375,6 +387,7 @@ test("each person enrolled by self-serve gets a default computer at setup that b
     "signing in again keeps the same computer",
   );
   await withTenant(tenant, async (token) => {
+    assert.equal(await s.built.sandboxResources.resolve("personal:imported"), null, "no stand-in computer is imported");
     const events = await s.built.auditLog.events(token);
     assert.equal(events.filter((e) => e.action === "sandbox.default").length, 2);
   });
