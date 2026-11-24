@@ -94,6 +94,7 @@ const SPARSE: &[&str] = &["AXWebArea", "AXGroup", "AXScrollArea", "AXLayoutArea"
 const TRANSIENT: &[&str] = &["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow"];
 const POPUPS: &[&str] = &["AXSheet", "AXPopover", "AXDrawer", "AXMenu"];
 const INVALID_ELEMENT: i32 = -25202;
+const NO_VALUE: i32 = -25212;
 const FETCH: &[&str] = &[
     "AXRole",
     "AXSubrole",
@@ -353,10 +354,14 @@ fn ax_result(status: i32, value: CFTypeRef) -> Option<CFType> {
     (status == 0).then_some(value)
 }
 
-fn attr(e: &El, name: &str) -> Option<CFType> {
+fn attr_status(e: &El, name: &str) -> Result<CFType, i32> {
     let mut v: CFTypeRef = std::ptr::null();
     let err = unsafe { AXUIElementCopyAttributeValue(e.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), &mut v) };
-    ax_result(err, v)
+    ax_result(err, v).ok_or(err)
+}
+
+fn attr(e: &El, name: &str) -> Option<CFType> {
+    attr_status(e, name).ok()
 }
 
 fn dead(e: &El) -> bool {
@@ -377,19 +382,17 @@ fn pid_of(element: &El) -> Option<i32> {
     (unsafe { AXUIElementGetPid(element.as_CFTypeRef(), &mut pid) } == 0 && pid > 0).then_some(pid)
 }
 
-pub(crate) fn system_focused_pid() -> Result<i32, String> {
+pub(crate) fn system_focused_pid() -> Result<Option<i32>, String> {
     let system = unsafe { AXUIElementCreateSystemWide() };
     if system.is_null() {
         return Err("the system-wide accessibility element is unavailable".into());
     }
     let system = unsafe { CFType::wrap_under_create_rule(system) };
-    let mut focused: CFTypeRef = std::ptr::null();
-    let status =
-        unsafe { AXUIElementCopyAttributeValue(system.as_CFTypeRef(), cfs("AXFocusedApplication").as_concrete_TypeRef(), &mut focused) };
-    ax_result(status, focused)
-        .as_ref()
-        .and_then(pid_of)
-        .ok_or_else(|| format!("accessibility reported no focused application (AXError {status})"))
+    match attr_status(&system, "AXFocusedApplication") {
+        Ok(focused) => pid_of(&focused).map(Some).ok_or_else(|| "accessibility's focused application has no process".into()),
+        Err(NO_VALUE) => Ok(None),
+        Err(status) => Err(format!("accessibility could not name the focused application (AXError {status})")),
+    }
 }
 
 fn text_of(v: &CFType) -> Option<String> {
