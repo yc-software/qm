@@ -420,7 +420,7 @@ export interface SessionStore {
   threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
   endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
-  sideChatsOf(sessionId: string, principalId?: string): Promise<Array<Session & { asked: boolean }>>;
+  sideChatsOf(sessionId: string, principalId?: string): Promise<Session[]>;
   forkOrigin(tenant: Tenant, sessionId: string): Promise<Session | null>;
   expandSideChat(sessionId: string): Promise<void>;
   updateForkProvenance(

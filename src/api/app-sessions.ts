@@ -661,13 +661,11 @@ export function createSessionMethods(
       const visible = rows.filter((row) => membership.get(row.scopeId) !== false);
       const running = await deps.runs.activeForThreads(visible.map((row) => row.threadRef));
       return Promise.all(
-        visible
-          .filter((row) => row.asked || running.has(row.threadRef))
-          .map(async ({ asked: _asked, ...row }) => ({
-            ...withoutStoredFacts(row),
-            canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
-            ...ownRunState(running.get(row.threadRef)),
-          })),
+        visible.map(async (row) => ({
+          ...withoutStoredFacts(row),
+          canContinue: await canContinueOnWeb(principalId, row, sharedAccess),
+          ...ownRunState(running.get(row.threadRef)),
+        })),
       );
     },
 

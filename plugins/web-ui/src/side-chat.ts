@@ -20,14 +20,14 @@ import {
   type CoreSession,
 } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
-import { openSession, openSessionInto, refreshSessions, syncWorkingPulse } from "./sessions";
+import { openSession, openSessionInto, refreshSessions, workingMark } from "./sessions";
 import { markWorking } from "./session-list";
 import { liveWorkDuration } from "./live-work-duration";
-import { liveTurnThreadRef } from "./working-dot";
+import { liveTurnOf } from "./working-dot";
 import type { Conversation, ConvCtx } from "./conv-types";
 import { messageEntrySeqs } from "./message-link";
 import { icon } from "./icons";
-import { brandMark, brandName, sheenLabel, workingWave } from "./ui";
+import { brandMark, brandName, sheenLabel } from "./ui";
 import { errMessage } from "../../chassis/src/errors";
 import { reportHandledError } from "./browser-errors";
 
@@ -238,7 +238,7 @@ export function createSideChatController(ctx: ConvCtx) {
     try {
       const page = await fetchTranscript(session.id, { tailTurns: 1 });
       const { items } = page;
-      if (sourceId !== id || previews.get(session.id) !== preview) return false;
+      if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
       else refreshCachedTranscript(session.id);
       const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
@@ -256,7 +256,7 @@ export function createSideChatController(ctx: ConvCtx) {
       preview.state = "ready";
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
-      if (sourceId !== id || previews.get(session.id) !== preview) return false;
+      if (sourceId !== id || previews.get(session.id) !== preview) return;
       preview.text = "";
       preview.state = "failed";
     }
@@ -265,7 +265,6 @@ export function createSideChatController(ctx: ConvCtx) {
         previewFrame = null;
         if (sourceId === id) redraw();
       });
-    return true;
   }
 
   function collapsedBody(chat: CoreSession) {
@@ -274,7 +273,7 @@ export function createSideChatController(ctx: ConvCtx) {
     return html`${text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing}${
       chat.working
         ? html`<div class="side-chat-working work-head">
-            <span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>${sheenLabel("Working", true)}${
+            ${workingMark()}${sheenLabel("Working", true)}${
               chat.workingSince === undefined
                 ? nothing
                 : html`<span class="work-elapsed"
@@ -287,7 +286,7 @@ export function createSideChatController(ctx: ConvCtx) {
   }
 
   function settle(settled: CoreSession[]) {
-    void Promise.all(settled.map(loadPreview)).then((current) => current.some(Boolean) && refreshHighlights());
+    void Promise.all(settled.map(loadPreview)).then(refreshHighlights);
   }
 
   function refreshHighlights() {
@@ -316,13 +315,9 @@ export function createSideChatController(ctx: ConvCtx) {
       const chat = active;
       const id = sourceId;
       const state = conversation?.state;
-      const live = liveTurnThreadRef({
-        mountedThreadRef: state?.threadRef ?? null,
-        isStreaming: Boolean(state?.agent?.state.isStreaming),
-        pendingSend: state?.pendingSend ?? null,
-      });
+      const live = state && liveTurnOf(state);
       if (live) chats = markWorking(chats, live);
-      void (state?.agent?.waitForIdle() ?? Promise.resolve()).then(() => sourceId === id && settle([chat]));
+      void Promise.resolve(state?.agent?.waitForIdle()).then(() => sourceId === id && settle([chat]));
     }
     pendingQuote = null;
     pendingAnchor = null;
