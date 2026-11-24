@@ -4,6 +4,7 @@ import { validateRuntimeChoice, validateWebTurnModelOptions } from "../src/api/r
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
@@ -367,6 +368,14 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("gateway reasoning follows the gateway's flag on any provider, within its advertised effort levels", async () => {
+  const levels = { providers: ["gemini"], supports_reasoning: true, supported_reasoning_efforts: ["high", "max"] };
+  await fixture([group("thinker", levels)]).catalog.refresh();
+  const model = resolveModel("gateway/thinker")!;
+  const clamped = (["medium", "max"] as const).map((level) => clampThinkingLevel(model, level));
+  assert.deepEqual([model.reasoning, ...clamped], [true, "high", "max"]);
 });
 
 test("the Fast toggle is accepted on a gateway model only when the gateway flags it for Anthropic fast mode", async () => {
