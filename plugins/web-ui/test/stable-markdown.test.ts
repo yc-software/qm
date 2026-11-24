@@ -105,13 +105,13 @@ test("completed tables and code components remain mounted while the reply grows"
   const marker = document.createElement("i");
   code.append(marker);
   code.setAttribute("data-expanded", "true");
-  code.classList.add("text-code-collapsible");
+  code.classList.add("code-block-collapsible");
   block.content += " paragraph";
   await block.updateComplete;
   assert.equal(block.querySelector("table"), table);
   assert.equal(block.querySelector("code-block"), code);
   assert.equal(code.getAttribute("data-expanded"), "true");
-  assert.ok(code.classList.contains("text-code-collapsible"));
+  assert.ok(code.classList.contains("code-block-collapsible"));
   assert.ok(marker.isConnected, "a custom element owns its rendered children");
   block.remove();
 });

@@ -21,6 +21,11 @@ test("hljs facade reports no language pre-load, so code-block takes the auto pat
   assert.equal(hljsFacade.getLanguage("javascript"), undefined);
 });
 
+test("plain-text code blocks skip highlighting instead of guessing a language", () => {
+  assert.ok(hljsFacade.getLanguage("text"), "code-block must not take the auto path for text");
+  assert.equal(hljsFacade.highlight("cd ~/a && ls", { language: "text" }).value, "cd ~/a &amp;&amp; ls");
+});
+
 test("stub grammar registration is a safe no-op", () => {
   assert.doesNotThrow(() => hljsFacade.registerLanguage("javascript", () => ({})));
 });

@@ -239,7 +239,7 @@ import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
 import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
-import { decorateTextCodeBlocks } from "./text-code";
+import { decorateCodeBlocks } from "./text-code";
 
 import { createTranscriptViewport, preserveTranscriptScroll } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
@@ -1526,7 +1526,7 @@ export function createChatSurface(
         host,
       );
       requestAnimationFrame(() => {
-        decorateTextCodeBlocks(host);
+        decorateCodeBlocks(host);
         if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
       });
     };
@@ -1964,7 +1964,7 @@ export function createChatSurface(
     const host = chatState.host;
     requestAnimationFrame(() => {
       if (chatState.host !== host || chatState.agent !== agent || !host.isConnected) return;
-      decorateTextCodeBlocks(host);
+      decorateCodeBlocks(host);
       ctx.composer.resizeComposer();
       scrollTranscript(opts.forceScroll);
     });

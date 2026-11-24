@@ -602,7 +602,7 @@ test("nested paste and attachment controls do not toggle the whole prompt", () =
   const f = fixture();
   try {
     f.prompt.innerHTML =
-      '<div class="user-bubble"><div class="pin-content"><code-block><button class="text-code-toggle">Show more</button><copy-button><button>Copy</button></copy-button></code-block><div class="message-files"><a class="file-chip" href="#file">notes.txt</a></div></div><button class="pin-toggle" hidden>Show more</button></div>';
+      '<div class="user-bubble"><div class="pin-content"><code-block><button class="code-block-toggle">Show more</button><copy-button><button>Copy</button></copy-button></code-block><div class="message-files"><a class="file-chip" href="#file">notes.txt</a></div></div><button class="pin-toggle" hidden>Show more</button></div>';
     const content = f.prompt.querySelector<HTMLElement>(".pin-content")!;
     const toggle = f.prompt.querySelector<HTMLButtonElement>(".pin-toggle")!;
     Object.defineProperties(content, {
@@ -613,7 +613,7 @@ test("nested paste and attachment controls do not toggle the whole prompt", () =
     assert.equal(toggle.hidden, false);
     for (const expanded of [false, true]) {
       if (expanded) toggle.click();
-      for (const selector of [".text-code-toggle", "copy-button button", ".file-chip"]) {
+      for (const selector of [".code-block-toggle", "copy-button button", ".file-chip"]) {
         f.prompt.querySelector<HTMLElement>(selector)!.click();
         assert.equal(f.prompt.classList.contains("pin-expanded"), expanded);
         assert.equal(toggle.getAttribute("aria-expanded"), String(expanded));
