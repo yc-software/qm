@@ -100,7 +100,7 @@ export function isModelBudget(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && err.code === "model_budget";
 }
 
-const PROVIDER_DECISION_CODES = new Set<ProviderErrorCode>(["refusal", "auth", "account", "model_budget"]);
+const PROVIDER_DECISION_CODES = new Set<ProviderErrorCode>(["refusal", "account", "model_budget"]);
 
 export function isProviderDecision(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
