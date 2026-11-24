@@ -54,8 +54,13 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
 const accountCheck = `CREATE OR REPLACE FUNCTION qm_external_org_account_check()
   RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = %1$I, pg_temp AS $f$
-  DECLARE bound uuid := CASE WHEN TG_TABLE_NAME = 'tenants' THEN NEW.id ELSE NEW.tenant END;
+  DECLARE bound uuid;
   BEGIN
+    IF TG_TABLE_NAME = 'tenants' THEN
+      bound := NEW.id;
+    ELSE
+      bound := NEW.tenant;
+    END IF;
     IF EXISTS (
       SELECT 1 FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id
       WHERE t.id = bound AND t.settings ? 'partnerChatAccount' AND t.settings->>'partnerChatAccount' IS DISTINCT FROM o.org_id
