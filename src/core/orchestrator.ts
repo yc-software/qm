@@ -2445,7 +2445,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
             },
-            systemPrompt: `${promptSnapshot.frame}\n\n${promptSnapshot.body}`,
+            systemPrompt: `This turn is running on Quartermaster (QM).\n\n${promptSnapshot.frame}\n\n${promptSnapshot.body}`,
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
