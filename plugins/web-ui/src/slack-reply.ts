@@ -79,13 +79,13 @@ export class SlackReply extends LitElement {
       this.observedInput = input;
     }
     if (!input) return;
-    resizeComposerInput(input, 30);
+    resizeComposerInput(input, 32);
     if (!this.inputObserver && typeof ResizeObserver !== "undefined") {
       let width = input.clientWidth;
       this.inputObserver = new ResizeObserver(() => {
         if (width === input.clientWidth) return;
         width = input.clientWidth;
-        resizeComposerInput(input, 30);
+        resizeComposerInput(input, 32);
       });
       this.inputObserver.observe(input);
     }
@@ -176,24 +176,24 @@ export class SlackReply extends LitElement {
 
   protected render() {
     if (this.connected !== false)
-      return html`<form class="composer-wrap slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
-        ${avatarTpl({ key: this.user, name: this.label || this.user, avatarUrl: speakerAvatar(this.user) })}
-        ${composerInput({
-          value: this.text,
-          placeholder: "Reply in thread…",
-          disabled: false,
-          label: `Reply in Slack as ${this.label || "yourself"}`,
-          maxLength: 4000,
-          onInput: (e) => {
-            this.text = (e.target as HTMLTextAreaElement).value;
-          },
-          onKeydown: (e) => {
-            if (e.isComposing || e.keyCode === 229 || e.key !== "Enter" || e.shiftKey) return;
-            void this.send(e);
-          },
-        })}
-        <div class="composer-toolbar">
-          <div class="composer-right">
+      return html`<div class="slack-reply-box">
+        <form class="slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
+          ${avatarTpl({ key: this.user, name: this.label || this.user, avatarUrl: speakerAvatar(this.user) })}
+          ${composerInput({
+            value: this.text,
+            placeholder: "Reply in thread…",
+            disabled: false,
+            label: `Reply in Slack as ${this.label || "yourself"}`,
+            maxLength: 4000,
+            onInput: (e) => {
+              this.text = (e.target as HTMLTextAreaElement).value;
+            },
+            onKeydown: (e) => {
+              if (e.isComposing || e.keyCode === 229 || e.key !== "Enter" || e.shiftKey) return;
+              void this.send(e);
+            },
+          })}
+          <div class="slack-reply-actions">
             <button
               class="send-btn"
               type="submit"
@@ -204,9 +204,9 @@ export class SlackReply extends LitElement {
               ${icon(ArrowUp, 16)}
             </button>
           </div>
-        </div>
-        ${this.error ? html`<div class="composer-error" role="alert">${this.error}</div>` : nothing}
-      </form>`;
+          ${this.error ? html`<div class="composer-error" role="alert">${this.error}</div>` : nothing}
+        </form>
+      </div>`;
     return html`<div class="slack-reply-box">
       ${this.linkAvailable ? html`<qm-slack-account .user=${this.user} .reply=${true} @slack-linked=${this.refresh}></qm-slack-account>` : nothing}
       ${this.error ? html`<p class="slack-account-error" role="alert">${this.error} <button class="btn" @click=${this.refresh}>Check connection</button></p>` : nothing}

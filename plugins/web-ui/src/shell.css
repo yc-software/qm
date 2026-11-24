@@ -3516,7 +3516,7 @@ qm-markdown .tok-in {
   min-width: 0;
   anchor-scope: --qm-composer;
 }
-.chat-bottom-dock .composer-wrap {
+.chat-bottom-dock :is(.composer-wrap, .slack-reply-pill) {
   anchor-name: --qm-composer;
 }
 .scroll-bottom-btn {
@@ -4665,6 +4665,9 @@ summary.stopped-head:focus-visible {
   --content-w: 696px;
   --composer-inset: 0px;
 }
+.slack-thread-chat .custom-chat-shell {
+  --slack-font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
+}
 .slack-thread-chat .chat-scroll {
   scrollbar-gutter: stable both-edges;
 }
@@ -4749,10 +4752,35 @@ summary.stopped-head:focus-visible {
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row).continued-row {
   margin-top: -14px;
 }
-.slack-thread-chat .message-stack > .user-row > .message-meta {
-  left: 48px;
-  right: auto;
-  padding: 0;
+@media (hover: hover) {
+  .slack-thread-chat .message-stack > :is(.user-row, .assistant-row):hover {
+    border-radius: 6px;
+    background: var(--inbox-row-hover);
+    box-shadow: 0 0 0 6px var(--inbox-row-hover);
+  }
+  .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) > .message-meta,
+  .slack-thread-chat .message-stack > .assistant-row > .assistant-body .message-meta {
+    top: -14px;
+    right: 4px;
+    bottom: auto;
+    left: auto;
+    z-index: 6;
+    margin: 0;
+    padding: 0 3px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  }
+}
+@media (hover: none) {
+  .slack-thread-chat .message-stack > .user-row > .message-meta,
+  .slack-thread-chat .message-stack > .assistant-row > .assistant-body .message-meta {
+    left: 48px;
+    right: auto;
+    margin: 0;
+    padding: 0;
+  }
 }
 .slack-thread-chat .message-stack > .sending-row {
   opacity: 0.5;
@@ -4764,7 +4792,7 @@ summary.stopped-head:focus-visible {
   min-height: 0;
   margin: 0 0 3px;
   color: var(--foreground);
-  font-size: var(--chat-font-size);
+  font-size: var(--slack-font-size);
   font-weight: 650;
   line-height: 1.25;
 }
@@ -4779,7 +4807,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-thread-chat .speaker-label > .speaker-time {
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.8);
+  font-size: calc(var(--slack-font-size) * 0.8);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
@@ -4791,7 +4819,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) :is(.user-bubble, .assistant-body) {
   color: color-mix(in srgb, var(--foreground) 86%, var(--muted-foreground));
-  font-size: var(--chat-font-size);
+  font-size: var(--slack-font-size);
   line-height: 1.55;
 }
 .slack-app-tag {
@@ -4801,7 +4829,7 @@ summary.stopped-head:focus-visible {
   border-radius: 3px;
   background: var(--secondary);
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.64);
+  font-size: calc(var(--slack-font-size) * 0.64);
   font-weight: 700;
   letter-spacing: 0.05em;
 }
@@ -4824,7 +4852,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-reaction b {
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.77);
+  font-size: calc(var(--slack-font-size) * 0.77);
   font-weight: 600;
 }
 .slack-forward {
