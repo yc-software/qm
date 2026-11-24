@@ -52,11 +52,23 @@ export interface ProcessedInbound {
   issues: string[];
 }
 
-export interface InboundWhere {
+export interface AttachmentWhere {
   surface: string;
   account?: string;
   chat: string;
 }
+
+export function logAttachmentFailure(
+  what: "unreadable" | "upload failed",
+  where: AttachmentWhere,
+  detail: string,
+): void {
+  const account = where.account ? ` account=${where.account}` : "";
+  console.error(`[${where.surface}] attachment ${what}${account} chat=${where.chat} ${detail}`);
+}
+
+export const attachmentList = (files: readonly { name: string; mimetype: string }[]): string =>
+  files.map((f) => `${JSON.stringify(f.name)}:${f.mimetype}`).join(",");
 
 export function unreadFilesNotice(issues: readonly string[]): string {
   return `Some of your files didn't come through, so I haven't read them: ${issues.join("; ")}.`;
@@ -67,7 +79,7 @@ export async function processInboundFiles<F extends InboundFile>(
   download: (file: F) => Promise<Uint8Array>,
   stage: (bytes: Uint8Array) => Promise<{ blobId: string }>,
   opts: {
-    where: InboundWhere;
+    where: AttachmentWhere;
     resolveAuthor?: (userId: string | undefined) => Promise<string | undefined> | string | undefined;
     unreadableHint?: string;
   },
@@ -77,8 +89,11 @@ export async function processInboundFiles<F extends InboundFile>(
   const { where, resolveAuthor, unreadableHint = "" } = opts;
   const unreadable = (f: F, label: string, issue: string, reason: string) => {
     issues.push(issue);
-    console.error(
-      `[${where.surface}] attachment unreadable${where.account ? ` account=${where.account}` : ""} chat=${where.chat} file=${JSON.stringify(label)} type=${f.mimetype || "unknown"}${typeof f.size === "number" ? ` bytes=${f.size}` : ""} reason=${reason}`,
+    const size = typeof f.size === "number" ? ` bytes=${f.size}` : "";
+    logAttachmentFailure(
+      "unreadable",
+      where,
+      `file=${JSON.stringify(label)} type=${f.mimetype || "unknown"}${size} reason=${reason}`,
     );
   };
   for (const f of files) {

@@ -6,6 +6,7 @@ import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { collectBytes } from "../util/bytes.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
 export const MAX_DOCUMENTS = 10;
@@ -229,7 +230,10 @@ export async function loadDocumentInputs(
       });
       if (dataBase64 === undefined) continue;
       const document = { name: artifact.name, mimeType: artifact.mimetype, dataBase64, artifactId: artifact.id };
-      const pages = pdf ? (await documentText(document, signal).catch(() => undefined))?.pages : undefined;
+      const pages = pdf
+        ? (await documentText(document, signal).catch(swallowAs(`documents: count pages of ${artifact.id}`, undefined)))
+            ?.pages
+        : undefined;
       const tokens = estimateDocumentTokens(artifact, pages);
       if (usedTokens + tokens > maxTokens) {
         stub();

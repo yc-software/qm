@@ -1,5 +1,6 @@
 import type { SurfaceTransport } from "../surfaces/turn-driver.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { attachmentList, logAttachmentFailure } from "../surfaces/attachments.ts";
 import {
   type PostMessageArgs,
   batchPostMessageArgs,
@@ -91,9 +92,10 @@ export function createSlackTurnTransport(at: {
         await uploadAttachments(client, channel, threadTs, attachments, at.blobs);
         return {};
       } catch (err) {
-        const files = attachments.map((a) => `${JSON.stringify(a.name)}:${a.mimetype}`).join(",");
-        console.error(
-          `[slack-plugin] attachment upload failed chat=${channel} files=${files} reason=${errMessage(err)}`,
+        logAttachmentFailure(
+          "upload failed",
+          { surface: "slack-plugin", chat: channel },
+          `files=${attachmentList(attachments)} reason=${errMessage(err)}`,
         );
         return { failureNote: uploadFailureNote(err) };
       }

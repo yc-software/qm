@@ -3,6 +3,8 @@ import type { OutgoingAttachment } from "../../types.ts";
 import { errMessage, httpFailure } from "../../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../../util/network.ts";
 import {
+  attachmentList,
+  logAttachmentFailure,
   processInboundFiles,
   readOutgoingFiles,
   responseBytes,
@@ -97,9 +99,10 @@ export async function uploadGenericChatFiles(
   try {
     return { fileIds: await uploadFiles(deps, where, attachments) };
   } catch (e) {
-    const files = attachments.map((a) => `${JSON.stringify(a.name)}:${a.mimetype}`).join(",");
-    console.error(
-      `[generic-chat] attachment upload failed account=${where.account} chat=${where.chat} files=${files} reason=${errMessage(e)}`,
+    logAttachmentFailure(
+      "upload failed",
+      { surface: "generic-chat", ...where },
+      `files=${attachmentList(attachments)} reason=${errMessage(e)}`,
     );
     return { failureNote: UPLOAD_FAILED };
   }
