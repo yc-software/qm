@@ -3758,8 +3758,7 @@ export function createChatSurface(
     } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
-    if (kind === "approval") why = firstLine(realApprovalReason(result.reason) ?? "", 90);
-    else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
+    if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");

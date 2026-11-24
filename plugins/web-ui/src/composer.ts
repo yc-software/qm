@@ -816,7 +816,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       </button>`;
     if (docked.length)
       return html`<button class="send-btn ac-confirm ac-decline" type="submit" ?disabled=${!composerCanSend()}>
-        <span>${docked.length > 1 ? `Decline all ${docked.length} and send` : "Decline and send"}</span
+        <span>${docked.length > 1 ? `Decline all ${docked.length}, send reply` : "Decline, send reply"}</span
         ><kbd aria-hidden="true">↵</kbd>
       </button>`;
     if (!agent.state.isStreaming) return sendButton("Send");

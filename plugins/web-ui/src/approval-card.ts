@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { X } from "lucide";
+import { ChevronDown, ChevronRight, X } from "lucide";
 import { icon } from "./icons";
 import type { ApprovalDecision, PendingApproval } from "./core-bridge";
 import {
@@ -133,24 +133,21 @@ function footer(count: number, o: ApprovalCardOptions): TemplateResult | typeof 
   </div>`;
 }
 
-function closeButton(label: string, o: ApprovalCardOptions, onClick: () => void, cls: string): TemplateResult {
-  return html`<button
-    type="button"
-    class=${cls}
-    aria-label=${label}
-    title=${label}
-    ?disabled=${o.busy}
-    @click=${onClick}
-  >
-    ${icon(X, 14)}
-  </button>`;
-}
-
-function card(o: ApprovalCardOptions, cls: string, eyebrow: string, tool: ApprovalCall | null, body: unknown, n: number) {
+function card(
+  o: ApprovalCardOptions,
+  cls: string,
+  eyebrow: string,
+  tool: ApprovalCall | null,
+  body: unknown,
+  n: number,
+) {
   return html`<section class="ac-card ${cls} ${o.typing ? "declining" : ""}" role="group" aria-label="Approval">
     <header class="ac-head">
       <span class="ac-eyebrow">${eyebrow}</span>
-      ${toolLine(tool)} ${closeButton(n > 1 ? "Decline all" : "Decline", o, o.declineAll, "ac-dismiss")}
+      ${toolLine(tool)}
+      <button type="button" class="ac-dismiss" ?disabled=${o.busy} @click=${o.declineAll}>
+        ${n > 1 ? "Decline all" : "Decline"}
+      </button>
     </header>
     ${body} ${footer(n, o)}
   </section>`;
@@ -174,64 +171,113 @@ function textOf(node: ArgNode): string | null {
   return node.kind === "text" || node.kind === "scalar" ? node.text : null;
 }
 
-function rowDiffs(rows: BatchRow[], index: number): Map<string, Segment[]> {
-  const other = rows[index === 0 ? 1 : 0];
-  const diffs = new Map<string, Segment[]>();
-  if (!other) return diffs;
-  for (const f of rows[index]!.view.fields) {
-    const mine = textOf(f.node);
-    const theirs = other.view.fields.find((g) => g.full === f.full);
-    const ref = theirs ? textOf(theirs.node) : null;
-    if (mine === null || ref === null || mine.split(/\s+/).length < 4) continue;
-    const segments = wordDiff(mine, ref);
-    if (segments.some((seg) => !seg.changed)) diffs.set(f.full, segments);
-  }
-  return diffs;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const WHEN = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } as const;
+
+function previewOf(view: ArgView): string {
+  const scalars = view.fields.filter((f) => f.node.kind === "scalar" && !f.node.literal);
+  const words = scalars.filter((f) => f.node.kind === "scalar" && !f.node.ident);
+  return (words.length ? words : scalars)
+    .map((f) => {
+      const text = textOf(f.node)!;
+      return ISO_TIME.test(text) ? new Date(text).toLocaleString(undefined, WHEN) : text;
+    })
+    .join(" · ");
 }
 
-function snippet(view: ArgView): string {
-  const texts = view.fields.map((f) => textOf(f.node)).filter((t): t is string => !!t);
-  return texts.join(" · ").replace(/\s+/g, " ").slice(0, 240);
+type Template = { field: string; segments: Segment[] };
+
+function templatesOf(rows: BatchRow[]): Template[] {
+  const [first, second] = rows;
+  if (!first || !second) return [];
+  return first.view.fields.flatMap((f): Template[] => {
+    const mine = textOf(f.node);
+    const theirs = second.view.fields.find((g) => g.full === f.full);
+    const ref = theirs ? textOf(theirs.node) : null;
+    if (mine === null || ref === null || mine.split(/\s+/).length < 6) return [];
+    const segments = wordDiff(mine, ref);
+    const kept = segments.filter((s) => !s.changed).reduce((n, s) => n + s.text.trim().length, 0);
+    return kept >= mine.replace(/\s+/g, "").length * 0.6 ? [{ field: f.full, segments }] : [];
+  });
+}
+
+function slotsOf(rows: BatchRow[], i: number, field: string): string[] {
+  const text = (r: BatchRow | undefined) => {
+    const f = r?.view.fields.find((g) => g.full === field);
+    return f ? (textOf(f.node) ?? "") : "";
+  };
+  return wordDiff(text(rows[i]), text(rows[i === 0 ? 1 : 0]))
+    .filter((s) => s.changed)
+    .map((s) => s.text);
 }
 
 interface Row {
   approval: PendingApproval;
   heading: string;
-  preview: string;
-  body: () => TemplateResult;
+  line: TemplateResult;
+  tool?: string;
+  body?: () => TemplateResult;
 }
 
-function rowView(row: Row, i: number, o: ApprovalCardOptions): TemplateResult {
-  return html`<li class="ac-item">
+function dropButton(row: Row, o: ApprovalCardOptions): TemplateResult {
+  const decline = () => o.decide({ requestId: row.approval.requestId, approved: false });
+  return html`<button
+    type="button"
+    class="ac-drop"
+    aria-label="Leave this one out"
+    title="Leave this one out"
+    ?disabled=${o.busy}
+    @click=${decline}
+  >
+    ${icon(X, 14)}
+  </button>`;
+}
+
+function rowView(row: Row, i: number, o: ApprovalCardOptions, extra: boolean): TemplateResult {
+  const index = html`<span class="ac-index">${i + 1}</span>`;
+  const cls = `ac-item ${extra ? "ac-extra" : ""}`;
+  if (!row.body)
+    return html`<li class=${cls} title=${row.heading}>
+      <div class="ac-flat">${index}<span class="ac-vals" dir="auto">${row.line}</span></div>
+      ${dropButton(row, o)}
+    </li>`;
+  return html`<li class=${cls}>
     <details>
       <summary>
-        <span class="ac-index">${i + 1}</span>
-        <span class="ac-item-title" dir="auto">${row.heading}</span>
-        <span class="ac-preview" dir="auto">${row.preview}</span>
+        ${index}${icon(ChevronRight, 14)}
+        <span class="ac-summary">
+          <span class="ac-summary-top"
+            ><span class="ac-item-title" dir="auto">${row.heading}</span
+            >${row.tool ? html`<span class="ac-tool">${row.tool}</span>` : nothing}</span
+          >
+          <span class="ac-preview" dir="auto">${row.line}</span>
+        </span>
       </summary>
       <div class="ac-item-body">${row.body()}</div>
     </details>
-    ${closeButton("Leave this one out", o, () => o.decide({ requestId: row.approval.requestId, approved: false }), "ac-drop")}
+    ${dropButton(row, o)}
   </li>`;
 }
 
+function showAll(e: Event): void {
+  (e.currentTarget as HTMLElement).closest(".ac-items")?.classList.add("ac-all");
+}
+
 function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
-  const keyed = (list: Row[], from: number) =>
-    repeat(
-      list,
-      (r) => r.approval.requestId,
-      (r, i) => rowView(r, from + i, o),
-    );
-  if (rows.length <= ROW_LIMIT) return html`<ol class="ac-items">${keyed(rows, 0)}</ol>`;
-  const head = ROW_LIMIT - 1;
+  const cut = rows.length > ROW_LIMIT ? ROW_LIMIT - 1 : rows.length;
   return html`<ol class="ac-items">
-    ${keyed(rows.slice(0, head), 0)}
-    <li class="ac-more">
-      <details>
-        <summary>and ${rows.length - head} more</summary>
-        <ol class="ac-items">${keyed(rows.slice(head), head)}</ol>
-      </details>
-    </li>
+    ${repeat(
+      rows,
+      (r) => r.approval.requestId,
+      (r, i) => rowView(r, i, o, i >= cut),
+    )}
+    ${
+      cut < rows.length
+        ? html`<li class="ac-more">
+            <button type="button" @click=${showAll}>Show ${rows.length - cut} more ${icon(ChevronDown, 14)}</button>
+          </li>`
+        : nothing
+    }
   </ol>`;
 }
 
@@ -244,33 +290,48 @@ function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): Templa
       return {
         approval: a,
         heading: approvalHeading(a, call),
-        preview: call ? snippet(argView(call.args)) : a.command,
-        body: () => html`${call ? html`<div class="ac-item-tool">${toolLine(call)}</div>` : nothing}${approvalBody(a)}`,
+        tool: call?.tool,
+        line: html`${call ? previewOf(argView(call.args)) : a.command}`,
+        body: () => approvalBody(a),
       };
     });
     return card(o, "ac-batch", eyebrow, null, rowsView(rows, o), approvals.length);
   }
-  const rows = batch.rows.map(
-    (row, i): Row => ({
+  const templates = templatesOf(batch.rows);
+  const templated = new Set(templates.map((t) => t.field));
+  const rows = batch.rows.map((row, i): Row => {
+    const own = row.view.fields.filter((f) => !templated.has(f.full));
+    const flat = own.every((f) => f.node.kind === "scalar");
+    const view = { fields: own, empty: row.view.empty };
+    return {
       approval: row.approval,
       heading: row.heading,
-      preview: snippet(row.view),
-      body: () => html`${argsView(row.view, rowDiffs(batch.rows, i))}`,
-    }),
-  );
+      line: html`${templates.map((t) =>
+        slotsOf(batch.rows, i, t.field).map(
+          (s) => html`<span class="ac-cell"><mark class="ac-diff">${s}</mark></span>`,
+        ),
+      )}${own.map((f) => nodeView(f.node))}`,
+      ...(flat && templates.length ? {} : { body: () => html`${argsView(view)}` }),
+    };
+  });
   const shared = batch.shared;
   const scalars = { fields: shared.fields.filter((f) => f.node.kind === "scalar"), empty: [] };
   const rest = { fields: shared.fields.filter((f) => f.node.kind !== "scalar"), empty: shared.empty };
+  const first = batch.rows[0]!.view;
+  const message = { fields: first.fields.filter((f) => templated.has(f.full)), empty: [] };
+  const diffs = new Map(templates.map((t) => [t.field, t.segments]));
   return card(
     o,
     "ac-batch",
     eyebrow,
     batch.call,
     html`${
-      shared.fields.length || shared.empty.length
+      shared.fields.length || shared.empty.length || templates.length
         ? html`<div class="ac-shared">
-            <span class="ac-caption">Same for each</span>
-            ${inlineView(scalars)} ${argsView(rest)}
+            <span class="ac-caption"
+              >${templates.length ? "Same for each, except the highlighted words" : "Same for each"}</span
+            >
+            ${inlineView(scalars)} ${argsView(rest)} ${argsView(message, diffs)}
           </div>`
         : nothing
     }
