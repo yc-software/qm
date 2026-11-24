@@ -12,12 +12,14 @@ const SLACK_SETTINGS = `${UI_BASE}/settings/slack-settings`;
 export class OnboardingSlack extends LitElement {
   static properties = {
     installAvailable: { state: true },
+    unavailable: { state: true },
     connected: { state: true },
     busy: { state: true },
     error: { state: true },
   };
   private connected = false;
   private installAvailable: boolean | undefined;
+  private unavailable = false;
   private busy = false;
   private error = "";
   private request?: AbortController;
@@ -64,7 +66,8 @@ export class OnboardingSlack extends LitElement {
       const status = await response.json();
       this.installAvailable = status.installAvailable === true;
       this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
-      this.error = "";
+      this.unavailable = status.setupUnavailable === true && !this.installAvailable;
+      this.error = this.unavailable ? "Slack installation isn't available for this workspace right now." : "";
     } catch {
       if (this.isConnected) {
         this.connected = false;
@@ -148,7 +151,7 @@ export class OnboardingSlack extends LitElement {
         : html`<button
             class="welcome-slack"
             type="button"
-            ?disabled=${this.busy || this.installAvailable === undefined}
+            ?disabled=${this.busy || this.unavailable || this.installAvailable === undefined}
             @click=${() => void this.install()}
           >
             ${slackMark(24)}<span

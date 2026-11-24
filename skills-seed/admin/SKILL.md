@@ -157,8 +157,6 @@ Only verified `setup.connected` together with `configured` warrants **Connected*
 Require a real reply before claiming the bot works, not as an onboarding prerequisite.
 A failed status read or `setupUnavailable` means unknown, not absent. Do not restart
 provisioning or create a duplicate. Retry the existing links or follow recovery guidance.
-When `installAvailable` is false because `setupUnavailable` is true, installation can't start
-right now: say so briefly and don't send an install link or `::add-to-slack{}`.
 
 `installAvailable: true` without `setup` means the shared QM Slack app. In web chat, reply
 with one short line and `::add-to-slack{}` as its own paragraph. On other surfaces, link
