@@ -157,7 +157,7 @@ describe("fireDropResolution", () => {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-      run: async () => ({ status: "pending_approval" }) as TurnResult,
+      run: async () => ({ status: "failed" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
     await fireDropResolution(deps, {

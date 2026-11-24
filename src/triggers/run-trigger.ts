@@ -78,7 +78,13 @@ export interface TriggerOutcome {
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
-  return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
+  return (
+    outcome.ran &&
+    outcome.status !== undefined &&
+    outcome.status !== "ok" &&
+    outcome.status !== "silent" &&
+    outcome.status !== "pending_approval"
+  );
 }
 
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
@@ -338,7 +344,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
+      note = `waiting for approval${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

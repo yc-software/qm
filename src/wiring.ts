@@ -2134,10 +2134,19 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
-    slack: slackApprovalCardRoute,
-    [GENERIC_CHAT]: genericChatApprovalCardRoute,
-  });
+  const approvals = createApprovalStore(
+    artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]),
+    deliveries,
+    { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
+    async (request, sessionId) => {
+      const generic = genericChatApprovalCardRoute(request);
+      if (generic) return generic;
+      if (request.origin?.kind === "automation" && request.origin.destination?.type === "web") return undefined;
+      const home = (await sessions.get(sessionId))?.surface;
+      if (home === "web" || home === "swarm") return undefined;
+      return slackApprovalCardRoute(request);
+    },
+  );
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
