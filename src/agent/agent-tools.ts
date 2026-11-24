@@ -1,4 +1,3 @@
-import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
@@ -26,8 +25,6 @@ import { withRetrySafety, withRuntimeBarrier, withToolApprovalGate, withToolSpan
 import type { SurfaceToolPrompt } from "../surfaces/registry.ts";
 
 export interface ToolContextRef {
-  documents?: DocumentInput[];
-  documentsStubbed?: boolean;
   runtimeHandoff?: TurnHandoff;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;

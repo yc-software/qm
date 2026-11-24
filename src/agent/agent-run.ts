@@ -16,7 +16,7 @@ import {
   type BridgedTool,
   type SteerIntake,
 } from "./turn-support.ts";
-import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
+import { createInlineDocuments, withDocumentsAt, withNativeDocuments, type DocumentModel } from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,6 +34,7 @@ import {
   type AssistantMessage,
   type Model,
   type ModelThinkingLevel,
+  type ImageContent,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
@@ -120,7 +121,6 @@ import {
 } from "./pi-messages.ts";
 import {
   DOCUMENT_REJECTION_CODES,
-  documentsDroppedNote,
   FALLBACK_CODES,
   fallbackFailed,
   refusalFallbackNote,
@@ -446,13 +446,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
       applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
       const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
-      let finalPayload = await withDocumentInputs(
-        payload,
-        model as DocumentModel,
-        ref.documents ?? [],
-        ref.abortSignal,
-        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
-      );
+      let finalPayload = withNativeDocuments(payload, model as DocumentModel);
       const guarded = guardOutputBudget(finalPayload, model);
       if (guarded.kind === "raised") {
         console.error(
@@ -546,14 +540,18 @@ export function createAgent(opts?: AgentOptions): Agent {
           turn.onModelRequest?.();
           if (turn.park?.requested()) turn.park.now();
         };
-        turn.recordModelCall({
-          model: effectiveModel,
-          inputTokens:
-            entry.composedPromptTokens +
-            estimateHistoryTokens(turn.history) +
-            (continueTurn ? 0 : countTokens(modelPrompt)),
-          entryCount: turn.history.length,
-        });
+        const openingTokens =
+          entry.composedPromptTokens +
+          estimateHistoryTokens(turn.history) +
+          (continueTurn ? 0 : countTokens(modelPrompt));
+        turn.recordModelCall({ model: effectiveModel, inputTokens: openingTokens, entryCount: turn.history.length });
+        const currentModel = () => entry.agentSession.model as DocumentModel;
+        const inline = createInlineDocuments(openingTokens, currentModel().contextWindow, turn.cancel);
+        const openingDocuments = await inline.blocks(turn.documents ?? [], currentModel());
+        if (continueTurn) {
+          const state = entry.agentSession.agent.state;
+          state.messages = withDocumentsAt(state.messages, userEntry?.createdAt, openingDocuments);
+        }
 
         const callUsage: Array<LlmCallUsage | null> = [];
         let thinkTail: Promise<unknown> = Promise.resolve();
@@ -589,7 +587,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           else if (role === "user" && !triggerSeen) triggerSeen = true;
           else if (role === "user") {
             steps.flush();
-            const text = textFromContent((message as { content?: unknown }).content);
+            const text = textFromContent((message as { content?: unknown[] }).content?.slice(0, 1));
             if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
@@ -678,6 +676,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
+                    const steeredDocuments = await inline.blocks(prepared?.documents ?? [], currentModel());
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const steer = {
                       text,
@@ -693,18 +692,16 @@ export function createAgent(opts?: AgentOptions): Agent {
                     };
                     pendingSteers.push(steer);
                     if (ts) steeredSeen.add(ts);
-                    if (prepared?.documents?.length)
-                      entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
                     entry.ref.silentRequested = false;
                     try {
-                      await entry.agentSession.steer(
-                        prompt,
-                        prepared?.images?.map((image) => ({
+                      await entry.agentSession.steer(prompt, [
+                        ...(prepared?.images ?? []).map((image) => ({
                           type: "image" as const,
                           mimeType: image.mimeType,
                           data: image.dataBase64,
                         })),
-                      );
+                        ...(steeredDocuments as ImageContent[]),
+                      ]);
                       steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
@@ -782,15 +779,14 @@ export function createAgent(opts?: AgentOptions): Agent {
         let documentRejection: ProviderTurnError | undefined;
         let documentRetried = false;
         const noteDocumentRejection = (message: unknown): void => {
-          if (documentRejection || !entry.ref.documents?.length) return;
+          if (documentRejection || !inline.count()) return;
           const failed = message as AssistantMessage | undefined;
           if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
           const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
           if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
           documentRejection = failure;
-          entry.ref.documentsStubbed = true;
           console.error(
-            `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+            `[pi] request with ${inline.count()} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
           );
         };
         const retryWithoutDocuments = async (): Promise<boolean> => {
@@ -802,6 +798,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
+          entry.agentSession.agent.state.messages = inline.stubbed(entry.agentSession.agent.state.messages);
           const outcome = await reprompt(DOCUMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")
@@ -818,13 +815,14 @@ export function createAgent(opts?: AgentOptions): Agent {
           return attemptRefusalFallback(failure);
         };
         try {
-          const images = turn.images?.length
-            ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
-            : undefined;
+          const attached = [
+            ...(turn.images ?? []).map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType })),
+            ...(openingDocuments as ImageContent[]),
+          ];
           wallClock = await raceTurnWallClock(
             continueTurn
               ? continueAssistantTurn(entry.agentSession)
-              : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+              : entry.agentSession.prompt(modelPrompt, attached.length ? { images: attached } : undefined),
             {
               capMs: raceCapMs(),
               extendMs: floorCap.extendMs,
