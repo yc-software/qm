@@ -305,8 +305,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
   }
   async function withdrawLoanUnlessPublisher(d: PublishedApp, actor: string | undefined): Promise<void> {
-    if (!samePerson(actor, d.createdBy))
-      await withdrawLoan(d, actor, "withdrawn: someone other than the publisher changed the running version");
+    if (!d.connectors || samePerson(actor, d.createdBy)) return;
+    if (actor && (await asOrgAdmin(deps, { actorId: actor }))) return;
+    await withdrawLoan(d, actor, "withdrawn: someone other than the publisher changed the running version");
   }
 
   const eachRunning = (work: (d: PublishedApp) => Promise<void>) =>

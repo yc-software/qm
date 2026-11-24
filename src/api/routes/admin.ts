@@ -28,6 +28,8 @@ import {
   inviteTeammate,
   listKeychainStatus,
   createAdminKeychainGrant,
+  revokeAdminKeychainGrant,
+  deleteAdminKeychainCredential,
   listUsers,
   resetUserToBrandNew,
   revokeAdminGrant,
@@ -481,6 +483,13 @@ const routes: Route<ApiCtx>[] = [
       handle: listKeychainStatus,
     },
     { method: "POST", path: "/v1/admin/keychain/grants", auth: "either", handle: createAdminKeychainGrant },
+    { method: "DELETE", path: "/v1/admin/keychain/grants/:id", auth: "either", handle: revokeAdminKeychainGrant },
+    {
+      method: "DELETE",
+      path: "/v1/admin/keychain/credentials/:id",
+      auth: "either",
+      handle: deleteAdminKeychainCredential,
+    },
     {
       method: "GET",
       path: "/v1/admin/users/:principalId",
@@ -570,7 +579,13 @@ const routes: Route<ApiCtx>[] = [
       admin: { privateRead: "always" },
       handle: listSecurityFlags,
     },
-    { method: "GET", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
+    {
+      method: "GET",
+      path: "/v1/admin/sandboxes/:scopeId",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: manageSandboxResources,
+    },
     { method: "POST", path: "/v1/admin/sandboxes/:scopeId", auth: "either", handle: manageSandboxResources },
     {
       method: "POST",

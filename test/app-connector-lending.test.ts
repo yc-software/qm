@@ -35,6 +35,7 @@ import { createControlService } from "../src/api/control-service.ts";
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
 const CO_MANAGER = "co@example.com";
+const ADMIN = "admin@example.com";
 const tokenOf = (host: string) => `publisher-token-for-${host}`;
 
 async function agent(t: { after: (fn: () => Promise<void>) => void }) {
@@ -58,6 +59,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     auditLog,
     acl,
     externalSharingAllowed: async () => true,
+    isOrgAdmin: async (id) => id === ADMIN,
     deployDir: mkdtempSync(join(tmpdir(), "connector-lending-")),
   });
   const app = createApp({
@@ -228,6 +230,9 @@ test("a new running version from anyone but the publisher withdraws the loan", a
   await h.lend(PUBLISHER, ["slack.com"]);
   await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).status, 200, "the publisher's own publish keeps it");
+  await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: ADMIN });
+  assert.equal((await h.broker(get("slack.com"))).status, 200, "an admin redeploy keeps the owner's loan");
+  assert.equal((await h.lend(ADMIN, ["gmail.googleapis.com"])).status, 403, "an admin cannot lend the owner's");
 
   await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: CO_MANAGER });
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");

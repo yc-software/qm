@@ -9,7 +9,7 @@ import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerApp } from "./app-types.ts";
 import { appView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { asOrgAdmin, type AdminActor, type CapabilityClaims } from "../auth/capability-token.ts";
 import { appSubdomainUrlOf, type PublishedApp } from "../deploy/deploy-store.ts";
 
 export function createAppMethods(
@@ -72,11 +72,12 @@ export function createAppMethods(
     const permissions = await appPermissions(tenant, publishedApps, caller.actorId);
     return Promise.all(publishedApps.map((d, i) => forCaller(d, caller, permissions[i]!)));
   }
-  async function callerGitPermission(
-    d: PublishedApp,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null> {
-    return forCaller(d, caller, await principalGitPermission(d, caller.actorId));
+  async function callerGitPermission(d: PublishedApp, caller: AdminActor): Promise<"read" | "write" | null> {
+    const permission = await forCaller(d, caller, await principalGitPermission(d, caller.actorId));
+    return permission === "write" || (await asOrgAdmin(deps, caller)) ? "write" : permission;
+  }
+  async function canReadApp(d: PublishedApp, principalId: string, caller?: AdminActor): Promise<boolean> {
+    return (await principalCanReadApp(d, principalId)) || (caller ? asOrgAdmin(deps, caller) : false);
   }
   const invitationLock = deps.advisoryLock;
   return {
@@ -209,7 +210,7 @@ export function createAppMethods(
       if (opts?.bypassAcl) return deps.deploy.reachApp(id, principalId, opts);
       const publishedApp = await deps.deploy.getApp(id);
       if (!publishedApp) return { status: "not_found" };
-      if (!(await principalCanReadApp(publishedApp, principalId))) return { status: "denied" };
+      if (!(await canReadApp(publishedApp, principalId, opts?.caller))) return { status: "denied" };
       return deps.deploy.reachApp(id, principalId, { bypassAcl: true });
     },
     async appLogsFor(
@@ -219,8 +220,8 @@ export function createAppMethods(
     ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }> {
       const publishedApp = await deps.deploy.getApp(id);
       if (!publishedApp) return { status: "not_found" };
-      if (!(await principalCanReadApp(publishedApp, principalId))) return { status: "denied" };
-      return { status: "ok", logs: await deps.deploy.appLogs(id, opts) };
+      if (!(await canReadApp(publishedApp, principalId, opts.caller))) return { status: "denied" };
+      return { status: "ok", logs: await deps.deploy.appLogs(id, { tailLines: opts.tailLines }) };
     },
     appGitRepoPath(id) {
       return deps.deploy.gitRepoPath(id);
@@ -250,7 +251,8 @@ export function createAppMethods(
       const external = await deps.appGitPrincipals?.authorizes(d, principalId, permission);
       if (external !== undefined) return external;
       const current = await principalGitPermission(d, principalId);
-      return permission === "write" ? current === "write" : current !== null;
+      if (permission === "write" ? current === "write" : current !== null) return true;
+      return asOrgAdmin(deps, { actorId: principalId });
     },
     reapIdleApps(ttlMs, now) {
       return deps.deploy.reapIdleApps(ttlMs, now);

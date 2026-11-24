@@ -55,7 +55,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { AdminActor, CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
@@ -642,10 +642,7 @@ export interface App {
   getApp(idOrName: string): Promise<PublishedApp | null>;
   listAppsForViewer(tenant: Tenant, viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<ViewerApp[]>;
   effectiveAppPermission(d: PublishedApp, principalId: string): Promise<Permission | null>;
-  appGitPermissionFor(
-    idOrName: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
-  ): Promise<"read" | "write" | null>;
+  appGitPermissionFor(idOrName: string, viewer: AdminActor): Promise<"read" | "write" | null>;
   appGitPermissionsFor(
     tenant: Tenant,
     publishedApps: readonly PublishedApp[],
@@ -716,11 +713,11 @@ export interface App {
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;
-  reachApp(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
+  reachApp(id: string, principalId: string, opts?: ReachOptions & { caller?: AdminActor }): Promise<Reach>;
   appLogsFor(
     id: string,
     principalId: string,
-    opts: { tailLines: number },
+    opts: { tailLines: number; caller?: AdminActor },
   ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }>;
   shareApp(
     idOrName: string,
@@ -748,7 +745,7 @@ export interface App {
   ): Promise<T>;
   appGitUrlFor(
     idOrName: string,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: AdminActor,
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<AppGitUrl | null>;
   authorizesAppGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;

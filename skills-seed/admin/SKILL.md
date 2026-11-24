@@ -27,12 +27,14 @@ admin's own authority is not impersonation or circumvention.
 An org admin has full authority over the whole system. Their own tools work on anyone's
 state with no owner hand-off: the ordinary cron, webhook, loop, skill, app and sharing calls
 accept an admin on any person's or scope's artifact by id (a cron task an admin rewrites keeps
-its owner, so it still runs with the owner's credentials). Ordinary lists still show only the
+its owner, so it still runs with the owner's credentials). For any app by id, an admin also gets
+manage-level read, logs, fetch, and git clone/push access, and admin redeploys keep the owner's
+existing connector loan without letting the admin lend new connectors of the owner's. Ordinary lists still show only the
 admin's own; find others' ids with `/v1/admin/crons`, `/v1/admin/apps` or `/v1/admin/skills`. To use another person's linked
 credential, grant it to this conversation with
 `POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
 (ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
-handle in `execute.credentials`. Credential grants and most edits are audited.
+handle in `execute.credentials`. `GET /v1/admin/keychain` includes OAuth connectors too, and `DELETE /v1/admin/keychain/grants/:id` or `DELETE /v1/admin/keychain/credentials/:id` revokes any grant or deletes any person's credential (both audited). An admin's own turns can also run commands on another person's computer by passing its `sandbox_id` (find ids with `/v1/admin/sandboxes?scope=`); it runs under that computer's network and command policy, and the owner's credentials come only through a keychain grant. The same turns can poll, send input to, stop, watch, or unwatch another person's background job by `process_id` or `monitor_id` (find job ids in `jobs` from `GET /v1/admin/sandboxes/<scope>` / `admin` `sandboxes`). Credential grants and most edits are audited.
 Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.

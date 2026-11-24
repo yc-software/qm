@@ -25,6 +25,7 @@ export function createTurnBrokers(turn: {
   scopeId: ScopeId;
   memoryScopeId: ScopeId;
   livePersonTurn: boolean;
+  orgAdmin?: boolean;
   defaultDestination: Destination | undefined;
   provision: TurnSandboxes["provision"];
   provisionJobSandbox: TurnSandboxes["provisionJobSandbox"];
@@ -41,6 +42,7 @@ export function createTurnBrokers(turn: {
     scopeId,
     memoryScopeId,
     livePersonTurn,
+    orgAdmin,
     defaultDestination,
     provision,
     provisionJobSandbox,
@@ -56,6 +58,7 @@ export function createTurnBrokers(turn: {
           onExit: finishProcess,
           scopeId: memoryScopeId,
           livePersonTurn,
+          orgAdmin: orgAdmin === true,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
           starter: { tenant, actorId: actor.id, botActor: input.botActor === true },
@@ -93,6 +96,7 @@ export function createTurnBrokers(turn: {
           owner: actor.id,
           ownerScopeId: scopeId,
           ...(input.botActor ? { botActor: true } : {}),
+          orgAdmin: orgAdmin === true,
           threadRef: conversation.threadRef,
           ...(defaultDestination ? { destination: defaultDestination } : {}),
           returnsToParent: isSubagentThreadRef(conversation.threadRef) && Boolean(session.parentSessionId),

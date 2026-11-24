@@ -549,12 +549,14 @@ export function createTurnSandboxAccess(ctx: {
   resolution: Resolution;
   scopeId: ScopeId;
   openResourceAccess?: boolean;
+  orgAdmin?: boolean;
   botMayUse?: (resource: SandboxResource) => Promise<boolean>;
 }) {
-  const { deps, actor, resolution, scopeId, openResourceAccess, botMayUse } = ctx;
+  const { deps, actor, resolution, scopeId, openResourceAccess, orgAdmin, botMayUse } = ctx;
   const writableScopeId = resolution.writableScopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
+    if (orgAdmin && actor.type === "internal") return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
       return false;
     const personal = personalScope(actor.id);
@@ -573,14 +575,7 @@ export function createTurnSandboxAccess(ctx: {
     }
     return true;
   };
-  const accessResource = async (id: string): Promise<SandboxAccessPlan> => {
-    const resource = await accessConversationSandbox(
-      deps.sandboxResources,
-      actor.id,
-      id,
-      canUseSandboxScope,
-      botMayUse,
-    );
+  const planFor = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
     const crossScope = resource.ownerScopeId !== writableScopeId && resource.ownerScopeId !== scopeId;
     if (!crossScope) return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
     await deps.config!.refreshSecurity([resource.ownerScopeId]);
@@ -593,8 +588,11 @@ export function createTurnSandboxAccess(ctx: {
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
+  const accessResource = async (id: string): Promise<SandboxAccessPlan> =>
+    planFor(await accessConversationSandbox(deps.sandboxResources, actor.id, id, canUseSandboxScope, botMayUse));
   const jobComputerPlan = async (resource: SandboxResource): Promise<SandboxAccessPlan> => {
     if (botMayUse && !(await botMayUse(resource))) throw new BotComputerRefusedError();
+    if (orgAdmin && !samePerson(resource.createdBy, actor.id)) return planFor(resource);
     return { resource, crossScope: false, egress: resolution.egress, commandPolicy: null };
   };
   return { accessResource, jobComputerPlan };

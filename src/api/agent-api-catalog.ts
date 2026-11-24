@@ -859,13 +859,24 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "GET",
         path: "/v1/admin/keychain",
-        summary: "person-owned keychain metadata, grants, and asks (DM or effective Open sharing)",
+        summary:
+          "person-owned keychain and OAuth connector metadata (no secrets), grants, and asks (DM or effective Open sharing)",
       },
       {
         method: "POST",
         path: "/v1/admin/keychain/grants",
         summary:
-          "grant any person's keychain credential to a scope so admin work can use it — {credentialId, purpose, scope? (default: this conversation)}; audited",
+          "grant any person's keychain or connector credential to a scope so admin work can use it — {credentialId, purpose, scope? (default: this conversation)}; audited",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/keychain/grants/:id",
+        summary: "revoke any keychain grant by id; audited",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/keychain/credentials/:id",
+        summary: "delete any person-owned keychain or connector credential by id (revokes its active grants); audited",
       },
     ],
   },

@@ -104,7 +104,14 @@ export interface KeychainCredential {
   updatedAt: number;
 }
 
-export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc"> & { credentialHandle?: string };
+type CredentialRefreshMeta = Omit<CredentialRefresh, "refreshTokenEnc" | "idTokenEnc"> & {
+  hasRefreshToken?: true;
+};
+
+export type KeychainCredentialMeta = Omit<KeychainCredential, "secretEnc" | "refresh" | "writer"> & {
+  refresh?: CredentialRefreshMeta;
+  credentialHandle?: string;
+};
 
 export type GrantMode = "once" | "standing";
 
@@ -405,13 +412,13 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
     source: FileCredentialSource,
     fileHashes: Record<string, string>,
   ): Promise<Extract<MaterializedCred, { kind: "file" }>>;
-  listAllMetadata(): Promise<KeychainCredentialMeta[]>;
-  listByOwner(ownerId: string): Promise<KeychainCredentialMeta[]>;
+  listAllMetadata(opts?: { includeConnectors?: boolean }): Promise<KeychainCredentialMeta[]>;
+  listByOwner(ownerId: string, opts?: { includeConnectors?: boolean }): Promise<KeychainCredentialMeta[]>;
   listByOwners(ownerIds: string[]): Promise<Map<string, KeychainCredentialMeta[]>>;
   listConnectorsByOwners(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   getCredential(id: string): Promise<KeychainCredentialMeta | null>;
   readOwnSecret(ownerId: string, credentialId: string): Promise<string | null>;
-  remove(ownerId: string, id: string): Promise<boolean>;
+  remove(ownerId: string, id: string, opts?: { includeConnectors?: boolean }): Promise<boolean>;
 
   createGrant(input: CreateGrantInput): Promise<KeychainGrant>;
   grantConnectorToScope(input: {
@@ -548,10 +555,22 @@ function credExpired(rec: { kind: CredentialKind; expiresAt?: number }, now: num
   return rec.kind !== "file" && expired(rec, now);
 }
 
+function sanitizeRefresh(refresh: CredentialRefresh | undefined): CredentialRefreshMeta | undefined {
+  if (!refresh) return undefined;
+  const { refreshTokenEnc, idTokenEnc: _, ...rest } = refresh;
+  return {
+    ...rest,
+    ...(refreshTokenEnc ? { hasRefreshToken: true as const } : {}),
+  };
+}
+
 function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: string }): KeychainCredentialMeta {
-  const { secretEnc: _, writer: __, ...meta } = rec;
+  const { secretEnc: _, writer: __, refresh, ...meta } = rec;
+  const safeRefresh = sanitizeRefresh(refresh);
   return {
     ...meta,
+    ...(safeRefresh ? { refresh: safeRefresh } : {}),
+    ...(rec.managed === "connector" && rec.host ? { envKey: envKey(rec.host) } : {}),
     ...((rec.kind === "env" || rec.kind === "file") && !isBackendCredential(rec)
       ? { credentialHandle: credentialHandle(rec) }
       : {}),
@@ -1235,13 +1254,15 @@ export function createKeychain(deps: {
       };
     },
 
-    async listAllMetadata() {
-      return (await deps.creds.select({ omit: ["secretEnc"] })).filter(listed).map(toMeta);
+    async listAllMetadata(opts) {
+      return (await deps.creds.select({ omit: ["secretEnc"] }))
+        .filter((c) => listed(c, opts?.includeConnectors))
+        .map(toMeta);
     },
 
-    async listByOwner(ownerId) {
+    async listByOwner(ownerId, opts) {
       return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && listed(c))
+        .filter((c) => samePerson(c.ownerId, ownerId) && listed(c, opts?.includeConnectors))
         .map(toMeta);
     },
 
@@ -1265,10 +1286,10 @@ export function createKeychain(deps: {
       return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
     },
 
-    async remove(ownerId, id) {
+    async remove(ownerId, id, opts) {
       const rec = await getOwned(ownerId, id);
-      if (!rec) return false;
-      if (rec.managed || rec.kind === "broker") return false;
+      if (!rec || rec.kind === "broker") return false;
+      if (rec.managed && !(opts?.includeConnectors && rec.managed === "connector")) return false;
       await deleteCredential(id);
       return true;
     },
@@ -1780,11 +1801,19 @@ function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine 
   };
 }
 
-const oauthExpired = (rec: KeychainCredentialMeta, t: number, oauthSkew: number) =>
+type ConnectorMetaSource = Omit<KeychainCredential, "secretEnc" | "refresh" | "writer"> & {
+  refresh?: CredentialRefresh | CredentialRefreshMeta;
+};
+
+const oauthExpired = (rec: Pick<KeychainCredential, "expiresAt">, t: number, oauthSkew: number) =>
   rec.expiresAt !== undefined && t >= rec.expiresAt - oauthSkew;
 
-function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_000): ConnectorMeta {
-  const hasRefresh = !!rec.refresh?.refreshTokenEnc;
+function connectorMeta(rec: ConnectorMetaSource, t: number, oauthSkew = 60_000): ConnectorMeta {
+  const hasRefresh = !!(
+    rec.refresh &&
+    (("refreshTokenEnc" in rec.refresh && rec.refresh.refreshTokenEnc) ||
+      ("hasRefreshToken" in rec.refresh && rec.refresh.hasRefreshToken))
+  );
   const refreshFailed = typeof rec.refresh?.refreshFailedAt === "number";
   const tokenExpired = oauthExpired(rec, t, oauthSkew);
   return {
@@ -1812,8 +1841,8 @@ function checkedFiles(files: CredentialFile[]): CredentialFile[] {
   return files;
 }
 
-function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
-  return !c.managed && c.kind !== "broker";
+function listed(c: Pick<KeychainCredential, "managed" | "kind">, includeConnectors = false): boolean {
+  return c.kind !== "broker" && (!c.managed || (includeConnectors && c.managed === "connector"));
 }
 
 const ORGANIZATION_OWNER_KEY = personKey("Organization");
