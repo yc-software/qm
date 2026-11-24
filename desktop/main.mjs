@@ -195,7 +195,7 @@ async function showInstance(url) {
       retryUrl = undefined;
       clearTimeout(retryTimer);
       retryTimer = undefined;
-      void page.loadURL(next).catch(() => {});
+      void page.loadURL(next).catch((error) => console.error("QM desktop reload failed", next, error));
     };
     const scheduleRetry = (destination) => {
       if (!active() || quitting || retryTimer) return;
@@ -232,6 +232,7 @@ async function showInstance(url) {
     };
     page.webContents.on("render-process-gone", (_event, details) => {
       stopComputer();
+      console.error("QM desktop renderer gone", details);
       if (details?.reason !== "clean-exit") scheduleRetry(page.webContents.getURL());
     });
     page.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
@@ -243,8 +244,9 @@ async function showInstance(url) {
         stopComputer();
       }
     });
-    page.webContents.on("did-fail-load", (_event, errorCode, _description, validatedURL, isMainFrame) => {
+    page.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3 || !loaded) return;
+      console.error("QM desktop load failed", errorCode, description, validatedURL);
       loadFailed = true;
       scheduleRetry(validatedURL);
     });
