@@ -81,7 +81,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
     ...(internalAudience ? { internalAudience: true } : {}),
-    ...(liveTurn ? { liveActor: true } : {}),
+    ...(liveTurn && internalAudience ? { liveActor: true } : {}),
     ...(turn.session.ephemeral ? { ephemeral: true as const } : {}),
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
@@ -161,7 +161,10 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
-  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(triggeredTurn ? { triggered: true } : {}) };
+  const presence = {
+    ...(liveAuthorTurn && internalAudience ? { liveAuthor: true } : {}),
+    ...(triggeredTurn ? { triggered: true } : {}),
+  };
   const runBinding = {
     ...(input.runId ? { runId: input.runId } : {}),
     runAttempt: input.attempt,

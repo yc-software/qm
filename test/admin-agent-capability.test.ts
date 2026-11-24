@@ -20,7 +20,10 @@ import {
   CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   EGRESS_PROXY_AUD,
+  verifyCapabilityToken,
+  type CapabilityClaims,
 } from "../src/auth/capability-token.ts";
+import { livePersonCapability } from "../src/api/artifact-share.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
@@ -893,12 +896,14 @@ test("a guest in the room: the person's turn mints presence without an internal 
   const s = await start();
   try {
     const replies: Array<[number, string]> = [];
+    const tokens: CapabilityClaims[] = [];
     const provision = s.built.sandbox.provision.bind(s.built.sandbox);
     s.built.sandbox.provision = async (owner, opts) => {
       const cap = opts?.env?.AGENT_API_TOKEN;
       if (cap) {
         const res = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
         replies.push([res.status, await res.text()]);
+        tokens.push((await verifyCapabilityToken(cap, SECRET))!);
       }
       return provision(owner, opts);
     };
@@ -930,6 +935,13 @@ test("a guest in the room: the person's turn mints presence without an internal 
       [200, 403],
     );
     assert.match(replies[1]![1], /carry a person's own authority/);
+    assert.equal(livePersonCapability(tokens[0]), true);
+    assert.equal(tokens[1]!.internalAudience, undefined);
+    assert.equal(
+      livePersonCapability(tokens[1]),
+      false,
+      "a token from a guest room must fail the presence-only gates of earlier releases",
+    );
   } finally {
     await s.close();
   }

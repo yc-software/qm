@@ -1731,7 +1731,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn ? { liveAuthor: true } : {}),
+          ...(livePersonTurn && internalAudience ? { liveAuthor: true } : {}),
           ...(triggeredTurn ? { triggered: true } : {}),
         };
         const baseTools = createToolContext({
