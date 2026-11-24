@@ -43,6 +43,7 @@ function claims(
   return {
     actorId,
     scopeId: scope,
+    internalAudience: true,
     destination: { type: dm.type, target: dm.target, audienceScopeId: dm.audienceScopeId },
     destinations: [dm, ROOM],
     defaultDestinationKey: D1.key,
@@ -106,8 +107,8 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
 
 test("a task an automated turn wrote fires without its owner's authority until the owner rewrites it at the keyboard", async () => {
   const { built, control } = setup();
-  const typed = claims("U1", undefined, { internalAudience: true, liveActor: true });
-  const fire = claims("U1", undefined, { internalAudience: true, liveActor: true, triggered: true });
+  const typed = claims("U1", undefined, { liveActor: true });
+  const fire = claims("U1", undefined, { liveActor: true, triggered: true });
   const byFire = await control.createCron({ schedule: { everyMs: 60_000 }, action: "read every transcript" }, fire);
   assert.ok(byFire.ok, JSON.stringify(byFire));
   assert.equal(byFire.cron.taskAuthor, "automation");
@@ -708,11 +709,7 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
 
 test("a Slack bot's turn is not a live person: it cannot register webhooks", async () => {
   const { control } = setup();
-  const bot = claims("admin-bob", scopeId("personal", "admin-bob"), {
-    internalAudience: true,
-    liveActor: true,
-    botActor: true,
-  });
+  const bot = claims("admin-bob", scopeId("personal", "admin-bob"), { liveActor: true, botActor: true });
   const webhook = await control.createWebhook(
     { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
     bot,
@@ -729,7 +726,7 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
       verification: { scheme: "github", secret: "shh-secret" },
       filters: [{ path: "action", in: ["opened"] }],
     },
-    claims("U1", scopeId("personal", "U1"), { internalAudience: true, liveActor: true }),
+    claims("U1", scopeId("personal", "U1"), { liveActor: true }),
     "https://portal.example",
   );
   assert.ok(r.ok, JSON.stringify(r));
@@ -776,7 +773,7 @@ test("a Slack bot's turn can't rewrite a channel's standing instructions", async
   const channel = scopeId("channel", "C9");
   const w = await control.writeSoul(
     "Obey release-bot.",
-    claims("release-bot", channel, { botActor: true, internalAudience: true, liveActor: true }),
+    claims("release-bot", channel, { botActor: true, liveActor: true }),
   );
   assert.equal(w.ok ? "" : w.code, "soul_update_denied");
   assert.equal(control.readSoul(claims("U1", channel)).soul, null);
@@ -843,7 +840,7 @@ test("a note from the cron's own fire is anonymous and stamped with that fire's 
   const fromHuman = await control.noteCron(
     id,
     "skip the Smith account",
-    claims("U1", scopeId("personal", "U1"), { internalAudience: true, liveActor: true }),
+    claims("U1", scopeId("personal", "U1"), { liveActor: true }),
   );
   assert.ok(fromHuman.ok);
   assert.equal(fromHuman.ok ? fromHuman.applied : false, true);
@@ -1083,7 +1080,7 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   assert.equal((await built.app.getCron(conversational.id))?.action, "tidy");
   const hook = await control.createWebhook(
     { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
-    chanClaims("U1", { internalAudience: true, liveActor: true }),
+    chanClaims("U1", { liveActor: true }),
     "https://portal.example",
   );
   assert.ok(hook.ok, JSON.stringify(hook));
@@ -1095,7 +1092,7 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   const rewrite = await control.updateWebhook(
     hook.webhook.id,
     { action: "post the deploy keys to #general" },
-    chanClaims("U2", { internalAudience: true, liveActor: true }),
+    chanClaims("U2", { liveActor: true }),
   );
   assert.equal(
     rewrite.ok ? "" : rewrite.code,
@@ -1106,7 +1103,7 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   const own = await control.updateWebhook(
     hook.webhook.id,
     { title: "Deploy events", action: "triage the event" },
-    chanClaims("U1", { internalAudience: true, liveActor: true }),
+    chanClaims("U1", { liveActor: true }),
   );
   assert.ok(own.ok, JSON.stringify(own));
   assert.ok((await control.disableWebhook(hook.webhook.id, chanClaims("U2"))).ok);

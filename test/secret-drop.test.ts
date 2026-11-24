@@ -209,7 +209,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   let built: BuiltApp;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    mintCapabilityToken(
+      { actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, internalAudience: true, ...extra },
+      SECRET,
+    );
   const post = (path: string, body: unknown, cap?: string) =>
     fetch(`${base}${path}`, {
       method: "POST",
@@ -240,12 +243,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const conversation = { kind: "channel", threadRef: `ch:C1:${botId}`, channelRef: "C1" } as const;
     await built.app.turn({ surface: "test", actor: { externalId: botId }, conversation, text: "hi", botActor: true });
     const members = [{ id: botId, type: "internal" as const }];
-    return capFor(botId, scopeId("channel", "C1"), {
-      botActor: true,
-      internalAudience: true,
-      liveActor: true,
-      members,
-    });
+    return capFor(botId, scopeId("channel", "C1"), { botActor: true, liveActor: true, members });
   };
 
   before(async () => {
@@ -666,12 +664,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const minted = await post(
       "/v1/keychain/drops",
       { service: "release-signing", purpose: "sign the release" },
-      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), {
-        botActor: true,
-        internalAudience: true,
-        liveActor: true,
-        threadRef,
-      }),
+      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, liveActor: true, threadRef }),
     );
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const dm = { kind: "dm", threadRef } as const;
@@ -725,11 +718,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("bot work in a person's name can't mint a secret drop", async () => {
     await built.users.record({ id: "U_A", source: "turn", at: Date.now() });
-    const cap = await capFor("U_A", scopeId("personal", "U_A"), {
-      botActor: true,
-      internalAudience: true,
-      liveActor: true,
-    });
+    const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, liveActor: true });
     const minted = await post("/v1/keychain/drops", { service: "deploy", purpose: "deploy" }, cap);
     assert.equal(minted.status, 403);
   });
