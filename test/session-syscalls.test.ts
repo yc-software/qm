@@ -31,6 +31,7 @@ import {
   wakeForUnreadMail,
 } from "../src/sessions/subagent-mail.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
+import type { Monitor } from "../src/triggers/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -845,6 +846,34 @@ async function delegatedTree(r: Rig) {
   return { root, lead, lane };
 }
 
+test("a subagent that ends its turn with an armed watch stays open and reports in progress until the watch's final wake", async () => {
+  const r = await rig();
+  const root = await parentRun(r);
+  const opened = await root.api.open({ task: "run the build" });
+  assert.ok(opened.ok);
+  const child = await claimedChild(r, opened.sessionId);
+  await r.runs.complete(root.run.id, root.leaseToken, { status: "ok", reply: "delegated" });
+  await r.runs.complete(child.run.id, child.leaseToken, { status: "ok", reply: "build started" });
+  const watch = {
+    id: "w1",
+    enabled: true,
+    threadRef: child.session.threadRef,
+    expiresAt: Date.now() + 60_000,
+  } as Monitor;
+  const deps = { ...r, maxAttempts: 3, monitors: { ownedBy: async () => [watch] } };
+
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(child.run.id))!), true);
+  const [progress] = await r.mailbox.pending(r.room.id);
+  assert.match(progress!.text, /kind="in_progress"/);
+  assert.equal((await r.sessions.get(child.session.id))!.spawnMeta?.retired, undefined);
+  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
+
+  const finished = (await r.runs.get(child.run.id))!;
+  await deliverSubagentMail(deps, { ...finished, request: { ...finished.request, idempotencyKey: "monitor:w1:exit" } });
+  assert.equal((await r.sessions.get(child.session.id))!.spawnMeta?.retired, true);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+});
+
 test("a subagent whose own subagent still works reports in progress, then its final answer reaches the root", async () => {
   const r = await rig();
   const deps = { ...r, maxAttempts: 3 };
@@ -855,7 +884,7 @@ test("a subagent whose own subagent still works reports in progress, then its fi
   assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lead.run.id))!), true);
   const [progress] = await r.mailbox.pending(r.room.id);
   assert.match(progress!.text, /kind="in_progress"/);
-  assert.match(progress!.text, /started the lane\n\nStill waiting on 1 subagent\./);
+  assert.match(progress!.text, /started the lane\n\nStill waiting on 1 subagent or watched background job\./);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
   const listed = await r.syscallsFor(r.room).read({});
   assert.ok(listed.ok && listed.mode === "children");

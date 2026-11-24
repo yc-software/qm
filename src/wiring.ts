@@ -2450,6 +2450,7 @@ export function buildApp(
     deliveries,
     signals: runSignals,
     advisoryLock,
+    monitors,
   };
   const app = createApp({
     errors,
