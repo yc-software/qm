@@ -33,6 +33,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             token: "test-token",
             appId: "A123",
             store: built.slackInstallation,
+            fetchImpl: async () => new Response("", { status: 404 }),
           }),
         }
       : {}),
