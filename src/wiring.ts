@@ -707,6 +707,12 @@ export function buildApp(
       };
     },
   };
+  const ownModelProviders = async (): Promise<ReadonlySet<string>> =>
+    new Set(
+      (await directModelCredentials.statuses())
+        .filter((status) => status.source === "admin" && status.configured)
+        .map((status) => status.provider),
+    );
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const users = createPostgresUserStore(databaseUrl);
   const principalLinks = createPrincipalLinkService(users, advisoryLock);
@@ -1459,7 +1465,7 @@ export function buildApp(
     const model = resolveEmbeddingModel(id);
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
+    return createMemoryEmbedder(model, key, await modelRoutes.companyGateway(model), overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1544,6 +1550,7 @@ export function buildApp(
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
+    ownProviders: ownModelProviders,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
