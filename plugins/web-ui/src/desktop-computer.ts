@@ -49,7 +49,16 @@ export async function answerDesktopCall(callId: string, post: Post, desk = deskt
     .call(claim.args, claim.runId, claim.deadline)
     .catch((error: unknown): Result => ({ content: errMessage(error), isError: true }))
     .finally(() => running.delete(callId));
-  await post(`${path}/result`, { desktopClientId: windowId, result }).catch(unlessGone);
+  await post(`${path}/result`, { desktopClientId: windowId, result }).catch(async (error: unknown) => {
+    reportHandledError("desktop-computer", error);
+    await post(`${path}/result`, {
+      desktopClientId: windowId,
+      result: {
+        content: `The desktop app ran the call but couldn't send its result: ${errMessage(error)}`,
+        isError: true,
+      },
+    });
+  });
 }
 
 export function stopDesktopCall(callId: string, desk = desktop()): void {

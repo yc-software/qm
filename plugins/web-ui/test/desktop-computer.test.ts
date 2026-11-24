@@ -62,3 +62,18 @@ test("a stop for a call this window is running stops the desk for that run", asy
   stopDesktopCall("call-4", desk);
   assert.deepEqual(stopped, [claim.runId]);
 });
+
+test("a result the server rejects is replaced by an error naming why, so the turn does not wait out its timeout", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  const post = async (path: string, body: unknown) => {
+    if (path.endsWith("/claim")) return claim;
+    posts.push(body as Record<string, unknown>);
+    if (posts.length === 1) throw Object.assign(new Error("HTTP 413"), { status: 413 });
+    return { ok: true };
+  };
+  await answerDesktopCall("call-5", post, { call: async () => ({ content: "big" }) });
+  assert.deepEqual(posts[1]!.result, {
+    content: "The desktop app ran the call but couldn't send its result: HTTP 413",
+    isError: true,
+  });
+});

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { answerDesktopCall, claimDesktopCall } from "../../surfaces/desktop-calls.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
-import { clientResultSchema, zodMessage } from "./turns.ts";
+import { CLIENT_RESULT_MAX_BODY_BYTES, clientResultSchema, zodMessage } from "./turns.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const claimSchema = z.object({ desktopClientId: z.uuid() });
@@ -48,7 +48,7 @@ export const desktopCallRoutes: ReadonlyArray<Route<ApiCtx>> = [
     browser: "embed",
     actor: "person",
     auth: "source",
-    maxBodyBytes: 6_000_000,
+    maxBodyBytes: CLIENT_RESULT_MAX_BODY_BYTES,
     handle: result,
   },
 ];

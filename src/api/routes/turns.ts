@@ -81,6 +81,8 @@ const surfaceBriefingSchema = z.object({
   instructions: z.string().max(8_000).optional(),
 });
 
+export const CLIENT_RESULT_MAX_BODY_BYTES = 6_000_000;
+
 export const clientResultSchema = z.object({
   callId: z.string().min(1).max(256),
   result: z.object({
@@ -330,7 +332,13 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: postRunDeliveryState,
   },
-  { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/signal",
+    auth: "source",
+    maxBodyBytes: CLIENT_RESULT_MAX_BODY_BYTES,
+    handle: postRunSignal,
+  },
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",

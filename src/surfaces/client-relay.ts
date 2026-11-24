@@ -33,7 +33,7 @@ export async function relayToClient(
 ) {
   await deps.uiState.put(req.pendingId, { value: req.pending, updatedAt: Date.now() });
   signalClient(deps.bus, req.to, req.ui);
-  const taken = () => deps.uiState.take(req.pendingId).catch(swallowAs("client relay pending cleanup", null));
+  const taken = () => deps.uiState.take(req.pendingId).catch(swallowAs("client relay pending cleanup", undefined));
   const outcome = await waitForClientResult(deps.signals, req.pending.runId, req.ui.callId, {
     timeoutMs: req.timeoutMs,
     ...(req.signal ? { signal: req.signal } : {}),
@@ -42,5 +42,8 @@ export async function relayToClient(
     throw error;
   });
   const last = await taken();
-  return { outcome, last: (last?.value ?? null) as Record<string, unknown> | null };
+  return {
+    outcome,
+    last: (last === undefined ? undefined : (last?.value ?? null)) as Record<string, unknown> | null | undefined,
+  };
 }

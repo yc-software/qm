@@ -11,7 +11,7 @@ export const NO_DESKTOP_TEXT =
   "No QM desktop app answered, so nothing ran on the person's Mac. Ask them to open the QM desktop app on their Mac, then try again.";
 
 export const DESKTOP_PERSON_ONLY_TEXT =
-  "The desktop tool only runs on messages the person typed themselves. This turn came from automation, a bot, or someone acting for them, so nothing ran on their Mac.";
+  "The desktop tool runs only on a message the person sent you themselves, or on work that message started. This turn wasn't one, so nothing ran on their Mac.";
 export const DESKTOP_UNAVAILABLE_TEXT =
   "This server can't relay desktop calls for this turn, so nothing ran on the person's Mac.";
 
@@ -60,8 +60,9 @@ export function desktopCallFor(
         ...(signal ? { signal } : {}),
       },
     );
-    if (outcome === "cancelled" && last?.claimedBy) signalClient(bus, to, { kind: "desktop", callId, stop: true });
-    if (outcome === "timeout" && !last?.claimedBy) return { content: NO_DESKTOP_TEXT, isError: true };
+    const claimed = last === undefined ? undefined : Boolean(last?.claimedBy);
+    if (outcome === "cancelled" && claimed !== false) signalClient(bus, to, { kind: "desktop", callId, stop: true });
+    if (outcome === "timeout" && claimed === false) return { content: NO_DESKTOP_TEXT, isError: true };
     return outcome;
   };
 }
@@ -89,6 +90,6 @@ export async function answerDesktopCall(
     kind: "client_result",
     callId,
     result,
-    dedupeKey: `desktop:${call.runId}:${callId}`,
+    dedupeKey: `client:${call.runId}:${callId}`,
   });
 }
