@@ -4,6 +4,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ModelProviderAvailability } from "./pi-models.ts";
 import { MODEL_PROVIDERS, type ModelProvider } from "./provider-endpoints.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface StoredModelCredential {
   provider: ModelProvider;
@@ -100,6 +101,12 @@ export function createModelCredentialStore(input: {
   };
 }
 
+export interface CustomProviderKeyStatus {
+  provider: string;
+  configured: boolean;
+  source: "admin" | "environment" | "absent";
+}
+
 export interface StoredCustomProvider extends CustomProviderSpec {
   apiKeyEnc?: string;
   disabled?: boolean;
@@ -118,6 +125,11 @@ export function createCustomProviderStore(input: {
 }) {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
   const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+  const openKey = (apiKeyEnc: string) => {
+    const apiKey = decryptSecret(apiKeyEnc, key);
+    validateHeaderValue("apiKey", apiKey);
+    return apiKey;
+  };
 
   return {
     async enabled(): Promise<CustomProviderSpec[]> {
@@ -136,12 +148,18 @@ export function createCustomProviderStore(input: {
         .sort((a, b) => a.id.localeCompare(b.id));
     },
 
-    async resolveKey(id: string): Promise<string | null> {
-      const saved = await input.backing.get(id);
-      if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
-      const apiKey = decryptSecret(saved.apiKeyEnc, key);
-      validateHeaderValue("apiKey", apiKey);
-      return apiKey;
+    async enabledWithKeys(): Promise<{ enabled: CustomProviderSpec[]; keys: Record<string, string> }> {
+      const enabled = (await input.backing.all()).filter((p) => !p.disabled);
+      const keys: Record<string, string> = {};
+      for (const p of enabled) {
+        if (!p.apiKeyEnc) continue;
+        try {
+          keys[p.id] = openKey(p.apiKeyEnc);
+        } catch (e) {
+          console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
+        }
+      }
+      return { enabled: enabled.map(customProviderSpec), keys };
     },
 
     async upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void> {

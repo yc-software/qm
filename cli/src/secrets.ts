@@ -103,6 +103,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
       'OpenAI API key: bills the base model when modelProvider is "openai", an optional deployment fallback otherwise.',
   },
   {
+    name: "BASETEN_API_KEY",
+    service: "core",
+    required: false,
+    description: "Baseten API key: offers Baseten Model APIs, discovered live from Baseten's model list.",
+    generate: "create an API key at https://app.baseten.co/settings/api_keys",
+  },
+  {
     name: "PUBLIC_API_URL",
     service: "core",
     required: true,

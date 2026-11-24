@@ -327,13 +327,14 @@ export function auxiliaryModelFor(baseModelId: string): string {
 
 const CONTEXT_BUDGET_FRACTION = 0.5;
 export const HISTORY_BUDGET_DEFAULT_TOKENS = 150_000;
+export const MAX_CONTEXT_TOKENS = 120_000;
 
 export function contextTokenBudgetForModel(id: string, cap = HISTORY_BUDGET_DEFAULT_TOKENS): number | undefined {
   const model = resolveModel(id);
   const window = model?.contextWindow;
   const output = model?.maxTokens;
-  if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0 || output >= window)
-    return undefined;
+  if (typeof window !== "number" || window <= 0 || typeof output !== "number" || output <= 0) return undefined;
+  if (output >= window) return Math.min(cap, MAX_CONTEXT_TOKENS, Math.floor(window * CONTEXT_BUDGET_FRACTION));
   return Math.min(cap, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
