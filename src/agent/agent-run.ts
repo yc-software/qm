@@ -775,7 +775,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             return true;
           } catch (e) {
             if (userAborted || turn.cancel?.aborted) return false;
-            fallbackFailure = fallbackFailed(failure, fallback, errMessage(e));
+            fallbackFailure = fallbackFailed(failure, fallback, e);
             throw fallbackFailure;
           }
         };
@@ -1088,7 +1088,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         try {
           return await summarize(fallback);
         } catch (fallbackError) {
-          throw fallbackFailed(failure, fallback, errMessage(fallbackError));
+          throw fallbackFailed(failure, fallback, fallbackError);
         }
       }
     },

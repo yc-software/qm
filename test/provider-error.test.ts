@@ -4,6 +4,7 @@ import test from "node:test";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import { providerTurnError } from "../src/model/provider-error.ts";
+import { turnFailureMessage } from "../src/core/turn-error.ts";
 
 test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerError", async (t) => {
   const body = {
@@ -50,6 +51,21 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
 });
 
+test("refusals and key-account failures name the model in a plain notice", () => {
+  const notice = (rawStopReason?: string, providerError?: AssistantMessage["providerError"]) =>
+    turnFailureMessage(
+      providerTurnError({ model: "claude-opus-4-8", rawStopReason, errorMessage: "blocked", providerError }),
+    );
+  assert.equal(
+    notice("refusal"),
+    `Claude Opus 4.8 declined this request under the provider's usage policy ("blocked"). Rephrase, or switch model.`,
+  );
+  assert.equal(
+    notice(undefined, { status: 402 }),
+    `The model key for Claude Opus 4.8 was refused by the provider ("blocked"). Whoever owns that key needs to fix its billing or access, or replace it.`,
+  );
+});
+
 test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
   const failed = (providerError: AssistantMessage["providerError"], rawStopReason?: string) =>
     ({
@@ -61,9 +77,20 @@ test("providerTurnError maps documented status, type and code without reading er
     }) as AssistantMessage;
   for (const [message, code, retryable] of [
     [failed({ status: 429, type: "budget_exceeded" }), "model_budget", false],
-    [failed({ status: 429, code: "insufficient_quota" }), "model_budget", false],
+    [failed({ status: 429, code: "insufficient_quota" }), "account", false],
     [failed({ status: 400, code: "context_length_exceeded" }), "context_too_long", false],
     [failed({ status: 401, type: "authentication_error" }), "auth", false],
+    [failed({ status: 400, code: "cyber_policy" }), "refusal", false],
+    [failed({ status: 402, type: "billing_error", code: "insufficient_credits" }), "account", false],
+    [
+      failed({
+        status: 400,
+        type: "invalid_request_error",
+        body: { error: { message: "Your credit balance is too low" } },
+      }),
+      "account",
+      false,
+    ],
     [failed({ status: 429, type: "rate_limit_error" }), "rate_limit", true],
     [failed({ status: 404, type: "not_found_error" }), "not_found", false],
     [failed({ status: 404, code: "model_not_found" }), "not_found", false],
