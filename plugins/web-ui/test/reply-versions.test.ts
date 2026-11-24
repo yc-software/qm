@@ -30,22 +30,24 @@ async function rendered(items: unknown[]) {
   return { h, replies: () => texts(".assistant-body > .streaming-text qm-markdown"), texts };
 }
 
-test("a superseded chain shows its newest reply, with earlier versions behind one toggle", async () => {
+test("a superseded chain folds into one work row and its newest reply, with earlier versions behind the footer", async () => {
   const { h, replies, texts } = await rendered(transcript(1, 5));
   try {
     assert.deepEqual(replies(), ["Third report"]);
+    assert.equal(document.querySelectorAll(".assistant-row").length, 1);
+    assert.equal(document.querySelectorAll(".assistant-row details.work").length, 1);
     assert.equal(document.querySelectorAll(".tool-expandable").length, 2);
-    const versions = document.querySelector<HTMLDetailsElement>("details.reply-versions")!;
-    const summary = versions.querySelector("summary")!;
-    assert.match(summary.textContent!.trim(), /^Updated \S.* · 2 earlier versions$/);
-    assert.deepEqual(texts(".reply-versions .thinking-body qm-markdown"), ["First report", "Second report"]);
-    assert.equal(versions.open, false);
+    const toggle = () => document.querySelector<HTMLButtonElement>(".message-meta .reply-versions-toggle")!;
+    assert.equal(toggle().textContent!.trim(), "· edited");
+    assert.equal(document.querySelector(".reply-versions-list"), null);
     for (const seq of [1, 5])
-      assert.ok(document.querySelector(`.message-row[data-entry-seqs~="${seq}"]`)?.contains(versions));
-    summary.click();
-    assert.equal(versions.open, true);
-    summary.click();
-    assert.equal(versions.open, false);
+      assert.ok(document.querySelector(`.message-row[data-entry-seqs~="${seq}"]`)?.contains(toggle()));
+    toggle().click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(texts(".reply-versions-list .thinking-body qm-markdown"), ["First report", "Second report"]);
+    toggle().click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(document.querySelector(".reply-versions-list"), null);
   } finally {
     await h.close();
   }
@@ -56,7 +58,7 @@ test("replies without a supersedes marker, or pointing at one that is not loaded
     const { h, replies } = await rendered(items);
     try {
       assert.deepEqual(replies(), ["First report", "Second report", "Third report"]);
-      assert.equal(document.querySelector(".reply-versions"), null);
+      assert.equal(document.querySelector(".reply-versions-toggle"), null);
     } finally {
       await h.close();
     }

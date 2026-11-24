@@ -4,7 +4,7 @@ import { createReadOnlySession } from "./readonly-session";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
-import { replyVersions, replyVersionsLabel, replyVersionsList, rowEntrySeqs } from "./reply-versions.ts";
+import { replyVersions, replyVersionsList, rowEntrySeqs } from "./reply-versions.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -2369,7 +2369,7 @@ export function createChatSurface(
                   drawActiveChat();
                 }}
               >
-                · ${replyVersionsLabel(earlier)} ${icon(openVersions.has(message) ? ChevronDown : ChevronRight, 12)}
+                · edited ${icon(openVersions.has(message) ? ChevronDown : ChevronRight, 12)}
               </button>`
             : nothing
         }

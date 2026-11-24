@@ -75,11 +75,6 @@ export function rowEntrySeqs(versions: ReplyVersions, message: AgentMessage, seq
   return [...seqs.filter((seq) => seq !== versions.superseded.get(message)), ...folded].join(" ");
 }
 
-/** Footer label beside the time, e.g. "edited · 2 earlier versions". */
-export function replyVersionsLabel(earlier: AssistantWork[]): string {
-  return `edited · ${earlier.length} earlier version${earlier.length === 1 ? "" : "s"}`;
-}
-
 export function replyVersionsList(earlier: AssistantWork[] | undefined, open: boolean): TemplateResult | typeof nothing {
   if (!earlier || !open) return nothing;
   return html`<div class="reply-versions-list">
