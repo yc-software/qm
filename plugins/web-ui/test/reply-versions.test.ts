@@ -40,6 +40,8 @@ test("a superseded chain shows its newest reply, with earlier versions behind on
     assert.match(summary.textContent!.trim(), /^Updated \S.* · 2 earlier versions$/);
     assert.deepEqual(texts(".reply-versions .thinking-body qm-markdown"), ["First report", "Second report"]);
     assert.equal(versions.open, false);
+    for (const seq of [1, 5])
+      assert.ok(document.querySelector(`.message-row[data-entry-seqs~="${seq}"]`)?.contains(versions));
     summary.click();
     assert.equal(versions.open, true);
     summary.click();

@@ -5,7 +5,7 @@ import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { isAgentReply, typedBy, type Item } from "../../sessions/items.ts";
+import { isAgentReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -136,19 +136,20 @@ export async function replyToRewrite(
   personId: string,
   history: readonly Item[],
 ): Promise<Item | undefined> {
-  const typed = history.findLastIndex(typedBy);
-  if (typed >= 0 && !samePerson(typedBy(history[typed]!), personId)) return undefined;
   const replies = history
-    .slice(typed + 1)
-    .filter((item) => isAgentReply(item) && !!item.text?.trim() && typeof item.body.via !== "string");
+    .slice(history.findLastIndex(typedBy) + 1)
+    .filter((item) => isAgentReply(item) && !!item.text?.trim() && item.turnId);
   if (!replies.length || !(await deps.featureFlags?.enabled("wake_reply_rewrite", personalScope(personId))))
     return undefined;
-  for (const reply of replies.reverse()) {
-    const run = reply.turnId ? await deps.runs?.get(reply.turnId) : null;
-    if (run && !firedByPoll(run.request)) return reply;
-  }
-  return undefined;
+  const sources = await deps.runs?.requestSources(replies.map((reply) => reply.turnId!));
+  return replies.findLast((reply) => {
+    const source = sources?.get(reply.turnId!);
+    return source && samePerson(source.actorId, personId) && !firedByPoll(source);
+  });
 }
+
+export const replacesReply = (entry: NewItem, emitted: readonly Item[]): boolean =>
+  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped && !emitted.some(typedBy);
 
 export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
   const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;

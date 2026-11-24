@@ -9,12 +9,12 @@ import { formatMessageTime } from "./message-time.ts";
 
 interface ReplyVersions {
   earlier: Map<AgentMessage, AssistantWork[]>;
-  superseded: Set<AgentMessage>;
+  superseded: Map<AgentMessage, number>;
 }
 
 export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions {
   const earlier = new Map<AgentMessage, AssistantWork[]>();
-  const superseded = new Set<AgentMessage>();
+  const superseded = new Map<AgentMessage, number>();
   if (!messages.some((message) => (message as AssistantWork).supersedes !== undefined)) return { earlier, superseded };
   const replies = new Map<number, AssistantWork>();
   for (const message of messages) {
@@ -24,11 +24,16 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
     if (previous) {
       earlier.set(reply, [...(earlier.get(previous) ?? []), previous]);
       earlier.delete(previous);
-      superseded.add(previous);
+      superseded.set(previous, reply.supersedes!);
     }
     for (const seq of reply.entrySeqs ?? []) replies.set(seq, reply);
   }
   return { earlier, superseded };
+}
+
+export function rowEntrySeqs(versions: ReplyVersions, message: AgentMessage, seqs: number[]): string {
+  const folded = (versions.earlier.get(message) ?? []).map((version) => versions.superseded.get(version));
+  return [...seqs.filter((seq) => seq !== versions.superseded.get(message)), ...folded].join(" ");
 }
 
 export function replyVersionsRow(latest: AssistantWork, earlier: AssistantWork[]): TemplateResult {

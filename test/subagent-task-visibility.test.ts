@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
@@ -112,7 +113,7 @@ test("a wake's reply in a web conversation replaces the agent's reply since the 
   await built.app.turn({ ...fire, origin: { kind: "automation" } });
   assert.notEqual((await lastReply()).seq, kept.seq, "the watch fire posted its own reply");
   const report = { kind: "AgentMessage" as const, text: "nightly report", body: { via: "cron" } };
-  await built.sessions.append({ sessionId: session.id }, report);
+  await built.sessions.append({ sessionId: session.id, turnId: randomUUID() }, report);
   assert.equal(
     (await subagentReply()).body.supersedes,
     kept.seq,
@@ -127,10 +128,19 @@ test("a wake's reply in a web conversation replaces the agent's reply since the 
   const shared = await conversation(built, chat.threadRef, { surface: "web", conversation: chat });
   const answer = await lastReply(shared.session.id);
   assert.equal((await subagentReply(shared)).body.supersedes, answer.seq, "a shared web chat is covered");
-  await built.app.turn({ ...turn, conversation: chat, actor: { externalId: "U2" } });
+  const second = await conversation(built, chat.threadRef, {
+    ...turn,
+    conversation: chat,
+    actor: { externalId: "U2" },
+  });
   const theirs = await lastReply(shared.session.id);
   const added = await subagentReply(shared);
   assert.ok(added.seq > theirs.seq && added.body.supersedes === undefined, "a reply to someone else is not replaced");
+  await built.app.turn({ ...turn, conversation: chat });
+  const mine = await lastReply(shared.session.id);
+  await built.featureFlags.setEnabled("wake_reply_rewrite", scopeId("personal", "U2"), true, "test");
+  assert.equal((await subagentReply(second)).body.supersedes, undefined, "their wake leaves my reply alone");
+  assert.equal((await subagentReply(shared)).body.supersedes, mine.seq, "my wake passes over their report");
 });
 
 test("a wake runs with a Slack bot's restrictions when either side does a bot's work, and never bot-flagged in a person's conversation", async () => {

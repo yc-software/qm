@@ -1,4 +1,12 @@
-import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type {
+  DeliveryProvenance,
+  Destination,
+  Principal,
+  ScopeId,
+  TurnOrigin,
+  TurnRequest,
+  TurnResult,
+} from "../types.ts";
 import type { CronScript } from "./types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -82,7 +90,7 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
 }
 
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
-export const firedByPoll = (turn: Partial<Pick<TurnRequest, "origin" | "surface">>): boolean =>
+export const firedByPoll = (turn: { origin?: Pick<TurnOrigin, "kind">; surface?: string }): boolean =>
   turn.origin?.kind === "automation" && !!turn.surface && POLL_SURFACES.has(turn.surface);
 
 function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResult): DeliveryProvenance {
