@@ -286,23 +286,19 @@ export function createSideChatController(ctx: ConvCtx) {
     }`;
   }
 
-  function settle(settled: CoreSession[]) {
-    void Promise.all(settled.map(loadPreview)).then(refreshHighlights);
-  }
-
-  function refreshHighlights() {
+  function refreshHighlights(fresh: readonly string[] = []) {
     const id = sourceId;
     if (!id) return;
     void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
-      (result) => {
+      async (result) => {
+        if (sourceId !== id) return;
+        const listed = result.sessions ?? [];
+        const finished = new Set(chats.filter((chat) => chat.working).map((chat) => chat.id));
+        const changed = (chat: CoreSession) => fresh.includes(chat.id) || (finished.has(chat.id) && !chat.working);
+        await Promise.all(listed.filter((chat) => chat.id !== active?.id && changed(chat)).map(loadPreview));
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
-        const working = new Set(chats.filter((chat) => chat.working).map((chat) => chat.id));
-        chats = (result.sessions ?? []).toSorted(
-          (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
-        );
-        for (const chat of chats)
-          if (working.has(chat.id) && !chat.working && chat.id !== active?.id) void loadPreview(chat);
+        chats = listed.toSorted((left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity));
         redraw();
       },
       (cause) => {
@@ -323,7 +319,7 @@ export function createSideChatController(ctx: ConvCtx) {
       if (live) chats = markWorking(chats, live);
       void Promise.resolve(state?.agent?.waitForIdle())
         .catch((cause) => reportHandledError("web:side_chat_close", cause))
-        .then(() => sourceId === id && settle([chat]));
+        .then(() => sourceId === id && refreshHighlights([chat.id]));
     }
     pendingQuote = null;
     pendingAnchor = null;
@@ -597,9 +593,11 @@ export function createSideChatController(ctx: ConvCtx) {
     sync,
     onDelivery(threadRef: string) {
       const chat = chats.find((session) => session.threadRef === threadRef);
-      if (chat) settle([chat]);
+      if (chat) refreshHighlights([chat.id]);
     },
-    catchUp: refreshHighlights,
+    catchUp() {
+      if (chats.some((chat) => chat.working)) refreshHighlights();
+    },
     select,
     dismissSelection,
     onScroll() {
