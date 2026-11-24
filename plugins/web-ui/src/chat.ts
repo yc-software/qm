@@ -4,7 +4,7 @@ import { createReadOnlySession } from "./readonly-session";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
-import { replyVersions, replyVersionsList, rowEntrySeqs } from "./reply-versions.ts";
+import { replyVersions, replyVersionsPanel, replyVersionsToggle, rowEntrySeqs } from "./reply-versions.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -357,7 +357,6 @@ export function createChatSurface(
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
   let versions = replyVersions([]);
-  const openVersions = new WeakSet<AgentMessage>();
   let slackReactions = collectReactions([], messageText);
   const slackOutbox = new SlackOutbox();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
@@ -2302,7 +2301,8 @@ export function createChatSurface(
           ),
           streaming: isStreaming,
           content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
-          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
+          ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
+          ${replyVersionsPanel(versions, message)}`,
           meta: isStreaming ? nothing : messageMeta(message, index),
         });
       const labeled = chatState.labelSpeakers;
@@ -2331,7 +2331,7 @@ export function createChatSurface(
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
             ${workBelow && workView !== nothing ? html`<div class="slack-work">${workView}</div>` : nothing}
             ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(message, index)}
-            ${replyVersionsList(versions.earlier.get(message), openVersions.has(message))}
+            ${replyVersionsPanel(versions, message)}
           </div>
         </article>
       `;
@@ -2357,22 +2357,7 @@ export function createChatSurface(
     return html`
       <div class="message-meta ${earlier ? "has-versions" : ""}">
         ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
-        ${
-          earlier
-            ? html`<button
-                class="reply-versions-toggle"
-                type="button"
-                aria-expanded=${openVersions.has(message) ? "true" : "false"}
-                @click=${() => {
-                  if (openVersions.has(message)) openVersions.delete(message);
-                  else openVersions.add(message);
-                  drawActiveChat();
-                }}
-              >
-                · edited ${icon(openVersions.has(message) ? ChevronDown : ChevronRight, 12)}
-              </button>`
-            : nothing
-        }
+        ${earlier ? replyVersionsToggle(message, () => drawActiveChat()) : nothing}
         ${
           text
             ? html`<button

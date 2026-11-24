@@ -1,5 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { html, nothing, type TemplateResult } from "lit";
+import { ChevronDown, ChevronRight } from "lucide";
+import { icon } from "./icons.ts";
 import { messageText, type AssistantWork } from "./core-bridge.ts";
 import { markdown } from "./message-markdown.ts";
 import { formatMessageTime } from "./message-time.ts";
@@ -14,14 +16,10 @@ interface ReplyVersions {
   folded: Map<AgentMessage, AssistantWork>;
 }
 
-function fromPerson(message: AgentMessage): boolean {
-  const row = message as { role?: string; subagentMail?: unknown; hidden?: boolean; opener?: boolean };
-  return (
-    (row.role === "user" || row.role === "user-with-attachments") &&
-    !row.subagentMail &&
-    !row.hidden &&
-    !row.opener
-  );
+function foldable(message: AgentMessage, superseded: Map<AgentMessage, number>): boolean {
+  const row = message as AssistantWork & { subagentMail?: unknown; hidden?: boolean };
+  if (row.role === "assistant") return superseded.has(message) || !messageText(row).trim();
+  return (row.role === "user" || row.role === "user-with-attachments") && Boolean(row.subagentMail || row.hidden);
 }
 
 export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions {
@@ -46,24 +44,24 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
   for (const latest of earlier.keys()) {
     const end = messages.indexOf(latest);
     let start = end;
-    while (start > 0 && !fromPerson(messages[start - 1]!)) start--;
-    const turns = messages.slice(start, end);
-    for (const turn of turns) absorbed.add(turn);
-    const works = [...turns, latest].flatMap((turn) => {
-      const work = (turn as AssistantWork).role === "assistant" ? (turn as AssistantWork).work : undefined;
+    while (start > 0 && foldable(messages[start - 1]!, superseded)) start--;
+    const span = messages.slice(start, end);
+    for (const row of span) absorbed.add(row);
+    const works = [...span, latest].flatMap((row) => {
+      const work = (row as AssistantWork).role === "assistant" ? (row as AssistantWork).work : undefined;
       return work ? [work] : [];
     });
-    const last = (latest as AssistantWork).work ?? works.at(-1);
-    if (!last || works.length < 2) continue;
+    const last = works.at(-1);
+    if (!last) continue;
     const before = works.slice(0, -1).reduce((sum, work) => sum + workSeconds(work), 0) * 1000;
-    const start0 = last.startedAt ?? works[0]!.startedAt;
+    const started = last.startedAt ?? works[0]!.startedAt;
     folded.set(latest, {
       ...(latest as AssistantWork),
       work: {
         ...last,
         activity: works.flatMap((work) => work.activity),
         reasoning: works.flatMap((work) => work.reasoning ?? []),
-        startedAt: start0 === undefined ? undefined : start0 - before,
+        startedAt: started === undefined ? undefined : started - before,
       },
     });
   }
@@ -75,7 +73,7 @@ export function rowEntrySeqs(versions: ReplyVersions, message: AgentMessage, seq
   return [...seqs.filter((seq) => seq !== versions.superseded.get(message)), ...folded].join(" ");
 }
 
-export function replyVersionsList(earlier: AssistantWork[] | undefined, open: boolean): TemplateResult | typeof nothing {
+function replyVersionsList(earlier: AssistantWork[] | undefined, open: boolean): TemplateResult | typeof nothing {
   if (!earlier || !open) return nothing;
   return html`<div class="reply-versions-list">
     ${earlier.map(
@@ -86,4 +84,26 @@ export function replyVersionsList(earlier: AssistantWork[] | undefined, open: bo
         </div>`,
     )}
   </div>`;
+}
+
+const openVersions = new WeakSet<AgentMessage>();
+
+export function replyVersionsToggle(message: AgentMessage, redraw: () => void): TemplateResult {
+  const open = openVersions.has(message);
+  return html`<button
+    class="reply-versions-toggle"
+    type="button"
+    aria-expanded=${open ? "true" : "false"}
+    @click=${() => {
+      if (open) openVersions.delete(message);
+      else openVersions.add(message);
+      redraw();
+    }}
+  >
+    · edited ${icon(open ? ChevronDown : ChevronRight, 12)}
+  </button>`;
+}
+
+export function replyVersionsPanel(versions: ReplyVersions, message: AgentMessage): TemplateResult | typeof nothing {
+  return replyVersionsList(versions.earlier.get(message), openVersions.has(message));
 }

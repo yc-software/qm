@@ -64,3 +64,19 @@ test("replies without a supersedes marker, or pointing at one that is not loaded
     }
   }
 });
+
+test("a reply outside the chain stays in place and stops the fold", async () => {
+  const { h, replies } = await rendered([
+    item("UserMessage", { seq: 0, createdAt: at, text: "Compare the two vendors" }),
+    reply(1, "On it"),
+    ...wake(2),
+    reply(5, "First report"),
+    ...wake(6),
+    reply(9, "Second report", 5),
+  ]);
+  try {
+    assert.deepEqual(replies(), ["On it", "Second report"]);
+  } finally {
+    await h.close();
+  }
+});
