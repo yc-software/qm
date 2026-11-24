@@ -2,8 +2,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { reportBackendError } from "../../../plugins/chassis/src/error-reporting.ts";
 import { overheardItem } from "../../agent/replay.ts";
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
-import { isOverheard } from "../../sessions/items.ts";
-import type { Run } from "../../runs/run-store.ts";
+import { isOverheard, type Item } from "../../sessions/items.ts";
+import { isTerminal, type Run } from "../../runs/run-store.ts";
 import { scopeId, type TurnRequest } from "../../types.ts";
 import { uuidSchema } from "../../util/ids.ts";
 import { readRawBody, sendJson } from "../http.ts";
@@ -18,6 +18,8 @@ const PROMPT_LINES = 12;
 const TEXT_BYTES = 64_000;
 const START_WAIT_MS = 10_000;
 const START_POLL_MS = 100;
+const NOTES_CHARS = 20_000;
+const RUN_LIMIT = 500;
 
 const CHECK_IN =
   "Meeting check-in. Reply only with something worth a glance mid-meeting: a claim you checked that is wrong or materially off (what was said, what is true, the source), or context the person would want right now. One or two lines, no summaries. Otherwise end with finish_silently.";
@@ -219,10 +221,12 @@ async function stopMeeting(ctx: ApiCtx): Promise<void> {
   if (!started) return sendJson(ctx.res, 404, { error: "not_found" });
   const timezone = started.request.timezone;
   const at = clock(endedAt, timezone);
+  const session = await ctx.deps.sessions!.getByThread(meeting.threadRef);
+  const notes = session ? (await notesPin(ctx, session.id))?.text : undefined;
   const refused = await wake(
     ctx,
     meeting,
-    `The recording stopped at ${at}. Write the meeting up: a short summary, decisions, action items with owners, and a "Checked" list of the claims you verified or could not verify, with sources. Attach a corrected transcript as a Markdown file: fix misheard names and terms from context, and attribute speakers where the evidence supports it.`,
+    `The recording stopped at ${at}. Write the meeting up: a short summary, decisions, action items with owners, and a "Checked" list of the claims you verified or could not verify, with sources. Attach a corrected transcript as a Markdown file: fix misheard names and terms from context, and attribute speakers where the evidence supports it.${notes ? `\n\nThe person's own notes from the meeting; build the write-up around them:\n${notes}` : ""}`,
     {
       displayText: `Recording stopped · ${at}`,
       ...(timezone ? { timezone } : {}),
@@ -233,6 +237,67 @@ async function stopMeeting(ctx: ApiCtx): Promise<void> {
   );
   if (refused) return sendJson(ctx.res, 403, { error: "refused", message: refused });
   return sendJson(ctx.res, 202, {});
+}
+
+async function notesPin(ctx: ApiCtx, sessionId: string) {
+  const user = ctx.actor!.p;
+  return (await ctx.deps.sessions!.listPins(sessionId)).find(
+    (pin) => pin.addedBy === user && pin.entrySeq === undefined,
+  );
+}
+
+function heardLine(item: Pick<Item, "externalId" | "text">) {
+  const [seconds, speaker] = (item.externalId ?? "").split(":");
+  return { at: Math.round(Number(seconds) * 1000), speaker: speaker === "me" ? "me" : "others", text: item.text ?? "" };
+}
+
+async function meetingNote(ctx: ApiCtx): Promise<void> {
+  const meeting = await openMeeting(ctx, ctx.params.id);
+  if (!meeting) return;
+  const sessions = ctx.deps.sessions!;
+  const session = await sessions.getByThread(meeting.threadRef);
+  if (!session) return sendJson(ctx.res, 404, { error: "not_found" });
+  const [items, runs, notes] = await Promise.all([
+    sessions.getItems(session.id, { messagesOnly: true }),
+    ctx.deps.runs!.list({ threadRef: meeting.threadRef, limit: RUN_LIMIT }),
+    notesPin(ctx, session.id),
+  ]);
+  const keyed = (suffix: string) => runs.find((run) => run.dedupKey === `${meeting.threadRef}:${suffix}`);
+  const [started, stopped] = [keyed("start"), keyed("stop")];
+  if (!started) return sendJson(ctx.res, 404, { error: "not_found" });
+  const checkIn = `${meeting.threadRef}:check-in:`;
+  return sendJson(ctx.res, 200, {
+    app: started.request.displayText?.split(" · ").slice(1, -1)[0] ?? null,
+    startedAt: started.createdAt,
+    endedAt: stopped?.createdAt ?? null,
+    brief: started.result?.reply ?? null,
+    notes: notes?.text ?? "",
+    transcript: items.filter(isOverheard).map(heardLine),
+    flags: runs
+      .filter((run) => run.dedupKey?.startsWith(checkIn) && run.result?.status === "ok" && run.result.reply)
+      .map((run) => ({ at: run.createdAt, text: run.result!.reply! }))
+      .reverse(),
+    writeup: stopped?.result?.reply ?? null,
+    writing: Boolean(stopped && !isTerminal(stopped.status)),
+  });
+}
+
+async function saveNotes(ctx: ApiCtx): Promise<void> {
+  const meeting = await openMeeting(ctx, ctx.params.id);
+  if (!meeting) return;
+  const notes = isObj(ctx.body) && typeof ctx.body.notes === "string" ? ctx.body.notes.trim() : undefined;
+  if (notes === undefined || notes.length > NOTES_CHARS)
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `notes must be text of at most ${NOTES_CHARS} characters.`,
+    });
+  const sessions = ctx.deps.sessions!;
+  const session = await sessions.getByThread(meeting.threadRef);
+  if (!session) return sendJson(ctx.res, 404, { error: "not_found" });
+  const old = await notesPin(ctx, session.id);
+  if (old) await sessions.removePin(session.id, old.id);
+  if (notes) await sessions.addPin(session.id, { text: notes, addedBy: meeting.user });
+  return sendJson(ctx.res, 200, { notes });
 }
 
 const route = (method: string, path: string, handle: Route<ApiCtx>["handle"]): Route<ApiCtx> => ({
@@ -249,4 +314,6 @@ export const meetingRoutes: ReadonlyArray<Route<ApiCtx>> = [
   route("POST", "/v1/web/meetings", startMeeting),
   { ...route("POST", "/v1/web/meetings/:id/speech", meetingSpeech), streamBody: true },
   route("POST", "/v1/web/meetings/:id/stop", stopMeeting),
+  route("GET", "/v1/web/meetings/:id", meetingNote),
+  route("PUT", "/v1/web/meetings/:id/notes", saveNotes),
 ];

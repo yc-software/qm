@@ -1,3 +1,4 @@
+import { QM_MAC_DOWNLOAD_URL } from "./desktop-computer";
 import { settingsSection as titledSection } from "./settings-layout";
 import "./onboarding-welcome";
 import "./slack-account";
@@ -31,8 +32,6 @@ const THEME_KEY = "theme";
 const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
-
-const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },

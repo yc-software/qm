@@ -1363,6 +1363,21 @@ export function createChatSurface(
     return () => container.contains(host);
   }
 
+  function mountMeeting(s: CoreSession, draw: (host: HTMLElement) => void): void {
+    const container = ctx.claimContainer();
+    if (!container) return;
+    dropAbandonedNewChat(s.threadRef);
+    teardownActiveChat();
+    ctx.composer.resetComposer();
+    chatState.sessionId = s.id;
+    chatState.scopeId = s.scopeId;
+    syncLocation();
+    const host = document.createElement("div");
+    host.className = "meeting-host";
+    container.replaceChildren(host);
+    draw(host);
+  }
+
   function mountLoadError(retry: () => void): void {
     const container = ctx.container();
     if (!container) return;
@@ -4025,6 +4040,7 @@ export function createChatSurface(
     mountReadOnly,
     attachApprovalsWhenLoaded,
     mountLoadingPane,
+    mountMeeting,
     mountLoadError,
     scrollToBottom,
     revealEntry: (seq: number) => {

@@ -13,7 +13,11 @@ const thread = `web:alice:meeting:${id}`;
 const flagged = new Set<string>();
 const turns: TurnRequest[] = [];
 const appended: NewItem[] = [];
-const runs = new Map<string, { createdAt: number; result: { reply?: string }; request: TurnRequest }>();
+const runs = new Map<
+  string,
+  { createdAt: number; result: { reply?: string; status?: string }; request: TurnRequest }
+>();
+const pins: { id: string; text: string; addedBy: string }[] = [];
 let pending = false;
 
 const app = {
@@ -47,10 +51,18 @@ const deps = {
       appended.push(item);
       return true;
     },
+    listPins: async () => [...pins],
+    removePin: async (_session: string, pinId: string) =>
+      pins.splice(
+        pins.findIndex((pin) => pin.id === pinId),
+        1,
+      ),
+    addPin: async (_session: string, pin: { text: string; addedBy: string }) => pins.push({ ...pin, id: pin.text }),
   },
   runs: {
     getByDedupKey: async (key: string) => runs.get(key) ?? null,
     inFlightForThread: async () => (pending ? [{ status: "pending" }] : []),
+    list: async () => [...runs].map(([dedupKey, run]) => ({ ...run, dedupKey })).reverse(),
   },
 };
 const server = createServer(app, deps as unknown as ServerDeps);
@@ -166,4 +178,38 @@ test("text transcribed on the Mac is stored without an OpenAI key, which audio s
   const refused = await speech("audio", "audio/webm");
   assert.deepEqual([(await speech({})).status, refused.status], [400, 403]);
   assert.equal(((await refused.json()) as { error: string }).error, "transcription_unavailable");
+});
+
+test("the meeting note carries the brief, lines heard, flags and the person's notes into the write-up", async () => {
+  const put = (notes: unknown) =>
+    fetch(`${base}/api/meetings/${id}/notes`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ notes }),
+    });
+  assert.equal((await put(7)).status, 400);
+  await put("Ask about churn");
+  await put(" Ask about churn and hiring ");
+  assert.deepEqual(
+    pins.map((pin) => [pin.text, pin.addedBy]),
+    [["Ask about churn and hiring", "alice"]],
+  );
+  const checkIn = (slot: number, status: string, reply: string) =>
+    runs.set(`${thread}:check-in:${slot}`, { createdAt: slot, result: { status, reply }, request: {} as TurnRequest });
+  checkIn(1, "ok", "Revenue doubled, not tripled.");
+  checkIn(2, "silent", "");
+  await post(`/api/meetings/${id}/stop`, { endedAt: Date.UTC(2026, 10, 23, 18, 48) });
+  assert.equal(turns.at(-1)!.text.endsWith("build the write-up around them:\nAsk about churn and hiring"), true);
+  const note = (await (await fetch(`${base}/api/meetings/${id}`, { headers })).json()) as Record<string, unknown[]>;
+  assert.deepEqual(
+    [note.app, note.brief, note.notes, note.flags, note.writing, note.transcript![0]],
+    [
+      "Zoom",
+      "Weekly sync with Dana Kowalczyk",
+      "Ask about churn and hiring",
+      [{ at: 1, text: "Revenue doubled, not tripled." }],
+      true,
+      { at: 1_795_000_000_000, speaker: "others", text: "Dana said revenue tripled." },
+    ],
+  );
 });
