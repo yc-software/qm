@@ -54,6 +54,7 @@ export function createTurnMethods(
   | "turn"
   | "getApproval"
   | "subscribeSessionStates"
+  | "stopThread"
   | "subscribeLedgerEvents"
   | "listSessionApprovals"
   | "pendingApprovalForThread"
@@ -555,6 +556,9 @@ export function createTurnMethods(
       return terminalResult ? withAdminLink(terminalResult) : awaitRun(run.id);
     },
 
+    stopThread(threadRef, opts) {
+      return stopThread(threadRef, undefined, opts?.tree ?? true);
+    },
     subscribeSessionStates(cb, opts) {
       if (!deps.sessionStateBus) return () => {};
       const lookupParticipants = async (threadRef: string): Promise<string[]> => {

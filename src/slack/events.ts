@@ -56,6 +56,8 @@ export function registerSlackEvents(
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
     backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
+    onAgentSessionStopped?: (channel: string, threadTs: string) => Promise<void>;
+    onAgentSessionTitleChanged?: (channel: string, threadTs: string, title: string) => Promise<void>;
     ensureHeader?: (
       client: SurfaceHeaderClient,
       channel: string,
@@ -411,6 +413,29 @@ export function registerSlackEvents(
 
   app.event("assistant_thread_started", async () => {});
   app.event("assistant_thread_context_changed", async () => {});
+  app.event("agent_session_stopped", async ({ event, body }: EventArgs) => {
+    const e = (event ?? {}) as { channel_id?: string; channel?: string; thread_ts?: string; event_ts?: string };
+    const channel = e.channel_id;
+    const threadTs = e.thread_ts;
+    if (!channel || !threadTs) return;
+    if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel, ts: e.event_ts ?? threadTs }))) return;
+    await deps.onAgentSessionStopped?.(channel, threadTs);
+  });
+  app.event("agent_session_title_changed", async ({ event, body }: EventArgs) => {
+    const e = (event ?? {}) as {
+      channel_id?: string;
+      channel?: string;
+      thread_ts?: string;
+      title?: string;
+      event_ts?: string;
+    };
+    const channel = e.channel_id;
+    const threadTs = e.thread_ts;
+    const title = typeof e.title === "string" ? e.title.trim() : "";
+    if (!channel || !threadTs || !title) return;
+    if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel, ts: e.event_ts ?? threadTs }))) return;
+    await deps.onAgentSessionTitleChanged?.(channel, threadTs, title);
+  });
 
   app.event("reaction_added", async ({ event, body, client }: EventArgs) => {
     const reaction = parseReactionEvent(event);

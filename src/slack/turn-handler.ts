@@ -118,8 +118,20 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
-  onSettled?: () => void;
+  onEngaged?: (
+    runId: string,
+    channel: string,
+    threadTs?: string,
+    meta?: {
+      sessionId: string;
+      detailMode: "full" | "brief";
+      recipientUserId?: string;
+      recipientTeamId?: string;
+      unprompted?: boolean;
+      initialTitle?: string;
+    },
+  ) => void;
+  onSettled?: (runId?: string) => void;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -249,6 +261,18 @@ export function createTurnHandler(deps: {
       triggerTs: inc.ts,
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
+      ...(core?.thinkingStream ? { thinkingStream: core.thinkingStream } : {}),
+      sessionId: () => threadRef,
+      detailMode: () =>
+        isExternallyShared(channelInfo) ||
+        Boolean(deps.externalAccess) ||
+        Boolean(actor.isExternalGuest) ||
+        audience.some((a) => a.isExternalGuest)
+          ? "brief"
+          : "full",
+      ...(ids.ownTeamId ? { recipientTeamId: ids.ownTeamId } : {}),
+      ...(inc.unprompted ? { unprompted: true } : {}),
+      ...(inc.rawText ? { initialTitle: inc.rawText } : {}),
       ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),

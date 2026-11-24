@@ -16,6 +16,8 @@ import {
 } from "./lib.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
+import type { SlackThinkingStream } from "./thinking-stream.ts";
+import type { StepDetailMode } from "./step-labels.ts";
 
 const noticeBlocks = (text: string): Array<Record<string, unknown>> => [
   { type: "context", elements: [{ type: "mrkdwn", text }] },
@@ -31,13 +33,46 @@ export function createSlackTurnTransport(at: {
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
   webUiPublicUrl?: string;
-  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
-  onSettled?: () => void;
+  thinkingStream?: SlackThinkingStream;
+  sessionId?: () => string;
+  detailMode?: () => StepDetailMode;
+  recipientTeamId?: string;
+  unprompted?: boolean;
+  initialTitle?: string;
+  onEngaged?: (
+    runId: string,
+    channel: string,
+    threadTs?: string,
+    meta?: {
+      sessionId: string;
+      detailMode: StepDetailMode;
+      recipientUserId?: string;
+      recipientTeamId?: string;
+      unprompted?: boolean;
+      initialTitle?: string;
+    },
+  ) => void;
+  onSettled?: (runId?: string) => void;
 }): SurfaceTransport {
   const { client, channel, threadTs } = at;
   const notices = new Set<string>();
+  let activeRunId: string | undefined;
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
+    if (activeRunId && at.thinkingStream && !opts.notice && threadTs) {
+      const streamed = await at.thinkingStream.deliver(client, {
+        runId: activeRunId,
+        channel,
+        threadTs,
+        rawMarkdown: opts.rawMarkdown ?? msg,
+        mrkdwnFallback: msg,
+        ...(opts.note ? { footerBlocks: [plainContext(opts.note)] } : {}),
+        ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+        unfurlLinks: false,
+        finalize: true,
+      });
+      if (streamed.handled) return streamed.messageTs;
+    }
     const baseOpts = { threadOnly: at.kind === "channel", unfurlLinks: false, persona: opts.persona };
     const args: PostMessageArgs = opts.notice
       ? { ...slackReplyArgs(channel, msg, threadTs, baseOpts), blocks: noticeBlocks(msg) }
@@ -59,6 +94,15 @@ export function createSlackTurnTransport(at: {
   return {
     post,
     async postPrivate(msg, opts) {
+      if (activeRunId && at.thinkingStream && (await at.thinkingStream.hasOpenStream(activeRunId))) {
+        const outcome = opts?.outcome ?? "failed";
+        if (at.kind === "dm" && !opts?.transient) {
+          const handled = await at.thinkingStream.finishRun(client, activeRunId, { outcome, note: msg });
+          if (handled) return;
+        } else {
+          await at.thinkingStream.finishRun(client, activeRunId, { outcome });
+        }
+      }
       if (at.kind === "dm" && !opts?.transient) {
         await post(msg);
         return;
@@ -84,8 +128,26 @@ export function createSlackTurnTransport(at: {
       await applyAndLogReactions(client, channel, at.triggerTs, directives);
     },
     async typing(on, run) {
-      if (!on) at.onSettled?.();
-      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs);
+      if (!on) {
+        at.onSettled?.(activeRunId);
+        return;
+      }
+      if (run) {
+        activeRunId = run.runId;
+        if (threadTs) {
+          at.onEngaged?.(run.runId, channel, threadTs, {
+            sessionId: at.sessionId?.() ?? `${channel}:${threadTs}`,
+            detailMode: at.detailMode?.() ?? "full",
+            ...(at.userId ? { recipientUserId: at.userId } : {}),
+            ...(at.recipientTeamId ? { recipientTeamId: at.recipientTeamId } : {}),
+            ...(at.unprompted ? { unprompted: true } : {}),
+            ...(at.initialTitle ? { initialTitle: at.initialTitle } : {}),
+          });
+        }
+      }
+    },
+    async finishTurn(runId, outcome) {
+      await at.thinkingStream?.finishRun(client, runId, { outcome });
     },
     async upload(attachments) {
       try {

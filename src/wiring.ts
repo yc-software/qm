@@ -10,6 +10,7 @@ import { createDecisionHooks, createReplyCheck, routeTurnRuntime } from "./decis
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import type { SlackThinkingStreamRecord } from "./slack/thinking-stream.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
 import { createApprovalStore } from "./surfaces/approval-store.ts";
@@ -2581,6 +2582,9 @@ export function buildApp(
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    thinkingStream: artifactMap<SlackThinkingStreamRecord>("slack_thinking_stream"),
+    runActivity,
+    sessions,
     statusActivity: {
       work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
       publicWebUrl: config.publicWebUrl,
