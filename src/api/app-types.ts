@@ -369,7 +369,7 @@ export interface App {
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> & { fireScope?: "accessible" | "none" | ScopeId },
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
@@ -654,7 +654,11 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  listVisibleSkills(
+    principalId: string,
+    ownScopeBotWork: boolean,
+    onlyScope?: ScopeId | null,
+  ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   manageableSkills(
     tenant: Tenant,

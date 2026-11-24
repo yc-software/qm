@@ -41,7 +41,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, resolveSelfRead, selfReadAudience } from "./shared.ts";
 import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
@@ -294,7 +294,9 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
-  const found = await app.getSessionForViewer(ctx.params.id!, capability, window);
+  const { inOwnPrivate, roomScope } = selfReadAudience(capability, capability.actorId);
+  const fireScope = inOwnPrivate ? "accessible" : (roomScope ?? "none");
+  const found = await app.getSessionForViewer(ctx.params.id!, { ...capability, fireScope }, window);
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
@@ -572,10 +574,13 @@ async function searchSessions(ctx: ApiCtx): Promise<void> {
 }
 
 async function listContexts(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(res, 200, { contexts: await app.listContexts(principalId) });
+  const access = resolveSelfRead(ctx, { botMessage: "bot turns cannot list contexts" });
+  if (!access) return;
+  const all = await ctx.app.listContexts(access.principalId);
+  const contexts = access.inOwnPrivate
+    ? all
+    : all.filter((context) => access.roomScope !== undefined && context.scopeId === access.roomScope);
+  return sendJson(ctx.res, 200, { contexts });
 }
 
 async function listScopeResources(ctx: ApiCtx): Promise<void> {
@@ -911,14 +916,21 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
 });
 
 async function listSkills(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const access = resolveSelfRead(ctx, { allowBot: true });
+  if (!access) return;
+  const { res, app, url, capability } = ctx;
+  const { principalId, inOwnPrivate, roomScope } = access;
+  const ownScopeBotWork = isOwnScopeBotWork(capability);
+  const onlyScope = inOwnPrivate ? undefined : (roomScope ?? null);
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId, false)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, ownScopeBotWork, onlyScope)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
-  const archivedAll = (await app.listSkills()).filter((skill) => skill.status === "archived");
+  const org = orgScope(ctx.deps);
+  const inSkillAudience = (scope: ScopeId) => inOwnPrivate || scope === roomScope || scope === org;
+  const archivedAll = (await app.listSkills()).filter(
+    (skill) => skill.status === "archived" && inSkillAudience(skill.scopeId),
+  );
   const visible = resolved.flatMap((row) => [
     { skill: row.skill, shadowed: row.shadowed },
     ...(includeShadowed ? row.shadowed.map((skill) => ({ skill, shadowed: [] })) : []),
@@ -927,11 +939,12 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
     tenantOf(ctx),
     [...archivedAll, ...visible.map((r) => r.skill)],
     principalId,
-    false,
+    ownScopeBotWork,
   );
   const archived = archivedAll.filter((skill) => manageable.has(skill.id)).map((skill) => ({ skill, shadowed: [] }));
+  const rows = [...visible, ...archived];
   const skills = await Promise.all(
-    [...visible, ...archived].map(async (r) => ({
+    rows.map(async (r) => ({
       id: r.skill.id,
       name: r.skill.manifest.name,
       description: r.skill.manifest.description,
@@ -958,11 +971,15 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const ownScopeBotWork = isOwnScopeBotWork(capability);
+  const { inOwnPrivate, roomScope } = selfReadAudience(capability, principalId);
   const skill = await app.getSkill(ctx.params.id!);
+  const inAudience =
+    skill !== null && (inOwnPrivate || skill.scopeId === roomScope || skill.scopeId === orgScope(ctx.deps));
   if (
     !skill ||
+    !inAudience ||
     (!(await app.canManageSkill(skill, principalId, ownScopeBotWork)) &&
-      !(await app.listVisibleSkills(principalId, ownScopeBotWork))
+      !(await app.listVisibleSkills(principalId, ownScopeBotWork, inOwnPrivate ? undefined : (roomScope ?? null)))
         .flatMap((row) => row.shadowed.concat(row.skill ?? []))
         .some((visible) => visible.id === skill.id))
   ) {
@@ -1554,11 +1571,11 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/sessions", browser: true, auth: "source", handle: listSessions },
     { method: "GET", path: "/v1/sessions/row", browser: true, auth: "source", handle: getSessionRow },
     { method: "GET", path: "/v1/sessions/:id/children", browser: true, auth: "source", handle: listSessionChildren },
-    { method: "GET", path: "/v1/contexts", browser: true, auth: "source", handle: listContexts },
+    { method: "GET", path: "/v1/contexts", browser: true, auth: "either", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", browser: true, auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", browser: true, auth: "source", handle: selfMemory },
-    { method: "GET", path: "/v1/spend", browser: true, auth: "source", handle: selfSpend },
-    { method: "GET", path: "/v1/skills", browser: true, auth: "source", handle: listSkills },
+    { method: "GET", path: "/v1/spend", browser: true, auth: "either", handle: selfSpend },
+    { method: "GET", path: "/v1/skills", browser: true, auth: "either", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", browser: true, auth: "either", handle: getSkillDetail },
   ]),
   ...withActor("query.viewer", [

@@ -161,9 +161,9 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get("retry-after"), "7");
   assert.ok(!(await limited.text()).includes(key));
-  for (const upstreamStatus of [401, 403, 500]) {
+  for (const upstreamStatus of [401, 403, 500, 503]) {
     status = upstreamStatus;
-    assert.equal((await openai(chat)).status, 502, String(upstreamStatus));
+    assert.equal((await openai(chat)).status, upstreamStatus < 500 ? 502 : upstreamStatus, String(upstreamStatus));
   }
   status = 200;
 
@@ -172,7 +172,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   overBudget = false;
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await openai(chat)).status, 403);
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 9);
 });
 
 test("a sandbox-model token is refused on every other route", async (t) => {

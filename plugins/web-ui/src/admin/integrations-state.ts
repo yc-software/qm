@@ -214,7 +214,7 @@ class SlackInstallationState extends Status {
         browser.searchParams.set("slack", step);
         if (await openDesktopBrowser(browser.href)) return;
         const result = await context.api("POST", "/api/slack-installation/start", { step });
-        if (!result.ok || !result.data.url) return this.setStatus(failure, "err");
+        if (!result.ok || !result.data.url) return this.setStatus(result.data?.message || failure, "err");
         const form = document.createElement("form");
         form.method = "POST";
         form.action = result.data.url;

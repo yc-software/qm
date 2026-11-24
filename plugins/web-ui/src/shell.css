@@ -420,15 +420,12 @@ html:not([data-qm-desktop="darwin"]) .layout.sidebar-closed .history-nav {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 20px;
   text-align: center;
 }
 .ephemeral-empty .chat-cta {
   margin-bottom: 0;
-}
-.ephemeral-empty-icon {
-  color: var(--muted-foreground);
 }
 .ephemeral-subtitle {
   margin: 0;
@@ -1465,24 +1462,17 @@ a.chat-row-open {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   position: relative;
 }
-/* Glance tiers render no top bar: two children (glance, dock), two rows. */
-[data-density="card"] .custom-chat-shell,
-[data-density="strip"] .custom-chat-shell {
-  grid-template-rows: minmax(0, 1fr) auto;
-}
-/* Panes render no session topbar either (the pane tab is the header) — same two-row
-   grid, or the transcript falls into the auto row and the composer into the 1fr row. */
-.custom-chat-shell.in-pane {
-  grid-template-rows: minmax(0, 1fr) auto;
+.custom-chat-shell:has(> .chat-topbar) {
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .custom-chat-shell.empty-chat {
-  grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
-}
-.custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.custom-chat-shell.empty-chat:has(> .chat-topbar) {
+  grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
@@ -11668,6 +11658,9 @@ h3.ambient-field-label {
 
 @media (max-width: 860px) {
   :where(html:not(.desktop-embed)) .custom-chat-shell.empty-chat {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  :where(html:not(.desktop-embed)) .custom-chat-shell.empty-chat:has(> .chat-topbar) {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   :where(html:not(.desktop-embed)) .empty-chat .chat-scroll {
@@ -11675,7 +11668,8 @@ h3.ambient-field-label {
     flex-direction: column;
     justify-content: center;
   }
-  :where(html:not(.desktop-embed)) .empty-chat .chat-cta {
+  :where(html:not(.desktop-embed)) .empty-chat .chat-cta,
+  :where(html:not(.desktop-embed)) .empty-chat .ephemeral-empty {
     margin-bottom: 0;
   }
 
@@ -12752,9 +12746,6 @@ body.app-edit-embed .main {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-}
-.app-edit-chat {
-  grid-template-rows: minmax(0, 1fr) auto;
 }
 body.app-edit-embed .custom-chat-shell {
   --chat-font-size: 13px;

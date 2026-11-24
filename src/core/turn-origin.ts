@@ -1,4 +1,4 @@
-import type { TurnOrigin, TurnRequest } from "../types.ts";
+import type { Destination, TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
 
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
@@ -49,4 +49,8 @@ export function introducesUser(
     !isSessionTurn(input) &&
     input.surfaceOrigin?.audience !== "external"
   );
+}
+
+export function automationDestination(request: Pick<TurnRequest, "origin" | "surfaceTools">): Destination | undefined {
+  return request.origin?.kind === "automation" && !request.surfaceTools ? request.origin.destination : undefined;
 }

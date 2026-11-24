@@ -179,6 +179,15 @@
   font-size: var(--font-14);
   overflow-wrap: anywhere;
 }
+.side-chat-working {
+  padding: 0 14px;
+}
+.side-chat-preview + .side-chat-working {
+  margin-top: 6px;
+}
+.side-chat-working .working-mark {
+  margin: 0 1px 0 0;
+}
 .side-chat-card > .side-chat-panel {
   border: 0;
   box-shadow: none;
@@ -500,6 +509,9 @@
 .side-chat-markers.dense .side-chat-preview {
   padding-inline: 12px;
   -webkit-line-clamp: 1;
+}
+.side-chat-markers.dense .side-chat-working {
+  padding-inline: 12px;
 }
 
 .chat-scroll:has(> .message-stack.with-side-chats) ~ .chat-bottom-dock > .scroll-bottom-btn {

@@ -1,6 +1,8 @@
 import type { EventBus } from "../util/event-bus.ts";
 
-type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
+import type { ReplyNotice } from "../notifications/reply-notifications.ts";
+
+type SessionState = "working" | "awaiting_approval" | "idle" | "metadata" | "ui" | "notify";
 
 export type UiSignal =
   | { kind: "canvas" }
@@ -14,6 +16,7 @@ export interface SessionStateEvent {
   participantsShed?: boolean;
   state: SessionState;
   ui?: UiSignal;
+  notice?: ReplyNotice;
   at: number;
 }
 

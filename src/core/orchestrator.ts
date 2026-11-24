@@ -55,7 +55,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { actsAsScope, scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -231,7 +231,7 @@ import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-re
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { postedWith, spineReplies, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
-import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
+import { BOT_REQUESTER_APPROVAL_NOTE, unavailableApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -635,6 +635,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { spendLimit, refusal: spendRefusal } = await checkSpendLimit(tenant, spendLimits, deps, scopeId, audit);
       if (spendRefusal) return spendRefusal;
       const botRequester = input.botActor === true;
+      const noApprover = botRequester || isSystemActor(actor.id);
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
@@ -758,13 +759,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.shutdown?.aborted)
           return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
         const heldReason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
-        if (botRequester) return botApprovalRefusal(audit, session.id, "security-screen", heldReason);
-        let approval: PendingApproval;
         try {
-          approval = await withManagedRosterVersion(async () => {
+          return await withManagedRosterVersion(async (): Promise<TurnResult> => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
+            if (noApprover)
+              return unavailableApprovalRefusal(audit, session.id, "security-screen", heldReason, botRequester);
+            const approval = await issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
               reason: heldReason,
@@ -774,12 +775,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
+            return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
           });
         } catch (err) {
           if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
           throw err;
         }
-        return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
@@ -996,6 +997,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
 
       await deps.skillsReady?.();
+      const skillSources = tracePhase("turn.skills", () => context.listSkills([scopeId, resolution.orgScopeId]), {
+        counts: countSkills,
+      });
+      void skillSources.catch(() => undefined);
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1032,11 +1037,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         recordScreenRequest,
         audit,
       });
-      const skillSourceContext = await tracePhase(
-        "turn.skills",
-        () => context.listSkills([scopeId, resolution.orgScopeId]),
-        { counts: countSkills },
-      );
+      const skillSourceContext = await skillSources;
       const otherSkillSources = skillSourceContext.skillSources
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
@@ -1172,6 +1173,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           recordedTurn,
           recordedTurn.answer,
         );
+
+      const contextWindow = deps.sessions.getContextWindow(session.id);
+      const snapshot = context.memorySnapshot();
+      void contextWindow.catch(() => undefined);
+      const recallOutcomes: MemoryProviderOutcome[] = [];
+      const loadedFacts = snapshot.then((view) => view.loaded);
+      void loadedFacts.catch(() => undefined);
+      const recallFor = async (history: Item[]) =>
+        appEdit
+          ? []
+          : context.recallMemory(
+              memoryRecallQuery(input.text, history),
+              loadedFacts,
+              (outcome) => void recallOutcomes.push(outcome),
+              isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+              session.id,
+            );
+      const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
+      const earlyRecall =
+        input.approval || importsOverheard || ambientTurn || input.cronScript
+          ? undefined
+          : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+      void earlyRecall?.catch(() => undefined);
 
       audit({
         action: "turn",
@@ -1424,27 +1448,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const contextWindow = deps.sessions.getContextWindow(session.id);
-        const snapshot = context.memorySnapshot();
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const loadedFacts = snapshot.then((view) => view.loaded);
-        void loadedFacts.catch(() => undefined);
-        const recallFor = async (history: Item[]) =>
-          appEdit
-            ? []
-            : context.recallMemory(
-                memoryRecallQuery(input.text, history),
-                loadedFacts,
-                (outcome) => void recallOutcomes.push(outcome),
-                isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-                session.id,
-              );
-        const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
-        const earlyRecall =
-          input.approval || importsOverheard || ambientTurn || input.cronScript
-            ? undefined
-            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
-        void earlyRecall?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
@@ -1601,7 +1604,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId,
           memoryScopeId,
-          livePersonTurn,
           defaultDestination,
           provision,
           provisionJobSandbox,
@@ -2710,6 +2712,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           approvalSummary: (summaryScope, command, reason, purpose) =>
             approvalSummary(tenant, summaryScope, command, reason, purpose),
           issueApproval,
+          ...(noApprover
+            ? {
+                refuseApproval: (command: string, reason: string) =>
+                  unavailableApprovalRefusal(audit, session.id, command, reason, botRequester),
+              }
+            : {}),
           withManagedRosterVersion,
         });
 
@@ -2728,7 +2736,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } catch (err) {
         if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
-          if (botRequester) return botApprovalRefusal(audit, session.id, err.command, err.approvalReason);
+          if (noApprover)
+            return unavailableApprovalRefusal(audit, session.id, err.command, err.approvalReason, botRequester);
           const summary = await approvalSummary(tenant, scopeId, err.command, err.approvalReason);
           let approval: PendingApproval;
           try {

@@ -1,6 +1,6 @@
 import type { DurableMap } from "./persistence/durable-map.ts";
 import { orgId as configOrgId } from "./config.ts";
-import { scopeId, type ScopeId } from "./types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "./types.ts";
 
 export const FEATURES = {
   app_annotations: {
@@ -43,6 +43,11 @@ export const FEATURES = {
     label: "UI canvas and UI state (agent code runs in the page)",
     personalOnly: true,
     hint: "Lets the agent read the selected people's whole web UI and place live HTML/CSS/JS panels in their conversations. Canvas code runs unsandboxed in their page with their full session: it can do anything they can, including answering approvals. Personal scopes only. Turning it off stops canvases from loading on the next page load.",
+  },
+  web_notifications: {
+    label: "Reply notifications (experimental)",
+    personalOnly: true,
+    hint: "Offers the selected people browser and desktop notifications for replies in web conversations they aren't viewing. Turning it off stops their notifications at the next reply; the prompt and setting disappear on their next page load.",
   },
 } as const satisfies Record<string, { label: string; personalOnly?: boolean; hint?: string }>;
 export type FeatureName = keyof typeof FEATURES;
@@ -98,6 +103,18 @@ export function createFeatureFlagStore(
       return record;
     },
   };
+}
+
+export async function enabledPeople(
+  flags: Pick<FeatureFlagStore, "get">,
+  featureName: FeatureName,
+): Promise<readonly string[] | "everyone"> {
+  const scopes = (await flags.get(featureName))?.enabledScopes ?? [];
+  if (scopes.includes(scopeId("org", configOrgId()))) return "everyone";
+  return scopes.flatMap((scope) => {
+    const parsed = parseScopeId(scope);
+    return parsed.kind === "personal" ? [parsed.ref] : [];
+  });
 }
 
 export const EXTERNAL_APP_SHARING_OFF =

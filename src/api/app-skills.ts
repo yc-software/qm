@@ -25,7 +25,16 @@ export async function skillVisibilityContext(
   principalId: string,
   homes: readonly ScopeId[],
   ownScopeBotWork: boolean,
+  onlyScope?: ScopeId | null,
 ) {
+  const org = scopeId("org", orgIdOf());
+  if (onlyScope !== undefined) {
+    const room = onlyScope && (await h.principalCanAccessCurrentScope(principalId, onlyScope)) ? [onlyScope] : [];
+    const ordered = [...new Set([...room, org])].filter((scope) =>
+      loadsScopeContext(principalId, scope, ownScopeBotWork),
+    );
+    return { ordered, granted: [] };
+  }
   const actor = deps.identity.classify(principalId);
   const sharedHomes = [
     ...new Set(
@@ -39,23 +48,16 @@ export async function skillVisibilityContext(
   const member = sharedHomes.map((sid) => (accessibleScopes.has(sid) ? sid : null));
   const shared = member.filter((sid): sid is ScopeId => sid !== null);
   const teams = (actor.teamIds ?? []).map((t) => scopeId("team", t));
-  const ordered = [
-    ...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())]),
-  ].filter((scope) => loadsScopeContext(principalId, scope, ownScopeBotWork));
-  const entitled = (p: Principal, sess: ScopeId, org: ScopeId) => [
-    ...entitledScopes(ownScopeBotWork)(p, sess, org),
+  const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, org])].filter((scope) =>
+    loadsScopeContext(principalId, scope, ownScopeBotWork),
+  );
+  const entitled = (p: Principal, sess: ScopeId, o: ScopeId) => [
+    ...entitledScopes(ownScopeBotWork)(p, sess, o),
     ...accessibleScopes,
   ];
   const granted = (
     await deps.acl
-      .sharedOfKindForAudience(
-        ambientTenant(),
-        "skill",
-        [actor],
-        scopeId("personal", principalId),
-        scopeId("org", orgIdOf()),
-        entitled,
-      )
+      .sharedOfKindForAudience(ambientTenant(), "skill", [actor], scopeId("personal", principalId), org, entitled)
       .catch(() => [])
   ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };
@@ -283,13 +285,14 @@ export function createSkillMethods(
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId, ownScopeBotWork) {
+    async listVisibleSkills(principalId, ownScopeBotWork, onlyScope) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
         principalId,
-        (await deps.skills.list()).map((s) => s.scopeId),
+        onlyScope !== undefined ? [] : (await deps.skills.list()).map((s) => s.scopeId),
         ownScopeBotWork,
+        onlyScope,
       );
       return deps.skills.visibleFor(ordered, granted);
     },

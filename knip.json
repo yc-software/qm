@@ -60,6 +60,7 @@
     "plugins/web-ui": {
       "entry": [
         "src/shared-session.ts",
+        "public/sw.js",
         "src/lazy-katex.ts",
         "src/lazy-hljs.ts",
         "src/hljs-lang-stub.ts",

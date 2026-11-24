@@ -1007,7 +1007,7 @@ test("profile: advertises the durable dataDir only when persistence is wired", (
   );
 });
 
-test("liveEdit: writes changed files into the running app, removes deleted ones, and restarts only when asked", async () => {
+test("liveEdit: writes changed files into the running app, keeps executables, removes deleted ones, and restarts only when asked", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
   const p = provider(api, fetchImpl);
@@ -1016,7 +1016,10 @@ test("liveEdit: writes changed files into the running app, removes deleted ones,
   const startsBefore = execs.filter((c) => c.includes("setsid")).length;
 
   const edited = await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {
-    files: [{ path: "src/App.jsx", data: Buffer.from("v2") }],
+    files: [
+      { path: "src/App.jsx", data: Buffer.from("v2"), mode: "100644" },
+      { path: "bin/run", data: Buffer.from("#!/bin/sh"), mode: "100755" },
+    ],
     deletedPaths: ["old.css"],
     restart: false,
   });
@@ -1026,6 +1029,7 @@ test("liveEdit: writes changed files into the running app, removes deleted ones,
     execs.some((c) => c.startsWith("rm -f") && c.includes("'/app/old.css'")),
     "deleted file removed",
   );
+  assert.ok(execs.includes("chmod +x '/app/bin/run'"), "executables keep their bit");
   assert.equal(execs.filter((c) => c.includes("setsid")).length, startsBefore, "no restart without one asked for");
 
   await p.liveEdit!(d, version("/unused", { entrypoint: "npm run dev" }), {

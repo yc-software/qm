@@ -97,7 +97,7 @@ export interface SlackCoreClient {
   noteSurfaceHistoryGap?(container: string, note: string): Promise<void>;
   readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
-  submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
+  submitTurn(body: Omit<TurnRequest, "surface"> & { surface?: string }): Promise<TurnResult>;
   waitRun(runId: string, hooks?: RunHooks): Promise<TurnResult | null>;
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
@@ -289,7 +289,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     submitTurn(body) {
-      return deps.app.turn({ ...body, surface: "slack" });
+      return deps.app.turn({ ...body, surface: body.surface ?? "slack" });
     },
 
     waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),

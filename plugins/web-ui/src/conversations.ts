@@ -6,6 +6,7 @@ import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
 import { clearTranscriptCache, refreshCachedTranscript } from "./transcript-cache";
+import { showReplyNotice } from "./notifications";
 import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 
@@ -106,6 +107,10 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
+      if (event.state === "notify") {
+        if (event.notice) showReplyNotice(event.notice);
+        return;
+      }
       if (event.state === "ui") {
         handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);
         return;

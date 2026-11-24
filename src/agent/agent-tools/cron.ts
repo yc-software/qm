@@ -100,6 +100,7 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
     `status=${entry.status ?? "unknown"}`,
     lifecycle,
     `fireKey=${entry.fireKey}`,
+    entry.sessionId ? `session=${entry.sessionId}` : null,
     entry.note ? `note=${entry.note}` : null,
     entry.reply ? `reply=${entry.reply}` : null,
   ].filter((bit): bit is string => bit !== null);
@@ -115,7 +116,7 @@ export function cronTools(kit: ToolKit) {
       "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. One job = one cron: list first and patch an existing one rather than creating a second.\n" +
       'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
       "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
-      "Right after creating one, make a reasonable effort to test it with the user (a sample run, or a preview of what a fire would post, with anything consequential stubbed; run a script's exact command end to end without marking its work done by other means), so the first real fire is not where they learn it isn't what they wanted. " +
+      "When a cron posts something the user reads for its content, like a digest or report, show them a sample right after creating it (a test run, or a preview of what a fire would post, with anything consequential stubbed) so they approve the format before the first real fire; watches, reminders and follow-ups need no demo. When a task runs a script, first run that exact command once end to end without marking its work done by other means. " +
       "`script` hands a task cron's routine work to a command run first at each fire, leaving the agent turn for judgment: exit 0 means it handled the fire and no agent turn runs; exit 1 wakes the agent with its output. " +
       "Setting a script runs it once for real right away, and it is refused unless that run exits 0 or 1. " +
       "Neither `script` nor `task` may run code from a sandbox disk (no `python3 /home/…/x.py`, no `cd ~/workspace/…`): sandboxes get recreated and are per-conversation. " +

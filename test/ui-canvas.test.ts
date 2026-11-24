@@ -161,6 +161,8 @@ describe("ui canvas and ui observe", () => {
     const own = await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U1`);
     assert.equal((await body(own)).canvas.html, "<b/>");
     assert.equal((await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U2`)).status, 404);
+    assert.equal((await source("GET", "/v1/ui/canvases/gone?principalId=U1")).status, 404);
+    assert.equal((await source("POST", "/v1/ui/canvases/gone", { principalId: "U1", pinned: true })).status, 404);
     const pin = await source("POST", `/v1/ui/canvases/${sessionId}`, { principalId: "U1", pinned: true });
     assert.equal((await body(pin)).canvas.pinned, true);
     await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), false, "test");

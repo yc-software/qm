@@ -10,6 +10,7 @@ import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/ap
 import { msOf } from "../sessions/items.ts";
 import {
   createDeployGitStore,
+  type DeployGitBlobRef,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
@@ -195,7 +196,7 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(id: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;

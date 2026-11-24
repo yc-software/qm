@@ -2,6 +2,7 @@ import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { OutgoingAttachment, TurnResult, WornPersona } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { AWAITING_APPROVAL } from "./approval-cards.ts";
+import { unreadFilesNotice } from "./attachments.ts";
 import type { ReplyReaction } from "./reactions.ts";
 import { postThenAckRunDelivery, refusalDelivery, refusalNote } from "./refusals.ts";
 import { turnFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
@@ -120,6 +121,10 @@ export async function runSurfaceTurn(
 
   const body = await turn.prepare();
   if (!body) return settleAck();
+  if (!unprompted && body.inboundNotes?.length)
+    await transport
+      .post(unreadFilesNotice(body.inboundNotes), { notice: true, idempotencyKey: `inbound-files:${turn.trigger}` })
+      .catch(swallowAs(`${label}: unread files notice`, undefined));
 
   let result: TurnResult;
   try {

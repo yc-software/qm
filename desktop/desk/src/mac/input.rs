@@ -297,9 +297,7 @@ fn menu_unavailable() -> Failure {
 }
 
 fn menu_attribute(element: &El, name: &str) -> Result<CFType, Failure> {
-    let mut value = std::ptr::null();
-    let status = unsafe { AXUIElementCopyAttributeValue(element.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), &mut value) };
-    ax_result(status, value).ok_or_else(|| {
+    attr_status(element, name).map_err(|status| {
         fail(ErrorCode::ActionFailed, format!("Cannot read popup {name} (AXError {status}); pointer input cannot be verified"))
     })
 }

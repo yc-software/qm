@@ -1,3 +1,5 @@
+import { isSystemActor } from "../types.ts";
+import { AUTOMATION_SESSION_SURFACES } from "../sessions/session-rows.ts";
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { createPersonNames } from "../identity/person-names.ts";
 import { turnModelRefusal } from "./runtime-config.ts";
@@ -184,7 +186,13 @@ export function createTurnMethods(
       const conversationRef = req.conversation.channelRef;
       let sessionParticipantIds = project ? [...project.memberIds] : undefined;
 
-      if (req.surface === "webhook" && req.origin?.kind === "automation" && !sessionParticipantIds) {
+      if (
+        req.surface &&
+        AUTOMATION_SESSION_SURFACES.has(req.surface) &&
+        req.origin?.kind === "automation" &&
+        !sessionParticipantIds &&
+        !isSystemActor(actor.id)
+      ) {
         sessionParticipantIds = [actor.id];
       }
 
@@ -239,7 +247,7 @@ export function createTurnMethods(
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
       const sameApprovedMessage =
         approvedRequest?.text === req.text &&
-        approvedRequest.actor.externalId === req.actor.externalId &&
+        samePerson(approvedRequest.actor.externalId, req.actor.externalId) &&
         approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;

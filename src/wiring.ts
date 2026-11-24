@@ -299,9 +299,10 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
+import { createSecretDropStore, LOGIN_TICKET_SWEEP, type SecretDropStore } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
+  enabledPeople,
   externalAppSharingAllowed,
   type FeatureFlagRecord,
   type FeatureFlagStore,
@@ -384,6 +385,14 @@ import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
+import { watchReplyNotices } from "./notifications/reply-notifications.ts";
+import {
+  createWebPush,
+  webPushSubject,
+  type VapidKeyRecord,
+  type WebPush,
+  type WebPushSubscriptionRecord,
+} from "./notifications/web-push.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
@@ -586,6 +595,7 @@ export interface BuiltApp {
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
+  webPush?: WebPush;
   slackCore: SlackCoreClient;
 }
 
@@ -707,6 +717,12 @@ export function buildApp(
       };
     },
   };
+  const ownModelProviders = async (): Promise<ReadonlySet<string>> =>
+    new Set(
+      (await directModelCredentials.statuses())
+        .filter((status) => status.source === "admin" && status.configured)
+        .map((status) => status.provider),
+    );
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const users = createPostgresUserStore(databaseUrl);
   const principalLinks = createPrincipalLinkService(users, advisoryLock);
@@ -1394,7 +1410,8 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
+  pgArtifactMap.pool.registerMigration(LOGIN_TICKET_SWEEP);
+  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1458,7 +1475,7 @@ export function buildApp(
     const model = resolveEmbeddingModel(id);
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
+    return createMemoryEmbedder(model, key, await modelRoutes.companyGateway(model), overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1543,6 +1560,7 @@ export function buildApp(
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
+    ownProviders: ownModelProviders,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
@@ -2133,10 +2151,19 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
-    slack: slackApprovalCardRoute,
-    [GENERIC_CHAT]: genericChatApprovalCardRoute,
-  });
+  const approvals = createApprovalStore(
+    artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]),
+    deliveries,
+    { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
+    async (request, sessionId) => {
+      const generic = genericChatApprovalCardRoute(request);
+      if (generic) return generic;
+      if (request.origin?.kind === "automation" && request.origin.destination?.type === "web") return undefined;
+      const home = (await sessions.get(sessionId))?.surface;
+      if (home === "web" || home === "swarm") return undefined;
+      return slackApprovalCardRoute(request);
+    },
+  );
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2450,6 +2477,7 @@ export function buildApp(
     deliveries,
     signals: runSignals,
     advisoryLock,
+    monitors,
   };
   const app = createApp({
     errors,
@@ -2611,6 +2639,22 @@ export function buildApp(
       const root = await stoppableRoot(sessions, session);
       if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
+  });
+  const pushSubject = webPushSubject(config.publicUrl);
+  const webPush = pushSubject
+    ? createWebPush({
+        subscriptions: artifactMap<WebPushSubscriptionRecord>("web_push_subscriptions", ["principalId"]),
+        vapid: artifactMap<VapidKeyRecord>("web_push_vapid"),
+        key: deriveConnectorKey(config.connectorSecretKey, "web-push"),
+        subject: pushSubject,
+      })
+    : undefined;
+  watchReplyNotices({
+    bus: sessionStateBus,
+    sessions,
+    notifiable: () => enabledPeople(featureFlags, "web_notifications"),
+    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+    ...(webPush ? { send: webPush.send } : {}),
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
@@ -3353,6 +3397,7 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
+    ...(webPush ? { webPush } : {}),
     sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
@@ -3497,6 +3542,7 @@ export function serverDeps(
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
+    ...(built.webPush ? { webPush: built.webPush } : {}),
     environments: built.environments,
     sandboxResources: built.sandboxResources,
   };

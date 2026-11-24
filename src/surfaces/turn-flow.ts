@@ -14,7 +14,7 @@ export function turnFailureText(err: unknown): string {
   return err instanceof TurnFailure ? err.message : GENERIC_FAILURE_TEXT;
 }
 
-export type CoreTurnBody = Omit<TurnRequest, "surface">;
+export type CoreTurnBody = Omit<TurnRequest, "surface"> & { surface?: string };
 
 export interface RunHooks {
   onReplying?(): void;

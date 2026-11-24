@@ -180,7 +180,7 @@ fn serve(desk: &mut mac::Desk) -> Result<(), String> {
 }
 
 fn send(out: &mut impl Write, resp: &Response) -> Result<(), String> {
-    let s = serde_json::to_string(resp).map_err(|e| e.to_string())?;
+    let s = serde_json::to_string(resp).map_err(|e| e.to_string())?.replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
     writeln!(out, "{s}").and_then(|_| out.flush()).map_err(|e| e.to_string())
 }
 

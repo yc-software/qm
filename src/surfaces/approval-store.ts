@@ -5,15 +5,22 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { approvalDeliveryKey } from "./approval-cards.ts";
 
-export type ApprovalCardRoute = (request: TurnRequest) => Destination | undefined;
+export type ApprovalCardRoute = (
+  request: TurnRequest,
+  sessionId: string,
+) => Destination | undefined | Promise<Destination | undefined>;
 
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
   deliveries: Pick<DeliveryStore, "enqueue">,
   routes: Readonly<Record<string, ApprovalCardRoute>>,
+  automationRoute?: ApprovalCardRoute,
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
-    const destination = record.request && routes[record.request.surface]?.(record.request);
+    const req = record.request;
+    if (!req) return;
+    const route = routes[req.surface] ?? (req.origin?.kind === "automation" ? automationRoute : undefined);
+    const destination = await route?.(req, record.sessionId);
     if (!destination) return;
     await deliveries.enqueue({
       destination: { ...destination, commandApprovalId: id },

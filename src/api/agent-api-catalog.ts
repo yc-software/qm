@@ -1,4 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
+import { selfReadAudience } from "./routes/shared.ts";
 import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
@@ -368,7 +369,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
-          "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
+          "read the bounded transcript (including reasoning, tool calls, and results) of one of the asking person's conversations or an accessible automation fire session (by session id from a delivery note or cron runs); defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a session they cannot see",
       },
     ],
   },
@@ -542,13 +543,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
-      },
-      {
-        method: "POST",
-        path: "/v1/keychain/login-tickets",
-        summary:
-          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); saving a service the user already has replaces that login / list participants' registered logins (metadata)",
       },
       {
         method: "POST|DELETE",
@@ -618,6 +613,12 @@ const FAMILIES: AgentApiFamily[] = [
       "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale. The skills tool's save and edit actions make the POST and PUT calls for you.",
     routes: [
       {
+        method: "GET",
+        path: "/v1/skills",
+        summary:
+          "list visible and manageable archived skills (metadata + ids; in a shared room, that room and org only)",
+      },
+      {
         method: "POST",
         path: "/v1/skills",
         summary:
@@ -673,6 +674,46 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/connectors/oauth/revoke",
         summary:
           'disconnect an OAuth connector — body {provider} (e.g. "google") or {host}, optional principalId (a conversation member; default you). Deletes the stored token across account slots; reversible by reconnecting',
+      },
+    ],
+  },
+  {
+    when: (v) => {
+      if (v.claims.botActor === true) return false;
+      const audience = selfReadAudience(v.claims, v.claims.actorId);
+      return audience.inOwnPrivate || audience.roomScope !== undefined;
+    },
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/spend",
+        summary:
+          "usage and spend report (?from=YYYY-MM-DD&to=YYYY-MM-DD&bucket=day|week, default 30d UTC, max 93d; own scope + shared rooms in DM/cron, room only in shared rooms)",
+      },
+    ],
+  },
+  {
+    when: (v) => v.claims.botActor !== true,
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/contexts",
+        summary: "list accessible contexts (scopeId, name; current room only in shared rooms)",
+      },
+      {
+        method: "GET",
+        path: "/v1/directory/channels",
+        summary: "list your channels (optional ?q= filter; excludes other private channels in shared rooms)",
+      },
+    ],
+  },
+  {
+    when: (v) => v.claims.botActor !== true && selfReadAudience(v.claims, v.claims.actorId).inOwnPrivate,
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/connectors/oauth/status",
+        summary: "direct OAuth connector status (connected, needsReconnect, configured hosts)",
       },
     ],
   },

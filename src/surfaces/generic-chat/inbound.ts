@@ -346,7 +346,7 @@ export function createGenericChatInbound(deps: {
     const staged = message.files.length
       ? await stageGenericChatFiles(
           deps.client,
-          event.account,
+          { account: event.account, chat: chat.id },
           message.files,
           deps.stageBlob,
           author.displayName,
