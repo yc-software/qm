@@ -16,7 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
-type GetFrontProcess = unsafe extern "C" fn(*mut ProcessSerialNumber) -> i32;
+type GetFrontProcess = unsafe extern "C" fn(*mut ProcessSerialNumber) -> i16;
 type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
 type GetProcessPid = unsafe extern "C" fn(*const ProcessSerialNumber, *mut i32) -> i32;
 
@@ -75,7 +75,9 @@ pub fn keyboard_focus_pid() -> Result<i32, Failure> {
 }
 
 pub fn front_process_pid() -> Result<i32, String> {
-    process_pid(c"GetFrontProcess", |symbol, process| unsafe { std::mem::transmute::<*mut c_void, GetFrontProcess>(symbol)(process) })
+    process_pid(c"GetFrontProcess", |symbol, process| {
+        i32::from(unsafe { std::mem::transmute::<*mut c_void, GetFrontProcess>(symbol)(process) })
+    })
 }
 
 const NOTIFICATION_SUBTYPE: CGEventField = CGEventField(64);
