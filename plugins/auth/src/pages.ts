@@ -105,15 +105,6 @@ export function signInPage(o: {
   const trustedButton = o.trustedSignInLabel
     ? `<a class="btn" href="/auth/trusted/login">Sign in with ${escapeHtml(o.trustedSignInLabel)}</a>`
     : "";
-  if (trustedButton && !o.emailLink && !o.password) {
-    return page({
-      title: "Sign in",
-      brandName: o.brandName,
-      heading: `Sign in to ${wordmark(o.brandName)}`,
-      msg: "Your team's conversations, connections and scheduled work are waiting.",
-      body: `<div class="actions">${trustedButton.replace('class="btn"', 'class="btn alternative"')}</div>`,
-    });
-  }
   const trusted = trustedButton ? `${trustedButton}<div class="divider">OR</div>` : "";
   const secondary = Boolean(o.trustedSignInLabel) || (o.emailLink && o.password);
   const emailForm = o.emailLink
