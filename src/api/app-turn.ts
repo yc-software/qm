@@ -628,7 +628,6 @@ export function createTurnMethods(
           ? run.attempts > 0 && !plannedRequeue
           : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
-        desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
         attempt: run.attempts,
         result: run.result ? await withAdminLink(run.result) : run.result,
@@ -747,8 +746,7 @@ export function createTurnMethods(
       if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
       if (signal.kind === "client_result") {
         if (viewer && !samePerson(run.request.actor.id, viewer)) return { accepted: false, reason: "not_found" };
-        if (!run.request.clientTools?.length && !run.request.desktopClientId)
-          return { accepted: false, reason: "no_client_tools" };
+        if (!run.request.clientTools?.length) return { accepted: false, reason: "no_client_tools" };
         const sent = await deps.signals.send(runId, {
           kind: "client_result",
           callId: signal.callId,

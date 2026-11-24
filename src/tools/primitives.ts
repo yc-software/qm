@@ -93,6 +93,7 @@ import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import { DESKTOP_UNAVAILABLE_TEXT, type DesktopCall } from "../surfaces/desktop-calls.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -263,6 +264,7 @@ export interface ToolContext extends SurfaceToolDeps {
     timeoutMs: number,
     signal?: AbortSignal,
     toolName?: string,
+    args?: unknown,
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
   backgroundStart(
     command: string,
@@ -471,7 +473,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   tenant: Tenant;
-  desktopClientId?: string;
+  desktopCall?: DesktopCall | undefined;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   sandbox: Sandbox;
@@ -1241,9 +1243,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async awaitClientResult(callId, timeoutMs, signal, toolName) {
-      if (toolName === "desktop" && !deps.desktopClientId)
-        return { content: "Computer access unavailable; continue from QM desktop.", isError: true };
+    async awaitClientResult(callId, timeoutMs, signal, toolName, args) {
+      if (toolName === "desktop")
+        return deps.desktopCall
+          ? deps.desktopCall(callId, args, timeoutMs, signal)
+          : { content: DESKTOP_UNAVAILABLE_TEXT, isError: true };
       if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
       return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });
     },

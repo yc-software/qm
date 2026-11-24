@@ -130,17 +130,9 @@ async function recordContext(
   session: Session,
   request: Pick<OrchestratorInput, "actor" | "conversation"> & Partial<OrchestratorInput>,
 ): Promise<Session> {
-  return sessions.getOrCreateByThread(
-    session.threadRef,
-    session.type,
-    session.scopeId,
-    undefined,
-    undefined,
-    undefined,
-    {
-      context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
-    },
-  );
+  return sessions.getOrCreateByThread(session.threadRef, session.type, session.scopeId, undefined, undefined, {
+    context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
+  });
 }
 
 async function freshSession(sessions: SessionStore, id: string): Promise<Session> {

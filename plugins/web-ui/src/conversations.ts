@@ -1,7 +1,8 @@
 import { createChatSurface } from "./chat";
 import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
-import { subscribeDeliveries } from "./core-bridge";
+import { api, subscribeDeliveries } from "./core-bridge";
+import { handleDesktopSignal } from "./desktop-computer";
 import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
@@ -111,6 +112,9 @@ export function ensureDeliveryStream(): void {
         if (event.notice) showReplyNotice(event.notice);
         return;
       }
+      const ui = event.ui as { kind?: string; callId?: string; stop?: boolean } | undefined;
+      if (event.state === "ui" && ui?.kind === "desktop")
+        return handleDesktopSignal(ui, (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }));
       if (event.state === "ui") {
         handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);
         return;

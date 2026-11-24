@@ -402,7 +402,6 @@ export interface SessionStore {
     scopeId: ScopeId,
     channelName?: string,
     surface?: string,
-    clientTools?: Session["clientTools"],
     facts?: SessionFacts,
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;

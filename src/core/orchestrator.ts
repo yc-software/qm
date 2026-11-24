@@ -12,6 +12,7 @@ import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
+import { DESKTOP_PERSON_ONLY_TEXT, desktopCallFor } from "../surfaces/desktop-calls.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { RECALL_CHECKED } from "../memory/cross-scope.ts";
@@ -56,7 +57,13 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
+import {
+  desktopClientForTurn,
+  introducesUser,
+  isPersonAuthored,
+  isSessionTurn,
+  mayDriveDesktop,
+} from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
@@ -751,7 +758,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           conversation.channelName,
           input.surface,
-          desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
           input.ephemeral ? { ephemeral: true } : undefined,
         );
         screenSession.id = session.id;
@@ -1056,6 +1062,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.surface,
         input.gatewayContext,
         conversation.kind === "dm" ? (cleanBrandingLabel(actor.displayName, 80) ?? personLabel(actor.id)) : undefined,
+        input.clientSurface,
       );
       if (gatewayBlock) turnContextBlocks["Where you are"] = gatewayBlock;
       if (homeChannel) turnContextBlocks["Project home channel"] = renderProjectHomeChannel(homeChannel.channelName);
@@ -1079,7 +1086,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         conversation.channelName,
         input.surface,
-        desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         {
           ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
           ...(ownsSessionContext(conversation.threadRef, input)
@@ -1730,7 +1736,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const baseTools = createToolContext({
           tenant,
-          desktopClientId: desktopClientForTurn(input),
+          desktopCall: mayDriveDesktop(input)
+            ? desktopCallFor(
+                { bus: deps.sessionStateBus, uiState: deps.uiState, signals: deps.signals },
+                {
+                  actorId: actor.id,
+                  threadRef: conversation.threadRef,
+                  sessionId: session.id,
+                  runId: input.runId,
+                  clientId: desktopClientForTurn(input),
+                },
+              )
+            : async () => ({ content: DESKTOP_PERSON_ONLY_TEXT, isError: true }),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -2471,9 +2488,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { surfacePrompt: { label: `the ${botName} web app`, mentionSyntax: "", transcript: true } }
               : {}),
             delegateWork,
-            ...((session.clientTools ?? input.clientTools)?.length
-              ? { clientTools: session.clientTools ?? input.clientTools }
-              : {}),
+            clientTools: [...(input.clientTools ?? []), desktopComputerTool],
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(replyOptional ? { replyOptional: true } : {}),
             turnWallClockMs:

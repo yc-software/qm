@@ -61,7 +61,7 @@ test("ephemeral sessions stay out of listings/search and hard-delete on clear an
     const user = "alice@example.com";
     const personal = scopeId("personal", user);
     const threadRef = `web:${user}:eph-1`;
-    const session = await sessions.getOrCreateByThread(threadRef, "dm", personal, undefined, "web", undefined, {
+    const session = await sessions.getOrCreateByThread(threadRef, "dm", personal, undefined, "web", {
       ephemeral: true,
     });
     assert.equal(session.ephemeral, true);
@@ -125,7 +125,7 @@ test("ephemeral sessions stay out of listings/search and hard-delete on clear an
     assert.equal(leftAct.rows[0].c, 0);
 
     const stuckRef = `web:${user}:eph-stuck`;
-    const stuck = await sessions.getOrCreateByThread(stuckRef, "dm", personal, undefined, "web", undefined, {
+    const stuck = await sessions.getOrCreateByThread(stuckRef, "dm", personal, undefined, "web", {
       ephemeral: true,
     });
     await sessions.addParticipant(stuck.id, user);
@@ -142,7 +142,7 @@ test("ephemeral sessions stay out of listings/search and hard-delete on clear an
       maxAttempts: 1,
     });
     const expiredRef = `web:${user}:eph-expired`;
-    const expired = await sessions.getOrCreateByThread(expiredRef, "dm", personal, undefined, "web", undefined, {
+    const expired = await sessions.getOrCreateByThread(expiredRef, "dm", personal, undefined, "web", {
       ephemeral: true,
     });
     await sessions.addParticipant(expired.id, user);

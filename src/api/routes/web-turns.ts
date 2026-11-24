@@ -299,7 +299,7 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
     ...ctx,
     body: {
       kind,
-      ...(kind === "client_result" ? { callId: p.callId, result: p.result, desktopClientId: p.desktopClientId } : {}),
+      ...(kind === "client_result" ? { callId: p.callId, result: p.result } : {}),
       ...(text !== undefined ? { text } : {}),
       ...(request ? { request } : {}),
       ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
