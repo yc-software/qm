@@ -5,6 +5,7 @@ import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { publicFetch } from "../../util/network.ts";
+import { ownPrivateConversation } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -94,7 +95,8 @@ function parseIngestEntry(loop: Loop, raw: unknown): IngestEntryInput | { error:
 
 function readableItems(ctx: ApiCtx, loop: Loop): boolean {
   if (!ctx.capability || parseScopeId(loop.ownerScopeId).kind !== "personal") return true;
-  if (ctx.capability.privateScope === true) return true;
+  const { actorId, scopeId, audienceScopeId } = ctx.capability;
+  if (ownPrivateConversation(actorId, scopeId, audienceScopeId)) return true;
   sendJson(ctx.res, 403, {
     error: "forbidden",
     message: "a personal loop's items are reachable only from its owner's own scope",

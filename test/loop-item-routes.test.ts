@@ -164,7 +164,7 @@ async function call(
   return out;
 }
 
-const CAP = { actorId: "josh", privateScope: true, scopeId: "personal:josh", liveActor: true, exp: 0 };
+const CAP = { actorId: "josh", scopeId: "personal:josh", audienceScopeId: "personal:josh", liveActor: true, exp: 0 };
 
 const PORTAL = null;
 
@@ -210,16 +210,19 @@ test("ingest needs an agent capability, not a portal session", async () => {
   assert.deepEqual(ok.body, { created: 1, updated: 0, skipped: 0 });
 });
 
-test("a personal loop's items stay out of a shared-scope capability's reach", async () => {
+test("a personal loop's items stay out of a private channel, a group DM and a cron posting elsewhere", async () => {
   const w = world();
   const loop = await inboxLoop(w);
-  const shared = { ...CAP, privateScope: false, scopeId: "channel:C9" };
-  assert.equal(
-    (await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [ITEM] }, capability: shared }))
-      .status,
-    403,
-  );
-  assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
+  for (const shared of [
+    { ...CAP, scopeId: "channel:C9", audienceScopeId: "channel:C9" },
+    { ...CAP, scopeId: "group:G1", audienceScopeId: "group:G1" },
+    { ...CAP, audienceScopeId: undefined },
+  ]) {
+    const body = { items: [ITEM] };
+    const post = await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body, capability: shared });
+    assert.equal(post.status, 403);
+    assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
+  }
 });
 
 test("another person cannot read the ledger at all", async () => {

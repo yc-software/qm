@@ -10,6 +10,7 @@ import {
   triageKeys,
 } from "../../loops/ledger-view.ts";
 import { uiStateId } from "../../surfaces/ui-state.ts";
+import { ownPrivateConversation } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { actingPrincipal, forInboxLoopsPeople, inboxPreviewEnabled, loopDeps } from "./loops.ts";
 import { cronSummary } from "./loop-items.ts";
@@ -70,7 +71,7 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId))) return reply(403, { error: "feature_disabled" });
-  if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
+  if (ctx.capability && !ownPrivateConversation(ctx.capability.actorId, ctx.capability.scopeId, ctx.capability.audienceScopeId)) return reply(403, { error: "forbidden" });
   const defaults = await ensureDefaultInboxLoops(deps.store, acting.actorId);
   const id = uiStateId(acting.actorId, "inbox-loops");
   const pref = await preferences.putIfAbsent(id, {

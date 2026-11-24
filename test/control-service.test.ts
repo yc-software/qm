@@ -61,7 +61,6 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string) =>
     claims(actor, chanScope, {
-      privateScope: true,
       destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
@@ -128,7 +127,6 @@ test("the owner rewriting their own shared cron's task keeps ownership and gets 
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string) =>
     claims(actor, chanScope, {
-      privateScope: true,
       destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
@@ -480,7 +478,6 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string) =>
     claims(actor, chanScope, {
-      privateScope: true,
       destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
@@ -1030,7 +1027,6 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
   const chanScope = scopeId("channel", "C9");
   const chanClaims = (actor: string, extra: Partial<CapabilityClaims> = {}) =>
     claims(actor, chanScope, {
-      privateScope: true,
       destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
