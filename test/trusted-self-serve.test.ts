@@ -22,7 +22,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
 import { orgId } from "../src/config.ts";
-import { scopeId } from "../src/types.ts";
+import { personalScope, scopeId } from "../src/types.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
@@ -46,6 +46,7 @@ function start(databaseUrl: string, extra: Parameters<typeof testConfig>[0] = {}
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     ...(built.selfServe ? { selfServe: built.selfServe } : {}),
+    sandboxResources: built.sandboxResources,
     identity: built.identity,
     auditLog: built.auditLog,
   });
@@ -337,4 +338,44 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
     403,
   );
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenants"))[0], { n: 0 });
+});
+
+test("each person enrolled by self-serve gets a default computer at setup that boots on first use", async (t) => {
+  const { s } = await shared(t);
+  const founders = ["founder-1", "founder-2"];
+  const [tenant] = (await withoutTenant(() =>
+    Promise.all(
+      founders.map((subject) => selfServeWorkspace(s.config, { subject, email: null }, { id: "7", name: "Gizmo" })),
+    ),
+  )) as [string];
+  const computers = () =>
+    withTenant(tenant, async () => {
+      const found = [];
+      for (const subject of founders) {
+        const computer = await s.built.sandboxResources.resolve(personalScope(trustedPrincipal(issuer, subject)));
+        assert.ok(computer, subject);
+        found.push(computer);
+      }
+      return found;
+    });
+  const first = await computers();
+  assert.equal(first.length, 2);
+  for (const [i, computer] of first.entries()) {
+    assert.equal(computer.ownerScopeId, personalScope(trustedPrincipal(issuer, founders[i]!)));
+    assert.equal(computer.state, "unverified");
+    assert.equal(computer.legacy, false);
+    assert.equal(computer.name, "Default computer");
+  }
+  await withoutTenant(() =>
+    selfServeWorkspace(s.config, { subject: "founder-1", email: null }, { id: "7", name: "Gizmo" }),
+  );
+  assert.deepEqual(
+    (await computers()).map((c) => c.id),
+    first.map((c) => c.id),
+    "signing in again keeps the same computer",
+  );
+  await withTenant(tenant, async (token) => {
+    const events = await s.built.auditLog.events(token);
+    assert.equal(events.filter((e) => e.action === "sandbox.default").length, 2);
+  });
 });

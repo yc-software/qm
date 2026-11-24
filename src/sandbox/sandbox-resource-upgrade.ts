@@ -32,6 +32,22 @@ export function legacySandboxBackendForScope(
 
 export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): string =>
   `legacy-${createHash("sha256").update(`${backend}:${scopeId}`).digest("hex").slice(0, 24)}`;
+export async function skipLegacySandboxImport(opts: {
+  marker: DurableMap<SandboxResourceUpgradeMarker>;
+  records: DurableMap<SandboxResource>;
+  routes?: () => Promise<Array<[string, LegacyRoute]>>;
+  legacySandboxes?: () => Promise<LegacySandboxBinding[]>;
+}): Promise<boolean> {
+  if ((await opts.marker.get("explicit-defaults")) !== null) return false;
+  const [records, routes, bindings] = await Promise.all([
+    opts.records.all(),
+    opts.routes?.() ?? [],
+    opts.legacySandboxes?.() ?? [],
+  ]);
+  if (records.length || routes.length || bindings.length) return false;
+  await opts.marker.putIfAbsent("explicit-defaults", { activatedAt: new Date().toISOString() });
+  return true;
+}
 
 export async function upgradeLegacySandboxes(opts: {
   availableBackends: readonly SandboxBackendName[];

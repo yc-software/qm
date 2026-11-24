@@ -97,7 +97,11 @@ export async function provisionWorkspace(
 }
 
 export interface SelfServe {
-  workspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
+  workspace(
+    issuer: string,
+    subject: string,
+    org: ExternalOrg,
+  ): Promise<{ tenant: string; created: boolean; provisioned: boolean }>;
 }
 
 export function createSelfServe(
@@ -124,7 +128,7 @@ export function createSelfServe(
         });
         await markSelfServeProvisioned(pg, workspace.tenant, key);
       }
-      return { tenant: workspace.tenant, created: workspace.created };
+      return { tenant: workspace.tenant, created: workspace.created, provisioned: !workspace.provisioned };
     },
   };
 }

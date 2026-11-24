@@ -17,6 +17,7 @@ import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
   legacySandboxId,
+  skipLegacySandboxImport,
   type LegacyRoute,
   type SandboxResourceUpgradeMarker,
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
@@ -1320,4 +1321,82 @@ test("the recorded load sample takes mem and disk totals from the created size, 
   await sized.options.records.update(resized.resourceId!, (current) => ({ ...current, memoryGb: 8 }));
   await sized.router.run(resized, "true");
   assert.equal((await sized.resources.load(resized.resourceId!))?.memTotalMb, 8192);
+});
+
+test("a scope's setup default is a record that boots on first use, made once, on the deployment provider", async () => {
+  const { resources, defaults, provisioned, router } = fixture(undefined, []);
+  const first = await resources.ensureDefault("personal:bob");
+  assert.ok(first?.created);
+  assert.equal(first.resource.backend, "local");
+  assert.equal(first.resource.state, "unverified");
+  assert.equal(first.resource.legacy, false);
+  assert.equal(first.resource.createdBy, "system");
+  assert.equal(first.resource.backingScopeId, `sandbox-${first.resource.id}`);
+  assert.deepEqual(provisioned, [], "setting up the default must not boot a machine");
+  assert.deepEqual(await defaults.get("personal:bob"), { sandboxId: first.resource.id });
+  const again = await resources.ensureDefault("personal:bob");
+  assert.equal(again?.created, false);
+  assert.equal(again?.resource.id, first.resource.id);
+  const handle = await router.provision("personal:bob");
+  assert.equal(handle.id, first.resource.backingScopeId, "first use boots the selected computer");
+});
+
+test("a setup default never replaces a chosen computer or an explicit choice of none", async () => {
+  const { resources, defaults } = fixture(undefined, []);
+  const chosen = await resources.create("bob", "personal:bob", "local", "mine");
+  await resources.setDefault("bob", "personal:bob", chosen.id);
+  const kept = await resources.ensureDefault("personal:bob");
+  assert.equal(kept?.created, false);
+  assert.equal(kept?.resource.id, chosen.id);
+  await resources.setDefault("bob", "personal:bob", null);
+  assert.equal(await resources.ensureDefault("personal:bob"), null);
+  assert.deepEqual(await defaults.get("personal:bob"), { sandboxId: null });
+});
+
+test("concurrent setup of one scope's default makes a single computer", async () => {
+  const { resources, records } = fixture(undefined, []);
+  const results = await Promise.all([1, 2, 3].map(() => resources.ensureDefault("personal:bob")));
+  assert.equal(results.filter((result) => result?.created).length, 1);
+  assert.equal(new Set(results.map((result) => result?.resource.id)).size, 1);
+  assert.equal((await records.all()).length, 1);
+});
+
+test("a workspace that never had a computer skips the legacy import instead of inventing existing computers", async () => {
+  const records = testMap<SandboxResource>();
+  const defaults = testMap<SandboxDefault>();
+  const marker = testMap<SandboxResourceUpgradeMarker>();
+  const lock = testAdvisoryLock();
+  const upgrade = () =>
+    upgradeLegacySandboxes({
+      availableBackends: ["local"],
+      records,
+      defaults,
+      marker,
+      lock,
+      legacyScopes: async () => ["personal:alice"],
+      legacyBackend: () => "local",
+    });
+  assert.equal(await skipLegacySandboxImport({ marker, records }), true);
+  await upgrade();
+  assert.deepEqual(await records.all(), []);
+  assert.equal(await defaults.get("personal:alice"), null);
+  assert.equal(await skipLegacySandboxImport({ marker, records }), false, "already settled");
+});
+
+test("legacy evidence keeps the import: provider records or routes leave the marker unwritten", async () => {
+  const records = testMap<SandboxResource>();
+  const marker = testMap<SandboxResourceUpgradeMarker>();
+  const withBinding = await skipLegacySandboxImport({
+    marker,
+    records,
+    legacySandboxes: async () => [{ scopeId: "personal:alice", backend: "modal" }],
+  });
+  const withRoute = await skipLegacySandboxImport({
+    marker,
+    records,
+    routes: async () => [["personal:alice", { backend: "local" }]],
+  });
+  assert.equal(withBinding, false);
+  assert.equal(withRoute, false);
+  assert.equal(await marker.get("explicit-defaults"), null);
 });

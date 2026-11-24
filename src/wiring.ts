@@ -273,7 +273,9 @@ import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
+  skipLegacySandboxImport,
   type LegacyRoute,
+  type SandboxResourceUpgradeMarker,
 } from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
@@ -1228,6 +1230,22 @@ export function buildApp(
   }
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
+  const sandboxRollout = artifactMap<SandboxResourceUpgradeMarker>("sandbox_resource_rollout");
+  const legacyRoutes = () => artifactMap<LegacyRoute>("sandbox_routing").entries();
+  const legacySandboxes = async () => {
+    const [e2b, modal, aws, superserve] = await Promise.all([
+      e2bBodies.entries(),
+      modalBodies.entries(),
+      awsBodies.entries(),
+      superserveBodies.entries(),
+    ]);
+    return [
+      ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
+      ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
+      ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
+      ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
+    ];
+  };
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     loads: artifactMap<LoadSample>("sandbox_loads"),
@@ -1241,8 +1259,8 @@ export function buildApp(
         availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
         records: sandboxRecords,
         defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
+        marker: sandboxRollout,
+        routes: legacyRoutes,
         lock: advisoryLock,
         legacyBackend: (scope) => legacySandboxBackendForScope(scope, choice.backend, choice.scopeBackends),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
@@ -1250,22 +1268,16 @@ export function buildApp(
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
           ...(await environments.list()).map((environment) => environment.id),
         ],
-        legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve] = await Promise.all([
-            e2bBodies.entries(),
-            modalBodies.entries(),
-            awsBodies.entries(),
-            superserveBodies.entries(),
-          ]);
-          return [
-            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
-            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
-            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
-            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
-          ];
-        },
+        legacySandboxes,
       });
     },
+    skipUpgrade: () =>
+      skipLegacySandboxImport({
+        marker: sandboxRollout,
+        records: sandboxRecords,
+        routes: legacyRoutes,
+        legacySandboxes,
+      }),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,

@@ -153,6 +153,8 @@ export interface SandboxResources {
   load(id: string): Promise<LoadSample | null>;
   release(id: string, runId: string | undefined, isLive: (runId: string) => Promise<boolean>): Promise<boolean>;
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
+  ensureDefault(scopeId: ScopeId): Promise<{ resource: SandboxResource; created: boolean } | null>;
+  skipLegacyImport(): Promise<boolean>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
   getMany(ids: readonly string[]): Promise<SandboxResource[]>;
@@ -233,6 +235,8 @@ export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
   ],
 };
 
+const SETUP_COMPUTER_NAME = "Default computer";
+
 export async function defaultComputer(
   resources: Pick<SandboxResources, "resolve"> | undefined,
   scopeId: ScopeId,
@@ -247,6 +251,7 @@ export async function defaultComputer(
 
 export function createSandboxResources(opts: {
   upgrade?: () => Promise<void>;
+  skipUpgrade?: () => Promise<boolean>;
   records: DurableMap<SandboxResource>;
   loads: DurableMap<LoadSample>;
   defaults: DurableMap<SandboxDefault>;
@@ -328,6 +333,12 @@ export function createSandboxResources(opts: {
     if (memoryGb === undefined) return;
     if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
   };
+  const defaultBackend = async (): Promise<SandboxBackendName> => {
+    const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
+    if (!opts.backends[backend])
+      throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
+    return backend;
+  };
   return {
     profiles,
     forTurn: (turn) =>
@@ -336,12 +347,7 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    async defaultBackend() {
-      const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
-      if (!opts.backends[backend])
-        throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
-      return backend;
-    },
+    defaultBackend,
     initialize,
     get,
     async getMany(ids) {
@@ -519,6 +525,36 @@ export function createSandboxResources(opts: {
           throw error;
         }
       });
+    },
+    async ensureDefault(scopeId) {
+      if (!parseScopeId(scopeId).kind) throw new SandboxAccessError(`invalid scope: ${scopeId}`);
+      await initialize();
+      const backend = await defaultBackend();
+      return opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
+        const selected = await opts.defaults.get(scopeId);
+        if (selected) return selected.sandboxId ? { resource: await get(selected.sandboxId), created: false } : null;
+        const id = randomUUID();
+        const spec = opts.backends[backend]?.profile.spec;
+        const record: SandboxResource = {
+          id,
+          backend,
+          ownerScopeId: scopeId,
+          backingScopeId: `sandbox-${id}`,
+          name: SETUP_COMPUTER_NAME,
+          createdBy: "system",
+          createdAt: new Date().toISOString(),
+          legacy: false,
+          state: "unverified",
+          ...(spec ? { spec } : {}),
+        };
+        await opts.records.put(id, record);
+        await opts.beforeDefaultChange?.(scopeId);
+        await opts.defaults.put(scopeId, { sandboxId: id });
+        return { resource: record, created: true };
+      });
+    },
+    async skipLegacyImport() {
+      return (await opts.skipUpgrade?.()) ?? false;
     },
     async setDefault(actorId, scopeId, id) {
       await initialize();
