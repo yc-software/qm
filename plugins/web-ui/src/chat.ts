@@ -1,6 +1,6 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
 import { createSideChatController } from "./side-chat";
-import { createReadOnlyChat } from "./readonly-chat";
+import { createReadOnlySession } from "./readonly-session";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
@@ -27,7 +27,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SlackOutbox } from "./slack-outbox";
-import { appTag, reactionChips, slackWireBubble } from "./slack-thread-view";
+import { appTag, openInSurface, reactionChips, slackTitle, slackWireBubble } from "./slack-thread-view";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
@@ -196,10 +196,13 @@ import {
   endSessionDrag,
   dropPendingSession,
   replacePendingSession,
+  groupDmTitle,
   refreshSessions,
   refreshTree,
   renderList,
   sessionsState,
+  sessionSlackUrl,
+  defaultSessionTitle,
   openSession,
   workingMark,
 } from "./sessions";
@@ -211,6 +214,7 @@ import {
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
+  chatSurfaceOf,
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnOf } from "./working-dot";
@@ -234,7 +238,7 @@ import { goalWorked, workSeconds, workedLabel } from "./work-duration";
 import { liveWorkDuration } from "./live-work-duration";
 import { decorateTextCodeBlocks } from "./text-code";
 
-import { createTranscriptViewport } from "./transcript-viewport";
+import { createTranscriptViewport, preserveTranscriptScroll } from "./transcript-viewport";
 import { suggestedActivities } from "./suggested-activities";
 import { reportHandledError } from "./browser-errors.ts";
 import { uiCanvasPanel } from "./ui-canvas";
@@ -465,8 +469,7 @@ export function createChatSurface(
     },
     current: () => Boolean(chatState.forkSession && chatState.sessionId === chatState.forkSession.id),
     redraw: () => {
-      if (chatState.agent) drawActiveChat();
-      else readOnlyChat.redraw();
+      drawActiveChat();
     },
     setError: (error) => {
       ctx.composer.state.error = error;
@@ -510,7 +513,7 @@ export function createChatSurface(
     sideChats.dispose();
     transcriptViewport.dispose();
     transcriptRefreshGeneration++;
-    readOnlyChat.clear();
+    readOnly.clear();
     preserveOutgoingWorkingDot(null);
     detachActiveChat();
     chatState.agent = null;
@@ -665,7 +668,7 @@ export function createChatSurface(
     const container = ctx.claimContainer();
     if (!container) return;
     if (chatState.ephemeral && chatState.threadRef !== threadRef) cleanupEphemeral();
-    readOnlyChat.clear();
+    readOnly.clear();
     preserveOutgoingWorkingDot(threadRef);
     dropAbandonedNewChat(threadRef);
     detachActiveChat();
@@ -906,8 +909,7 @@ export function createChatSurface(
   }
 
   const stopAvatarWatch = onSpeakerAvatars(() => {
-    if (chatState.agent) drawActiveChat();
-    else readOnlyChat.redraw();
+    drawActiveChat();
   });
   const onPageHide = () => cleanupEphemeral(true);
   window.addEventListener("pagehide", onPageHide);
@@ -991,7 +993,7 @@ export function createChatSurface(
   }
 
   function resolveCommandApproval(decision: ApprovalDecision): void {
-    const ro = readOnlyChat.approve(decision);
+    const ro = readOnly.approve(decision);
     if (ro) void ro;
     else if (chatState.agent) void approveCommand(chatState.agent, decision);
   }
@@ -1371,49 +1373,96 @@ export function createChatSurface(
     container.replaceChildren(host);
   }
 
-  const readOnlyChat = createReadOnlyChat({
-    chatState,
-    claimContainer: ctx.claimContainer,
-    ensureDeliveryStream: ctx.ensureDeliveryStream,
-    resetComposer: () => ctx.composer.resetComposer(),
-    composerApprovalPanel: (approvals) => ctx.composer.composerApprovalPanel(approvals),
-    composerError: {
-      get: () => ctx.composer.state.error,
-      set: (value) => {
-        ctx.composer.state.error = value;
-      },
-    },
-    preserveOutgoingWorkingDot,
-    dropAbandonedNewChat,
-    detachActiveChat,
-    clearLiveWork,
-    resetForkOrigin: () => forkOriginController.reset(),
-    syncLocation,
-    resetBackgroundPanel,
-    consumeBackgroundPanelRequest,
-    openThinking,
-    observeLiveWork,
-    currentTurnOptions,
-    runSlot,
+  const readOnly = createReadOnlySession({
     slackOutbox,
+    resolvingApprovals: chatState.resolvingApprovals,
+    onRedraw: () => drawActiveChat(),
     onDelivery,
-    visibleMessages,
-    prepareMessageRows,
-    goalStrip,
-    chatHeader,
-    swarmStrip: (sessionId) => swarmUi.strip(sessionId),
-    backgroundActivityStrip,
-    pinnedStrip,
-    inheritedHeader,
-    settledChatMessage,
-    liveWorkStatus,
-    scrollBottomButton,
-    scrollToBottom,
-    transcriptViewport,
-    bindAgentLifecycle,
-    resumeTrackedRun,
-    setPins,
+    onScrollToBottom: scrollToBottom,
+    onError: (message) => {
+      ctx.composer.state.error = message;
+    },
   });
+
+  function mountReadOnly(
+    s: CoreSession,
+    messages: ReturnType<typeof itemsToMessages>,
+    earlierCount = 0,
+    anchorSeq: number | null = null,
+    inheritedMessages: ReturnType<typeof itemsToMessages> = [],
+  ): void {
+    const container = ctx.claimContainer();
+    if (!container) return;
+    const sameSession = readOnly.session()?.id === s.id;
+    preserveOutgoingWorkingDot(s.threadRef);
+    dropAbandonedNewChat(s.threadRef);
+    detachActiveChat();
+    clearLiveWork();
+    chatState.host = null;
+    ctx.composer.resetComposer();
+    if (!sameSession) forkOriginController.reset();
+    chatState.threadRef = s.threadRef;
+    chatState.sessionId = s.id;
+    chatState.scopeId = s.scopeId;
+    chatState.forkSession = s;
+    chatState.transcriptAnchorSeq = anchorSeq;
+    chatState.earlierCount = earlierCount;
+    chatState.loadingEarlier = false;
+    if (!(sameSession && chatState.inheritedLoaded)) {
+      chatState.inheritedMessages = inheritedMessages;
+      chatState.inheritedLoaded = !s.forkedFrom;
+    }
+    if (!sameSession) {
+      chatState.inheritedExpanded = false;
+      chatState.pins = [];
+      chatState.goal = null;
+      chatState.turnRuntime = null;
+    }
+    syncLocation();
+    resetBackgroundPanel();
+    const agent = new Agent({
+      initialState: { systemPrompt: "", model: transcriptModel(), messages, tools: [] },
+      convertToLlm: () => [],
+    });
+    chatState.agent = agent;
+    chatState.resolvingApprovals.clear();
+    openThinking.clear();
+    const onWork = observeLiveWork(agent);
+    const normalStreamFn = makeCoreStreamFn(s.threadRef, agent, currentTurnOptions, onWork, runSlot);
+    agent.streamFn = normalStreamFn;
+    chatState.normalStreamFn = normalStreamFn;
+    chatState.onWork = onWork;
+    const priorHost = sameSession ? container.querySelector<HTMLElement>(":scope > .readonly-chat") : null;
+    const restoreScroll = priorHost ? preserveTranscriptScroll(priorHost) : null;
+    const host = priorHost ?? document.createElement("div");
+    host.className = `custom-chat readonly-chat ${s.surface === "slack" ? "slack-thread-chat" : ""}`;
+    chatState.host = host;
+    readOnly.activate(s, container, sameSession, messages);
+    bindAgentLifecycle(agent, s.threadRef, normalStreamFn, onWork, {
+      afterRefresh: () => void readOnly.refreshApprovals(),
+    });
+    void readOnly.refreshApprovals();
+    drawActiveChat(agent);
+    if (!priorHost) container.replaceChildren(host);
+    if (!restoreScroll || readOnly.consumeFollowSend()) scrollToBottom();
+    else restoreScroll();
+    ctx.ensureDeliveryStream();
+    const runningSince = s.working ? s.workingSince : undefined;
+    void resumeTrackedRun(agent, s.threadRef, normalStreamFn, onWork, runningSince);
+    consumeBackgroundPanelRequest();
+  }
+
+  function mountReadOnlyPage(s: CoreSession, page: TranscriptPage): void {
+    const split = inheritedTranscript(s, page.items);
+    mountReadOnly(
+      s,
+      itemsToMessages(split.current, transcriptModel()),
+      currentEarlierCount(s, page.earlierItems ?? 0),
+      page.items?.[0]?.seq ?? null,
+      itemsToMessages(split.inherited, transcriptModel()),
+    );
+    setPins(page.pins ?? []);
+  }
 
   let startingIdeas = false;
 
@@ -1475,15 +1524,13 @@ export function createChatSurface(
 
   function setPins(pins: SessionPin[]): void {
     chatState.pins = pins;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readOnlyChat.redraw();
+    drawActiveChat();
   }
 
   function togglePins(e: Event): void {
     if ((e.target as Element | null)?.closest("a")) return;
     chatState.pinsExpanded = !chatState.pinsExpanded;
-    if (chatState.agent) drawActiveChat(chatState.agent);
-    else readOnlyChat.redraw();
+    drawActiveChat();
   }
 
   function linkifiedText(text: string): TemplateResult {
@@ -1638,12 +1685,95 @@ export function createChatSurface(
   ctx.onDensityChange(() => drawActiveChat());
 
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
-    if (readOnlyChat.active()) {
-      if (!agent || agent === chatState.agent) readOnlyChat.redraw();
+    const roSession = readOnly.session();
+    if (
+      !agent ||
+      agent !== chatState.agent ||
+      !chatState.host ||
+      (!roSession && !ctx.inbox && appState.currentView !== "chats")
+    )
+      return;
+    if (roSession) {
+      const approvals = readOnly.approvals();
+      const currentMessages = visibleMessages(agent);
+      readOnly.confirmSlackMessages(currentMessages);
+      const inheritedOffset = chatState.inheritedExpanded ? chatState.inheritedMessages.length : 0;
+      const shownMessages = [
+        ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
+        ...currentMessages,
+        ...readOnly.pendingSlackMessages(),
+      ];
+      prepareMessageRows(shownMessages);
+      const chatSurface = chatSurfaceOf(roSession);
+      const slackReply = readOnly.slackReply();
+      const host = chatState.host;
+      transcriptViewport.beforeRender();
+      render(
+        html`
+          <div class="custom-chat-shell">
+            ${
+              roSession.surface === "slack"
+                ? chatHeader(
+                    roSession.type === "channel"
+                      ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
+                      : groupDmTitle(roSession),
+                    null,
+                    shownMessages,
+                    { shown: 3, named: true },
+                    openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
+                  )
+                : chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", shownMessages, {
+                    shown: 5,
+                    named: false,
+                  })
+            }
+            ${
+              slackReply
+                ? nothing
+                : html`<div class="readonly-banner">
+                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                  </div>`
+            }
+            ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
+            ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
+            <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
+              ${pinnedStrip()}
+              <div class="message-stack">
+                ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing}
+                ${
+                  shownMessages.length
+                    ? shownMessages.map((m, i) =>
+                        settledChatMessage(
+                          m,
+                          i - inheritedOffset,
+                          agent.state.isStreaming && m === agent.state.streamingMessage,
+                        ),
+                      )
+                    : nothing
+                }
+                ${
+                  !shownMessages.length && !agent.state.isStreaming
+                    ? html`<div class="empty compact">No readable messages in this conversation.</div>`
+                    : nothing
+                }
+                ${liveWorkStatus(agent)}
+                ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
+              </div>
+            </section>
+            <div class="chat-bottom-dock">
+              ${goalStrip(agent, { readOnly: true })} ${slackReply ?? nothing} ${scrollBottomButton()}
+            </div>
+          </div>
+        `,
+        host,
+      );
+      transcriptViewport.afterRender();
+      requestAnimationFrame(() => {
+        decorateTextCodeBlocks(host);
+        if (host.isConnected) transcriptViewport.sync(host.querySelector<HTMLElement>(".chat-scroll"));
+      });
       return;
     }
-    if (!agent || agent !== chatState.agent || !chatState.host || (!ctx.inbox && appState.currentView !== "chats"))
-      return;
     for (const message of agent.state.messages) {
       const work = (message as AssistantWork).work;
       if (work?.pendingApprovals) work.pendingApprovals = unresolvedApprovals(work.pendingApprovals);
@@ -1948,7 +2078,7 @@ export function createChatSurface(
       ) &&
       (!work || ((work.status === "complete" || work.status === "failed") && !work.pendingApprovals?.length));
     if (!cacheable) return chatMessage(message, index, isStreaming);
-    const forkable = Boolean(!readOnlyChat.active() && chatState.threadRef && chatState.sessionId && chatState.agent);
+    const forkable = Boolean(!readOnly.active() && chatState.threadRef && chatState.sessionId && chatState.agent);
     const forking = pendingFork !== null;
     const speaker = speakerLabelFor(message);
     const speakerLabel =
@@ -2228,7 +2358,7 @@ export function createChatSurface(
     const ts = (message as { timestamp?: number }).timestamp;
     if (!text && ts === undefined) return nothing;
     const forkable = Boolean(
-      !readOnlyChat.active() && index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent,
+      !readOnly.active() && index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent,
     );
     return html`
       <div class="message-meta">
@@ -2365,7 +2495,7 @@ export function createChatSurface(
   }
 
   function isReadOnlySlackView(): boolean {
-    return readOnlyChat.active() && chatState.forkSession?.surface === "slack";
+    return readOnly.active() && chatState.forkSession?.surface === "slack";
   }
 
   function workTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
@@ -2536,7 +2666,7 @@ export function createChatSurface(
     bgPanel.output.clear();
     bgPanel.fetchSeq++;
     bgPanel.epoch++;
-    readOnlyChat.clear();
+    readOnly.clear();
   }
 
   function consumeBackgroundPanelRequest(): void {
@@ -2569,8 +2699,7 @@ export function createChatSurface(
   }
 
   function redrawBackgroundPanel(): void {
-    if (readOnlyChat.active()) readOnlyChat.redraw();
-    else drawActiveChat();
+    drawActiveChat();
   }
 
   async function refreshBackgroundDetail(): Promise<void> {
@@ -3667,8 +3796,7 @@ export function createChatSurface(
   }
 
   function redrawTranscript(): void {
-    if (readOnlyChat.active()) readOnlyChat.redraw();
-    else drawActiveChat();
+    drawActiveChat();
   }
 
   async function loadFullItem(work: WorkBlock, item: Item): Promise<void> {
@@ -3903,7 +4031,7 @@ export function createChatSurface(
     teardown: teardownActiveChat,
     resetChatState,
     mountContinuable,
-    mountReadOnly: readOnlyChat.mount,
+    mountReadOnly,
     attachApprovalsWhenLoaded,
     mountLoadingPane,
     mountLoadError,
@@ -3911,16 +4039,14 @@ export function createChatSurface(
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
         chatState.inheritedExpanded = true;
-        if (readOnlyChat.active()) readOnlyChat.redraw();
-        else drawActiveChat();
+        drawActiveChat();
       }
       const host = chatState.host ?? ctx.container()?.querySelector<HTMLElement>(".custom-chat");
       transcriptViewport.cancelFollow();
       const found = host ? highlightMessage(host, seq) : false;
       if (!found) {
         ctx.composer.state.error = "The linked message is unavailable or isn't visible in this conversation.";
-        if (readOnlyChat.active()) readOnlyChat.redraw();
-        else drawActiveChat();
+        drawActiveChat();
       }
       return found;
     },
@@ -3937,7 +4063,7 @@ export function createChatSurface(
     syncPaneState: postCurrentPaneState,
     onDelivery,
     applyTranscript,
-    mountReadOnlyPage: readOnlyChat.mountPage,
+    mountReadOnlyPage,
     transcriptAnchor,
     resumeIfIdle,
     catchUp,
