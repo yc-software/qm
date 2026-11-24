@@ -111,6 +111,18 @@ function provisioner(t: test.TestContext) {
   return { state, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/provision?x=1` };
 }
 
+async function setUp(
+  config: Parameters<typeof selfServeWorkspace>[0],
+  subject: string,
+  org: { id: string; name: string },
+) {
+  for (;;) {
+    const workspace = await withoutTenant(() => selfServeWorkspace(config, { subject, email: null }, org));
+    if (workspace.ready) return workspace.tenant;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 async function shared(t: test.TestContext, extra: Parameters<typeof testConfig>[0] = {}) {
   await bindBootTenant(async () => undefined);
   t.after(() => bindBootTenant(async () => TEST_TENANT));
@@ -138,8 +150,8 @@ test("cofounders signing in at once share one new workspace and every one of the
       ),
     ),
   );
-  assert.equal(new Set(tenants).size, 1);
-  const [tenant] = tenants as [string];
+  assert.equal(new Set(tenants.map(({ tenant }) => tenant)).size, 1);
+  const tenant = await setUp(s.config, "founder-1", { id: "42", name: "Acme Robotics" });
   const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]);
   assert.deepEqual(row?.settings, {
     brandName: "Acme Robotics",
@@ -161,7 +173,7 @@ test("cofounders signing in at once share one new workspace and every one of the
   const again = await withoutTenant(() =>
     selfServeWorkspace(s.config, { subject: "founder-1", email: null }, { id: "42", name: "Renamed" }),
   );
-  assert.equal(again, tenant);
+  assert.deepEqual(again, { tenant, ready: true });
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenant_external_orgs WHERE org_id = '42'"))[0], {
     n: 1,
   });
@@ -219,7 +231,7 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
 test("a founder removed from the workspace cannot self-serve back in", async (t) => {
   const { s, isAdmin } = await shared(t);
   const org = { id: "77", name: "Leavers Inc" };
-  const tenant = await withoutTenant(() => selfServeWorkspace(s.config, { subject: "stayer", email: null }, org));
+  const tenant = await setUp(s.config, "stayer", org);
   const leaver = trustedPrincipal(issuer, "leaver");
   await withTenant(tenant, async () => {
     await s.built.admin.users.record({ id: leaver, source: "invite", at: Date.now() });
@@ -235,7 +247,7 @@ test("a founder removed from the workspace cannot self-serve back in", async (t)
 test("a member an admin demoted does not regain admin by self-serving again", async (t) => {
   const { s, isAdmin } = await shared(t);
   const org = { id: "78", name: "Demoted Inc" };
-  const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
+  const signIn = (subject: string) => setUp(s.config, subject, org);
   const tenant = await signIn("keeper");
   await signIn("demoted");
   await withTenant(tenant, async (bound) => {
@@ -261,25 +273,21 @@ test("a deployment with a boot tenant never self-serves another workspace", asyn
   assert.equal((await send(s.base, claims({ externalOrg: { id: "boot", name: "Boot" } }))).status, 403);
 });
 
-test("a deployment's provisioner sets up each new workspace before anyone can use it, and a failure leaves it switched off", async (t) => {
+test("a founder gets in before setup finishes, and the workspace stays switched off until a retried setup succeeds", async (t) => {
   const { db, s, directory, isAdmin, provision } = await shared(t);
   provision.state.failing = true;
   const org = { id: "55", name: "Gated Co", partnerChatAccount: "5555" };
   const signIn = (subject: string) => withoutTenant(() => selfServeWorkspace(s.config, { subject, email: null }, org));
-  await assert.rejects(signIn("g1"), /HTTP 502/);
-  const [row] = await db.owner.q("SELECT tenant::text AS tenant FROM tenant_external_orgs WHERE org_id = '55'");
-  const tenant = row!.tenant as string;
+  const { tenant, ready } = await signIn("g1");
+  assert.equal(ready, false);
+  assert.equal(await isAdmin(tenant, "g1"), true, "the founder is in the workspace before it is set up");
   const settingsOf = async () =>
     (await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings;
-  assert.deepEqual(await settingsOf(), {
-    brandName: "Gated Co",
-    serving: false,
-    deploymentModelKey: false,
-  });
+  while (provision.state.calls.length < 3) assert.equal((await signIn("g1")).ready, false);
+  assert.deepEqual(await settingsOf(), { brandName: "Gated Co", serving: false, deploymentModelKey: false });
   assert.deepEqual(await withoutTenant(() => directory.tenantsForPrincipal!(trustedPrincipal(issuer, "g1"))), []);
-  assert.equal(await isAdmin(tenant, "g1"), false);
   provision.state.failing = false;
-  assert.deepEqual(await Promise.all([signIn("g1"), signIn("g2")]), [tenant, tenant]);
+  assert.deepEqual(await Promise.all([setUp(s.config, "g1", org), setUp(s.config, "g2", org)]), [tenant, tenant]);
   assert.deepEqual(await settingsOf(), {
     brandName: "Gated Co",
     modelGatewayKey: "own-key",
@@ -291,7 +299,7 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   assert.deepEqual(body, { tenant, brandName: "Gated Co", issuer, externalOrg: org });
   assert.ok(provision.state.calls.every((call) => call.signed));
   const calls = provision.state.calls.length;
-  await signIn("g3");
+  assert.deepEqual(await signIn("g3"), { tenant, ready: true });
   assert.equal(provision.state.calls.length, calls, "a provisioned workspace is not provisioned again");
   for (const subject of ["g1", "g2", "g3"]) assert.equal(await isAdmin(tenant, subject), true, subject);
   await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving":false}' WHERE id = $1`, [tenant]);
@@ -304,24 +312,18 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
 });
 
 test("a provisioner reply without the workspace's own model gateway key leaves it switched off", async (t) => {
-  const { s, isAdmin, provision, db } = await shared(t);
+  const { s, provision, db } = await shared(t);
   provision.state.reply = { settings: { brandName: "Renamed" } };
   const org = { id: "66", name: "No Key Co" };
-  await assert.rejects(
-    withoutTenant(() => selfServeWorkspace(s.config, { subject: "n1", email: null }, org)),
-    /HTTP 502/,
-  );
+  while (provision.state.calls.length < 2)
+    assert.equal(
+      (await withoutTenant(() => selfServeWorkspace(s.config, { subject: "n1", email: null }, org))).ready,
+      false,
+    );
   const [row] = await db.owner.q(
     "SELECT t.settings FROM tenant_external_orgs o JOIN tenants t ON t.id = o.tenant WHERE o.org_id = '66'",
   );
   assert.deepEqual(row, { settings: { brandName: "No Key Co", serving: false, deploymentModelKey: false } });
-  assert.equal(
-    await isAdmin(
-      String((await db.owner.q("SELECT tenant FROM tenant_external_orgs WHERE org_id = '66'"))[0]!.tenant),
-      "n1",
-    ),
-    false,
-  );
 });
 
 test("self-serve never creates a deployment's first workspace", async (t) => {

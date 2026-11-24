@@ -796,6 +796,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (pathname === "/auth/callback" && method === "GET") return authCallback(req, res, url);
   if (pathname === "/auth/tenant" && method === "POST") return tenantChoice.choose(req, res);
   if (pathname === "/auth/tenant" && method === "GET") return tenantChoice.search(req, res, url);
+  if (pathname === "/auth/setting-up" && method === "GET") return tenantChoice.settingUp(req, res);
   if (pathname.startsWith("/auth/trusted/") && method === "GET") return trustedAuth(req, res, url);
   if (pathname === "/auth/desktop" || pathname === "/auth/desktop/redeem") return desktopLogin(req, res, url);
   if (pathname === "/auth/invite") return inviteLogin(req, res);
@@ -1437,7 +1438,7 @@ const tenantChoice = createTenantChoice({
   ...(trustedAssertions
     ? {
         selfServe: async (who: { subject: string; email: string | null }, org: ExternalOrg) => {
-          const tenant = await selfServeWorkspace(
+          const workspace = await selfServeWorkspace(
             {
               core: CORE,
               signingSecret: CORE_SIGNING_SECRET!,
@@ -1449,7 +1450,7 @@ const tenantChoice = createTenantChoice({
             org,
           );
           adminCache.delete(trustedPrincipal(trustedOidc!.issuer, who.subject));
-          return tenant;
+          return workspace;
         },
       }
     : {}),

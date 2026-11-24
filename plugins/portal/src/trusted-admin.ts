@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CompactSign } from "jose";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
-import type { ExternalOrg } from "./tenant-choice.ts";
-
-const SELF_SERVE_TIMEOUT_MS = 45_000;
+import type { ExternalOrg, SelfServedWorkspace } from "./tenant-choice.ts";
 
 interface TrustedCoreConfig {
   core: string;
@@ -49,18 +47,17 @@ export async function selfServeWorkspace(
   who: { subject: string; email: string | null },
   externalOrg: ExternalOrg,
   fetchImpl: typeof fetch = fetch,
-): Promise<string> {
+): Promise<SelfServedWorkspace> {
   const response = await postAssertion(
     config,
     "/v1/auth/broker/self-serve",
     { purpose: "trusted-self-serve", subject: who.subject, email: who.email, externalOrg },
     fetchImpl,
-    SELF_SERVE_TIMEOUT_MS,
   );
   if (!response.ok) throw new Error(`Self-serve workspace failed: HTTP ${response.status} ${await response.text()}`);
-  const { tenant } = (await response.json()) as { tenant?: unknown };
+  const { tenant, ready } = (await response.json()) as { tenant?: unknown; ready?: unknown };
   if (!isTenantId(tenant)) throw new Error("Self-serve workspace failed: no workspace returned");
-  return tenant;
+  return { tenant, ready: ready !== false };
 }
 
 export async function provisionTrustedAdmin(

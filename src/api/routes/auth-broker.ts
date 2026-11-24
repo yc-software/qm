@@ -285,7 +285,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
     const admin = deps.admin;
-    const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
+    const { tenant, created, ready } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
     await withTenant(tenant, async (bound) => {
       const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
       if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
@@ -297,7 +297,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
           { ...event, action: "grant.create", resource: `${grant.principalId}/${grant.role}` },
         );
     });
-    return sendJson(res, 200, { tenant, created });
+    return sendJson(res, 200, { tenant, created, ready });
   } catch (error) {
     if (error instanceof AdminError)
       return sendJson(res, error.status, { error: "self_serve_failed", message: error.message });

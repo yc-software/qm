@@ -29,6 +29,7 @@ let orgs: unknown = undefined;
 let selfServe = false;
 const selfServed: Array<Record<string, unknown>> = [];
 const orgTenants: Record<string, string> = {};
+const settingUp = new Set<string>();
 const principalLookups: string[] = [];
 const claimed = new Set<string>();
 const admissions: Array<string | undefined> = [];
@@ -72,7 +73,9 @@ const upstream = createServer((req, res) => {
       const claims = JSON.parse(Buffer.from(payload).toString()) as Record<string, unknown>;
       selfServed.push(claims);
       const org = claims.externalOrg as { id: string };
-      return void res.end(JSON.stringify({ tenant: orgTenants[org.id] ?? null, created: true }));
+      return void res.end(
+        JSON.stringify({ tenant: orgTenants[org.id] ?? null, created: true, ready: !settingUp.has(org.id) }),
+      );
     }
     if (path.startsWith("/v1/principals/") && canonicalStatus !== 200) {
       res.statusCode = canonicalStatus;
@@ -391,6 +394,22 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
     const many = await trustedCallback("founder@acme.test");
     assert.equal((await many.text()).match(/name="tenant" value="org:/g)?.length, 40, "every organization is offered");
     assert.ok(cookieFrom(many, "portal_tenant_choice")!.length <= 4096);
+
+    orgs = [{ id: "42", name: "Acme" }];
+    settingUp.add("42");
+    const waiting = await trustedCallback("founder@acme.test");
+    assert.deepEqual(
+      [waiting.status, waiting.headers.get("refresh"), sessionOf(waiting)],
+      [200, "3; url=/auth/setting-up", null],
+    );
+    assert.match(await waiting.text(), /Setting up your workspace/);
+    const waitingCookie = cookieFrom(waiting, "portal_tenant_choice")!;
+    const poll = () => fetch(`${base}/auth/setting-up`, { headers: { cookie: waitingCookie }, redirect: "manual" });
+    assert.equal((await poll()).headers.get("refresh"), "3; url=/auth/setting-up", "each poll retries the setup");
+    settingUp.clear();
+    const opened = await poll();
+    assert.deepEqual([opened.status, sessionOf(opened)?.sub, sessionOf(opened)?.t], [302, principal, alpha]);
+    assert.equal((await fetch(`${base}/auth/setting-up`, { redirect: "manual" })).status, 400);
 
     tenants = [{ id: beta, brandName: "Beta Labs" }];
     selfServed.length = 0;

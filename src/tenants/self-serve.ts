@@ -97,13 +97,26 @@ export async function provisionWorkspace(
 }
 
 export interface SelfServe {
-  workspace(issuer: string, subject: string, org: ExternalOrg): Promise<{ tenant: string; created: boolean }>;
+  workspace(
+    issuer: string,
+    subject: string,
+    org: ExternalOrg,
+  ): Promise<{ tenant: string; created: boolean; ready: boolean }>;
 }
 
 export function createSelfServe(
   pg: Pick<PgPool, "q">,
   provision: (request: WorkspaceProvisionRequest) => Promise<string>,
 ): SelfServe {
+  const settingUp = new Map<string, Promise<void>>();
+  const setUp = (request: WorkspaceProvisionRequest): void => {
+    if (settingUp.has(request.tenant)) return;
+    const run = provision(request)
+      .then((key) => markSelfServeProvisioned(pg, request.tenant, key))
+      .catch((error: unknown) => reportFailure("self-serve workspace setup", error, request.tenant))
+      .finally(() => settingUp.delete(request.tenant));
+    settingUp.set(request.tenant, run);
+  };
   return {
     async workspace(issuer, subject, org) {
       if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
@@ -111,20 +124,8 @@ export function createSelfServe(
       const workspace = await selfServeTenant(pg, issuer, org);
       if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
-      if (!workspace.provisioned) {
-        const request = {
-          tenant: workspace.tenant,
-          brandName: org.name,
-          issuer,
-          externalOrg: org,
-        };
-        const key = await provision(request).catch((error: unknown) => {
-          reportFailure("self-serve workspace provisioning", error, workspace.tenant);
-          throw new AdminError(502, "the new workspace could not be set up; try signing in again", { cause: error });
-        });
-        await markSelfServeProvisioned(pg, workspace.tenant, key);
-      }
-      return { tenant: workspace.tenant, created: workspace.created };
+      if (!workspace.provisioned) setUp({ tenant: workspace.tenant, brandName: org.name, issuer, externalOrg: org });
+      return { tenant: workspace.tenant, created: workspace.created, ready: workspace.provisioned };
     },
   };
 }

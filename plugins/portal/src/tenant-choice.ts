@@ -35,13 +35,18 @@ export interface ExternalOrg {
   partnerChatAccount?: string;
 }
 
+export interface SelfServedWorkspace {
+  tenant: string;
+  ready: boolean;
+}
+
 interface ChoiceClaims {
   k: "choice";
   signIn?: VerifiedSignIn;
   trusted?: TrustedSignIn;
   returnTo: string;
   email?: string | null;
-  selfServe?: { subject: string };
+  selfServe?: { subject: string; org?: ExternalOrg };
   exp: number;
 }
 
@@ -213,6 +218,14 @@ function workspacePicker(
 
 type Who = Pick<ChoiceClaims, "signIn" | "trusted" | "selfServe">;
 
+interface SelfServeArrival {
+  trusted: TrustedSignIn;
+  returnTo: string;
+  email: string | null;
+  selfServe: { subject: string; org: ExternalOrg };
+  exp: number;
+}
+
 interface CardPage {
   title: string;
   heading: string;
@@ -242,7 +255,7 @@ export interface TenantChoiceDeps {
     returnTo: string,
     tenant?: string,
   ) => void | Promise<void>;
-  selfServe?: (who: { subject: string; email: string | null }, org: ExternalOrg) => Promise<string>;
+  selfServe?: (who: { subject: string; email: string | null }, org: ExternalOrg) => Promise<SelfServedWorkspace>;
 }
 
 export function createTenantChoice(deps: TenantChoiceDeps) {
@@ -319,6 +332,47 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     return finish(res, who, returnTo, pin ?? tenants[0]?.id);
   }
 
+  async function selfServed(res: ServerResponse, arrival: SelfServeArrival): Promise<void> {
+    const { trusted, returnTo, email, selfServe } = arrival;
+    const { tenant, ready } = await deps.selfServe!({ subject: selfServe.subject, email }, selfServe.org);
+    if (ready) return finish(res, { trusted }, returnTo, tenant);
+    res.setHeader("set-cookie", [
+      clearCookie("portal_oidc_tmp", "/auth", deps.secureCookies),
+      setCookie("portal_tenant_choice", seal({ k: "choice", ...arrival }, deps.key), {
+        path: "/auth",
+        maxAge: Math.max(arrival.exp - Math.floor(Date.now() / 1000), 0),
+        secure: deps.secureCookies,
+      }),
+    ]);
+    res.setHeader("refresh", "3; url=/auth/setting-up");
+    deps.sendHtml(
+      res,
+      200,
+      deps.cardPage({
+        title: "Setting up",
+        heading: "Setting up your workspace",
+        msg: "This takes a few seconds. Your workspace opens here as soon as it is ready.",
+        icon: deps.lockIcon,
+        actions: "",
+        help: "",
+      }),
+    );
+  }
+
+  async function settingUp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
+    const org = choice?.selfServe?.org;
+    if (!choice?.trusted || !org || !deps.selfServe) return expired(res);
+    const { trusted, returnTo, email, exp } = choice;
+    return selfServed(res, {
+      trusted,
+      returnTo,
+      email: email ?? null,
+      selfServe: { subject: choice.selfServe!.subject, org },
+      exp,
+    });
+  }
+
   function lookupTenants(choice: ChoiceClaims): Promise<EmailTenants> {
     if (choice.trusted)
       return coreSignInTenants(deps.core, deps.signingSecret, {
@@ -356,12 +410,16 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       orgs.length &&
       identity.subject
     ) {
-      if (orgs.length === 1) {
-        const tenant = await deps.selfServe({ subject: identity.subject, email: identity.email }, orgs[0]!);
-        return finish(res, { trusted: who }, identity.returnTo, tenant);
-      }
       const { subject } = identity;
       const exp = Math.floor(Date.now() / 1000) + deps.ttlS;
+      if (orgs.length === 1)
+        return selfServed(res, {
+          trusted: who,
+          returnTo: identity.returnTo,
+          email: identity.email,
+          selfServe: { subject, org: orgs[0]! },
+          exp,
+        });
       const options = orgs.map((org) => ({
         id: `${ORG_OPTION}${seal({ k: "org", subject, org, exp }, deps.key)}`,
         brandName: org.name,
@@ -390,7 +448,6 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     const choice = openChoice(readCookie(req.headers.cookie, "portal_tenant_choice"), deps.key, Date.now());
     const picked = new URLSearchParams(await readBody(req, 4096)).get("tenant") ?? "";
     if (!choice || (!choice.signIn && !choice.trusted)) return expired(res);
-    let tenant = picked;
     if (choice.selfServe && choice.trusted) {
       const offered = picked.startsWith(ORG_OPTION) ? open(picked.slice(ORG_OPTION.length), deps.key) : null;
       if (
@@ -401,15 +458,18 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
         !deps.selfServe
       )
         return expired(res);
-      tenant = await deps.selfServe(
-        { subject: choice.selfServe.subject, email: choice.email ?? null },
-        offered.org as ExternalOrg,
-      );
-    } else {
-      if (!isTenantId(tenant)) return expired(res);
-      const { tenants } = await lookupTenants(choice);
-      if (!tenants.some(({ id }) => id === tenant)) return expired(res);
+      return selfServed(res, {
+        trusted: choice.trusted,
+        returnTo: choice.returnTo,
+        email: choice.email ?? null,
+        selfServe: { subject: choice.selfServe.subject, org: offered.org as ExternalOrg },
+        exp: Math.floor(Date.now() / 1000) + deps.ttlS,
+      });
     }
+    const tenant = picked;
+    if (!isTenantId(tenant)) return expired(res);
+    const { tenants } = await lookupTenants(choice);
+    if (!tenants.some(({ id }) => id === tenant)) return expired(res);
     const recent = [tenant, ...readRecent(req.headers.cookie).filter((id) => id !== tenant)].slice(0, RECENT_MAX);
     res.setHeader("set-cookie", [
       setCookie(RECENT_COOKIE, recent.join("."), {
@@ -430,5 +490,5 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     pickerPage(res, tenants, { recent: readRecent(req.headers.cookie), query });
   }
 
-  return { settle, settleTrusted, choose, search };
+  return { settle, settleTrusted, choose, search, settingUp };
 }

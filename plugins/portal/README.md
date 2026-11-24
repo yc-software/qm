@@ -95,9 +95,13 @@ A new workspace starts switched off. Core POSTs `{ tenant, brandName, issuer, ex
 nonce }` to `WORKSPACE_PROVISIONER_URL`, source-signed with the key
 `HMAC-SHA256(CORE_SIGNING_SECRET, "workspace-provisioner")` (hex). A 200 reply of
 `{ "settings": { "modelGatewayKey": "…" } }` (nothing else) gives the workspace its own
-model gateway key and switches it on, once. Until a call succeeds sign-in fails and the
-next sign-in retries, so the provisioner must answer repeated calls for a tenant with the
-same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
+model gateway key and switches it on, once. Sign-in does not wait for that call: the
+person is recorded and granted at once, and portal shows "Setting up your workspace",
+which reloads `/auth/setting-up` every few seconds. Each reload repeats the self-serve
+call, which starts the provisioner call again unless one is already running, and the
+person enters once the workspace is switched on. The waiting page lasts as long as the
+sign-in choice cookie. The provisioner must therefore answer repeated calls for a tenant
+with the same key. A self-served workspace carries `deploymentModelKey: false`, so it never falls
 back to the deployment's model key: without a key of its own its model calls fail. Core
 refuses to start with `WORKSPACE_PROVISIONER_URL` alongside deployment-wide model provider
 credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
