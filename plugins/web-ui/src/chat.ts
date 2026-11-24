@@ -5,7 +5,7 @@ import type { SlackReply } from "./slack-reply";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
-import { replyVersions, replyVersionsRow } from "./reply-versions.ts";
+import { replyVersions, replyVersionsRow, rowEntrySeqs } from "./reply-versions.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -2351,9 +2351,11 @@ export function createChatSurface(
         return assistantMessage({
           role: "agent",
           index,
-          entrySeqs: messageEntrySeqs(message)
-            .filter((seq) => !inlineSteers.has(seq))
-            .join(" "),
+          entrySeqs: rowEntrySeqs(
+            versions,
+            message,
+            messageEntrySeqs(message).filter((seq) => !inlineSteers.has(seq)),
+          ),
           streaming: isStreaming,
           content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
@@ -2365,9 +2367,11 @@ export function createChatSurface(
         <article
           class="message-row assistant-row ${labeled ? "named-assistant-row" : ""} ${isStreaming ? "streaming" : ""} ${continuedSpeakerRows.has(message) ? "continued-row" : ""}"
           data-index=${index}
-          data-entry-seqs=${messageEntrySeqs(message)
-            .filter((seq) => !inlineSteers.has(seq))
-            .join(" ")}
+          data-entry-seqs=${rowEntrySeqs(
+            versions,
+            message,
+            messageEntrySeqs(message).filter((seq) => !inlineSteers.has(seq)),
+          )}
         >
           ${
             labeled && !continuedSpeakerRows.has(message)

@@ -1,15 +1,7 @@
 import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
-import {
-  isAgentReply,
-  isOverheard,
-  isUserItem,
-  type Item,
-  type NewItem,
-  stepMessage,
-  typedBy,
-} from "../sessions/items.ts";
+import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -207,6 +199,7 @@ import {
   addConversationBlocks,
   appendTurnGuidance,
   finishSystemPrompt,
+  replacesReply,
   replyToRewrite,
   wakeTurnEvent,
 } from "./orchestrator/turn-prompt.ts";
@@ -1970,9 +1963,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, actor.id, history) : undefined;
-        if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
+        const rewrites = wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, actor.id, history) : undefined;
         if (spineWake) turnEvents.push(wakeTurnNote(await replyToRewrite(deps, actor.id, history, "web_dm_spine")));
+        else if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2278,8 +2271,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
                 if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
-                const replaces = rewrites && isAgentReply(entry) && !!entry.text?.trim() && !body.stopped;
-                if (replaces && !emittedEntries.some(typedBy)) body.supersedes = rewrites.seq;
+                if (rewrites && replacesReply(entry, emittedEntries)) body.supersedes = rewrites.seq;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;

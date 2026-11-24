@@ -5,7 +5,7 @@ import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { isShownReply, typedBy, type Item } from "../../sessions/items.ts";
+import { isAgentReply, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
 import type { FeatureName } from "../../feature-flags.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
@@ -138,16 +138,19 @@ export async function replyToRewrite(
   history: readonly Item[],
   flag: FeatureName = "wake_reply_rewrite",
 ): Promise<Item | undefined> {
-  const typed = history.findLastIndex(typedBy);
-  if (typed >= 0 && !samePerson(typedBy(history[typed]!), personId)) return undefined;
-  const replies = history.slice(typed + 1).filter(isShownReply);
+  const replies = history
+    .slice(history.findLastIndex(typedBy) + 1)
+    .filter((item) => isShownReply(item) && !!item.turnId);
   if (!replies.length || !(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
-  for (const reply of replies.reverse()) {
-    const run = reply.turnId ? await deps.runs?.get(reply.turnId) : null;
-    if (run && !firedByPoll(run.request)) return reply;
-  }
-  return undefined;
+  const sources = await deps.runs?.requestSources(replies.map((reply) => reply.turnId!));
+  return replies.findLast((reply) => {
+    const source = sources?.get(reply.turnId!);
+    return source && samePerson(source.actorId, personId) && !firedByPoll(source);
+  });
 }
+
+export const replacesReply = (entry: NewItem, emitted: readonly Item[]): boolean =>
+  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped && !emitted.some(typedBy);
 
 export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
   const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;
