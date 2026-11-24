@@ -13,6 +13,7 @@ import type { ConversationTurn, OverheardMessage } from "../types.ts";
 import {
   isOverheard,
   isAgentReply,
+  isToolPost,
   isUserItem,
   messageTs,
   stepMessage,
@@ -404,7 +405,7 @@ export function reconstructMessagesFromHistory(
           });
       }
     } else if (isAgentReply(e)) {
-      if (typeof e.body.callId === "string") continue;
+      if (isToolPost(e)) continue;
       const t = itemText(e);
       const via = typeof e.body.via === "string" ? e.body.via : undefined;
       if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));

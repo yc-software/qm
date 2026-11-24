@@ -20,7 +20,6 @@ export async function webDmSpine(
     (input.origin.kind === "human" || isSessionTurn(input)) &&
     !isSubagentThreadRef(conversation.threadRef) &&
     !input.swarm &&
-    !input.approval &&
     !input.proactiveOpener &&
     !input.privateSessionMessage &&
     !input.readOnly &&

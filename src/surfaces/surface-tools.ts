@@ -55,7 +55,7 @@ import { sleep } from "../util/async.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { Item, NewItem } from "../sessions/items.ts";
+import { isShownReply, type Item, type NewItem } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
@@ -493,11 +493,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (inTranscript(d.destination)) {
         if (!input.text.trim()) return { ok: false, message: "An edit needs the new text; nothing was changed." };
         const latest = await latestVersion(deps.sessions, session.id, input.ref);
-        if (!latest)
+        if (!latest) {
+          const mine = (await deps.sessions.getItems(session.id, { messagesOnly: true, limit: 50 })).findLast(
+            isShownReply,
+          );
           return {
             ok: false,
-            message: `ref ${input.ref} isn't a message I posted in this conversation; use the ref this turn's note names`,
+            message: `ref ${input.ref} isn't a message I posted in this conversation; ${mine ? `my latest message here is ref ${mine.seq}` : "I have posted nothing here to edit"}`,
           };
+        }
         return postToTranscript(input.text, { supersedes: latest.seq });
       }
       if (!editable(d.destination))

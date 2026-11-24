@@ -4,7 +4,6 @@ import { personLabel } from "../identity/person-names.ts";
 import {
   isAgentReply,
   isOverheard,
-  isShownReply,
   isUserItem,
   type Item,
   type NewItem,
@@ -1973,7 +1972,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
         const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, actor.id, history) : undefined;
         if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
-        if (spineWake) turnEvents.push(wakeTurnNote(history.findLast(isShownReply)));
+        if (spineWake) turnEvents.push(wakeTurnNote(await replyToRewrite(deps, actor.id, history, "web_dm_spine")));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,

@@ -22,11 +22,13 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
       },
     },
   });
-  await built.featureFlags.setEnabled("web_dm_spine", scopeId("personal", "U1"), true, "test");
+  for (const flag of ["web_dm_spine", "wake_reply_rewrite"] as const)
+    await built.featureFlags.setEnabled(flag, scopeId("personal", "U1"), true, "test");
   built.runtime.start();
   const threadRef = "web:U1:spine";
-  const typed = (text: string, actor = "U1", thread = threadRef) =>
+  const typed = (text: string, actor = "U1", thread = threadRef, extra = {}) =>
     built.app.turn({
+      ...extra,
       surface: "web",
       actor: { externalId: actor },
       conversation: { kind: "dm", threadRef: thread },
@@ -83,6 +85,11 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
 
   await typed("hello");
   assert.ok((await shown()).at(-1)!.text!.startsWith("You said: hello"), "an unposted answer to the person is shown");
+
+  const held = await typed("!paused-approval deploy");
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  await typed("!post Deployed", "U1", threadRef, { approval });
+  assert.equal((await shown()).at(-1)!.text, "Deployed", "an approved turn still speaks by posting");
 
   const plain = await typed("hello", "U2", "web:U2:plain");
   assert.deepEqual([plain.status, plain.reply?.startsWith("You said: hello")], ["ok", true], "flag off: unchanged");

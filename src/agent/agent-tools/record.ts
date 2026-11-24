@@ -60,7 +60,7 @@ function capPayloadStrings(v: unknown): unknown {
   return v;
 }
 
-export function createRecorder(ref: ToolContextRef) {
+export function createRecorder(ref: ToolContextRef, mailHeldFrom?: ReadonlySet<string>) {
   const logResult = async (
     summary: { callId: string; isError: boolean; result: string } & Record<string, unknown>,
   ): Promise<void> => {
@@ -259,7 +259,7 @@ export function createRecorder(ref: ToolContextRef) {
         }
       }
       if (stopped()) return ret;
-      const mail = await deliverMessages(ret);
+      const mail = mailHeldFrom?.has(originalTool) ? { text: "", delivered: [] } : await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
       const goalInbox =

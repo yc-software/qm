@@ -116,6 +116,7 @@ export const typedBy = (item: Pick<Item, "kind" | "body">): string | undefined =
   isUserItem(item) && typeof item.body.speakerId === "string" ? item.body.speakerId : undefined;
 export const isShownReply = (item: Pick<Item, "kind" | "variant" | "text" | "body">): boolean =>
   isAgentReply(item) && !!item.text?.trim() && typeof item.body.via !== "string";
+export const isToolPost = (item: Pick<Item, "body">): boolean => typeof item.body.callId === "string";
 export const isOverheard = (item: Pick<Item, "kind" | "body">): boolean =>
   item.kind === "UserMessage" && item.body.overheard === true;
 export const isHidden = (item: Pick<Item, "hidden" | "body">): boolean =>

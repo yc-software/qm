@@ -1191,19 +1191,42 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
-test("a surface whose posts are transcript messages records a post's size and runs its step's calls in order", async () => {
+test("a surface whose posts are transcript messages records a post's size, runs its step's calls in order, and leaves mail unread", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = { current: fakeToolContext(), emit: sink(emitted), scopeLabel: "personal:U1" };
-  const web = createAgentTools(ref, {
+  const current = fakeToolContext();
+  const mail = {
+    id: "m1",
+    senderId: "child",
+    recipientId: "parent",
+    audience: [],
+    text: "child finding",
+    createdAt: 1,
+  };
+  current.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => [{ ...mail, actor: { id: "U1", type: "internal" as const } }],
+  };
+  const ref: ToolContextRef = { current, emit: sink(emitted), scopeLabel: "personal:U1", replyOptional: true };
+  const tools = createAgentTools(ref, {
     surfaceTools: true,
     surfaceName: "web",
     surfacePrompt: { label: "the web app", mentionSyntax: "", transcript: true },
-  }).find((tool) => tool.name === "web")!;
+  });
+  const web = tools.find((tool) => tool.name === "web")!;
   assert.equal(web.executionMode, "sequential");
   await call(web, { action: "post", text: "hello there" });
   await call(web, { action: "edit", ref: "7", text: "hello" });
+  await call(
+    tools.find((tool) => tool.name === "finish_silently")!,
+    {},
+  );
+  assert.ok(!emitted.some((e) => String(e.text).includes("child finding")));
   assert.deepEqual(
-    emitted.filter((e) => e.kind === "ToolCall").map((e) => [e.body.action, e.body.bytes, e.body.text]),
+    emitted
+      .filter((e) => e.kind === "ToolCall" && e.tool === "web")
+      .map((e) => [e.body.action, e.body.bytes, e.body.text]),
     [
       ["post", 11, undefined],
       ["edit", 5, undefined],

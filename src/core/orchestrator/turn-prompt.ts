@@ -6,6 +6,7 @@ import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
 import { isShownReply, typedBy, type Item } from "../../sessions/items.ts";
+import type { FeatureName } from "../../feature-flags.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -135,12 +136,12 @@ export async function replyToRewrite(
   deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
   personId: string,
   history: readonly Item[],
+  flag: FeatureName = "wake_reply_rewrite",
 ): Promise<Item | undefined> {
   const typed = history.findLastIndex(typedBy);
   if (typed >= 0 && !samePerson(typedBy(history[typed]!), personId)) return undefined;
   const replies = history.slice(typed + 1).filter(isShownReply);
-  if (!replies.length || !(await deps.featureFlags?.enabled("wake_reply_rewrite", personalScope(personId))))
-    return undefined;
+  if (!replies.length || !(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
   for (const reply of replies.reverse()) {
     const run = reply.turnId ? await deps.runs?.get(reply.turnId) : null;
     if (run && !firedByPoll(run.request)) return reply;
