@@ -3,12 +3,14 @@ import test, { after, beforeEach } from "node:test";
 import { browserEnv } from "./browser-env.ts";
 import type { AppView } from "../src/app-view.ts";
 
+let pinnedIds: string[] = [];
 let requests: Array<{ path: string; resolve: (body: unknown) => void }> = [];
 const { vite, close } = await browserEnv({
   dom: { url: "http://localhost/apps" },
   fetch: (input) => {
     const path = String(input);
     if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
+    if (path.startsWith("/api/ui-state")) return Promise.resolve(Response.json({ value: pinnedIds, updatedAt: 1 }));
     return new Promise<Response>((resolve) => requests.push({ path, resolve: (body) => resolve(Response.json(body)) }));
   },
 });
@@ -26,6 +28,7 @@ let main: HTMLElement;
 
 beforeEach(async () => {
   requests = [];
+  pinnedIds = [];
   document.body.innerHTML = '<div id="app"></div><main></main>';
   main = document.querySelector("main")!;
   vite.moduleGraph.invalidateAll();
@@ -54,6 +57,22 @@ test("the initial list refresh redraws the list when no detail was opened", asyn
   request("/api/apps").resolve({ apps: [{ id: "app", ownerScopeId: "personal:tester" }] });
   await rendering;
   assert.deepEqual(listedIds(), ["app"]);
+});
+
+test("pinned apps list above the tabs instead of in them", async () => {
+  pinnedIds = ["b"];
+  const rendering = renderApps();
+  await settle();
+  request("/api/apps").resolve({
+    apps: ["a", "b"].map((id) => ({ id, status: "running", ownerScopeId: "personal:tester" })),
+  });
+  await rendering;
+  assert.deepEqual(
+    [...main.querySelectorAll(".app-pinned .list-row-title")].map((row) => row.textContent),
+    ["b"],
+  );
+  assert.deepEqual(listedIds(), ["b", "a"]);
+  assert.equal(main.querySelector(".app-pin.pinned")?.getAttribute("aria-label"), "Unpin b");
 });
 
 test("the initial list refresh leaves an opened detail and its loading state untouched", async () => {

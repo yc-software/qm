@@ -7784,6 +7784,37 @@ a.file-card:hover {
   min-height: 30px;
   padding: 5px 9px;
 }
+.app-pinned {
+  margin: 14px 0;
+}
+.app-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.app-pin {
+  width: 30px;
+  height: 30px;
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+.app-pin.pinned {
+  opacity: 1;
+}
+.app-pin:hover {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.app-row:hover .app-pin,
+.app-card:hover .app-pin,
+.app-pin:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .app-pin {
+    opacity: 1;
+  }
+}
 .session-menu-option.danger {
   color: var(--destructive);
 }
