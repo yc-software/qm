@@ -358,6 +358,7 @@ export function createTurnHandler(deps: {
       const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
       const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
         token: deps.botToken,
+        where: { account: ids.ownTeamId, chat: inc.channel },
         ...(deps.trustedFileHost ? { trustedHost: deps.trustedFileHost } : {}),
         core,
         directory,
