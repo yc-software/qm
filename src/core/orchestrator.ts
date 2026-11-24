@@ -1963,8 +1963,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const rewrites = wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, actor.id, history) : undefined;
-        if (spineWake) turnEvents.push(wakeTurnNote(await replyToRewrite(deps, actor.id, history, "web_dm_spine")));
+        const rewrites =
+          wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
+        if (spineWake)
+          turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine")));
         else if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {

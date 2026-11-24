@@ -162,6 +162,7 @@ export interface RunStore {
   get(runId: string): Promise<Run | null>;
 
   requestSources(
+    tenant: Tenant,
     runIds: readonly string[],
   ): Promise<Map<string, { actorId: string; origin?: Pick<TurnOrigin, "kind">; surface?: string }>>;
 
