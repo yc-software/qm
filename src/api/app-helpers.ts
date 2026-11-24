@@ -1,4 +1,3 @@
-import { AUTOMATION_SESSION_SURFACES } from "../sessions/session-rows.ts";
 import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
@@ -323,9 +322,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function sessionsForViewer(viewer: Pick<CapabilityClaims, "actorId" | "botActor">): Promise<Session[]> {
-    const sessions = (await deps.sessions.listByParticipant(viewer.actorId, { botActor: viewer.botActor })).filter(
-      (session) => !session.surface || !AUTOMATION_SESSION_SURFACES.has(session.surface),
-    );
+    const sessions = await deps.sessions.listByParticipant(viewer.actorId, { botActor: viewer.botActor });
     const allowed = await managedProjectMemberships(
       sessions.map((session) => session.scopeId),
       viewer.actorId,

@@ -519,7 +519,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   await setOnboardingStatus(deps.memory, personal, "not_started", today, { actorId: actor.id, context: "admin" });
   let deletedSessions = 0;
   if (deps.sessions) {
-    const own = (await deps.sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal);
+    const own = await deps.sessions.listByScope(personal);
     for (const s of own) {
       await deps.sessions.deleteSession(s.id);
       deletedSessions++;
