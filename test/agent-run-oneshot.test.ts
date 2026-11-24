@@ -5,13 +5,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import {
-  createAgent,
-  oneShot,
-  agentConfigOptions,
-  seedRawMessagesIntoSession,
-  toPiMessage,
-} from "../src/agent/agent-run.ts";
+import { createAgent, oneShot, agentConfigOptions } from "../src/agent/agent-run.ts";
+import { seedRawMessagesIntoSession, toPiMessage } from "../src/agent/pi-context.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "../src/agent/utility-prompts.ts";
 import { piLastAssistantTextOrThrow, piTurnError } from "../src/agent/pi-messages.ts";
 import { refusalFallbackNote } from "../src/agent/turn-fallback.ts";
@@ -444,7 +439,7 @@ test("oneShot removes its temp dirs even when the session call throws", async ()
   assert.equal(after, before, "oneShot must leave no agent dirs behind");
 });
 
-test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
+test("oneShot completes an authenticated Pi turn", async (t) => {
   let apiKey: string | undefined;
   let requestBody = "";
   const server = createServer((request, response) => {

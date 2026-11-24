@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { continuableContext } from "../src/agent/pi-context.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";

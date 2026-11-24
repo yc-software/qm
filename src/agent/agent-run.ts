@@ -30,6 +30,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import {
+  getCurrentSystemPrompt,
   type Api,
   type AssistantMessage,
   type Model,
@@ -77,14 +78,14 @@ import {
   type ToolContextRef,
 } from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
+import { reconstructMessagesFromHistory, recordedMessageTimestamps, seedPriorTurns } from "./replay.ts";
 import {
-  reconstructMessagesFromHistory,
-  recordedMessageTimestamps,
-  seedPriorTurns,
-  legacyAssistant,
-  type PiReplayMessage,
-  type SeededMessage,
-} from "./replay.ts";
+  continuableContext,
+  dropFailedAssistant,
+  omitFromModelContext,
+  seedRawMessagesIntoSession,
+  toPiMessage,
+} from "./pi-context.ts";
 import { estimateHistoryTokens } from "./context-compaction.ts";
 import { createStepRecorder, recordingTools, type StepRecorder } from "./step-recorder.ts";
 import { restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
@@ -172,58 +173,8 @@ interface IsolatedResources {
   ephemeralCwd?: string;
 }
 
-export function continuableContext<M extends { role?: unknown }>(messages: readonly M[]): M[] | null {
-  let end = messages.length;
-  while (messages[end - 1]?.role === "assistant") end--;
-  const role = messages[end - 1]?.role;
-  return role === "user" || role === "toolResult" ? messages.slice(0, end) : null;
-}
-
-function continueAssistantTurn(session: AgentSession): Promise<void> {
-  return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
-}
-
-interface PiSeedTarget {
-  agent?: { state?: { messages?: unknown[] } };
-  sessionManager?: { appendMessage?: (message: unknown) => unknown };
-}
-
-export function toPiMessage(m: SeededMessage): PiReplayMessage {
-  return m.role === "assistant"
-    ? legacyAssistant([{ type: "text", text: m.text }], Date.now())
-    : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
-}
-
-export function seedRawMessagesIntoSession(session: unknown, messages: readonly PiReplayMessage[]): void {
-  if (!messages.length) return;
-  const target = session as PiSeedTarget;
-  const liveMessages = target.agent?.state?.messages;
-  const appendMessage = target.sessionManager?.appendMessage?.bind(target.sessionManager);
-  for (const message of messages) {
-    if (Array.isArray(liveMessages)) liveMessages.push(message);
-    if (appendMessage) {
-      try {
-        appendMessage(message);
-      } catch (e) {
-        swallow("pi: replay message append", e);
-      }
-    }
-  }
-}
-
 const DOCUMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
-
-function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
-  const state = session.agent.state;
-  for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
-    const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
-    if (m?.role === "assistant" && m.stopReason === "error") {
-      state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
-      break;
-    }
-  }
-}
 
 export function stableCwd(prefix: string): string {
   return join(tmpdir(), `${prefix}-cwd`);
@@ -241,7 +192,10 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     ephemeralCwd = cwd;
   }
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
-  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+  const settingsManager = SettingsManager.inMemory(
+    { cacheWarming: "off", enableInstallTelemetry: false },
+    { projectTrusted: false },
+  );
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -288,6 +242,7 @@ export async function oneShot(
     prefix,
     systemPrompt,
   );
+  let created: AgentSession | undefined;
   try {
     const { session } = await createAgentSession({
       model,
@@ -295,12 +250,14 @@ export async function oneShot(
       resourceLoader,
       settingsManager,
       customTools: [],
-      noTools: "builtin",
+      noTools: "all",
+      tools: [],
       sessionManager: SessionManager.inMemory(),
       ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
       cwd,
       agentDir,
     });
+    created = session;
     const messagesBefore = session.messages.length;
     if (opts?.signal?.aborted) return undefined;
     const onAbort = () => {
@@ -329,6 +286,7 @@ export async function oneShot(
     }
     return piLastAssistantTextOrThrow(session);
   } finally {
+    created?.dispose();
     removeIsolatedDirs({ agentDir, ephemeralCwd });
   }
 }
@@ -414,7 +372,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         resourceLoader,
         settingsManager,
         customTools: tools,
-        noTools: "builtin",
+        noTools: "all",
+        tools: tools.map((tool) => tool.name),
         sessionManager: SessionManager.inMemory(undefined, { id: sessionId }),
         cwd,
         agentDir,
@@ -534,8 +493,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
         applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
 
-        const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
-        if (continued) entry.agentSession.agent.state.messages = continued;
+        const live = entry.agentSession.agent.state.messages;
+        const continued = turn.continueTurn ? continuableContext(live) : null;
+        if (continued) omitFromModelContext(entry.agentSession, new Set(live.slice(continued.length)));
         else if (turn.continueTurn)
           console.log(`[pi] resume has no seeded context to continue; prompting the input session=${turn.session.id}`);
         const continueTurn = !!continued;
@@ -825,7 +785,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             : undefined;
           wallClock = await raceTurnWallClock(
             continueTurn
-              ? continueAssistantTurn(entry.agentSession)
+              ? entry.agentSession.agent.continue()
               : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
             {
               capMs: raceCapMs(),
@@ -943,10 +903,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                 retractedMessages.add(m);
             if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
           }
-          if (retractedMessages.size)
-            entry.agentSession.agent.state.messages = entry.agentSession.agent.state.messages.filter(
-              (m) => !retractedMessages.has(m),
-            );
+          omitFromModelContext(entry.agentSession, retractedMessages);
         } catch (err) {
           if (persistError) throw persistError;
           if (fallbackFailure) throw fallbackFailure;
@@ -1036,6 +993,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           ...(entry.ref.silentRequested ? { silent: true } : {}),
         });
       } finally {
+        entry.agentSession.dispose();
         removeIsolatedDirs(entry);
       }
     },
@@ -1066,7 +1024,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         return summarizeHistory(input.history, route.model, (summaryModel, context, options) => {
           input.recordModelCall({
             model: route.modelId,
-            inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+            inputTokens:
+              countTokens(getCurrentSystemPrompt(context.messages)) +
+              countTokens(JSON.stringify(context.messages.filter((message) => message.role !== "system"))),
             entryCount: input.history.length,
           });
           return runtime.streamSimple(summaryModel, context, options);

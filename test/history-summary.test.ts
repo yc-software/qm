@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
-import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
+import {
+  contentText,
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  type StopReason,
+} from "@earendil-works/pi-ai";
 import { summarizeHistory } from "../src/agent/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
@@ -37,10 +42,11 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
       ],
       model,
       (_model, context, options) => {
-        assert.match(context.systemPrompt ?? "", /Do NOT continue the conversation/);
-        assert.equal(context.messages.length, 1);
-        assert.equal(context.messages[0]!.role, "user");
-        const prompt = contentText(context.messages[0]!.content);
+        assert.match(getCurrentSystemPrompt(context.messages), /Do NOT continue the conversation/);
+        const turns = context.messages.filter((message) => message.role !== "system");
+        assert.equal(turns.length, 1);
+        assert.equal(turns[0]!.role, "user");
+        const prompt = contentText(turns[0]!.content);
         assert.match(prompt, /^<conversation>\n/);
         const end = prompt.lastIndexOf("</conversation>");
         assert.ok(end > prompt.indexOf(ending));
@@ -69,7 +75,7 @@ test("repeated compaction separates the latest summary and only summarizes its u
     item(7, { kind: "ToolCall", callId: "pending", tool: "execute", body: { command: "check" } }),
   ];
   await summarizeHistory(history, model, (_model, context) => {
-    const prompt = contentText(context.messages[0]!.content);
+    const prompt = contentText(context.messages.find((message) => message.role === "user")!.content);
     assert.ok(prompt.includes(`<previous-summary>\n${summary}\n</previous-summary>`));
     assert.match(prompt, /Update the existing structured summary/);
     assert.doesNotMatch(prompt, /superseded summary|covered request|covered follow-up|ContextCompaction#5/);
