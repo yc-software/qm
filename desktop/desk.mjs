@@ -112,6 +112,28 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
   return result;
 }
 
+export function watchMicrophone(onApps, onFailure) {
+  const proc = spawn(binary, ["microphone"], { stdio: ["ignore", "pipe", "pipe"] });
+  let stopped = false;
+  let stderr = "";
+  proc.stderr.on("data", (chunk) => (stderr += chunk));
+  proc.on("error", (error) => onFailure(error.message));
+  proc.on("exit", (code, signal) => {
+    if (!stopped) onFailure(stderr.trim() || `desk microphone exited with ${code ?? signal}`);
+  });
+  createInterface({ input: proc.stdout }).on("line", (line) => {
+    try {
+      onApps(JSON.parse(line).apps);
+    } catch (error) {
+      onFailure(`Unreadable desk microphone line: ${error.message}`);
+    }
+  });
+  return () => {
+    stopped = true;
+    proc.kill("SIGTERM");
+  };
+}
+
 export const desk = {
   request: (cmd, owner, deadline) => request(cmd.type === "act" ? { ...cmd, pace: paced } : cmd, owner, deadline),
   stop,

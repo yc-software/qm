@@ -21,6 +21,14 @@ mod pasteboard;
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(target_os = "macos")]
+mod microphone;
+#[cfg(not(target_os = "macos"))]
+mod microphone {
+    pub fn watch() -> Result<(), String> {
+        Err("desk microphone needs macOS 14.2 or later".into())
+    }
+}
 
 #[cfg(not(target_os = "macos"))]
 mod mac {
@@ -43,7 +51,8 @@ const USAGE: &str = "usage:
   desk apps
   desk observe <app> [--png out.png]
   desk act <app> '<actions json>' [--png out.png]
-  desk serve            JSON lines on stdin/stdout (see PROTOCOL.md)";
+  desk serve            JSON lines on stdin/stdout (see PROTOCOL.md)
+  desk microphone       one JSON line whenever the apps using audio input change";
 
 fn main() {
     if let Err(e) = run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -59,6 +68,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1).cloned());
     let cmd = match args.first().map(String::as_str) {
         Some("serve") => return serve(&mut desk),
+        Some("microphone") => return microphone::watch(),
         Some("permissions") => Command::Permissions { prompt: args.iter().any(|a| a == "--prompt") },
         Some("apps") => Command::Apps,
         Some("observe") => Command::Observe { app: arg(1)?, screenshot: png.is_some(), diff: false },

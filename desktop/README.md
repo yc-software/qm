@@ -45,6 +45,14 @@ The first call returns API documentation. Start with `var app = await computer.g
 
 Before each click, scroll or drag, a transparent click-through overlay flies an agent cursor to the target point and desk waits for it to land. Set `QM_DESK_CURSOR=0` to skip the overlay.
 
+## Meeting recording
+
+When the instance enables meetings (`GET /api/meetings` returns `enabled: true`), QM adds a menu bar item and File → Start Recording. Otherwise none of this appears. A recording captures two tracks in a hidden, sandboxed local page: your microphone (with echo cancellation) and your computer's audio. Each track is cut into 10–30 second segments at pauses; segments without sound are dropped and the rest are uploaded in order to the instance, which transcribes them into a private meeting chat and writes notes. Nothing is created until someone speaks. No audio is kept on disk.
+
+On macOS 14.2 or later, `desk microphone` reports which apps are using audio input. When a meeting app (Zoom, Microsoft Teams, Slack, FaceTime, Webex, Discord, WhatsApp, or a browser) starts using the microphone, QM notifies you with a Record button, or starts recording right away when **Record Meetings Automatically** is checked in the menu bar item. A recording started this way stops 20 seconds after no meeting app is using the microphone. Any recording stops after 15 minutes without speech. Microphone denial, missing computer audio, and failing uploads show in the menu bar item and as notifications; failed uploads retry until they succeed. Automatic updates wait for a recording to finish, and quitting uploads what was recorded first.
+
+macOS asks for Microphone and System Audio Recording permission on the first recording. `npm run test:meetings` exercises detection, recording, uploads, notes, and quitting against a local stub server with fake media devices.
+
 ## Mac release
 
 `npm run package` builds the unsigned local app. For a signed and notarized build, install a Developer ID Application certificate in the Mac keychain and sign in to that team in Xcode Settings → Accounts. Then run:

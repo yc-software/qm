@@ -39,6 +39,15 @@ test("pending permission setup takes activation and does not open a workspace af
     },
   });
   mock.module("../updates.mjs", { namedExports: { startUpdates: () => undefined } });
+  mock.module("../meetings.mjs", {
+    namedExports: {
+      configureMeetings() {},
+      refreshMeetings: async () => {},
+      meetingMenu: () => [],
+      isRecording: () => false,
+      quitRecording() {},
+    },
+  });
   mock.module("../runtime.mjs", {
     namedExports: { stopComputer: () => stopped++, registerComputerRuntime() {}, callComputer() {} },
   });

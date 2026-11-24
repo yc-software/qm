@@ -23,6 +23,11 @@ const apps = await packager({
   name: "QM",
   appBundleId: "com.qm.desktop",
   protocols: [{ name: "QM", schemes: ["qm-desktop"] }],
+  extendInfo: {
+    NSMicrophoneUsageDescription: "QM uses the microphone to transcribe meetings you record.",
+    NSAudioCaptureUsageDescription:
+      "QM captures your computer's audio to transcribe the other people in meetings you record.",
+  },
   icon: path.join(directory, "assets/qm"),
   out: path.join(directory, "dist"),
   overwrite: true,
