@@ -109,7 +109,7 @@ export function createInlineDocuments(promptTokens: number, contextWindow = 128_
 function nativeFileBlock(block: Record<string, unknown>): Record<string, unknown> {
   const source = block.source as { type?: string; media_type?: string } | undefined;
   if (block.type === "image" && source?.type === "base64" && !source.media_type?.startsWith("image/"))
-    return { type: "document", source };
+    return { ...block, type: "document" };
   const url = block.type === "input_image" ? block.image_url : (block.image_url as { url?: unknown } | undefined)?.url;
   if (typeof url !== "string" || !url.startsWith("data:") || url.startsWith("data:image/")) return block;
   const ext = documentExtension({ name: "", mimeType: url.slice(5, url.indexOf(";")) });
