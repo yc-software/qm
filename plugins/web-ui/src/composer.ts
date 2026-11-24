@@ -1,6 +1,7 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
+import type { MentionSource } from "./emoji-completion";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
@@ -197,6 +198,11 @@ export interface ComposerOptions {
   placeholder?: string;
   preferenceKey?: string;
   runtimeAccount?: "company";
+  slack?: {
+    avatar: () => TemplateResult;
+    label: string;
+    mentions: MentionSource;
+  };
 }
 
 export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {}): ComposerSurface {
@@ -519,7 +525,76 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
   }
 
+  function attachmentStrip(agent: Agent): TemplateResult | typeof nothing {
+    return composerState.attachments.length
+      ? html`
+          <div class="attachment-strip">
+            ${repeat(
+              composerState.attachments,
+              (a) => a.id,
+              (a) => html`
+                <span class=${stagedMedia(a) ? "file-chip composer-image" : "file-chip"}>
+                  ${stagedThumb(a)}
+                  ${
+                    pastedTextIds.has(a.id)
+                      ? html`
+                          <button
+                            type="button"
+                            class="chip-open"
+                            aria-label="View pasted text"
+                            ${tip("View pasted text")}
+                            @click=${() => openPasteView(a.id, agent)}
+                          >
+                            ${icon(FileText, 14)}
+                            <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
+                          </button>
+                        `
+                      : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
+                            >${a.fileName}</span
+                          >`
+                  }
+                  <button
+                    type="button"
+                    class="chip-x"
+                    aria-label="Remove attachment"
+                    ${tip("Remove")}
+                    @click=${() => removeAttachment(a.id, agent)}
+                  >
+                    ${icon(X, 13)}
+                  </button>
+                </span>
+              `,
+            )}
+          </div>
+        `
+      : nothing;
+  }
+
+  function slackForm(agent: Agent, slack: NonNullable<ComposerOptions["slack"]>): TemplateResult {
+    let notice: TemplateResult | typeof nothing = nothing;
+    if (composerState.processingFiles) notice = html`<div class="composer-note">Preparing files...</div>`;
+    else if (composerState.error) notice = html`<div class="composer-error" role="alert">${composerState.error}</div>`;
+    return html`<form class="slack-reply-pill" @submit=${(e: Event) => submitComposer(e, agent)}>
+        ${attachmentStrip(agent)} ${slack.avatar()}
+        ${composerInput({
+          value: composerState.draft,
+          placeholder: "Reply in thread…",
+          disabled: false,
+          label: `Reply in Slack as ${slack.label}`,
+          maxLength: 4000,
+          mentions: slack.mentions,
+          onInput: (e) => onDraftInput(e, agent),
+          onKeydown: (e) => onComposerKeydown(e, agent),
+          onPaste: (e) => void onComposerPaste(e, agent),
+        })}
+        <div class="slack-reply-actions">${sendButton("Send to Slack")}</div>
+        ${notice}
+      </form>
+      ${pasteViewDialog(agent)}`;
+  }
+
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
+    if (options.slack) return slackForm(agent, options.slack);
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
     if (!selectedModel) {
@@ -614,51 +689,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               </div>`
             : nothing
         }
-        ${
-          composerState.attachments.length
-            ? html`
-                <div class="attachment-strip">
-                  ${repeat(
-                    composerState.attachments,
-                    (a) => a.id,
-                    (a) => html`
-                      <span class=${stagedMedia(a) ? "file-chip composer-image" : "file-chip"}>
-                        ${stagedThumb(a)}
-                        ${
-                          pastedTextIds.has(a.id)
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="chip-open"
-                                  aria-label="View pasted text"
-                                  ${tip("View pasted text")}
-                                  @click=${() => openPasteView(a.id, agent)}
-                                >
-                                  ${icon(FileText, 14)}
-                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-                                </button>
-                              `
-                            : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
-                                  >${a.fileName}</span
-                                >`
-                        }
-                        <button
-                          type="button"
-                          class="chip-x"
-                          aria-label="Remove attachment"
-                          ${tip("Remove")}
-                          @click=${() => removeAttachment(a.id, agent)}
-                        >
-                          ${icon(X, 13)}
-                        </button>
-                      </span>
-                    `,
-                  )}
-                </div>
-              `
-            : nothing
-        }
-        ${approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing}
+        ${attachmentStrip(agent)} ${approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing}
         ${composerInput({
           value: composerState.draft,
           placeholder,
@@ -1119,7 +1150,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function currentSlashMenu(): { open: boolean; loading: boolean; matches: SkillMatch[] } {
-    const query = slashQuery(composerState.draft);
+    const query = options.slack ? null : slashQuery(composerState.draft);
     if (query === null || composerState.slashDismissed) return { open: false, loading: false, matches: [] };
     const loading = skillsLoading;
     const matches = skillsCache ? matchSkills(query, skillsCache) : [];
@@ -1268,7 +1299,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.note = "";
     composerState.slashDismissed = false;
     slashActiveIndex = 0;
-    const armed = slashQuery(composerState.draft) !== null;
+    const armed = !options.slack && slashQuery(composerState.draft) !== null;
     if (armed && skillsCache === null && !skillsLoading) void loadSkills(agent);
     const popoverShown = Boolean(ctx.chat.state.host?.querySelector(".slash-popover"));
     if (
@@ -1289,6 +1320,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function readyToSend(): boolean {
+    if (options.slack) return !composerState.processingFiles && !submitting;
     if (!currentModelOption()) return false;
     return (
       !composerState.processingFiles &&
@@ -1614,13 +1646,15 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         : draft;
     const submit = options.prepareSubmit?.();
     if (submit) {
-      const selected = currentModelOption()!;
+      const selected = currentModelOption();
       const attachments = [...composerState.attachments];
-      const selection: ComposerSubmission = {
-        model: selected.model.id,
-        thinkingLevel: composerState.effortLevel,
-        fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
-      };
+      const selection: ComposerSubmission = selected
+        ? {
+            model: selected.model.id,
+            thinkingLevel: composerState.effortLevel,
+            fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
+          }
+        : { model: "" };
       submitting = true;
       clearActiveDraft();
       resetComposer();
@@ -2048,7 +2082,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
       if (ta.value === autosizedValue) return;
       autosizedValue = ta.value;
-      resizeComposerInput(ta, ctx.pane ? 0 : 48);
+      const minHeight = ctx.pane ? 0 : 48;
+      resizeComposerInput(ta, options.slack ? 32 : minHeight);
     });
   }
 

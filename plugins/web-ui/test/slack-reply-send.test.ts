@@ -61,7 +61,7 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
     succeed = true;
     field.focus();
     widget.querySelector("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
-    assert.match(document.querySelector(".sending-row")?.textContent ?? "", /Hello Slack/);
+    await until(() => /Hello Slack/.test(document.querySelector(".sending-row")?.textContent ?? ""));
     await until(() => field.value === "");
     await until(() => transcriptReads() > beforeSend);
     await until(() => document.activeElement === widget.querySelector("textarea"));
