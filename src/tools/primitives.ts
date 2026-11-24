@@ -1140,7 +1140,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
-        personAtKeyboard: personAtKeyboard(deps.controlClaims),
+        personAtKeyboard: personAtKeyboard(deps.controlClaims) && deps.controlClaims?.internalAudience === true,
       });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },

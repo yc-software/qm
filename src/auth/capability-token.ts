@@ -86,6 +86,7 @@ export interface CapabilityClaims {
   blob?: BlobGrant;
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  internalAudience?: boolean;
   liveActor?: boolean;
   ephemeral?: true;
   runId?: string;
@@ -179,6 +180,7 @@ export async function verifyCapabilityToken(
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
+  if (claims.internalAudience !== undefined && typeof claims.internalAudience !== "boolean") return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
@@ -222,9 +224,12 @@ export async function verifyBlobTransferCapability(
 
 export async function asOrgAdmin(
   admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
-  actor: { actorId: string; botActor?: boolean; liveActor?: boolean; liveAuthor?: boolean; scopeId?: string },
+  actor: Pick<CapabilityClaims, "actorId" | "botActor" | "internalAudience" | "liveActor" | "liveAuthor"> & {
+    scopeId?: string;
+  },
 ): Promise<boolean> {
   if (actor.botActor === true) return false;
-  if (actor.scopeId !== undefined && actor.liveActor !== true && actor.liveAuthor !== true) return false;
+  if (actor.scopeId !== undefined && !(actor.internalAudience === true && (actor.liveActor || actor.liveAuthor)))
+    return false;
   return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }

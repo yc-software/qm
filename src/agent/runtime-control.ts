@@ -44,7 +44,8 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       };
     const lifetime = request.lifetime ?? "task";
     const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
-    if (!cronTask && !personAtKeyboard(claims)) return { ok: false, error: "live_actor_required" };
+    if (!cronTask && !(personAtKeyboard(claims) && claims.internalAudience === true))
+      return { ok: false, error: "live_actor_required" };
     const candidates = snapshot.models;
     let modelId = request.model ?? active.modelId;
     if (!candidates.includes(modelId)) {

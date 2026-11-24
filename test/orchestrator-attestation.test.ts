@@ -612,6 +612,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveAuthor, true, "an author-live detection turn attests authorship");
+  assert.equal(claims!.internalAudience, true, "an all-internal roster attests an internal audience");
   const threadPrompt = await app.turn({
     surface: "test",
     actor: admin,
@@ -667,7 +668,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
     "ok",
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveAuthor, undefined, "an unattested room must not attest authorship");
+  assert.equal(claims!.internalAudience, undefined, "an unattested room must not attest an internal audience");
 
   captured.opts = undefined;
   assert.equal(
@@ -706,8 +707,8 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
     "ok",
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "guest-audience turns must not attest liveness");
-  assert.equal(claims!.liveAuthor, undefined);
+  assert.equal(claims!.internalAudience, undefined, "a guest in the room means no internal audience");
+  assert.equal(claims!.liveActor, true, "presence is attested apart from the audience");
   assert.equal(claims!.memory?.orgWrite, undefined);
 
   for (const publishMembers of [undefined, [] as { externalId: string; orgId: string }[]]) {
@@ -731,7 +732,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
       "ok",
     );
     claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-    assert.equal(claims!.liveActor, undefined, "unknown room membership must not attest liveness");
+    assert.equal(claims!.internalAudience, undefined, "unknown room membership must not attest an internal audience");
     if (publishMembers === undefined) {
       assert.equal(
         claims!.members,

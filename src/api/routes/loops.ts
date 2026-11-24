@@ -64,7 +64,8 @@ export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
 
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
-    const atKeyboard = ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
+    const atKeyboard =
+      ctx.capability.internalAudience === true && ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
     return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,

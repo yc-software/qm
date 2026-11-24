@@ -548,11 +548,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
       const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
-      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && allInternal && !external;
+      const internalAudience = allInternal && !external;
+      const liveTurn = authorizationOrigin.kind === "human" || ownerFireTurn;
       const liveAuthorTurn =
-        !external &&
-        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
-        allInternal;
+        (!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn);
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -664,7 +663,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
-        verified: liveAuthorTurn && conversation.kind !== "dm",
+        verified: liveAuthorTurn && internalAudience && conversation.kind !== "dm",
       });
       const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
@@ -887,7 +886,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audience: conversation.audience,
         acl: deps.acl,
         origin: authorizationOrigin,
-        trustedLiveHuman: livePersonTurn,
+        trustedLiveHuman: livePersonTurn && internalAudience,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -1228,6 +1227,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         allInternal,
+        internalAudience,
         liveAuthorTurn: livePersonTurn,
         scopeId,
         environmentId,
@@ -1305,6 +1305,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         allInternal,
+        internalAudience,
         liveTurn,
         liveAuthorTurn: livePersonTurn,
         triggeredTurn,
@@ -1409,7 +1410,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && (livePersonTurn || openAutomationKeychain),
+        openResourceAccess: !external && ((livePersonTurn && internalAudience) || openAutomationKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1722,7 +1723,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn: liveTurn && !triggeredTurn,
+          liveTurn: liveTurn && internalAudience && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
@@ -1820,7 +1821,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(personAtKeyboard(runtimeClaims) && !sessionTurn ? { personTurn: true } : {}),
+          ...(personAtKeyboard(runtimeClaims) && internalAudience && !sessionTurn ? { personTurn: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),

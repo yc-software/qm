@@ -27,7 +27,7 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
     targetScope,
     nativeScopes,
     audience: targetScope === personalScope(id) ? [actor] : (ctx.capability?.members ?? []),
-    open: !ctx.capability || livePersonCapability(ctx.capability),
+    open: !ctx.capability || (livePersonCapability(ctx.capability) && ctx.capability.internalAudience === true),
     ...(ctx.capability?.memory?.notebookOnly ? { notebookOnly: true } : {}),
     config: ctx.deps.config,
     isCurrentSharedScopeMember: (person, scope) => ctx.app.isCurrentSharedScopeMember(person, scope),

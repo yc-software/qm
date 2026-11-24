@@ -149,10 +149,18 @@ test("skills: a private-channel member may edit + delete a shared skill; provena
   await deps.skills.review(planted.id, "system:test", []);
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
-  const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
+  const edited = await app.updateOwnedSkill(
+    planted.id,
+    PRIV_MEMBER,
+    { description: "d2" },
+    { internalAudience: true, liveActor: true },
+  );
   assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
   assert.equal((edited as { createdBy: string }).createdBy, OWNER, "createdBy is never rewritten on a member edit");
-  assert.equal(await app.deleteOwnedSkill({ principalId: PRIV_MEMBER, id: planted.id, liveActor: true }), "deleted");
+  assert.equal(
+    await app.deleteOwnedSkill({ principalId: PRIV_MEMBER, id: planted.id, internalAudience: true, liveActor: true }),
+    "deleted",
+  );
 });
 
 test("skills: a member editing a normal shared skill auto-republishes it (stays live)", async () => {
@@ -165,7 +173,12 @@ test("skills: a member editing a normal shared skill auto-republishes it (stays 
   await deps.skills.review(planted.id, "system:test", []);
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
-  const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
+  const edited = await app.updateOwnedSkill(
+    planted.id,
+    PRIV_MEMBER,
+    { description: "d2" },
+    { internalAudience: true, liveActor: true },
+  );
   assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
   assert.equal(
     (edited as { status: string }).status,
@@ -191,7 +204,12 @@ test("skills: a member CANNOT resurrect an admin-archived shared skill via an in
   await deps.skills.archive(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   assert.equal(
-    await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "resurrect" }, { liveActor: true }),
+    await app.updateOwnedSkill(
+      planted.id,
+      PRIV_MEMBER,
+      { description: "resurrect" },
+      { internalAudience: true, liveActor: true },
+    ),
     null,
     "an archived skill is not a member's to edit",
   );
@@ -420,7 +438,15 @@ test("skills: an archive landing mid-edit is not overwritten by the edit", async
     return seen;
   };
   const app = createApp(deps as unknown as AppDeps);
-  assert.equal(await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "late" }, { liveActor: true }), null);
+  assert.equal(
+    await app.updateOwnedSkill(
+      planted.id,
+      PRIV_MEMBER,
+      { description: "late" },
+      { internalAudience: true, liveActor: true },
+    ),
+    null,
+  );
   const after = await get(planted.id);
   assert.equal(after!.status, "archived");
   assert.equal(after!.manifest.description, "d");
@@ -441,6 +467,11 @@ test("skills: a person granted write on someone's skill may edit it", async () =
     grantedBy: OWNER,
     permission: "write",
   });
-  const edited = await app.updateOwnedSkill(planted.id, OUTSIDER, { description: "d2" }, { liveActor: true });
+  const edited = await app.updateOwnedSkill(
+    planted.id,
+    OUTSIDER,
+    { description: "d2" },
+    { internalAudience: true, liveActor: true },
+  );
   assert.equal(typeof edited === "object" && edited?.manifest.description, "d2");
 });

@@ -161,6 +161,7 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: Capabi
       scopeId: audienceScopeId,
       ...(rec.scopeVersion ? { scopeVersion: rec.scopeVersion } : {}),
       ...(claims?.botActor ? { botActor: true } : {}),
+      ...(claims?.internalAudience ? { internalAudience: true } : {}),
       ...(claims?.liveActor ? { liveActor: true } : {}),
       ...(claims?.members ? { members: claims.members } : {}),
     })
@@ -427,6 +428,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       actorId: ownerId,
       scopeId: capability.scopeId,
       ...(capability.botActor ? { botActor: true } : {}),
+      ...(capability.internalAudience ? { internalAudience: true } : {}),
       ...(capability.liveActor ? { liveActor: true } : {}),
       ...(capability.members ? { members: capability.members } : {}),
       aud: brain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD,

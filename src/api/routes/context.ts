@@ -65,7 +65,13 @@ async function resolveSurfaceTarget(
 
 async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery, "rateLimitRecipient">> {
   const cap = ctx.capability;
-  if (!cap?.liveActor || !personAtKeyboard(cap) || cap.destination?.type !== "slack" || !cap.destination.target)
+  if (
+    !cap?.internalAudience ||
+    !cap.liveActor ||
+    !personAtKeyboard(cap) ||
+    cap.destination?.type !== "slack" ||
+    !cap.destination.target
+  )
     return {};
   const member = await ctx.app.directoryMember(cap.actorId);
   return { rateLimitRecipient: { target: cap.destination.target, user: member?.slackId ?? cap.actorId } };
@@ -181,6 +187,7 @@ function awaitFileFulfillment(ctx: ApiCtx, requestId: string): Promise<void> {
         scopeId: cap.scopeId,
         ...(cap.scopeVersion ? { scopeVersion: cap.scopeVersion } : {}),
         ...(cap.botActor ? { botActor: true } : {}),
+        ...(cap.internalAudience ? { internalAudience: true } : {}),
         ...(cap.liveActor ? { liveActor: true } : {}),
         ...(cap.members ? { members: cap.members } : {}),
         aud: BLOB_TRANSFER_AUD,

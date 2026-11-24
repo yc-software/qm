@@ -33,6 +33,7 @@ export interface CredentialCatalogTurn {
   external: boolean;
   strictReadOnly: boolean;
   allInternal: boolean;
+  internalAudience: boolean;
   liveAuthorTurn: boolean;
   scopeId: ScopeId;
   environmentId: string;
@@ -59,6 +60,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     actor,
     conversation,
     external,
+    internalAudience,
     liveAuthorTurn,
     scopeId,
     environmentId,
@@ -73,7 +75,10 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const actorKeychain = input.botActor !== true;
   const openSpeakerKeychain =
-    liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
+    liveAuthorTurn &&
+    internalAudience &&
+    conversation.kind !== "dm" &&
+    sharingSources.includes(personalScope(actor.id));
   const openAutomationKeychain =
     actorKeychain &&
     !external &&

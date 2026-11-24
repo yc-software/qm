@@ -603,6 +603,7 @@ const privateCap: CapabilityClaims = {
   actorId: "alice",
   scopeId: "personal:alice",
   ownerConnections: true,
+  internalAudience: true,
   liveActor: true,
   exp: Date.now() + 60_000,
 };

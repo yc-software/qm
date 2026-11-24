@@ -294,6 +294,7 @@ describe("surface-context pulls", async () => {
       {
         "x-agent-capability": await cap({
           botActor: true,
+          internalAudience: true,
           liveActor: true,
           members: [{ id: "U1", type: "internal" }],
         }),

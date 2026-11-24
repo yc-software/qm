@@ -90,6 +90,7 @@ async function fixture(t: TestContext) {
         actorId,
         scopeId,
         members,
+        internalAudience: true,
         liveActor: true,
         exp: Date.now() + 600_000,
         destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },

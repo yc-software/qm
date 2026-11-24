@@ -70,6 +70,7 @@ export async function credential(
       cap.botActor ||
       (shared &&
         livePersonCapability(cap) &&
+        cap.internalAudience === true &&
         (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
     ) {
       sendJson(ctx.res, 403, {
@@ -389,7 +390,8 @@ async function connections(ctx: ApiCtx): Promise<void> {
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (ctx.capability && !(personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true))
+    return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;

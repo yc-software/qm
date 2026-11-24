@@ -27,6 +27,7 @@ import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-datab
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { captureProvision } from "./support/orchestrator-app.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -91,6 +92,7 @@ const capFor = async (
       scopeId: opts.scope ?? scopeId("personal", actorId),
       ...(aud === null ? {} : { aud }),
       ...liveRunClaims(actorId),
+      internalAudience: true,
       liveActor: opts.live !== false,
       ...(opts.runId ? { runId: opts.runId } : {}),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
@@ -148,6 +150,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
       scopeId: "channel:C1",
       aud: CONTROL_PLANE_AUD,
       ...liveRunClaims("admin-alice"),
+      internalAudience: true,
       liveAuthor: true,
       members,
       keychainMembers: members,
@@ -882,6 +885,43 @@ test("native admin tools use the authenticated handler, including its live autho
     assert.equal((await call({ action: "scopes" })).status, 200);
     await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
     assert.equal((await call({ action: "memory", scope: target })).status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a guest in the room: the person's turn mints presence without an internal audience, and the real admin routes refuse it", async () => {
+  const s = await start();
+  const captured = captureProvision(s.built.sandbox);
+  try {
+    const tokenFor = async (publishMembers: TurnRequest["conversation"]["publishMembers"], thread: string) => {
+      captured.opts = undefined;
+      const turn = await s.built.app.turn({
+        surface: "test",
+        actor: { externalId: "admin-alice" },
+        conversation: {
+          kind: "channel",
+          threadRef: thread,
+          channelRef: "C1",
+          audience: [{ externalId: "admin-alice" }],
+          publishMembers,
+        },
+        text: "!run echo hi",
+        origin: { kind: "human" },
+      });
+      assert.equal(turn.status, "ok", JSON.stringify(turn));
+      return captured.opts!.env!.AGENT_API_TOKEN!;
+    };
+    const internal = await tokenFor([{ externalId: "admin-alice" }, { externalId: "U1" }], "C1:internal");
+    const guest = await tokenFor(
+      [{ externalId: "admin-alice" }, { externalId: "visitor", isExternalGuest: true }],
+      "C1:guest",
+    );
+    const spend = (token: string) => fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": token } });
+    assert.equal((await spend(internal)).status, 200);
+    const refused = await spend(guest);
+    assert.equal(refused.status, 403);
+    assert.match(((await refused.json()) as any).message, /carry a person's own authority/);
   } finally {
     await s.close();
   }

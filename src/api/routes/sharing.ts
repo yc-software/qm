@@ -35,7 +35,13 @@ function claimsOf(ctx: ApiCtx): CapabilityClaims | null {
   if (ctx.capability) return ctx.capability;
   const person = ctx.actor;
   return person
-    ? { actorId: person.p, scopeId: scopeId("personal", person.p), exp: person.exp, liveActor: true }
+    ? {
+        actorId: person.p,
+        scopeId: scopeId("personal", person.p),
+        exp: person.exp,
+        internalAudience: true,
+        liveActor: true,
+      }
     : null;
 }
 
@@ -90,7 +96,8 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
       await app.setAppPublic(params.id!, b.public, {
         createdBy: claims.actorId,
         botActor: claims.botActor,
-        personAtKeyboard: !ctx.capability || personAtKeyboard(ctx.capability),
+        personAtKeyboard:
+          !ctx.capability || (personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true),
       });
     } catch (e) {
       return sendShareFailure(res, e);

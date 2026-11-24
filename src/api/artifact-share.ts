@@ -27,8 +27,14 @@ export function authorPublishesSkill(scope: ScopeId): boolean {
   return kind !== null && AUTHOR_PUBLISHED_SKILL_KINDS[kind];
 }
 
-export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {
-  return isMultiMemberSkillScope(homeScope) && !liveActor;
+export interface SkillEditor {
+  liveActor?: boolean;
+  internalAudience?: boolean;
+  botActor?: boolean;
+}
+
+export function triggerBlocksSharedSkill(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
+  return isMultiMemberSkillScope(homeScope) && !(editor?.liveActor === true && editor.internalAudience === true);
 }
 
 export function livePersonCapability(

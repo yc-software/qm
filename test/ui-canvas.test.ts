@@ -44,6 +44,7 @@ describe("ui canvas and ui observe", () => {
         scopeId: scopeId("personal", "U1"),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        internalAudience: true,
         liveActor: true,
         surface: "web",
         ...liveRunBinding("U1"),

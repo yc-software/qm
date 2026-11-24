@@ -95,7 +95,7 @@ export function resolveSelfRead(
 }
 
 export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+  if (!ctx.capability || (personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true)) return true;
   refuseWithoutPerson(ctx.res);
   return false;
 }

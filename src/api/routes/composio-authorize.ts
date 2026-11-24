@@ -38,7 +38,8 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (ctx.capability && !(personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true))
+    return refuseWithoutPerson(ctx.res);
   const access = await credential(ctx, true);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;

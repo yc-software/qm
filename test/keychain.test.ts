@@ -1141,7 +1141,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
     const owner = "HANDLE_OWNER";
-    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const cap = await capFor(owner, scopeId("personal", owner), { internalAudience: true, liveActor: true });
     const saved = (await (
       await post(
         "/v1/keychain/credentials",

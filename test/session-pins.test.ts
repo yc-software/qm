@@ -32,6 +32,7 @@ describe("conversation pins self-API", async () => {
         scopeId: scopeId("personal", actorId),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        internalAudience: true,
         liveActor: true,
         ...(threadRef ? { threadRef } : {}),
         ...(botActor ? { botActor } : {}),
