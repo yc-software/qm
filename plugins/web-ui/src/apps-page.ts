@@ -1,12 +1,12 @@
 import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { AppWindow, Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
-import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { AppWindow, Archive, Check, Copy, ExternalLink, Pin, PinOff, Plus, RotateCcw, Trash2, X } from "lucide";
+import { api, fetchUiState, putUiState } from "./core-bridge";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { listBackLink, listGroupsTpl, listPageTpl, listRowsTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
@@ -76,6 +76,46 @@ function setAppsLayout(layout: ListLayout): void {
   drawAppsPage();
 }
 
+const PINNED_APPS_KEY = "pinned-apps";
+let pinnedAppIds: string[] = [];
+
+async function loadPinnedApps(): Promise<void> {
+  const rec = await fetchUiState(PINNED_APPS_KEY).catch(swallowAs("web-ui: load pinned apps", null));
+  if (!rec || !Array.isArray(rec.value)) return;
+  pinnedAppIds = rec.value.filter((id): id is string => typeof id === "string");
+}
+
+function appPinned(d: AppView): boolean {
+  return d.status !== "archived" && pinnedAppIds.includes(d.id);
+}
+
+function togglePinned(d: AppView): void {
+  const previous = pinnedAppIds;
+  pinnedAppIds = appPinned(d) ? previous.filter((id) => id !== d.id) : [d.id, ...previous.filter((id) => id !== d.id)];
+  drawAppsPage();
+  putUiState(PINNED_APPS_KEY, pinnedAppIds, Date.now()).catch((error: unknown) => {
+    pinnedAppIds = previous;
+    appToast = { app: d, text: errMessage(error, "Could not save pinned apps.") };
+    drawAppsPage();
+  });
+}
+
+function pinButton(d: AppView): TemplateResult {
+  if (d.status === "archived") return html``;
+  const pinned = appPinned(d);
+  const label = pinned ? "Unpin" : "Pin";
+  return html`<button
+    class="icon-btn app-pin ${pinned ? "pinned" : ""}"
+    type="button"
+    ${tip(label)}
+    aria-label=${`${label} ${appTitle(d)}`}
+    aria-pressed=${pinned}
+    @click=${() => togglePinned(d)}
+  >
+    ${pinned ? icon(PinOff, 14) : icon(Pin, 14)}
+  </button>`;
+}
+
 function statusLabel(d: AppView): string {
   if (
     d.status === "running" &&
@@ -121,7 +161,7 @@ function ownerLabel(d: AppView): string {
 }
 
 function appTabs(): TemplateResult {
-  const inContext = appList.filter((d) => appInScope(d, appScope));
+  const inContext = appList.filter((d) => !appPinned(d) && appInScope(d, appScope));
   const viewer = appState.me?.user;
   const counts = Object.fromEntries(
     APP_TABS.map((tab) => [tab.value, inContext.filter((d) => appTab(d, viewer) === tab.value).length]),
@@ -187,14 +227,16 @@ function appCard(d: AppView): TemplateResult {
         <span class="list-row-title" dir="auto" title=${appTitle(d)}>${appTitle(d)}</span>
         <div class="app-card-meta">
           <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
-          <button
-            class="btn app-manage"
-            type="button"
-            aria-label=${`Manage ${appTitle(d)}`}
-            @click=${() => void openApp(d)}
+          <span class="app-card-actions"
+            >${pinButton(d)}<button
+              class="btn app-manage"
+              type="button"
+              aria-label=${`Manage ${appTitle(d)}`}
+              @click=${() => void openApp(d)}
+            >
+              Manage
+            </button></span
           >
-            Manage
-          </button>
         </div>
       </div>
     </div>
@@ -224,6 +266,7 @@ function appRow(d: AppView): TemplateResult {
       }
       <div class="app-row-actions" aria-label="App status and actions">
         <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+        ${pinButton(d)}
         <button
           class="btn app-manage"
           type="button"
@@ -242,6 +285,21 @@ function appRows(rows: AppView[]): TemplateResult[] {
   return rows.map(appRow);
 }
 
+function pinnedAppsGroup(pinned: AppView[]): TemplateResult {
+  if (!pinned.length) return html``;
+  return html`<div class="app-pinned">
+    ${listGroupsTpl([
+      {
+        label: "Pinned",
+        body:
+          appsLayout === "grid"
+            ? html`<div class="file-grid app-grid">${pinned.map(appCard)}</div>`
+            : listRowsTpl(pinned.map(appRow)),
+      },
+    ])}
+  </div>`;
+}
+
 function drawAppsPage(): void {
   if (appState.currentView !== "apps" || !appState.mainEl) return;
   activeApp = null;
@@ -251,13 +309,11 @@ function drawAppsPage(): void {
     appState.mainEl.replaceChildren(appsPageHost);
   }
   const viewer = appState.me?.user;
-  const rows = filterApps(appList, {
-    tab: selectedAppTab,
-    scope: appScope,
-    query: appQuery,
-    viewer,
-    sort: "newest",
-  });
+  const pinned = (["yours", "shared"] as const)
+    .flatMap((tab) => filterApps(appList.filter(appPinned), { tab, scope: appScope, query: appQuery, viewer }))
+    .sort((a, b) => pinnedAppIds.indexOf(a.id) - pinnedAppIds.indexOf(b.id));
+  const unpinned = appList.filter((d) => !appPinned(d));
+  const rows = filterApps(unpinned, { tab: selectedAppTab, scope: appScope, query: appQuery, viewer, sort: "newest" });
   const allForTab = appList.filter((d) => appTab(d, viewer) === selectedAppTab && appInScope(d, appScope));
   let empty = appTabEmptyMessage(selectedAppTab);
   if (!appList.length && appNotices.list) empty = appNotices.list;
@@ -270,7 +326,9 @@ function drawAppsPage(): void {
         ...(appNotices.list
           ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
-        ...(rows.length ? appRows(rows) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
+        ...(rows.length || pinned.length
+          ? appRows(rows)
+          : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);
@@ -281,6 +339,7 @@ function drawAppsPage(): void {
       ${listPageTpl({
         title: "Apps",
         controls: appList.length ? listLayoutSelect(appsLayout, setAppsLayout) : undefined,
+        filters: pinnedAppsGroup(pinned),
         search: {
           value: appQuery,
           placeholder: "Search apps",
@@ -911,7 +970,7 @@ export async function renderApps(): Promise<void> {
   appLoading = appList.length === 0;
   appNotices = withAppListNotice(appNotices, "");
   drawAppsPage();
-  await refreshApps();
+  await Promise.all([refreshApps(), loadPinnedApps()]);
   if (seq !== appState.viewRenderSeq || appState.currentView !== "apps") return;
   if (requestedId) {
     await openApp(appList.find((d) => d.id === requestedId) ?? { id: requestedId });
