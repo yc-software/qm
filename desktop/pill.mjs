@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const page = path.join(directory, "pill.html");
 const pageUrl = pathToFileURL(page).href;
-const width = 420;
+const width = 470;
 const height = 64;
 let window;
 let latest;
