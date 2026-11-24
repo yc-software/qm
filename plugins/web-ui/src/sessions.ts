@@ -1910,7 +1910,7 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-function openConversationIds(): string[] {
+export function openConversationIds(): string[] {
   const opening = sessionsState.openingKey ? [sessionsState.openingKey] : [];
   return [...opening, ...allConversations().flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []))];
 }

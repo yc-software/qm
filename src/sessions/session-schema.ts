@@ -674,6 +674,11 @@ const SESSION_EPHEMERAL_CLAIM: PgMigrationDefinition = {
   ],
 };
 
+const PARTICIPANT_NOTIFIED_AT: PgMigrationDefinition = {
+  id: "sessions/store/0069-participant-notified-at",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE participants ADD COLUMN IF NOT EXISTS notified_at BIGINT`],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -700,6 +705,7 @@ export const SESSION_MIGRATIONS = [
   TOOL_CALL_ID_CONSTRAINT,
   SESSION_EPHEMERAL,
   SESSION_EPHEMERAL_CLAIM,
+  PARTICIPANT_NOTIFIED_AT,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (
