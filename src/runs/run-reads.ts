@@ -30,13 +30,13 @@ export function createRunReads(
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    async requestSources(runIds) {
+    async requestSources(tenant, runIds) {
       if (!runIds.length) return new Map();
-      const { rows } = await q(
+      const rows = await pg.forTenant(tenant).q(
         `SELECT id, request::jsonb -> 'actor' ->> 'id' AS actor, request::jsonb -> 'origin' ->> 'kind' AS origin,
                 request::jsonb ->> 'surface' AS surface
-         FROM runs WHERE id = ANY($1::text[])`,
-        [[...new Set(runIds)]],
+         FROM runs WHERE tenant_id = $1 AND id = ANY($2::text[])`,
+        [tenant.id, [...new Set(runIds)]],
       );
       return new Map(
         rows.map((row) => [

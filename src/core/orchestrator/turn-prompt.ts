@@ -133,6 +133,7 @@ export async function appendTurnGuidance(turn: {
 
 export async function replyToRewrite(
   deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
+  tenant: TurnCapabilities["tenant"],
   personId: string,
   history: readonly Item[],
 ): Promise<Item | undefined> {
@@ -141,7 +142,10 @@ export async function replyToRewrite(
     .filter((item) => isAgentReply(item) && !!item.text?.trim() && item.turnId);
   if (!replies.length || !(await deps.featureFlags?.enabled("wake_reply_rewrite", personalScope(personId))))
     return undefined;
-  const sources = await deps.runs?.requestSources(replies.map((reply) => reply.turnId!));
+  const sources = await deps.runs?.requestSources(
+    tenant,
+    replies.map((reply) => reply.turnId!),
+  );
   return replies.findLast((reply) => {
     const source = sources?.get(reply.turnId!);
     return source && samePerson(source.actorId, personId) && !firedByPoll(source);

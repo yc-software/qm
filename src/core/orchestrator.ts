@@ -1938,7 +1938,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, actor.id, history) : undefined;
+        const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
         if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
