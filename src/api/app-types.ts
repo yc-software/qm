@@ -836,7 +836,7 @@ export interface AppDeps {
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
-  loops?: Pick<LoopStore, "ownedBy" | "update">;
+  loops?: Pick<LoopStore, "releaseMovedDestinations">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;

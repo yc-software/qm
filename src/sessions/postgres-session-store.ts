@@ -336,9 +336,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return (rows[0]?.origin as SessionOrigin | undefined) ?? "conversation";
     },
 
-    async getManyForParticipant(ids, principalId): Promise<Session[]> {
+    async getManyForParticipant(tenant, ids, principalId): Promise<Session[]> {
       if (!ids.length) return [];
-      const rows = await q(participantSessionsSql(" AND s.id = ANY($2::text[])"), [principalId, [...ids]]);
+      const rows = await db
+        .forTenant(tenant)
+        .q(participantSessionsSql(" AND s.tenant_id = $3 AND s.id = ANY($2::text[])"), [
+          principalId,
+          [...ids],
+          tenant.id,
+        ]);
       return rows.map(rowToParticipantSession);
     },
 

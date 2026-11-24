@@ -1202,38 +1202,35 @@ export function createSessionMethods(
       const held: HeldChat[] = [];
       const access = new Map<string, Promise<boolean>>();
       const ids = [...new Set(sessionIds)];
-      const rows = await deps.sessions.getManyForParticipant(ids, principalId);
+      const rows = await deps.sessions.getManyForParticipant(tenant, ids, principalId);
       const memberships = await managedProjectMemberships(
         rows.map((row) => row.scopeId),
         principalId,
       );
       const byId = new Map(rows.map((row) => [row.id, row]));
-      const sources = await Promise.all(
-        ids.map(async (sessionId): Promise<Session | null> => {
-          const source = byId.get(sessionId);
-          const refuse = (reason: "not_found" | "same_scope" | "unsupported_source") => {
-            held.push({ sessionId, reason });
-            return null;
-          };
-          if (!source || memberships.get(source.scopeId) === false || source.ephemeral) return refuse("not_found");
-          if (source.scopeId === targetScopeId) return refuse("same_scope");
-          const from = parseScopeId(source.scopeId);
-          const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref);
-          const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
-          if (
-            (source.scopeId !== personalScope(principalId) && !fromProject) ||
-            !topLevelWebChat ||
-            !(await mayWriteSession(principalId, source, access))
-          )
-            return refuse("unsupported_source");
-          return source;
-        }),
-      );
+      const internal = deps.identity.isInternal(deps.identity.classify(principalId));
+      const sources = ids.map((sessionId): Session | null => {
+        const source = byId.get(sessionId);
+        const refuse = (reason: "not_found" | "same_scope" | "unsupported_source") => {
+          held.push({ sessionId, reason });
+          return null;
+        };
+        if (!source || memberships.get(source.scopeId) === false || source.ephemeral) return refuse("not_found");
+        if (source.scopeId === targetScopeId) return refuse("same_scope");
+        const from = parseScopeId(source.scopeId);
+        const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref);
+        const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
+        const mayWrite = fromProject
+          ? memberships.get(source.scopeId) === true
+          : source.scopeId === personalScope(principalId);
+        if (!internal || !topLevelWebChat || !mayWrite) return refuse("unsupported_source");
+        return source;
+      });
       let trees = await chatTrees(
         deps,
         sources.filter((s): s is Session => s !== null),
       );
-      const jobs = await settleChatJobs(deps, trees);
+      const jobs = await settleChatJobs(deps, tenant, trees);
       const decide = async (project: Project): Promise<MoveSessionsResult> => {
         if (project.orgId !== orgIdOf()) return { outcome: "not_project" };
         const members = await projects.members(target.ref);
@@ -1324,7 +1321,7 @@ export function createSessionMethods(
       let movedIds: string[] = [];
       const result = (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
       if (result.outcome !== "moved" || !movedIds.length) return result;
-      const moved = await deps.sessions.getManyForParticipant(movedIds, principalId);
+      const moved = await deps.sessions.getManyForParticipant(tenant, movedIds, principalId);
       const sessions = await Promise.all(
         moved.map(async (session) => ({
           ...session,

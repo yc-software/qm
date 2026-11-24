@@ -6,7 +6,6 @@ import type { ProcessRecord, ProcessRegistry } from "../processes/process-regist
 import { reconcileProcesses } from "../processes/reconcile.ts";
 import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
 import type { Tenant } from "../tenants/context.ts";
-import { postsInto, threadsFrom } from "../triggers/trigger-store.ts";
 import type { ChildIsolation, Principal, ScopeId, Session, SpawnMeta } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { WebhookStore } from "../webhooks/webhook-store.ts";
@@ -59,7 +58,7 @@ export interface ChatMoveDeps {
   crons: Pick<CronStore, "rehome">;
   webhooks: Pick<WebhookStore, "rehome">;
   monitors?: Pick<MonitorStore, "rehome">;
-  loops?: Pick<LoopStore, "ownedBy" | "update">;
+  loops?: Pick<LoopStore, "releaseMovedDestinations">;
 }
 
 export type ChatTree = readonly Session[];
@@ -79,20 +78,22 @@ export async function chatTrees(deps: ChatMoveDeps, roots: readonly Session[]): 
   return roots.map((root) => [root, ...children.filter((child) => rootOf.get(child.id) === root.id)]);
 }
 
-async function liveJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]) {
-  const threadRefs = new Set(trees.flatMap((tree) => tree.map((s) => s.threadRef)));
-  const scopes = [...new Set(trees.map((tree) => tree[0]!.scopeId))];
-  const jobs = await Promise.all(scopes.map((scope) => deps.processes?.listByScope(scope) ?? []));
-  return jobs
-    .flat()
-    .filter(
-      (rec) =>
-        rec.kind === "background" && rec.status === "running" && rec.sessionRef && threadRefs.has(rec.sessionRef),
-    );
+async function liveJobs(deps: ChatMoveDeps, tenant: Tenant, trees: readonly ChatTree[]) {
+  return (
+    deps.processes?.runningJobsIn(
+      tenant,
+      [...new Set(trees.map((tree) => tree[0]!.scopeId))],
+      trees.flatMap((tree) => tree.map((s) => s.threadRef)),
+    ) ?? []
+  );
 }
 
-export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTree[]): Promise<ProcessRecord[]> {
-  const jobs = await liveJobs(deps, trees);
+export async function settleChatJobs(
+  deps: ChatMoveDeps,
+  tenant: Tenant,
+  trees: readonly ChatTree[],
+): Promise<ProcessRecord[]> {
+  const jobs = await liveJobs(deps, tenant, trees);
   const { processes, sandbox } = deps;
   if (!jobs.length || !processes || !sandbox || !supportsProcessSessions(sandbox)) return jobs;
   const hosts = new Map(jobs.flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])));
@@ -110,7 +111,7 @@ export async function settleChatJobs(deps: ChatMoveDeps, trees: readonly ChatTre
       })().catch(swallowAs("session move: check a moving chat's jobs", undefined)),
     ),
   );
-  return liveJobs(deps, trees);
+  return liveJobs(deps, tenant, trees);
 }
 
 export function runningJob(tree: ChatTree, jobs: readonly ProcessRecord[]): JobHold | undefined {
@@ -158,19 +159,12 @@ export async function carryChatsAlong(
 ): Promise<void> {
   const threads = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!.scopeId] as const)));
   const move = { threads, to };
-  const clearLoops = async (loops: Pick<LoopStore, "ownedBy" | "update">) => {
-    const owned = await loops.ownedBy([...new Set(threads.values())]);
-    await Promise.all(
-      owned
-        .filter((loop) => postsInto(loop, threadsFrom(move, loop.ownerScopeId)))
-        .map((loop) => loops.update(loop.id, { destination: null })),
-    );
-  };
+
   await Promise.all([
     deps.crons.rehome(move),
     deps.webhooks.rehome(move),
     deps.monitors?.rehome(move),
-    deps.loops && clearLoops(deps.loops),
+    deps.loops?.releaseMovedDestinations(move),
   ]);
   const sessions = trees.flat();
   const isolations = sessions.flatMap((s) => s.spawnMeta?.isolation ?? []);
