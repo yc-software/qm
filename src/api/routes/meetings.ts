@@ -87,7 +87,7 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
   const timezone = p.timezone;
   if (!startedAt || !validZone(timezone))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "startedAt and a valid timezone are required." });
-  const app = typeof p.app === "string" && p.app.trim() ? p.app.trim().slice(0, 60) : undefined;
+  const app = typeof p.app === "string" && p.app.trim() ? p.app.trim() : undefined;
   const spawned = await ctx.app.spawnSession(meeting.user, {
     scopeId: scopeId("personal", meeting.user),
     threadRef: meeting.threadRef,
@@ -165,13 +165,15 @@ async function afterSpeech(ctx: ApiCtx, meeting: Meeting, sessionId: string, sta
   const slot = Math.floor((Date.now() - started.createdAt) / CHECK_IN_MS);
   if (stopped || slot < 1 || inFlight.some((run) => run.status === "pending")) return;
   const { deliveryTarget: _web, clientSurface: _client, ...checkIn } = await meetingTurn(ctx, meeting, CHECK_IN);
-  await ctx.app.turn({
+  const result = await ctx.app.turn({
     ...checkIn,
     surface: "meeting",
     origin: { kind: "automation" },
     idempotencyKey: `${meeting.threadRef}:check-in:${slot}`,
     async: true,
   });
+  if (result.status === "refused")
+    console.error(`[meetings] check-in refused in ${meeting.threadRef}: ${result.reason}`);
 }
 
 async function stopMeeting(ctx: ApiCtx): Promise<void> {
