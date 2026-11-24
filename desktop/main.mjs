@@ -158,6 +158,7 @@ async function finishBrowserSignIn(url) {
 }
 
 const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "notifications"]);
+
 function instanceRequest(pathname, method, signal, type, body) {
   const origin = new URL(target).origin;
   return instanceSession(target).fetch(new URL(pathname, origin).href, {

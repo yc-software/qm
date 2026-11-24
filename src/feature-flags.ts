@@ -35,6 +35,7 @@ export const FEATURES = {
     label: "Web DM post and edit (experimental)",
     personalOnly: true,
     hint: "Runs the selected people's web DMs the way Slack threads run: the agent speaks only by posting, delegates substantial work to subagents, and edits its latest message when a subagent or another conversation brings news instead of adding a message below it. Edited versions stay in the transcript. Applies from their next turn.",
+  },
   meeting_recorder: {
     label: "Meeting recorder",
     personalOnly: true,
