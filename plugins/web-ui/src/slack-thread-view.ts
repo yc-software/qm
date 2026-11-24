@@ -32,8 +32,13 @@ export function slackTitle(channel: string, leaf: string | undefined): TemplateR
 
 export function openInSurface(href: string | null, surface: string | undefined): TemplateResult | typeof nothing {
   if (!href || !surface) return nothing;
-  return html`<a class="open-in-surface" href=${href} target="_blank" rel="noreferrer"
-    >${slackMark(12)}Open in ${surface}${icon(ExternalLink, 12)}</a
+  return html`<a
+    class="open-in-surface"
+    href=${href}
+    target="_blank"
+    rel="noreferrer"
+    aria-label=${`Open in ${surface}`}
+    >${slackMark(12)}<span>Open in ${surface}</span>${icon(ExternalLink, 12)}</a
   >`;
 }
 
