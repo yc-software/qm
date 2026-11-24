@@ -20,7 +20,7 @@ import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
 
-function anthropicStream(text: string): string {
+function anthropicStream(text: string, stopReason = "end_turn"): string {
   const events = [
     {
       type: "message_start",
@@ -38,7 +38,7 @@ function anthropicStream(text: string): string {
     { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
     { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
     { type: "content_block_stop", index: 0 },
-    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 1 } },
     { type: "message_stop" },
   ];
   return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
@@ -47,6 +47,7 @@ function anthropicStream(text: string): string {
 test("company browser inference runs on the session route through the gateway", async (t) => {
   const calls: Array<{ url: string; auth: string | undefined; model: unknown; context: Record<string, unknown> }> = [];
   let status = 200;
+  let stopReason = "end_turn";
   const upstream = httpServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -65,7 +66,7 @@ test("company browser inference runs on the session route through the gateway", 
       return res.end(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "slow down" } }));
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
-    res.end(anthropicStream("done"));
+    res.end(anthropicStream("done", stopReason));
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
@@ -151,14 +152,36 @@ test("company browser inference runs on the session route through the gateway", 
   );
   status = 429;
   const limited = await post(body);
-  assert.equal(limited.status, 502);
+  assert.equal(limited.status, 429);
   const limitedText = await limited.text();
   assert.match(limitedText, /billed to the shared model gateway/);
   assert.ok(!limitedText.includes(key));
+  const logged: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => logged.push(args.join(" "));
+  try {
+    status = 401;
+    assert.equal((await post(body)).status, 502);
+  } finally {
+    console.error = origError;
+  }
+  assert.match(logged.join("\n"), /\/v1\/browser-model\/chat\/completions.*Claude Opus 5/);
+  status = 200;
+  stopReason = "max_tokens";
+  const truncated = await post(body);
+  assert.equal(truncated.status, 200);
+  assert.equal(
+    ((await truncated.json()) as { choices: Array<{ finish_reason: string }> }).choices[0]?.finish_reason,
+    "length",
+  );
+  const schema = { response_format: { type: "json_schema", json_schema: { schema: { type: "object" } } } };
+  assert.equal((await post({ ...body, ...schema })).status, 422);
+  stopReason = "refusal";
+  assert.equal((await post(body)).status, 422);
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await post(body)).status, 403);
   await built.config.setSecurityPosture("personal:U1", "auto");
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 7);
 });
 
 test("gateway deployment provisions a browser token without exposing the company model key", async () => {

@@ -22,9 +22,13 @@ export async function respondChatCompletion(
     sendJson(res, 200, result);
     return result;
   } catch (error) {
-    if (error instanceof ChatCompletionError) sendJson(res, error.status, errorBody(error.message));
-    else if (!controller.signal.aborted) {
-      reportFailure(`${purpose} model request`, error, routeLabel(route));
+    if (controller.signal.aborted) return undefined;
+    const detail = `${ctx.pathname} ${routeLabel(route)}`;
+    if (error instanceof ChatCompletionError) {
+      if (error.status >= 500) reportFailure(`${purpose} model request`, error, detail);
+      if (!res.destroyed) sendJson(res, error.status, errorBody(error.message));
+    } else {
+      reportFailure(`${purpose} model request`, error, detail);
       if (!res.destroyed)
         sendJson(
           res,
