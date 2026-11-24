@@ -11,7 +11,7 @@ const MESSAGE_ID_WIDTH = 20;
 
 const ID = /^[A-Za-z0-9_-]+$/;
 const id = z.string().regex(ID);
-const originSchema = z.url().refine((value) => new URL(value).origin === value);
+const originSchema = z.url().refine((value) => URL.canParse(value) && new URL(value).origin === value);
 export const genericChatMessageIdSchema = z.string().regex(/^\d{1,20}$/);
 const user = z.object({
   id,

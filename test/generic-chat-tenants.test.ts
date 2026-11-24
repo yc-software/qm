@@ -95,4 +95,11 @@ describeTwoTenants("generic chat on a shared host", (db) => {
       assert.equal(init.redirect, "error");
     }
   });
+
+  it("rejects malformed origins without throwing", async () => {
+    for (const origin of ["", "not a URL", "https://", "https://one.dev.example.test/"]) {
+      assert.equal(await deliver("7000", origin), 400);
+      assert.ok((await post(genericChatAccount("7000", origin)))?.refused);
+    }
+  });
 });
