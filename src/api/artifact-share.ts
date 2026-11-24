@@ -29,22 +29,15 @@ export function authorPublishesSkill(scope: ScopeId): boolean {
 
 export interface SkillEditor {
   personAuthority?: boolean;
-  internalAudience?: boolean;
   botActor?: boolean;
 }
 
 export function sharedSkillRefused(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
-  return isMultiMemberSkillScope(homeScope) && !internalPerson(editor);
+  return isMultiMemberSkillScope(homeScope) && !carriesPersonAuthority(editor);
 }
 
 export function carriesPersonAuthority(c: { personAuthority?: boolean; botActor?: boolean } | undefined): boolean {
   return c?.botActor !== true && c?.personAuthority === true;
-}
-
-export function internalPerson(
-  c: (Parameters<typeof carriesPersonAuthority>[0] & { internalAudience?: boolean }) | undefined,
-): boolean {
-  return carriesPersonAuthority(c) && c?.internalAudience === true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;

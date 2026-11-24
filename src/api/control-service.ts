@@ -26,7 +26,7 @@ import {
   type ArtifactHome,
   type ArtifactType,
   isMultiMemberSkillScope,
-  internalPerson,
+  carriesPersonAuthority,
   resolveShareTarget,
   type ShareAccessResult,
   type ShareArtifactRequest,
@@ -785,7 +785,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async createWebhook(req, capability, publicBase, signOff = unsigned): Promise<WebhookCreateResult> {
-      if (!internalPerson(capability))
+      if (!carriesPersonAuthority(capability))
         return { ok: false, code: "forbidden", message: "registering a webhook needs its owner's own authority" };
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
@@ -901,7 +901,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability, signOff = unsigned): Promise<ShareArtifactResult> {
-      const personInInternalAudience = internalPerson(capability);
+      const personInInternalAudience = carriesPersonAuthority(capability);
       if (req.type === "deploy" && !personInInternalAudience)
         return { ok: false, code: "forbidden", message: "changing who can reach an app needs its owner's authority" };
       const permission: Permission = req.permission === "write" ? "write" : "read";
