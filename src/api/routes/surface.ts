@@ -213,20 +213,46 @@ const MOVE_REFUSALS = {
   same_scope: { status: 409, message: "That conversation is already in this project." },
   unsupported_source: { status: 409, message: "Only your own web chats and project chats can be moved." },
   not_project: { status: 404, message: "That project isn't available." },
-  anchored: {
-    status: 409,
-    message: "Stop this chat's goal, schedules and background jobs, and detach its subagents, before moving it.",
-  },
   forbidden: { status: 403, message: "You're not a member of that project." },
   busy: { status: 409, message: "Wait for the agent to finish before moving this chat." },
+  awaiting_approval: { status: 409, message: "This chat is waiting for an approval. Answer it, then move the chat." },
 } as const;
 
+function jobRefusal(job: { purpose: string; chat?: string }): string {
+  const where = job.chat ? `in this chat's subagent "${job.chat}"` : "in this chat";
+  return `The background job "${job.purpose}" ${where} is still running on a computer the project can't use. Stop it or wait for it to finish, then move the chat.`;
+}
+
+function audienceList(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 async function moveSession(ctx: ApiCtx): Promise<void> {
-  const b = (isObj(ctx.body) ? ctx.body : {}) as { principalId?: unknown; scopeId?: unknown };
+  const b = (isObj(ctx.body) ? ctx.body : {}) as {
+    principalId?: unknown;
+    scopeId?: unknown;
+    audience?: unknown;
+    preview?: unknown;
+  };
   if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
-  const out = await ctx.app.moveSession(ctx.params.id!, b.principalId, b.scopeId as ScopeId);
+  if (b.audience !== undefined && (!Array.isArray(b.audience) || !b.audience.every((id) => typeof id === "string")))
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "audience must be a list of principal ids" });
+  const out = await ctx.app.moveSession(tenantOf(ctx), ctx.params.id!, b.principalId, b.scopeId as ScopeId, {
+    ...(b.audience ? { audience: b.audience as string[] } : {}),
+    ...(b.preview === true ? { preview: true } : {}),
+  });
   if (out.moved) return sendJson(ctx.res, 200, { session: out.session });
+  if ("preview" in out) return sendJson(ctx.res, 200, { gains: out.gains });
+  if (out.reason === "confirm_audience")
+    return sendJson(ctx.res, 409, {
+      error: out.reason,
+      gains: out.gains,
+      message: `Moving this chat lets ${audienceList(out.gains.map((g) => g.displayName))} read it. Confirm to move it.`,
+    });
+  if (out.reason === "job_running")
+    return sendJson(ctx.res, 409, { error: out.reason, job: out.job, message: jobRefusal(out.job) });
   const refusal = MOVE_REFUSALS[out.reason];
   return sendJson(ctx.res, refusal.status, { error: out.reason, message: refusal.message });
 }

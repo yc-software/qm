@@ -35,7 +35,9 @@ import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
-import type { App, AppDeps } from "./app-types.ts";
+import type { App, AppDeps, MoveSessionResult } from "./app-types.ts";
+import { postsInto } from "../triggers/trigger-store.ts";
+import { newReaders, rehomedSpawnMeta } from "../sessions/session-move.ts";
 import {
   SideChatAnchorError,
   SoulUpdateDeniedError,
@@ -410,28 +412,6 @@ export function createSessionMethods(
     if (deletedRuns.length) await deps.runActivity?.deleteForRuns(tenant, deletedRuns);
     await deps.sessions.deleteSession(sessionId);
   }
-
-  const copyToFreshWebSession = async (
-    principalId: string,
-    target: Pick<Session, "type" | "scopeId" | "channelName">,
-    copied: readonly Item[],
-    members?: readonly string[],
-  ): Promise<{ session: Session; lastSeq: number | null }> => {
-    const threadRef = `web:${principalId}:${randomUUID()}`;
-    const session = await deps.sessions.getOrCreateByThread(
-      threadRef,
-      target.type,
-      target.scopeId,
-      target.channelName,
-      "web",
-    );
-    const copiedItems = await deps.sessions.appendMany(
-      { sessionId: session.id },
-      copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
-    );
-    await deps.sessions.addParticipants(session.id, members ?? [principalId]);
-    return { session, lastSeq: copiedItems.at(-1)?.seq ?? null };
-  };
 
   return {
     async getSession(sessionId, window) {
@@ -1159,12 +1139,19 @@ export function createSessionMethods(
           (!isSideChatAnchor(opts.sideChat) || !copied.some((item) => item.seq === opts.sideChat!.entrySeq))
         )
           throw new SideChatAnchorError();
-        const { session: forked, lastSeq: forkBoundarySeq } = await copyToFreshWebSession(
-          principalId,
-          { type: source.type, scopeId: source.scopeId, channelName: source.channelName },
-          copied,
-          projectMembers,
+        const threadRef = `web:${principalId}:${randomUUID()}`;
+        const forked = await deps.sessions.getOrCreateByThread(
+          threadRef,
+          source.type,
+          source.scopeId,
+          source.channelName,
+          "web",
         );
+        const copiedItems = await deps.sessions.appendMany(
+          { sessionId: forked.id },
+          copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
+        );
+        const forkBoundarySeq = copiedItems.at(-1)?.seq ?? null;
         if (forkBoundarySeq !== null) {
           await deps.sessions.updateForkProvenance(forked.id, {
             forkedFrom: { sessionId, title: source.title ?? null },
@@ -1172,6 +1159,9 @@ export function createSessionMethods(
             ...(opts?.sideChat ? { sideChat: { ...opts.sideChat, expanded: false } } : {}),
           });
         }
+        await Promise.all(
+          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+        );
         const sourceTitle = source.title?.trim();
         if (sourceTitle && projectMembers === undefined)
           await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
@@ -1198,13 +1188,13 @@ export function createSessionMethods(
       });
     },
 
-    async moveSession(sessionId, principalId, targetScopeId) {
+    async moveSession(tenant, sessionId, principalId, targetScopeId, opts = {}) {
       const viewed = await sessionForViewer(sessionId, principalId);
       const source = viewed && (await deps.sessions.get(sessionId));
       if (!viewed || !source || source.ephemeral) return { moved: false, reason: "not_found" };
       if (source.scopeId === targetScopeId) return { moved: false, reason: "same_scope" };
       const from = parseScopeId(source.scopeId);
-      const fromProject = from.kind === "group" && projectIdFromGroupRef(from.ref) !== null;
+      const fromProject = from.kind === "group" ? projectIdFromGroupRef(from.ref) : null;
       const topLevelWebChat = source.surface === "web" && !source.parentSessionId && !source.sideChat;
       if (
         (source.scopeId !== personalScope(principalId) && !fromProject) ||
@@ -1216,49 +1206,123 @@ export function createSessionMethods(
       const projectId = target.kind === "group" ? projectIdFromGroupRef(target.ref) : null;
       const projects = deps.projects;
       if (!projectId || !projects) return { moved: false, reason: "not_project" };
-      if ((await deps.runs.inFlightForThread(source.threadRef)).length) return { moved: false, reason: "busy" };
-      const [attached] = await decorateSessions(principalId, [source]);
-      if (
-        attached?.goal ||
-        attached?.crons ||
-        attached?.watches ||
-        attached?.backgroundJobs ||
-        (await deps.sessions.childrenOf(sessionId)).length
-      )
-        return { moved: false, reason: "anchored" };
-      const items = (await transcripts.forViewer(sessionId, principalId)).items;
-      const result = await projects.withRosterLock(projectId, async (project) => {
-        if (project.orgId !== orgIdOf()) return { moved: false as const, reason: "not_project" as const };
+      const result = await projects.withRosterLock(projectId, async (project): Promise<MoveSessionResult> => {
+        if (project.orgId !== orgIdOf()) return { moved: false, reason: "not_project" };
         const members = await projects.members(target.ref);
-        if (!members?.includes(principalId)) return { moved: false as const, reason: "forbidden" as const };
-        const { session: moved } = await copyToFreshWebSession(
-          principalId,
-          { type: "group", scopeId: targetScopeId, channelName: project.name },
-          items,
-          members,
+        if (!members?.includes(principalId)) return { moved: false, reason: "forbidden" };
+        const descendants = await deps.sessions.descendantsOf([sessionId]);
+        const tree = [
+          source,
+          ...(await Promise.all(descendants.map((d) => deps.sessions.get(d.id)))).filter((s): s is Session => !!s),
+        ];
+        const threadRefs = new Set(tree.map((s) => s.threadRef));
+        const inFlight = await Promise.all(tree.map((s) => deps.runs.inFlightForThread(s.threadRef)));
+        if (inFlight.some((runs) => runs.length)) return { moved: false, reason: "busy" };
+        const approvals =
+          (await deps.approvals?.selectEntries({
+            where: { field: "sessionId", anyOfFold: tree.map((s) => s.id) },
+          })) ?? [];
+        for (const [, record] of approvals)
+          if (await approvalRecordIsCurrent(record)) return { moved: false, reason: "awaiting_approval" };
+        const jobs = ((await deps.processes?.listLive()) ?? []).filter(
+          (rec) => rec.kind === "background" && rec.sessionRef && threadRefs.has(rec.sessionRef),
         );
-        const title = viewed.title?.trim();
-        if (title) await deps.sessions.updateTitle(moved.id, title);
-        if (viewed.pinned || viewed.color)
-          await deps.sessions.updateParticipantView(moved.id, principalId, {
-            ...(viewed.pinned ? { pinned: true } : {}),
-            ...(viewed.color ? { color: viewed.color } : {}),
-          });
-        await deps.sessions.updateParticipantView(sessionId, principalId, { archived: true });
-        return { moved: true as const, sessionId: moved.id };
+        const computers = await Promise.all(
+          jobs.map((rec) => (rec.sandboxId ? deps.sandboxResources?.get(rec.sandboxId).catch(() => null) : null)),
+        );
+        const stranded = jobs.find((_, i) => computers[i]?.ownerScopeId !== targetScopeId);
+        if (stranded) {
+          const chat = tree.find((s) => s.threadRef === stranded.sessionRef);
+          return {
+            moved: false,
+            reason: "job_running",
+            job: {
+              purpose: stranded.purpose ?? stranded.command.replace(/^bg: /, ""),
+              ...(chat && chat.id !== sessionId && chat.title ? { chat: chat.title } : {}),
+            },
+          };
+        }
+        const sourceMembers = fromProject ? ((await projects.members(from.ref)) ?? []) : null;
+        const readers = await Promise.all(
+          tree.map(async (s) =>
+            (await deps.sessions.participantsOf(s.id)).filter((id) => !sourceMembers || sourceMembers.includes(id)),
+          ),
+        );
+        const gains = await Promise.all(
+          newReaders(members, readers).map(async (id) => ({
+            principalId: id,
+            displayName: (await deps.directory.get(id).catch(() => null))?.displayName ?? id,
+          })),
+        );
+        if (opts.preview) return { moved: false, preview: true, gains };
+        if (gains.some((g) => !opts.audience?.includes(g.principalId)))
+          return { moved: false, reason: "confirm_audience", gains };
+        const move = { threadRefs, from: source.scopeId, to: targetScopeId };
+        if (jobs.length && deps.processes)
+          await deps.processes.rescope(
+            tenant,
+            jobs.map((rec) => rec.processId),
+            targetScopeId,
+          );
+        await Promise.all([deps.crons.rehome(move), deps.webhooks.rehome(move), deps.monitors?.rehome(move)]);
+        for (const loop of (await deps.loops?.list()) ?? [])
+          if (loop.ownerScopeId === source.scopeId && postsInto(loop, threadRefs))
+            await deps.loops!.update(loop.id, { destination: null });
+        const audience = await Promise.all(
+          members.map(async (id) => {
+            const principal = deps.identity.classify(id);
+            const displayName = (await deps.directory.get(id).catch(() => null))?.displayName;
+            return displayName ? { ...principal, displayName } : principal;
+          }),
+        );
+        const version = await projects.version(target.ref);
+        const childComputers = new Map<string, string>();
+        for (const s of tree) {
+          const id = s.spawnMeta?.isolation?.sandboxId;
+          if (!id || childComputers.has(id)) continue;
+          const computer = await deps.sandboxResources?.get(id).catch(() => null);
+          if (computer?.ownerScopeId !== targetScopeId) childComputers.set(id, randomUUID());
+        }
+        const spawnMeta = new Map(
+          tree.flatMap((s) =>
+            s.spawnMeta
+              ? [
+                  [
+                    s.id,
+                    rehomedSpawnMeta(
+                      s.spawnMeta,
+                      { groupRef: target.ref, channelName: project.name, audience, version },
+                      childComputers,
+                    ),
+                  ] as const,
+                ]
+              : [],
+          ),
+        );
+        await deps.sessions.rehome(
+          tenant,
+          tree.map((s) => s.id),
+          { type: "group", scopeId: targetScopeId, channelName: project.name },
+          members,
+          spawnMeta,
+        );
+        h.recordAudit({
+          at: Date.now(),
+          principalId,
+          action: "session.move",
+          resource: sessionId,
+          scopeLabel: targetScopeId,
+          detail: JSON.stringify({
+            from: source.scopeId,
+            to: targetScopeId,
+            sessions: tree.map((s) => s.id),
+            gains: gains.map((g) => g.principalId),
+          }),
+        });
+        const stored = (await sessionForViewer(sessionId, principalId))!;
+        return { moved: true, session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
       });
-      if (!result) return { moved: false, reason: "not_project" };
-      if (!result.moved) return result;
-      h.recordAudit({
-        at: Date.now(),
-        principalId,
-        action: "session.move",
-        resource: sessionId,
-        scopeLabel: targetScopeId,
-        detail: JSON.stringify({ from: source.scopeId, to: targetScopeId, session: result.sessionId }),
-      });
-      const stored = (await sessionForViewer(result.sessionId, principalId))!;
-      return { moved: true, session: { ...stored, canContinue: await canContinueOnWeb(principalId, stored) } };
+      return result ?? { moved: false, reason: "not_project" };
     },
 
     async spawnSession(principalId, opts) {

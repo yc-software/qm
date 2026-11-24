@@ -2507,6 +2507,8 @@ export function buildApp(
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
+    loops: loopStore,
+    sandboxResources,
     sandbox,
     files,
     approvals,

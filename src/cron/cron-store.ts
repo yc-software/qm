@@ -16,6 +16,8 @@ import {
   type CreateTriggerInput,
   normalizeTitle,
   ownedBy,
+  rehomeTriggers,
+  type ScopeMove,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
@@ -71,6 +73,7 @@ export interface CronStore {
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
+  rehome(move: ScopeMove): Promise<string[]>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   runningFires(now: number): Promise<CronFireRecord[]>;
@@ -207,6 +210,18 @@ export function createCronStore(
     delete: (id) => backing.delete(id),
     async setEnabled(id, enabled) {
       await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+    },
+    rehome(move) {
+      return rehomeTriggers(
+        backing,
+        move,
+        (cron) => !cron.loopId && [...move.threadRefs].some((threadRef) => cronTiedTo(cron, threadRef)),
+        (cron, before) => {
+          if (before.ownerScopeId !== move.from || !cron.script?.sandboxId) return cron;
+          const { sandboxId: _sandboxId, ...script } = cron.script;
+          return { ...cron, script };
+        },
+      );
     },
     async setDestination(id, destination) {
       await backing.merge(id, { destination });

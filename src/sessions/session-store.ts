@@ -415,6 +415,13 @@ export interface SessionStore {
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  rehome(
+    tenant: Tenant,
+    sessionIds: readonly string[],
+    target: { type: SessionType; scopeId: ScopeId; channelName: string },
+    memberIds: readonly string[],
+    spawnMeta: ReadonlyMap<string, SpawnMeta>,
+  ): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;
   threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
@@ -450,7 +457,6 @@ export interface SessionStore {
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string): Promise<void>;
-  addParticipants(sessionId: string, principalIds: readonly string[]): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit?: number; botActor?: boolean }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;

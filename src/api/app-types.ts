@@ -34,6 +34,8 @@ import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
+import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { LoopStore } from "../loops/loop-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
@@ -460,7 +462,13 @@ export interface App {
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; items: Item[] } | null>;
-  moveSession(sessionId: string, principalId: string, targetScopeId: ScopeId): Promise<MoveSessionResult>;
+  moveSession(
+    tenant: Tenant,
+    sessionId: string,
+    principalId: string,
+    targetScopeId: ScopeId,
+    opts?: { audience?: readonly string[]; preview?: boolean },
+  ): Promise<MoveSessionResult>;
   listFilesForViewer(
     tenant: Tenant,
     principalId: string,
@@ -829,6 +837,8 @@ export interface AppDeps {
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
+  loops?: Pick<LoopStore, "list" | "update">;
+  sandboxResources?: Pick<SandboxResources, "get">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
@@ -964,9 +974,24 @@ interface SessionPageResult {
   hasArchived?: boolean;
 }
 
+interface MoveAudienceMember {
+  principalId: string;
+  displayName: string;
+}
+
+type MoveRefusal =
+  | "not_found"
+  | "same_scope"
+  | "unsupported_source"
+  | "not_project"
+  | "forbidden"
+  | "busy"
+  | "awaiting_approval"
+  | "job_running";
+
 export type MoveSessionResult =
   | { moved: true; session: Session }
-  | {
-      moved: false;
-      reason: "not_found" | "same_scope" | "unsupported_source" | "not_project" | "forbidden" | "busy" | "anchored";
-    };
+  | { moved: false; preview: true; gains: MoveAudienceMember[] }
+  | { moved: false; reason: "confirm_audience"; gains: MoveAudienceMember[] }
+  | { moved: false; reason: "job_running"; job: { purpose: string; chat?: string } }
+  | { moved: false; reason: Exclude<MoveRefusal, "job_running"> };

@@ -9,6 +9,9 @@ import {
   setTriggerEnabled,
   type CreateTriggerInput,
   ownedBy,
+  postsInto,
+  rehomeTriggers,
+  type ScopeMove,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
@@ -45,6 +48,7 @@ export interface WebhookStore {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   update(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
+  rehome(move: ScopeMove): Promise<string[]>;
 }
 
 export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
@@ -128,6 +132,9 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         ...(info.deliveryId ? { lastDeliveryId: info.deliveryId } : {}),
         lastError: info.error,
       });
+    },
+    rehome(move) {
+      return rehomeTriggers(backing, move, (webhook) => postsInto(webhook, move.threadRefs));
     },
   };
 }

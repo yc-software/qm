@@ -387,10 +387,26 @@ export async function forkSession(
   );
 }
 
-export async function moveSession(id: string, scopeId: string): Promise<{ session: CoreSession }> {
+export interface MoveAudienceMember {
+  principalId: string;
+  displayName: string;
+}
+
+export async function previewSessionMove(id: string, scopeId: string): Promise<{ gains: MoveAudienceMember[] }> {
+  return api<{ gains: MoveAudienceMember[] }>(`/api/sessions/${encodeURIComponent(id)}/move`, {
+    method: "POST",
+    body: JSON.stringify({ scopeId, preview: true }),
+  });
+}
+
+export async function moveSession(
+  id: string,
+  scopeId: string,
+  audience: readonly string[],
+): Promise<{ session: CoreSession }> {
   return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}/move`, {
     method: "POST",
-    body: JSON.stringify({ scopeId }),
+    body: JSON.stringify({ scopeId, audience }),
   });
 }
 

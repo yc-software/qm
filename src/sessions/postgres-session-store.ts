@@ -206,6 +206,35 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
     },
 
+    async rehome(tenant, sessionIds, target, memberIds, spawnMeta): Promise<void> {
+      await db.forTenant(tenant).q(
+        `WITH moved AS (
+           UPDATE sessions s SET scope_id = $3, type = $4, channel_name = $5, spawn_meta = COALESCE(m.meta, s.spawn_meta)
+             FROM unnest($2::text[], $7::text[]) AS m(id, meta)
+            WHERE s.tenant_id = $1 AND s.id = m.id
+           RETURNING s.id
+         ), dropped AS (
+           DELETE FROM participants p USING moved
+            WHERE p.tenant_id = $1 AND p.session_id = moved.id AND NOT (p.principal_id = ANY($6::text[]))
+         )
+         INSERT INTO participants(tenant_id, session_id, principal_id)
+         SELECT $1, moved.id, member FROM moved CROSS JOIN unnest($6::text[]) AS member
+         ON CONFLICT (tenant_id, session_id, principal_id) DO NOTHING`,
+        [
+          tenant.id,
+          [...sessionIds],
+          target.scopeId,
+          target.type,
+          target.channelName,
+          [...memberIds],
+          sessionIds.map((id) => {
+            const meta = spawnMeta.get(id);
+            return meta ? JSON.stringify(meta) : null;
+          }),
+        ],
+      );
+    },
+
     async setRuntime(sessionId, runtime): Promise<void> {
       await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1 AND runtime IS DISTINCT FROM $2::jsonb", [
         sessionId,

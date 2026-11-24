@@ -149,3 +149,48 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
     END $$`,
   ],
 };
+
+export interface ScopeMove {
+  threadRefs: ReadonlySet<string>;
+  from: ScopeId;
+  to: ScopeId;
+}
+
+export function postsInto(trigger: Pick<TriggerBase, "destination">, threadRefs: ReadonlySet<string>): boolean {
+  return trigger.destination !== undefined && threadRefs.has(trigger.destination.target);
+}
+
+function rehomedTrigger<T extends TriggerBase>(trigger: T, move: ScopeMove): T {
+  const destination = trigger.destination;
+  const audienceMoves = destination?.audienceScopeId === move.from;
+  return {
+    ...trigger,
+    ...(trigger.ownerScopeId === move.from ? { ownerScopeId: move.to } : {}),
+    ...(destination && audienceMoves
+      ? { destination: { ...withoutProject(destination), audienceScopeId: move.to } }
+      : {}),
+  };
+}
+
+function withoutProject({ project: _project, ...destination }: Destination): Destination {
+  return destination;
+}
+
+export async function rehomeTriggers<T extends TriggerBase>(
+  backing: DurableMap<T>,
+  move: ScopeMove,
+  tied: (trigger: T) => boolean,
+  adjust: (moved: T, before: T) => T = (moved) => moved,
+): Promise<string[]> {
+  const ids = (await backing.entries())
+    .filter(
+      ([, trigger]) =>
+        tied(trigger) && (trigger.ownerScopeId === move.from || trigger.destination?.audienceScopeId === move.from),
+    )
+    .map(([id]) => id);
+  if (ids.length)
+    await backing.mutateMany(
+      ids.map((id) => ({ id, apply: (trigger) => adjust(rehomedTrigger(trigger!, move), trigger!) })),
+    );
+  return ids;
+}

@@ -5,8 +5,10 @@ import {
   beginSessionMoveDrag,
   endSessionMoveDrag,
   movableInto,
+  moveConfirmation,
   projectDropHandlers,
   registerSessionMoveHost,
+  runSessionMove,
   SESSION_DROP_OVER_CLASS,
   sessionsToMove,
 } from "../src/session-move.ts";
@@ -26,7 +28,6 @@ const sessions = [
   { id: "goal", scopeId: "personal:me", surface: "web", goal: { objective: "ship", activeMs: 0 } },
   { id: "cron", scopeId: "personal:me", surface: "web", crons: 1 },
 ] as CoreSession[];
-const movableFrom = (scopeId: string) => scopeId === "personal:me" || scopeId.startsWith("group:project:");
 
 test("dragging a selected row carries the whole selection; other rows move alone", () => {
   assert.deepEqual(sessionsToMove(new Set(["a", "b"]), "b"), ["a", "b"]);
@@ -35,14 +36,28 @@ test("dragging a selected row carries the whole selection; other rows move alone
   assert.deepEqual(sessionsToMove(new Set(), "a"), ["a"]);
 });
 
-test("only idle top-level web chats from your own personal scope or another project are movable", () => {
+test("every dragged chat outside the project is offered to the server, which decides and explains", () => {
   const all = sessions.map((s) => s.id);
-  assert.deepEqual(movableInto(sessions, [...all, "missing"], "group:project:launch", movableFrom), [
-    "a",
-    "b",
-    "other",
-  ]);
-  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch", movableFrom), []);
+  assert.deepEqual(
+    movableInto(sessions, [...all, "missing"], "group:project:launch"),
+    all.filter((id) => id !== "c"),
+  );
+  assert.deepEqual(movableInto(sessions, ["c"], "group:project:launch"), []);
+});
+
+test("the confirmation names the chat, the project, and everyone who gains access", () => {
+  assert.equal(
+    moveConfirmation(["Launch plan"], "Launch", ["Ada"]),
+    'Move "Launch plan" to Launch? Ada will be able to read it, including its earlier messages.',
+  );
+  assert.equal(
+    moveConfirmation(["One", "Two"], "Launch", ["Ada", "Grace"]),
+    "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
+  );
+  assert.equal(
+    moveConfirmation(["One"], "Launch", ["A", "B", "C", "D", "E", "F", "G", "H"]),
+    'Move "One" to Launch? A, B, C, D, E, F and 2 others will be able to read it, including its earlier messages.',
+  );
 });
 
 function fixture() {
@@ -55,7 +70,6 @@ function fixture() {
   const moves: Array<{ ids: readonly string[]; scopeId: string }> = [];
   registerSessionMoveHost({
     sessions: () => sessions,
-    movableFrom,
     move: async (ids, scopeId) => {
       moves.push({ ids, scopeId });
     },
@@ -87,17 +101,88 @@ test("a project accepts dragged sessions, highlights while over, and moves them 
   assert.equal(fire("dragover").defaultPrevented, false, "the drag is over once dropped");
 });
 
-test("a project ignores drags that are not sessions, are already there, or would be refused", () => {
+test("a project accepts working chats so the refusal can be explained, and ignores ones already there", () => {
   const { target, moves, fire } = fixture();
   endSessionMoveDrag();
   assert.equal(fire("dragover").defaultPrevented, false);
+  beginSessionMoveDrag(["c"]);
+  assert.equal(fire("dragover").defaultPrevented, false, "a chat already in the project is not a drop");
   beginSessionMoveDrag(["c", "busy"]);
-  assert.equal(fire("dragover").defaultPrevented, false);
+  assert.equal(fire("dragover").defaultPrevented, true);
   fire("drop");
   assert.ok(!target.classList.contains(SESSION_DROP_OVER_CLASS));
-  assert.deepEqual(moves, []);
+  assert.deepEqual(moves, [{ ids: ["busy"], scopeId: "group:project:launch" }]);
   beginSessionMoveDrag(["a"]);
   fire("dragover");
   endSessionMoveDrag();
   assert.ok(!target.classList.contains(SESSION_DROP_OVER_CLASS), "ending the drag clears every highlight");
+});
+
+function io(opts: { gains?: Record<string, string[]>; refuse?: Record<string, string>; confirm?: boolean }) {
+  const asked: string[] = [];
+  const moved: Array<{ id: string; audience: readonly string[] }> = [];
+  const names: Record<string, string> = { ada: "Ada", grace: "Grace" };
+  return {
+    asked,
+    moved,
+    io: {
+      project: "Launch",
+      title: (id: string) => `Chat ${id}`,
+      preview: async (id: string) => {
+        if (opts.refuse?.[id]) throw new Error(opts.refuse[id]);
+        return { gains: (opts.gains?.[id] ?? []).map((p) => ({ principalId: p, displayName: names[p]! })) };
+      },
+      move: async (id: string, audience: readonly string[]) => {
+        moved.push({ id, audience });
+        return { id, scopeId: "group:project:launch" } as CoreSession;
+      },
+      confirm: (question: string) => {
+        asked.push(question);
+        return opts.confirm ?? true;
+      },
+      reason: (error: unknown) => (error as Error).message,
+    },
+  };
+}
+
+test("a move that gives nobody new access goes ahead without asking", async () => {
+  const t = io({});
+  const out = await runSessionMove(["a"], t.io);
+  assert.deepEqual(t.asked, []);
+  assert.deepEqual(t.moved, [{ id: "a", audience: [] }]);
+  assert.equal(out.toast, "Moved to Launch");
+});
+
+test("a multi-select drag asks once for everyone who gains access, and moves with that audience", async () => {
+  const t = io({ gains: { a: ["ada"], b: ["ada", "grace"] } });
+  const out = await runSessionMove(["a", "b"], t.io);
+  assert.deepEqual(t.asked, [
+    "Move 2 chats to Launch? Ada and Grace will be able to read them, including their earlier messages.",
+  ]);
+  assert.deepEqual(t.moved, [
+    { id: "a", audience: ["ada", "grace"] },
+    { id: "b", audience: ["ada", "grace"] },
+  ]);
+  assert.equal(out.toast, "Moved 2 chats to Launch");
+});
+
+test("cancelling the confirmation moves nothing", async () => {
+  const t = io({ gains: { a: ["ada"] }, confirm: false });
+  const out = await runSessionMove(["a", "b"], t.io);
+  assert.equal(t.asked.length, 1);
+  assert.deepEqual(t.moved, []);
+  assert.equal(out.toast, null);
+});
+
+test("refused chats are named in the toast while the rest still move", async () => {
+  const wait = "Wait for the agent to finish before moving this chat.";
+  const t = io({ refuse: { busy: wait } });
+  const out = await runSessionMove(["a", "busy"], t.io);
+  assert.deepEqual(
+    t.moved.map((m) => m.id),
+    ["a"],
+  );
+  assert.equal(out.toast, `Moved 1 of 2 chats to Launch. "Chat busy" wasn't moved: ${wait}`);
+  const alone = io({ refuse: { busy: wait } });
+  assert.equal((await runSessionMove(["busy"], alone.io)).toast, wait, "a single refusal says why and nothing else");
 });

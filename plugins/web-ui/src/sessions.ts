@@ -44,7 +44,9 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
+  ApiError,
   moveSession,
+  previewSessionMove,
   itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -133,6 +135,7 @@ import { emptySelection, pruneSelection, selectionClick, type SessionSelection }
 import {
   beginSessionMoveDrag,
   endSessionMoveDrag,
+  runSessionMove,
   projectDropHandlers,
   registerSessionMoveHost,
   sessionsToMove,
@@ -1354,40 +1357,33 @@ export function endSessionDrag(): void {
 }
 
 async function moveSessionsToProject(ids: readonly string[], scopeId: string): Promise<void> {
-  const name = projectName(scopeId) ?? "the project";
   const viewing = new Set(appState.currentView === "chats" ? openConversationIds() : []);
-  let opened: CoreSession | null = null;
-  let moved = 0;
-  let failure: string | null = null;
-  for (const id of ids) {
-    try {
-      const { session } = await moveSession(id, scopeId);
-      moved++;
-      if (viewing.has(id)) {
-        closeSessionSurfaces(id);
-        opened ??= session;
-      }
-    } catch (error) {
-      reportHandledError("web:session_move", error);
-      failure ??= errMessage(error);
-    }
-  }
+  const { moved, toast } = await runSessionMove(ids, {
+    project: projectName(scopeId) ?? "the project",
+    title: (id) => sessionsState.list.find((s) => s.id === id)?.title?.trim() || "Untitled chat",
+    preview: (id) => previewSessionMove(id, scopeId),
+    move: async (id, audience) => (await moveSession(id, scopeId, audience)).session,
+    confirm: (question) => window.confirm(question),
+    reason: (error) => {
+      if (!(error instanceof ApiError)) reportHandledError("web:session_move", error);
+      return errMessage(error);
+    },
+  });
+  const opened = moved.find((session) => viewing.has(session.id)) ?? null;
+  for (const session of moved) if (viewing.has(session.id)) closeSessionSurfaces(session.id);
   selection = emptySelection();
-  if (moved) {
+  if (moved.length) {
     sessionsState.collapsedProjectScopes.delete(scopeId);
     await refreshSessions({ silent: true });
   }
   redrawSelection();
   if (opened) await openSession(opened, undefined, undefined, "replace");
-  else if (moved && appState.currentView === "contexts") await renderContexts();
-  if (!failure) canvasToast(moved === 1 ? `Moved to ${name}` : `Moved ${moved} chats to ${name}`);
-  else if (moved) canvasToast(`Moved ${moved} of ${ids.length} chats to ${name}. ${failure}`);
-  else canvasToast(failure);
+  else if (moved.length && appState.currentView === "contexts") await renderContexts();
+  if (toast) canvasToast(toast);
 }
 
 registerSessionMoveHost({
   sessions: () => sessionsState.list,
-  movableFrom: (scopeId) => scopeId === personalScopeId() || projectOf(scopeId) !== null,
   move: moveSessionsToProject,
 });
 
