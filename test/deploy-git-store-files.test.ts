@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeployGitStore } from "../src/deploy/deploy-git-store.ts";
 
-test("filesIn reads binary, empty and duplicate blobs in one batch and reports missing ones", async () => {
+test("git store batches blobs, reports missing ones, keeps executables and names symlinks", async () => {
   const store = createDeployGitStore({ repoRoot: mkdtempSync(join(tmpdir(), "git-store-files-")) });
   const binary = new Uint8Array([0, 10, 255, 10, 0, 49, 32, 98, 108, 111, 98, 10]);
   const files = [
@@ -26,4 +27,9 @@ test("filesIn reads binary, empty and duplicate blobs in one batch and reports m
     store.filesIn("d1", [{ ...entries[0]!, sha: "0".repeat(40), path: "gone.txt" }]),
     (err: Error) => err.message === `missing blob ${"0".repeat(40)} for gone.txt`,
   );
+  const input = `100755 blob ${entries[0]!.sha}\tbin\n120000 blob ${entries[0]!.sha}\tlink\n`;
+  const tree = execFileSync("git", ["--git-dir", await store.repoUrl("d1"), "mktree"], { input })
+    .toString()
+    .trim();
+  await assert.rejects(store.treeOf("d1", tree), { message: "link is a symlink; symlinks are not deployable" });
 });
