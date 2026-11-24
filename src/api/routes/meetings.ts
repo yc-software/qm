@@ -123,7 +123,10 @@ async function meetingSpeech(ctx: ApiCtx): Promise<void> {
   const speaker = ctx.url.searchParams.get("speaker");
   const at = epochMs(ctx.url.searchParams.get("at"));
   if ((speaker !== "me" && speaker !== "others") || !at)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "speaker must be me or others, and at a time." });
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "speaker must be me or others, and at a time in epoch milliseconds.",
+    });
   const [session, started] = await Promise.all([
     sessions.getByThread(meeting.threadRef),
     ctx.deps.runs!.getByDedupKey(`${meeting.threadRef}:start`),
