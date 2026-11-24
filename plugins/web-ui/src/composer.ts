@@ -556,7 +556,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     const approvalPauses = ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
     const docked = dockedApprovals(agent);
-    noteCardShown(docked);
     const runtimePending = activeRuntimeConfig === null;
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0;
     const attachingDisabled = inputBlocked;
@@ -812,7 +811,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         ?disabled=${!readyToSend()}
         aria-label=${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}
       >
-        <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span><kbd aria-hidden="true">↵</kbd>
+        <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span><kbd aria-hidden="true">${approveKey}</kbd>
       </button>`;
     if (docked.length)
       return html`<button class="send-btn ac-confirm ac-decline" type="submit" ?disabled=${!composerCanSend()}>
@@ -838,11 +837,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return alwaysSteer() !== flip && canSteer(agent);
   }
 
+  const modKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
+  const approveKey = `${modKey}↵`;
+
   function sendWhileWorkingLabel(agent: Agent, steer: boolean): string {
     const action = steer ? "Steer the running task" : "Queue for after this turn";
     if (!canSteer(agent) || flipHeld) return action;
-    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
-    return `${action} (${flipKey}↵ to ${steer ? "queue" : "steer"})`;
+        return `${action} (${modKey}↵ to ${steer ? "queue" : "steer"})`;
   }
 
   let flipHeld = false;
@@ -980,9 +981,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let receipt: ApprovalReceipt | null = null;
   let receiptTimer: ReturnType<typeof setTimeout> | undefined;
   const settling = new Set<string>();
-  let cardKey = "";
-  let cardShownAt = 0;
-  const APPROVE_GUARD_MS = 700;
 
   function showReceipt(verdict: ApprovalReceipt["verdict"], approvals: PendingApproval[]): void {
     const first = approvals[0];
@@ -999,20 +997,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function dockedApprovals(agent: Agent | null = ctx.chat.state.agent): PendingApproval[] {
     if (!agent || agent.state.isStreaming || options.prepareSubmit) return [];
     return ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
-  }
-
-  function noteCardShown(approvals: PendingApproval[]): void {
-    const key = approvals.map((a) => a.requestId).join(" ");
-    if (key === cardKey) return;
-    cardKey = key;
-    cardShownAt = performance.now();
-  }
-
-  function approvalGuardOpen(fromKey: boolean): boolean {
-    if (performance.now() - cardShownAt < APPROVE_GUARD_MS) return false;
-    if (!fromKey) return true;
-    const active = document.activeElement;
-    return !!active && active.classList.contains("composer-input") && !(active as HTMLTextAreaElement).value.trim();
   }
 
   async function decideEach(
@@ -1066,12 +1050,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function approvalPlaceholder(count: number): string {
     return count > 1
-      ? `Enter to approve all ${count}, or say what to change`
-      : "Enter to approve, or say what to change";
+      ? `${approveKey} to approve all ${count}, or say what to change`
+      : `${approveKey} to approve, or say what to change`;
   }
 
-  function approveDocked(approvals: PendingApproval[], fromKey: boolean): void {
-    if (!approvalGuardOpen(fromKey)) return;
+  function approveDocked(approvals: PendingApproval[]): void {
     showReceipt("approved", approvals);
     void decideEach(approvals, true, ctx.chat.resolveCommandApproval);
   }
@@ -1686,7 +1669,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const draft = composerState.draft.trim();
     const docked = dockedApprovals(agent);
     if (!draft && composerState.attachments.length === 0) {
-      if (docked.length) approveDocked(docked, fromKey);
+      if (docked.length && (!fromKey || flipSteer)) approveDocked(docked);
       return;
     }
     if (docked.length) declineOnSend(agent, docked);
