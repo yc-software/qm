@@ -404,6 +404,7 @@ export function reconstructMessagesFromHistory(
           });
       }
     } else if (isAgentReply(e)) {
+      if (typeof e.body.callId === "string") continue;
       const t = itemText(e);
       const via = typeof e.body.via === "string" ? e.body.via : undefined;
       if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));

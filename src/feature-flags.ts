@@ -31,6 +31,11 @@ export const FEATURES = {
     personalOnly: true,
     hint: "In the selected people's web DMs, a reply to a turn started by a subagent or another conversation replaces the agent's latest reply since the person last typed, instead of adding a message below it. The replaced reply stays in the transcript. Applies from their next such turn.",
   },
+  web_dm_spine: {
+    label: "Web DM post and edit (experimental)",
+    personalOnly: true,
+    hint: "Runs the selected people's web DMs the way Slack threads run: the agent speaks only by posting, delegates substantial work to subagents, and edits its latest message when a subagent or another conversation brings news instead of adding a message below it. Edited versions stay in the transcript. Applies from their next turn.",
+  },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   team_scopes: { label: "Team scopes" },

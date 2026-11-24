@@ -13,6 +13,8 @@ export function surfaceTool(kit: ToolKit) {
   const surfaceLabel = opts?.surfacePrompt?.label ?? surfaceName;
   const mentionSyntax = opts?.surfacePrompt?.mentionSyntax;
   const textOnly = opts?.surfacePrompt?.textOnly === true;
+  const sentText = (sent: string) =>
+    opts?.surfacePrompt?.transcript ? { bytes: sent.length } : { text: capText(sent) };
   const surface = defineTool({
     name: surfaceName,
     label: surfaceName,
@@ -155,7 +157,7 @@ export function surfaceTool(kit: ToolKit) {
             tool: surfaceName,
             action: "post",
             ...opts,
-            text: capText(params.text),
+            ...sentText(params.text),
             ...(params.files?.length ? { files: params.files } : {}),
           });
           const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
@@ -250,7 +252,7 @@ export function surfaceTool(kit: ToolKit) {
             tool: surfaceName,
             action: "edit",
             ref: params.ref,
-            text: capText(params.text),
+            ...sentText(params.text),
             ...routing,
           });
           const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });

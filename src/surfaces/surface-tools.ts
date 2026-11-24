@@ -50,6 +50,7 @@ import {
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
+import { latestVersion, type TranscriptPosts } from "./web-spine.ts";
 import { sleep } from "../util/async.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { mentionedUserIds } from "../slack/mrkdwn.ts";
@@ -124,6 +125,7 @@ export interface SurfaceToolsContext {
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
   postKeys: TurnPostKeys;
   spine: SpineState;
+  transcript?: TranscriptPosts;
 }
 
 function postedFileMetas(attachments: readonly OutgoingAttachment[]): PostedFileMeta[] {
@@ -207,9 +209,29 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postProvenance,
     postKeys,
     spine,
+    transcript,
   } = ctx;
   if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
+  const inTranscript = (d: Destination) => !!transcript && d === currentDestination;
+  const postToTranscript = (
+    message: string,
+    extra: { supersedes?: number; files?: PostedFileMeta[] },
+  ): SurfacePostResult => {
+    const { supersedes, files } = extra;
+    const shown = {
+      ...(typeof input.runStartedAt === "number" ? { workStartedAt: input.runStartedAt } : {}),
+      workFinishedAt: Date.now(),
+      ...(currentDestination.persona ? { personaId: currentDestination.persona.id } : {}),
+      ...(supersedes === undefined ? {} : { supersedes }),
+    };
+    transcript!.queue([
+      ...(message.trim() ? [{ kind: "AgentMessage" as const, text: message, body: shown }] : []),
+      ...(files ? [{ kind: "AgentMessage" as const, variant: "files_delivered" as const, body: { files } }] : []),
+    ]);
+    spine.surfaceOutboundCount += 1;
+    return { ok: true, ...(files ? { attachments: files } : {}) };
+  };
   const textOnly = (d: Destination) => turnCapabilities(deps.surfaces.get(d.type), input)?.textOnly === true;
   const editable = (d: Destination) => editableIn(deps.surfaces, d.type, input);
   const homeSurface = deps.surfaces.get(currentDestination.type);
@@ -391,6 +413,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
+      if (transcript) {
+        const sent = f.attachments?.length ? postedFileMetas(f.attachments) : undefined;
+        if (!postText.trim() && !sent) return { ok: false, message: "A post needs text or files; nothing was sent." };
+        return postToTranscript(postText, sent ? { files: sent } : {});
+      }
       let unknownMentions: string[] | undefined;
       if (postText.includes("<@") && deliversOwnMessageTs(destination)) {
         const roster = await rosterForMentions();
@@ -452,7 +479,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!d.ok) return { ok: false, message: d.message };
       if (d.destination.type === "principal")
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
-      if (textOnly(d.destination)) return { ok: false, message: "Reactions aren't supported in this conversation." };
+      if (textOnly(d.destination) || inTranscript(d.destination))
+        return { ok: false, message: "Reactions aren't supported in this conversation." };
       return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "", seq);
     },
     edit: async (input: SurfaceEditInput) => {
@@ -462,6 +490,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
+      if (inTranscript(d.destination)) {
+        if (!input.text.trim()) return { ok: false, message: "An edit needs the new text; nothing was changed." };
+        const latest = await latestVersion(deps.sessions, session.id, input.ref);
+        if (!latest)
+          return {
+            ok: false,
+            message: `ref ${input.ref} isn't a message I posted in this conversation; use the ref this turn's note names`,
+          };
+        return postToTranscript(input.text, { supersedes: latest.seq });
+      }
       if (!editable(d.destination))
         return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
@@ -473,7 +511,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (textOnly(d.destination)) return { ok: false, message: "Messages in this conversation can't be deleted." };
+      if (textOnly(d.destination) || inTranscript(d.destination))
+        return { ok: false, message: "Messages in this conversation can't be deleted." };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
     readThread: async (opts?: { limit?: number }) => {

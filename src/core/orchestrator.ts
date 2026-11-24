@@ -4,6 +4,7 @@ import { personLabel } from "../identity/person-names.ts";
 import {
   isAgentReply,
   isOverheard,
+  isShownReply,
   isTypedByPerson,
   isUserItem,
   type Item,
@@ -237,6 +238,7 @@ import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
+import { createTranscriptPosts, postedWith, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, botApprovalRefusal } from "./approval-requester.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
@@ -254,6 +256,7 @@ const SHARED_CORE_MD = loadProtocolFile("shared-core");
 const MODE_CONVERSATION_MD = loadProtocolFile("mode-conversation");
 const REPLY_DELIVERY_MD = loadProtocolFile("reply-delivery");
 const MODE_AUTONOMOUS_MD = loadProtocolFile("mode-autonomous");
+const MODE_WEB_SPINE_MD = loadProtocolFile("mode-web-spine");
 const MODE_FALLBACK_MD = loadProtocolFile("mode-fallback");
 
 const FIRST_BLOCK_CAPTURE_MAX_CHARS = 20_000;
@@ -571,6 +574,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botRequest = input.botActor;
       if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
         input = { ...input, botActor: true };
+      const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
+      const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
+      if (spineDm !== undefined && spineDm !== (input.surfaceTools === true))
+        input = { ...input, surfaceTools: spineDm };
+      if (spineWake) input = { ...input, addressed: false };
       if (
         storedSession &&
         !(swarmBinding && swarmBinding.rootSessionId !== storedSession.id) &&
@@ -790,7 +798,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const actAsActor = actor.type === "internal" && !input.botActor;
       const isWeb = input.surface === "web";
       let modeName = "mode-fallback";
-      if (input.surfaceTools) modeName = "mode-autonomous";
+      if (spineDm) modeName = "mode-web-spine";
+      else if (input.surfaceTools) modeName = "mode-autonomous";
       else if (!automatedTurn && !(sessionTurn && input.envelopeWrapped) && (conversation.kind === "dm" || isWeb))
         modeName = "mode-conversation";
       const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
@@ -912,7 +921,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
       const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
       let frameMd = MODE_FALLBACK_MD;
-      if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
+      if (modeName === "mode-web-spine") frameMd = MODE_WEB_SPINE_MD;
+      else if (modeName === "mode-autonomous") frameMd = MODE_AUTONOMOUS_MD;
       else if (modeName === "mode-conversation") frameMd = appEdit?.frameMd ?? MODE_CONVERSATION_MD;
       const frameVars: PromptVars = {
         botName,
@@ -926,7 +936,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         replyDelivery: REPLY_DELIVERY_MD,
         surfaceStyle: surfaceHints?.[modeName === "mode-conversation" ? "conversationStyle" : "autonomousStyle"] ?? "",
       };
-      if (modeName === "mode-conversation" && conversation.kind === "dm") {
+      if ((modeName === "mode-conversation" || spineDm) && conversation.kind === "dm") {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       } else if (modeName === "mode-conversation") frameVars.userName = "the people here";
@@ -1613,6 +1623,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           crossConversationPosts: 0,
           turnUserEntrySeq: undefined,
         };
+        const transcript = spineDm ? createTranscriptPosts() : undefined;
+        const publishPosted = (text: string): void => {
+          if (!input.runId) return;
+          deps.turnStream.publishBlockStart(input.runId);
+          deps.turnStream.publish(input.runId, text);
+        };
+        let unshownText = "";
+        const closingReply = (text: string): string => {
+          const shown = !spineWake && spine.surfaceOutboundCount === 0 ? text : "";
+          unshownText = shown ? "" : text;
+          if (!shown.trim()) return shown;
+          spine.surfaceOutboundCount += 1;
+          publishPosted(shown);
+          return shown;
+        };
         const turnKey = input.runId ?? randomUUID();
         const postKeys = turnPostKeys(turnKey);
         let spineFirstBlock = "";
@@ -1639,7 +1664,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             isPollFire ||
             !spineFirstBlockOpen ||
             resume ||
-            approvalReplay
+            approvalReplay ||
+            transcript
           )
             return;
           spineFirstBlockOpen = false;
@@ -1685,6 +1711,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           postProvenance,
           postKeys,
           spine,
+          ...(transcript ? { transcript } : {}),
         });
         const attachStaging = createAttachStaging({
           sandbox: deps.sandbox,
@@ -1951,6 +1978,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? await replyToRewrite(deps.featureFlags, actor.id, history)
             : undefined;
         if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
+        if (spineWake) turnEvents.push(wakeTurnNote(history.findLast(isShownReply)));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2293,10 +2321,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...((syntheticPrompt || continuation) && !steered ? { hidden: true } : {}),
               };
             })();
-            const appended = await tracePhase("step.persist", () =>
-              withManagedRosterVersion(() => deps.sessions.append(writer, stored)),
+            const posted = transcript ? postedWith(transcript, stored, surfaceName) : [];
+            const persisted = await tracePhase("step.persist", () =>
+              withManagedRosterVersion(() => deps.sessions.appendMany(writer, [stored, ...posted])),
             );
-            emittedEntries.push(appended);
+            const appended = persisted[0]!;
+            emittedEntries.push(...persisted);
+            for (const post of persisted.slice(1)) if (isAgentReply(post) && post.text) publishPosted(post.text);
             if (mailbox && !continuation && appended.body.environment !== undefined) await mailbox.settle();
             const userMessage = isUserItem(appended);
             if (userMessage && spine.turnUserEntrySeq === undefined) {
@@ -2435,6 +2466,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
             ...(toolSurface ? { surfacePrompt: surfaceToolPrompt(toolSurface, input) } : {}),
+            ...(transcript
+              ? { surfacePrompt: { label: `the ${botName} web app`, mentionSyntax: "", transcript: true } }
+              : {}),
             delegateWork,
             ...((session.clientTools ?? input.clientTools)?.length
               ? { clientTools: session.clientTools ?? input.clientTools }
@@ -2475,6 +2509,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
             ...(checkReply ? { checkReply } : {}),
+            ...(transcript ? { closingReply } : {}),
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,
@@ -2606,6 +2641,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             filterHistory,
             historyWindow,
             runAgentTurn,
+            ...(transcript ? { unshownText: () => unshownText } : {}),
           },
           result,
         );

@@ -114,10 +114,10 @@ export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVaria
   item.kind === "AgentMessage" && !item.variant;
 export const isTypedByPerson = (item: Pick<Item, "kind" | "body">): boolean =>
   isUserItem(item) && typeof item.body.speakerId === "string";
+export const isShownReply = (item: Pick<Item, "kind" | "variant" | "text" | "body">): boolean =>
+  isAgentReply(item) && !!item.text?.trim() && typeof item.body.via !== "string";
 export function ownReplySinceTyped(items: readonly Item[]): Item | undefined {
-  return items
-    .slice(items.findLastIndex(isTypedByPerson) + 1)
-    .findLast((item) => isAgentReply(item) && !!item.text?.trim() && typeof item.body.via !== "string");
+  return items.slice(items.findLastIndex(isTypedByPerson) + 1).findLast(isShownReply);
 }
 export const isOverheard = (item: Pick<Item, "kind" | "body">): boolean =>
   item.kind === "UserMessage" && item.body.overheard === true;
