@@ -135,6 +135,15 @@ async function readAutomatic() {
   }
 }
 
+async function explain(response) {
+  const text = await response.text().catch((error) => error.message);
+  try {
+    return JSON.parse(text).message ?? text;
+  } catch {
+    return text;
+  }
+}
+
 async function call(current, run) {
   for (let delay = 1000; ; delay = Math.min(delay * 2, 60_000)) {
     let response;
@@ -152,7 +161,7 @@ async function call(current, run) {
       return response;
     }
     if (response) {
-      problem = `HTTP ${response.status} ${await response.text().catch((error) => error.message)}`;
+      problem = `HTTP ${response.status}: ${await explain(response)}`;
       if (response.status < 500 && response.status !== 408 && response.status !== 429) throw new Error(problem);
     }
     current.uploadProblem = problem;
