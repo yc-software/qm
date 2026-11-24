@@ -142,6 +142,7 @@ export interface AgentTurnInput {
   onToolCallStart?(name: string): void;
   checkReply?(draft: string): Promise<ReplyVerdict | undefined>;
   onInterimReply?(text: string): boolean | Promise<boolean>;
+  closingReply?(text: string): string;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;
 }

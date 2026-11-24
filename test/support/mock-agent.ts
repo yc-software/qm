@@ -823,6 +823,7 @@ export function createMockAgent(): Agent {
 
       if (turn.onDelta) for (const chunk of streamChunks(reply)) turn.onDelta(chunk);
 
+      if (!silent) reply = turn.closingReply?.(reply) ?? reply;
       await record({ kind: "AgentMessage", text: reply });
       const modelCalls = usedTool ? 2 : 1;
       const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));

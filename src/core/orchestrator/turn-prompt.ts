@@ -5,7 +5,8 @@ import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { isAgentReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import { isAgentReply, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import type { FeatureName } from "../../feature-flags.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -136,12 +137,12 @@ export async function replyToRewrite(
   tenant: TurnCapabilities["tenant"],
   personId: string,
   history: readonly Item[],
+  flag: FeatureName = "wake_reply_rewrite",
 ): Promise<Item | undefined> {
   const replies = history
     .slice(history.findLastIndex(typedBy) + 1)
-    .filter((item) => isAgentReply(item) && !!item.text?.trim() && item.turnId);
-  if (!replies.length || !(await deps.featureFlags?.enabled("wake_reply_rewrite", personalScope(personId))))
-    return undefined;
+    .filter((item) => isShownReply(item) && !!item.turnId);
+  if (!replies.length || !(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
   const sources = await deps.runs?.requestSources(
     tenant,
     replies.map((reply) => reply.turnId!),

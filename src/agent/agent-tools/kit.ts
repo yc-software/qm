@@ -36,7 +36,7 @@ export const outboundSandboxSchema = Type.Optional(
 export const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
 
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
-  const recorder = createRecorder(ref);
+  const recorder = createRecorder(ref, opts?.surfacePrompt?.transcript === true);
   const { recordResult } = recorder;
   const approvalUnavailableResult = (callId: string, summary: Record<string, unknown>, reason: string) =>
     recordResult(

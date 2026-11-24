@@ -1024,7 +1024,7 @@ export function createAgent(opts?: AgentOptions): Agent {
 
         await settleGoal(false);
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-        const reply = entry.ref.silentRequested ? "" : closingText;
+        const reply = entry.ref.silentRequested ? "" : (turn.closingReply?.(closingText) ?? closingText);
         const closing = steps.closing(reply);
         await turn.emit({ kind: "AgentMessage", text: reply, step: closing?.step ?? null, body: { ...closing?.body } });
         const pendingApprovals = entry.ref.pendingApprovals ?? [];

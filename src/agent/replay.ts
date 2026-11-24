@@ -13,6 +13,7 @@ import type { ConversationTurn, OverheardMessage } from "../types.ts";
 import {
   isOverheard,
   isAgentReply,
+  isToolPost,
   isUserItem,
   messageTs,
   stepMessage,
@@ -233,7 +234,7 @@ export function legacyAssistant(content: AssistantMessage["content"], timestamp:
 
 type Positioned = { index: number; block: AssistantMessage["content"][number] };
 
-function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
+function stepBlocks(e: Item, step: ReplayStep, postedText?: string): Positioned[] {
   const p = e.body;
   const at = step.index ?? 0;
   if (e.kind === "Reasoning")
@@ -253,7 +254,8 @@ function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
       type: "toolCall",
       id: e.callId,
       name: e.tool ?? "tool",
-      arguments: argumentsJson === undefined ? recordedToolArguments(e) : recordedWireArguments(argumentsJson, e),
+      arguments:
+        argumentsJson === undefined ? recordedToolArguments(e, postedText) : recordedWireArguments(argumentsJson, e),
       ...wire,
     };
     return [{ index: at, block }];
@@ -275,7 +277,7 @@ function recordedWireArguments(argumentsJson: string, call: Item): ToolCall["arg
   }
 }
 
-export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
+export function recordedToolArguments(call: Pick<Item, "body">, postedText?: string): Record<string, unknown> {
   const { rerun, result: _r, approvedRequestId: _a, ...recorded } = visibleBody(call);
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
@@ -285,7 +287,7 @@ export function recordedToolArguments(call: Pick<Item, "body">): Record<string, 
   return {
     ...rest,
     ...(Array.isArray(recordedFiles) ? { files: recordedFiles } : {}),
-    text: "[sent earlier — text not retained]",
+    text: postedText ?? "[sent earlier — text not retained]",
   };
 }
 
@@ -336,6 +338,9 @@ export function reconstructMessagesFromHistory(
     if (e.kind === "ToolCall" && e.callId) callById.set(e.callId, e);
     else if (e.kind === "ToolResult" && e.callId) resultByCallId.set(e.callId, e);
   }
+  const postedText = new Map(
+    history.flatMap((e) => (isAgentReply(e) && isToolPost(e) ? [[e.body.callId as string, e.text ?? ""]] : [])),
+  );
   const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
@@ -361,7 +366,7 @@ export function reconstructMessagesFromHistory(
     const step = itemStep(e);
     if (step) {
       if (step.stopReason === "aborted" || step.stopReason === "error") continue;
-      const blocks = stepBlocks(e, step);
+      const blocks = stepBlocks(e, step, e.callId ? postedText.get(e.callId) : undefined);
       if (!blocks.length) continue;
       let message = steps.get(step.id);
       if (!message) {
@@ -404,6 +409,7 @@ export function reconstructMessagesFromHistory(
           });
       }
     } else if (isAgentReply(e)) {
+      if (isToolPost(e) && callById.has(e.body.callId as string)) continue;
       const t = itemText(e);
       const via = typeof e.body.via === "string" ? e.body.via : undefined;
       if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));
@@ -428,7 +434,7 @@ export function reconstructMessagesFromHistory(
         type: "toolCall",
         id: e.callId,
         name: e.tool ?? "tool",
-        arguments: recordedToolArguments(e),
+        arguments: recordedToolArguments(e, postedText.get(e.callId)),
       };
       if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {
