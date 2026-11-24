@@ -553,6 +553,7 @@ export interface PendingApproval {
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
   executesOnApprove?: boolean;
+  call?: { tool: string; input: Record<string, unknown> };
 }
 
 export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
@@ -626,6 +627,7 @@ export interface TurnOptions {
   scopeId?: string | null;
   channelName?: string | null;
   ephemeral?: boolean;
+  declinePendingApprovals?: boolean;
 }
 
 export async function deleteEphemeralSession(threadRef: string, keepalive = false): Promise<void> {
@@ -1136,7 +1138,7 @@ export async function activeRunForThread(threadRef: string): Promise<ActiveRun> 
   return { ...live, queued: r.queued ?? [] };
 }
 
-export const PENDING_APPROVAL_REASON = "Approve or deny the pending command to continue.";
+export const PENDING_APPROVAL_REASON = "Approve or decline the pending call to continue.";
 
 export async function queueTurn(
   threadRef: string,
@@ -1352,6 +1354,7 @@ function turnRequestBody(
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
     ...(turnOptions.ephemeral ? { ephemeral: true } : {}),
+    ...(turnOptions.declinePendingApprovals ? { declinePendingApprovals: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };

@@ -430,6 +430,7 @@ export interface TurnRequest {
   turnWallClockMs?: number;
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
+  declinePendingApprovals?: boolean;
   proactiveOpener?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
@@ -460,6 +461,7 @@ export interface PendingApproval {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   executesOnApprove?: boolean;
+  call?: ApprovedToolCallSpec;
 }
 
 export interface ApprovedToolCallSpec {

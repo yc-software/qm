@@ -14527,101 +14527,522 @@ button:disabled .qm-switch {
   gap: 8px;
 }
 
-/* Readable tool-call approval cards */
-.approval-call-title {
-  font-size: var(--font-14, 14px);
-  font-weight: 600;
-  color: var(--foreground);
+/* Approval card docked on the composer */
+.composer-approval-panel.docked {
+  display: block;
+  margin: calc(-1 * var(--composer-pad-block)) calc(-1 * var(--composer-pad-end)) 2px
+    calc(-1 * var(--composer-pad-inline));
+  padding: 16px var(--composer-pad-end) 16px calc(var(--composer-pad-inline) + 8px);
+  border-bottom: 1px solid var(--border);
+  max-height: min(calc(100dvh - 170px), calc(100cqh - 170px), 600px);
 }
-.approval-via {
-  font-size: 12px;
-  color: var(--muted-foreground);
+.composer-approval-panel.docked:has(.ac-batch) {
+  max-height: min(58dvh, 58cqh, 620px);
+  padding-bottom: 36px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 52px), transparent calc(100% - 1px), #000 calc(100% - 1px));
+  mask-image: linear-gradient(#000 calc(100% - 52px), transparent calc(100% - 1px), #000 calc(100% - 1px));
 }
-.approval-fields {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 14px;
-  margin: 4px 0 0;
-  font-size: var(--font-13);
+.composer-wrap.has-approval {
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 0.05),
+    0 16px 44px rgb(0 0 0 / 0.08);
 }
-.approval-field {
-  display: contents;
+.composer-wrap.has-approval .composer-input {
+  min-height: 36px;
+  padding-top: 9px;
 }
-.approval-field dt {
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-.approval-field dd {
-  margin: 0;
-  color: var(--foreground);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.ac-card {
+  --ac-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ac-tint: color-mix(in srgb, var(--foreground) 3.5%, var(--background));
+  --ac-quiet: color-mix(in srgb, var(--foreground) 80%, var(--background));
+  display: block;
   min-width: 0;
+  color: var(--foreground);
+  animation: ac-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
-.approval-field.long dd {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--muted-foreground) 8%, var(--background));
-  line-height: 1.45;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.approval-raw > summary {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-.approval-batch {
-  gap: 0;
-  padding: 4px 4px 8px;
-}
-.approval-batch-head {
+.ac-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  padding: 2px 0 8px;
-}
-.approval-batch-title {
-  font-weight: 600;
-  font-size: var(--font-14, 14px);
-}
-.approval-batch-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 7px 0;
-  border-top: 1px solid var(--border);
-}
-.approval-batch-detail {
-  flex: 1;
+  min-height: 26px;
   min-width: 0;
+  line-height: 1;
 }
-.approval-batch-detail > summary {
-  display: flex;
-  gap: 8px;
-  cursor: pointer;
-  font-size: var(--font-13);
-  min-width: 0;
-  padding-top: 5px;
-}
-.approval-batch-name {
+.ac-eyebrow {
   flex: none;
-  font-weight: 600;
-}
-.approval-batch-line {
+  line-height: 16px;
+  font-size: var(--font-12-5);
+  font-weight: 500;
   color: var(--muted-foreground);
-  white-space: nowrap;
+}
+.ac-tool {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ac-mono);
+  font-size: 11.5px;
+  line-height: 16px;
+  padding-top: 1px;
+  color: color-mix(in srgb, var(--muted-foreground) 80%, var(--background));
+}
+.ac-sep {
+  margin: 0 4px;
+  opacity: 0.55;
+}
+.ac-dismiss,
+.ac-drop {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin: -6px 0 -6px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+.ac-dismiss:hover:not(:disabled),
+.ac-drop:hover:not(:disabled) {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.ac-dismiss:focus-visible,
+.ac-drop:focus-visible,
+.ac-scopes button:focus-visible,
+.ac-link:focus-visible,
+.ac-approve:focus-visible,
+.ac-text.clamp:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--foreground) 35%, transparent);
+  outline-offset: 2px;
+}
+.ac-title {
+  margin: 10px 0 14px;
+  font-size: var(--font-19);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.011em;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.ac-fields {
+  display: grid;
+  grid-template-columns: minmax(76px, max-content) minmax(0, 1fr);
+  column-gap: 20px;
+  row-gap: 6px;
+  margin: 0;
+  font-size: var(--font-13-5);
+  line-height: 1.5;
+}
+.ac-row {
+  display: contents;
+}
+.ac-row > dt {
+  font-size: var(--font-12-5);
+  line-height: calc(var(--font-13-5) * 1.5);
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.ac-path::after {
+  content: "›";
+  margin: 0 4px;
+  opacity: 0.6;
+}
+.ac-path {
+  opacity: 0.7;
+}
+.ac-row > dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--ac-quiet);
+  overflow-wrap: anywhere;
+}
+.ac-k-text > dt {
+  padding-top: 10px;
+}
+.ac-k-text + .ac-row > dt,
+.ac-k-list + .ac-row > dt {
+  padding-top: 4px;
+}
+.ac-value.literal {
+  color: var(--muted-foreground);
+}
+.ac-value.ident {
+  font-family: var(--ac-mono);
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+.ac-batch:not(.ac-mixed) .ac-fields {
+  grid-template-columns: 84px minmax(0, 1fr);
+  column-gap: 14px;
+}
+.ac-mixed .ac-item-main > .ac-body > .ac-fields {
+  grid-template-columns: 132px minmax(0, 1fr);
+  column-gap: 16px;
+}
+.ac-batch .ac-row > dt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ac-batch .ac-k-text > dt {
+  padding-top: 0;
+}
+.ac-inline-record {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-size: var(--font-13);
+}
+.ac-text {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--ac-tint);
+  color: var(--foreground);
+  font-size: var(--font-14);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.ac-pre {
+  white-space: pre-wrap;
+}
+.ac-k-text > dd > .ac-text:not(.clamp) {
+  margin-left: -14px;
+}
+.ac-text.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  max-height: none;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ac-quiet);
+  font-size: var(--font-13-5);
+  line-height: 1.5;
+  overflow: hidden;
+  cursor: pointer;
+}
+.ac-text.clamp.open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+.ac-diff {
+  margin: 0 -2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  color: var(--foreground);
+}
+.ac-empty {
+  margin-top: 8px;
+  font-size: var(--font-12-5);
+  color: color-mix(in srgb, var(--muted-foreground) 85%, var(--background));
+}
+.ac-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ac-record {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--foreground) 2.5%, var(--background));
+}
+.ac-record .ac-fields {
+  grid-template-columns: minmax(48px, max-content) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 3px;
+}
+.ac-record .ac-empty {
+  margin-top: 4px;
+}
+.ac-command {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--ac-tint);
+  color: var(--ac-quiet);
+  font-family: var(--ac-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.ac-note {
+  margin-top: 10px;
+  font-size: var(--font-12-5);
+  color: var(--muted-foreground);
+}
+.ac-note > code {
+  font-family: var(--ac-mono);
+  font-size: 12px;
+}
+.ac-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 10px 0 0 -6px;
+  font-size: var(--font-12-5);
+}
+.ac-scopes button {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: color-mix(in srgb, var(--foreground) 70%, var(--background));
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 25%, transparent);
+  text-underline-offset: 3px;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.ac-scopes button + button {
+  margin-left: 6px;
+}
+.ac-scopes button:hover:not(:disabled) {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+.ac-foot {
+  margin-top: 12px;
+  font-size: var(--font-12-5);
+  color: var(--muted-foreground);
+}
+.ac-typing {
+  animation: ac-in 160ms ease-out;
+}
+.ac-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+.ac-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.ac-link:hover:not(:disabled) {
+  color: var(--foreground);
+}
+.ac-approve {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--cta);
+  color: var(--cta-foreground);
+  font: inherit;
+  font-size: var(--font-13);
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ac-approve:hover:not(:disabled) {
+  background: var(--cta-hover);
+}
+.ac-batch .ac-eyebrow {
+  font-size: var(--font-16);
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.008em;
+  color: var(--foreground);
+}
+.ac-shared {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 8px 0 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: var(--font-12-5);
+}
+.ac-shared > .ac-fields,
+.ac-shared > .ac-empty {
+  flex-basis: 100%;
+}
+.ac-caption {
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.ac-inline {
+  display: contents;
+}
+.ac-pair {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
   min-width: 0;
 }
-.approval-batch-detail[open] > summary .approval-batch-line {
-  display: none;
+.ac-pair-key {
+  color: var(--muted-foreground);
 }
-.approval-batch-detail .composer-approval-copy {
-  padding: 8px 0 2px;
+.ac-pair .ac-value {
+  color: var(--ac-quiet);
 }
-.approval-batch-row .approval-actions {
+.ac-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ac-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 26px;
+  column-gap: 12px;
+  align-items: start;
+  padding: 12px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.ac-item:first-child {
+  border-top: 0;
+}
+.ac-mixed .ac-item:first-child {
+  padding-top: 8px;
+}
+.ac-index {
+  font-size: var(--font-12-5);
+  line-height: 21px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.ac-item-title {
+  margin-bottom: 6px;
+  font-size: var(--font-15);
+  font-weight: 600;
+  line-height: 21px;
+  letter-spacing: -0.006em;
+  overflow-wrap: anywhere;
+}
+.ac-item-title:last-child {
+  margin-bottom: 0;
+}
+.ac-item-tool {
+  display: flex;
+  min-width: 0;
+  margin: -2px 0 10px;
+}
+.ac-item .ac-drop {
+  align-self: start;
+  margin: -2px 0 0;
+  opacity: 0.4;
+}
+.ac-item:hover .ac-drop,
+.ac-item:focus-within .ac-drop {
+  opacity: 1;
+}
+.composer-wrap.has-approval .composer-toolbar .send-btn.ac-confirm {
+  width: auto;
+  height: 34px;
+  min-height: 34px;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--font-13-5);
+  font-weight: 550;
+  white-space: nowrap;
+  animation: ac-in 180ms ease-out;
+}
+.send-btn.ac-confirm kbd {
+  font: inherit;
+  font-weight: 400;
+  font-size: 0.92em;
+  line-height: 1;
+  opacity: 0.7;
+}
+.ac-receipt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 8px;
+  font-size: var(--font-13);
+  color: var(--muted-foreground);
+  animation: ac-settle 2600ms ease forwards;
+}
+.ac-receipt-mark {
   flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid color-mix(in srgb, var(--muted-foreground) 60%, transparent);
+  border-radius: 50%;
+}
+.ac-receipt[data-verdict="approved"] .ac-receipt-mark {
+  border: 0;
+  background:
+    no-repeat center / 10px 10px
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 5.2 4.1 7.2 8 3'/%3E%3C/svg%3E"),
+    var(--success);
+}
+.ac-receipt-verdict {
+  flex: none;
+  font-weight: 550;
+  color: var(--foreground);
+}
+.ac-receipt-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes ac-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes ac-settle {
+  0% {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0;
+  }
+  10% {
+    opacity: 1;
+    max-height: 32px;
+    margin-bottom: 12px;
+  }
+  78% {
+    opacity: 1;
+    max-height: 32px;
+    margin-bottom: 12px;
+  }
+  100% {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac-card,
+  .ac-typing,
+  .composer-wrap.has-approval .composer-toolbar .send-btn.ac-confirm {
+    animation: none;
+  }
+  .ac-receipt {
+    animation-timing-function: steps(1, end);
+  }
 }

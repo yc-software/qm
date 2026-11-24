@@ -28,13 +28,15 @@ import {
   userSendMessage,
   withdrawRun,
   type ApprovalDecision,
+  type AssistantWork,
   type CoreAttachment,
   type PendingApproval,
   type QueuedRun,
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
-import { allowLabel, approvalCallLine, approvalCallView } from "./approval-call";
+import { approvalCall, approvalHeading } from "./approval-call";
+import { approvalCard, approvalReceipt, type ApprovalReceipt } from "./approval-card";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { icon } from "./icons";
@@ -552,16 +554,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         </button>
       </div>`;
     }
-    const approvalPauses = ctx.chat.activePendingApprovals();
+    const approvalPauses = ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
+    const docked = dockedApprovals(agent);
+    noteCardShown(docked);
     const runtimePending = activeRuntimeConfig === null;
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0;
     const attachingDisabled = inputBlocked;
     let placeholder =
       options.placeholder ??
       (appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? "Describe a change…" : "Ask anything");
-    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
+    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Sending your decision…";
+    else if (docked.length) placeholder = approvalPlaceholder(docked.length);
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
-    suggestedNext = inputBlocked ? null : nextPromptFor(agent);
+    suggestedNext = inputBlocked || docked.length ? null : nextPromptFor(agent);
     if (suggestedNext) placeholder = suggestedNext;
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
@@ -590,7 +595,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked, routed);
     return html`
       <form
-        class="composer-wrap ${compact ? "compact" : ""}"
+        class="composer-wrap ${compact ? "compact" : ""} ${docked.length ? "has-approval" : ""}"
         @submit=${(e: Event) => submitComposer(e, agent)}
         @keydown=${(e: KeyboardEvent) => composerShortcut(e, agent, inputBlocked)}
       >
@@ -659,7 +664,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               `
             : nothing
         }
-        ${approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing}
+        ${
+          approvalPauses.length
+            ? composerApprovalPanel(approvalPauses, ctx.chat.resolveCommandApproval, docked.length > 0)
+            : receipt
+              ? approvalReceipt(receipt)
+              : nothing
+        }
         ${composerInput({
           value: composerState.draft,
           placeholder,
@@ -793,6 +804,17 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function sendControls(agent: Agent): TemplateResult {
+    const docked = dockedApprovals(agent);
+    if (docked.length && !composerState.draft.trim() && !composerState.attachments.length)
+      return html`<button
+        class="send-btn ac-confirm"
+        type="submit"
+        ?disabled=${!readyToSend()}
+        aria-label=${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}
+      >
+        <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span><kbd aria-hidden="true">↵</kbd>
+      </button>`;
+    if (docked.length) return sendButton("Send, declining the pending call");
     if (!agent.state.isStreaming) return sendButton("Send");
     if (ctx.chat.isStopping())
       return html`
@@ -951,108 +973,113 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
-  function approvalDecisionButtons(
-    a: PendingApproval,
-    decide: (decision: ApprovalDecision) => void,
-    busy: boolean,
-  ): TemplateResult {
-    return html`<div class="approval-actions">
-      <button
-        class="approval-btn deny"
-        type="button"
-        ?disabled=${busy}
-        @click=${() => decide({ requestId: a.requestId, approved: false })}
-      >
-        Deny
-      </button>
-      <button
-        class="approval-btn ${a.grantModes?.session === false ? "primary" : ""}"
-        type="button"
-        ?disabled=${busy}
-        @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
-      >
-        ${allowLabel(a)}
-      </button>
-      ${
-        a.grantModes?.session === false
-          ? nothing
-          : html`<button
-              class="approval-btn primary"
-              type="button"
-              ?disabled=${busy}
-              @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
-            >
-              Allow for session
-            </button>`
+  let receipt: ApprovalReceipt | null = null;
+  let receiptTimer: ReturnType<typeof setTimeout> | undefined;
+  const settling = new Set<string>();
+  let cardKey = "";
+  let cardShownAt = 0;
+  const APPROVE_GUARD_MS = 700;
+
+  function showReceipt(verdict: ApprovalReceipt["verdict"], approvals: PendingApproval[]): void {
+    const first = approvals[0];
+    const text =
+      approvals.length === 1 && first ? approvalHeading(first, approvalCall(first)) : `${approvals.length} calls`;
+    receipt = { key: Date.now(), verdict, text };
+    clearTimeout(receiptTimer);
+    receiptTimer = setTimeout(() => {
+      receipt = null;
+      ctx.chat.drawActiveChat();
+    }, 2600);
+  }
+
+  function dockedApprovals(agent: Agent | null = ctx.chat.state.agent): PendingApproval[] {
+    if (!agent || agent.state.isStreaming || options.prepareSubmit) return [];
+    return ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
+  }
+
+  function noteCardShown(approvals: PendingApproval[]): void {
+    const key = approvals.map((a) => a.requestId).join(" ");
+    if (key === cardKey) return;
+    cardKey = key;
+    cardShownAt = performance.now();
+  }
+
+  function approvalGuardOpen(fromKey: boolean): boolean {
+    if (performance.now() - cardShownAt < APPROVE_GUARD_MS) return false;
+    if (!fromKey) return true;
+    const active = document.activeElement;
+    return !!active && active.classList.contains("composer-input") && !(active as HTMLTextAreaElement).value.trim();
+  }
+
+  async function decideEach(
+    approvals: PendingApproval[],
+    approved: boolean,
+    resolve: (decision: ApprovalDecision) => void | Promise<void>,
+  ): Promise<void> {
+    const resolving = ctx.chat.state.resolvingApprovals;
+    for (const a of approvals) settling.add(a.requestId);
+    try {
+      for (const a of approvals) {
+        if (resolving.has(a.requestId)) continue;
+        await resolve({ requestId: a.requestId, approved, ...(approved ? { scope: "once" as const } : {}) });
       }
-      ${
-        a.grantModes?.always === false
-          ? nothing
-          : html`<button
-              class="approval-btn"
-              type="button"
-              ?disabled=${busy}
-              @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
-            >
-              Allow always
-            </button>`
-      }
-    </div>`;
+    } finally {
+      for (const a of approvals) settling.delete(a.requestId);
+      ctx.chat.drawActiveChat();
+    }
   }
 
   function composerApprovalPanel(
     approvals: PendingApproval[],
     resolve: (decision: ApprovalDecision) => void | Promise<void> = ctx.chat.resolveCommandApproval,
+    docked = false,
   ): TemplateResult {
     const resolving = ctx.chat.state.resolvingApprovals;
-    const decide = (decision: ApprovalDecision): void => {
-      if (!resolving.has(decision.requestId)) void resolve(decision);
-    };
-    if (approvals.length < 2)
-      return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
-        ${approvals.map(
-          (a) =>
-            html`<div class="composer-approval">
-              <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
-              ${approvalDecisionButtons(a, decide, resolving.has(a.requestId))}
-            </div>`,
-        )}
-      </div>`;
-    // Each call stays its own exact-call decision; "all" just submits them one after another.
-    const decideAll = async (approved: boolean): Promise<void> => {
-      for (const a of approvals) {
-        if (resolving.has(a.requestId)) continue;
-        await resolve({ requestId: a.requestId, approved, ...(approved ? { scope: "once" as const } : {}) });
-      }
-    };
     const busy = resolving.size > 0;
-    return html`<div class="composer-approval-panel approval-batch" role="group" aria-label="Approvals">
-      <div class="approval-batch-head">
-        <span class="approval-batch-title">${approvals.length} calls need approval</span>
-        <div class="approval-actions">
-          <button class="approval-btn deny" type="button" ?disabled=${busy} @click=${() => void decideAll(false)}>
-            Deny all
-          </button>
-          <button class="approval-btn primary" type="button" ?disabled=${busy} @click=${() => void decideAll(true)}>
-            Allow all ${approvals.length}
-          </button>
-        </div>
-      </div>
-      ${approvals.map((a) => {
-        const call = approvalCallView(a);
-        const line = call ? approvalCallLine(call) : a.summary ?? a.command;
-        return html`<div class="approval-batch-row">
-          <details class="approval-batch-detail">
-            <summary>
-              <span class="approval-batch-name">${call?.title ?? "Call"}</span>
-              <span class="approval-batch-line">${line}</span>
-            </summary>
-            <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
-          </details>
-          ${approvalDecisionButtons(a, decide, resolving.has(a.requestId))}
-        </div>`;
+    const decide = (decision: ApprovalDecision): void => {
+      if (resolving.has(decision.requestId)) return;
+      const target = approvals.filter((a) => a.requestId === decision.requestId);
+      if (docked && approvals.length === 1) showReceipt(decision.approved ? "approved" : "declined", target);
+      void resolve(decision);
+    };
+    return html`<div class="composer-approval-panel ${docked ? "docked" : ""}">
+      ${approvalCard(approvals, {
+        docked,
+        typing: docked && !!composerState.draft.trim(),
+        busy,
+        decide,
+        approveAll: () => {
+          if (docked) showReceipt("approved", approvals);
+          void decideEach(approvals, true, resolve);
+        },
+        declineAll: () => {
+          if (docked) showReceipt("declined", approvals);
+          void decideEach(approvals, false, resolve);
+        },
       })}
     </div>`;
+  }
+
+  function approvalPlaceholder(count: number): string {
+    return count > 1
+      ? `Enter to approve all ${count}, or say what to change`
+      : "Enter to approve, or say what to change";
+  }
+
+  function approveDocked(approvals: PendingApproval[], fromKey: boolean): void {
+    if (!approvalGuardOpen(fromKey)) return;
+    showReceipt("approved", approvals);
+    void decideEach(approvals, true, ctx.chat.resolveCommandApproval);
+  }
+
+  function declineOnSend(agent: Agent, approvals: PendingApproval[]): void {
+    const ids = new Set(approvals.map((a) => a.requestId));
+    for (const message of agent.state.messages) {
+      const work = (message as AssistantWork).work;
+      if (work?.pendingApprovals) work.pendingApprovals = work.pendingApprovals.filter((a) => !ids.has(a.requestId));
+    }
+    ctx.chat.state.declineApprovalsOnSend = true;
+    showReceipt("declined", approvals);
   }
 
   let loadout = loadLoadout(loadoutKey);
@@ -1302,7 +1329,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function submitComposer(e: Event, agent: Agent): void {
     e.preventDefault();
-    void sendPrompt(agent, flipHeld);
+    void sendPrompt(agent, flipHeld, false);
   }
 
   function onDraftInput(e: InputEvent, agent: Agent): void {
@@ -1321,7 +1348,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       armed ||
       popoverShown ||
       hadError ||
-      (Boolean(appState.me?.suggestedActivities?.length) && wasEmpty !== !composerState.draft)
+      ((Boolean(appState.me?.suggestedActivities?.length) || dockedApprovals(agent).length > 0) &&
+        wasEmpty !== !composerState.draft)
     ) {
       ctx.chat.drawActiveChat(agent);
       return;
@@ -1331,7 +1359,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function composerCanSend(): boolean {
-    return Boolean(composerState.draft.trim() || composerState.attachments.length) && readyToSend();
+    return (
+      Boolean(composerState.draft.trim() || composerState.attachments.length || dockedApprovals().length) &&
+      readyToSend()
+    );
   }
 
   function readyToSend(): boolean {
@@ -1398,7 +1429,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    void sendPrompt(agent, e.metaKey || e.ctrlKey);
+    void sendPrompt(agent, e.metaKey || e.ctrlKey, true);
   }
 
   function stopStreaming(agent: Agent): void {
@@ -1634,22 +1665,27 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent, flipSteer = false): Promise<void> {
+  async function sendPrompt(agent: Agent, flipSteer = false, fromKey = false): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent, flipSteer);
+      await sendPromptNow(agent, flipSteer, fromKey);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent, flipSteer = false): Promise<void> {
+  async function sendPromptNow(agent: Agent, flipSteer = false, fromKey = false): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
     if (agent.state.isStreaming) return queueDraft(agent, flipSteer);
     const draft = composerState.draft.trim();
-    if (!draft && composerState.attachments.length === 0) return;
+    const docked = dockedApprovals(agent);
+    if (!draft && composerState.attachments.length === 0) {
+      if (docked.length) approveDocked(docked, fromKey);
+      return;
+    }
+    if (docked.length) declineOnSend(agent, docked);
     const sideChat = ctx.chat.state.forkSession?.sideChat;
     const text =
       sideChat?.quote &&
@@ -1690,7 +1726,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resetComposer();
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
-    await deliver(agent, sentFromThread, text, draft, attachments);
+    try {
+      await deliver(agent, sentFromThread, text, draft, attachments);
+    } finally {
+      ctx.chat.state.declineApprovalsOnSend = false;
+    }
   }
 
   function beginSend(): string | null {

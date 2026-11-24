@@ -264,15 +264,12 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
     const queue = pendingByCmd.get(cmd);
     if (queue?.length) item.row.pending = queue.shift();
   }
-  // Pending approvals are decided in the card docked above the composer, so the transcript does not repeat the card.
-  // Connector calls carry no command text to pair on; give leftover approvals to the latest unpaired blocked rows.
   const leftover = [...pendingByCmd.values()].flat();
   for (let i = collapsed.length - 1; i >= 0 && leftover.length; i--) {
     const item = collapsed[i]!;
     if (item.kind === "tool" && !item.row.pending && toolBody(item.row.result).blocked === "needs_approval")
       item.row.pending = leftover.pop();
   }
-  // A run of calls waiting together shows as one quiet row.
   const out: TimelineItem[] = [];
   for (const item of collapsed) {
     const prev = out[out.length - 1];

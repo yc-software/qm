@@ -2,7 +2,7 @@ import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
-import { executesOnApprove } from "../core/orchestrator/approvals.ts";
+import { executesOnApprove, visibleCall } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -182,6 +182,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
       ...executesOnApprove(r),
+      ...visibleCall(r),
     }));
   }
 
@@ -206,7 +207,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return {
       status: "pending_approval",
       sessionId: session.id,
-      reason: "Approve or deny the pending command to continue.",
+      reason: "Approve or decline the pending call to continue.",
       pendingApprovals: approvals,
     };
   }

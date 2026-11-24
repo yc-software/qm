@@ -137,7 +137,8 @@ import {
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
-import { approvalCallView, realApprovalReason, type ApprovalCallView } from "./approval-call";
+import { approvalCall, approvalHeading, realApprovalReason } from "./approval-call";
+import { approvalBody } from "./approval-card";
 import {
   buildTimeline,
   rowArgs,
@@ -342,6 +343,7 @@ export function createChatSurface(
     normalStreamFn: null as Agent["streamFn"] | null,
     onWork: null as ((work: WorkBlock) => void) | null,
     resolvingApprovals: new Set<string>(),
+    declineApprovalsOnSend: false,
     transcriptAnchorSeq: null as number | null,
     earlierCount: 0,
     loadingEarlier: false,
@@ -821,6 +823,7 @@ export function createChatSurface(
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
       ...(chatState.ephemeral ? { ephemeral: true } : {}),
+      ...(chatState.declineApprovalsOnSend ? { declinePendingApprovals: true } : {}),
     };
     if (ctx.composer.followsDefault()) return target;
     return {
@@ -3414,46 +3417,14 @@ export function createChatSurface(
     })}`;
   }
 
-  function approvalCallCard(a: PendingApproval, call: ApprovalCallView, reason: string | undefined): TemplateResult {
-    return html`
-      <div class="approval-head">
-        <span class="approval-call-title">${call.title}</span>
-        ${call.via ? html`<span class="approval-via">via ${call.via}</span>` : nothing}
-        ${reason ? html`<span class="approval-reason-badge">${reason}</span>` : nothing}
-      </div>
-      ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
-      ${
-        call.fields.length
-          ? html`<dl class="approval-fields">
-              ${call.fields.map(
-                (f) =>
-                  html`<div class="approval-field ${f.long ? "long" : ""}">
-                    <dt>${f.label}</dt>
-                    <dd dir="auto">${f.value}</dd>
-                  </div>`,
-              )}
-            </dl>`
-          : nothing
-      }
-      ${
-        a.matched
-          ? html`<div class="approval-match">
-              <span class="approval-match-label">Triggered by</span
-              ><code class="approval-match-snippet">${a.matched}</code>
-            </div>`
-          : nothing
-      }
-      <details class="approval-full approval-raw">
-        <summary>Raw call</summary>
-        <code class="approval-cmd approval-cmd-full">${call.raw}</code>
-      </details>
-    `;
-  }
-
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
     const reason = realApprovalReason(a.reason);
-    const call = approvalCallView(a);
-    if (call) return approvalCallCard(a, call, reason);
+    const call = approvalCall(a);
+    if (call)
+      return html`<div class="approval-head">
+          <span class="approval-call-title" dir="auto">${approvalHeading(a, call)}</span>
+        </div>
+        ${approvalBody(a, !expanded)}`;
     const summary = firstLine(a.command, 80);
     const truncated = a.command.includes("\n") || a.command.length > 80;
     return html`

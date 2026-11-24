@@ -20,6 +20,8 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
+import { redactCommand } from "../../sandbox/exec-process-session.ts";
+import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 
 export function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -44,7 +46,21 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
     ...executesOnApprove(record),
+    ...visibleCall(record),
   };
+}
+
+function redactedValue(value: unknown): unknown {
+  if (typeof value === "string") return redactCommand(redactSecrets(value));
+  if (Array.isArray(value)) return value.map(redactedValue);
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactedValue(v)]));
+  return value;
+}
+
+export function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
+  if (!record.call) return {};
+  return { call: { tool: record.call.tool, input: redactedValue(record.call.input) as Record<string, unknown> } };
 }
 
 const APPROVED_CALL_RAN_NOTE =
@@ -397,7 +413,18 @@ export async function applyTurnApprovals(
   const recovered = !!input.approval && earlier?.decided.has(input.approval.requestId) === true;
   if (earlier?.unstarted.length || recovered) turnEvents.push(APPROVED_CALL_RAN_NOTE);
   if (input.approval && !recovered) return decideApproval(turn, decisions, input.approval);
+  if (input.declinePendingApprovals && !input.approval) await declinePendingOnReply(turn, decisions);
   return undefined;
+}
+
+async function declinePendingOnReply(turn: ApprovalDecisionTurn, decisions: ApprovalDecisions): Promise<void> {
+  const { deps, actor, session } = turn;
+  const rows = await deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [session.id] } });
+  for (const [requestId, record] of rows) {
+    if (approvalRefusal(record, session.id, actor.id) || record.kind === "input" || record.blocksInput === false)
+      continue;
+    await decideApproval(turn, decisions, { requestId, approved: false });
+  }
 }
 
 async function decideApproval(

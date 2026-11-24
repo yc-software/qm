@@ -56,6 +56,7 @@ interface ChatState {
   rememberedContextName: string | null;
   pendingSend: string | null;
   resolvingApprovals: Set<string>;
+  declineApprovalsOnSend: boolean;
   transcriptAnchorSeq: number | null;
   earlierCount: number;
   loadingEarlier: boolean;
@@ -147,6 +148,7 @@ export interface ComposerSurface {
   composerApprovalPanel(
     approvals: PendingApproval[],
     resolve?: (decision: ApprovalDecision) => void | Promise<void>,
+    docked?: boolean,
   ): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
