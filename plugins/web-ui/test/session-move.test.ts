@@ -110,7 +110,13 @@ test("a project accepts working chats so the refusal can be explained, and ignor
   assert.ok(!target.classList.contains(SESSION_DROP_OVER_CLASS), "ending the drag clears every highlight");
 });
 
-function io(opts: { gains?: string[]; refuse?: Record<string, string>; confirm?: boolean; fail?: string }) {
+function io(opts: {
+  gains?: string[];
+  refuse?: Record<string, string>;
+  confirm?: boolean;
+  fail?: string;
+  notices?: string[];
+}) {
   const asked: string[] = [];
   const moved: Array<{ ids: readonly string[]; audience: readonly string[] }> = [];
   const names: Record<string, string> = { ada: "Ada", grace: "Grace" };
@@ -132,7 +138,11 @@ function io(opts: { gains?: string[]; refuse?: Record<string, string>; confirm?:
           };
         const ready = ids.filter((id) => !opts.refuse?.[id]);
         moved.push({ ids: ready, audience });
-        return { sessions: ready.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession), held };
+        return {
+          sessions: ready.map((id) => ({ id, scopeId: "group:project:launch" }) as CoreSession),
+          held,
+          ...(opts.notices ? { notices: opts.notices } : {}),
+        };
       },
       confirm: (question: string) => {
         asked.push(question);
@@ -177,4 +187,16 @@ test("held chats are named in the toast while the rest still move", async () => 
   assert.equal((await runSessionMove(["busy"], alone.io)).toast, wait, "a single refusal says why and nothing else");
   const failed = io({ fail: "That project isn't available." });
   assert.equal((await runSessionMove(["a"], failed.io)).toast, "That project isn't available.");
+});
+
+test("what the server says stopped working after the move is added to the toast", async () => {
+  const stopped = 'The loop "Inbox triage" no longer posts to "Chat a": its owner isn\'t a member of this project.';
+  const t = io({ notices: [stopped] });
+  assert.equal((await runSessionMove(["a"], t.io)).toast, `Moved to Launch. ${stopped}`);
+  const wait = "Wait for the agent to finish before moving this chat.";
+  const partial = io({ refuse: { busy: wait }, notices: [stopped] });
+  assert.equal(
+    (await runSessionMove(["a", "busy"], partial.io)).toast,
+    `Moved 1 of 2 chats to Launch. "Chat busy" wasn't moved: ${wait} ${stopped}`,
+  );
 });

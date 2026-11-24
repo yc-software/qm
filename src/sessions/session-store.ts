@@ -422,6 +422,7 @@ export interface SessionStore {
     target: { type: SessionType; scopeId: ScopeId; channelName: string },
     memberIds: readonly string[],
     spawnMeta: ReadonlyMap<string, SpawnMeta>,
+    titlesOf: { principalId: string; sessionIds: readonly string[] },
   ): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;

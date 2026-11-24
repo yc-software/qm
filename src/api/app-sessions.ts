@@ -37,6 +37,7 @@ import { projectIdFromGroupRef, projectScopeId, type Project } from "../projects
 
 import type { App, AppDeps, HeldChat, MoveSessionsResult } from "./app-types.ts";
 import {
+  busyHold,
   carryChatsAlong,
   chatTrees,
   moveConfirmation,
@@ -1261,7 +1262,8 @@ export function createSessionMethods(
         trees = trees.filter((tree) => {
           const sessionId = tree[0]!.id;
           const job = runningJob(tree, jobs);
-          if (tree.some((s) => active.has(s.threadRef))) held.push({ sessionId, reason: "busy" });
+          const busy = busyHold(tree, active);
+          if (busy) held.push({ sessionId, reason: "busy", ...busy });
           else if (tree.some((s) => pending.has(s.id))) held.push({ sessionId, reason: "awaiting_approval" });
           else if (job) held.push({ sessionId, reason: "job_running", job });
           else return true;
@@ -1295,12 +1297,15 @@ export function createSessionMethods(
           return displayName ? { ...principal, displayName } : principal;
         });
         const version = await projects.version(target.ref);
-        await carryChatsAlong(deps, tenant, trees, targetScopeId, members, {
-          groupRef: target.ref,
-          channelName: project.name,
-          audience,
-          version,
-        });
+        const stoppedLoops = await carryChatsAlong(
+          deps,
+          tenant,
+          trees,
+          targetScopeId,
+          members,
+          { groupRef: target.ref, channelName: project.name, audience, version },
+          principalId,
+        );
         for (const tree of trees)
           h.recordAudit({
             at: Date.now(),
@@ -1316,7 +1321,7 @@ export function createSessionMethods(
             }),
           });
         movedIds = trees.map((tree) => tree[0]!.id);
-        return { outcome: "moved", sessions: [], held };
+        return { outcome: "moved", sessions: [], held, stoppedLoops };
       };
       let movedIds: string[] = [];
       const result = (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };

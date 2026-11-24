@@ -836,7 +836,7 @@ export interface AppDeps {
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
-  loops?: Pick<LoopStore, "releaseMovedDestinations">;
+  loops?: Pick<LoopStore, "retargetMovedDestinations">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
@@ -979,13 +979,14 @@ interface MoveAudienceMember {
 
 export type HeldChat =
   | { sessionId: string; reason: "job_running"; job: { purpose: string; chat?: string } }
+  | { sessionId: string; reason: "busy"; subagent?: { title?: string } }
   | {
       sessionId: string;
-      reason: "not_found" | "same_scope" | "unsupported_source" | "busy" | "awaiting_approval";
+      reason: "not_found" | "same_scope" | "unsupported_source" | "awaiting_approval";
     };
 
 export type MoveSessionsResult =
   | { outcome: "not_project" }
   | { outcome: "forbidden" }
   | { outcome: "confirm_audience"; gains: MoveAudienceMember[]; held: HeldChat[]; question: string }
-  | { outcome: "moved"; sessions: Session[]; held: HeldChat[] };
+  | { outcome: "moved"; sessions: Session[]; held: HeldChat[]; stoppedLoops: { name: string; chat: string }[] };

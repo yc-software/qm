@@ -184,7 +184,9 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
     isolation: { mode: "shared", sandboxId: child },
   });
 
-  assert.equal((await move(sid, "owner", scope)).outcome, "moved");
+  const moved = await move(sid, "owner", scope);
+  assert.ok(moved.outcome === "moved");
+  assert.deepEqual(moved.stoppedLoops, [], "the mover's own loop keeps posting");
   assert.equal((await built.sessions.goals([sid])).get(sid)?.objective, "ship the launch");
 
   const movedCron = (await built.crons.get(cron.id))!;
@@ -197,7 +199,11 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
   assert.equal((await built.monitors.get(watch.id))!.ownerScopeId, scope);
   const movedLoop = (await built.loops.store.get(loop.id))!;
   assert.equal(movedLoop.ownerScopeId, "personal:owner", "a loop belongs to its space and stays");
-  assert.equal(movedLoop.destination, undefined, "but it no longer posts into the moved chat");
+  assert.deepEqual(
+    movedLoop.destination,
+    { type: "web", target: thread, audienceScopeId: scope },
+    "and keeps posting into the moved chat, addressed to the project's readers",
+  );
 
   const movedChild = (await built.sessions.get(child))!;
   assert.equal(movedChild.scopeId, scope);
@@ -230,7 +236,8 @@ test("only work that is running right now holds a move back", async () => {
   const free = await personal("owner", "web:owner:move-free", "Idle work");
   const other = await personal("owner", "web:owner:move-job", "Job work");
   const sid = await personal("owner", "web:owner:move-busy", "Busy work");
-  const { threadRef: childThread } = await subagent(sid, "agent:main:subagent:move-busy-child");
+  const { id: childId, threadRef: childThread } = await subagent(sid, "agent:main:subagent:move-busy-child");
+  await built.sessions.updateTitle(childId, "Research competitors");
   const actor = { id: "internal:owner", type: "internal" as const };
   await built.runs.enqueue({
     sessionId: childThread,
@@ -259,7 +266,7 @@ test("only work that is running right now holds a move back", async () => {
     "one request moves what it can",
   );
   assert.deepEqual(first.held, [
-    { sessionId: sid, reason: "busy" },
+    { sessionId: sid, reason: "busy", subagent: { title: "Research competitors" } },
     { sessionId: other, reason: "job_running", job: { purpose: "Building the site" } },
   ]);
   const otherThread = (await built.sessions.get(other))!.threadRef;
@@ -295,6 +302,7 @@ test("moves are refused for non-members, strangers, side chats, and non-project 
     outcome: "moved",
     sessions: [],
     held: [{ sessionId: sid, reason: "not_found" }],
+    stoppedLoops: [],
   });
   assert.deepEqual(await move(sid, "owner", "personal:owner"), { outcome: "not_project" });
   const sideChat = await built.app.forkSession(sid, "owner", {
@@ -304,11 +312,12 @@ test("moves are refused for non-members, strangers, side chats, and non-project 
     outcome: "moved",
     sessions: [],
     held: [{ sessionId: sideChat!.session.id, reason: "unsupported_source" }],
+    stoppedLoops: [],
   });
 });
 
 test("the move route binds the principal to the portal identity and maps refusals to statuses", async () => {
-  const { built, scope, personal } = await setup();
+  const { built, scope, personal, subagent } = await setup();
   const sid = await personal("owner", "web:owner:move-route", "Route move");
   const outsiders = await personal("outsider", "web:outsider:move-route", "Route refusal");
   const sourceSecret = "session-move-source-secret-for-http-tests";
@@ -357,10 +366,86 @@ test("the move route binds the principal to the portal identity and maps refusal
     assert.deepEqual(((await again.json()) as { held: unknown[] }).held, [
       { sessionId: sid, reason: "same_scope", message: "That conversation is already in this project." },
     ]);
+    const working = await personal("owner", "web:owner:move-route-busy", "Delegating");
+    const { id: helper, threadRef: helperThread } = await subagent(working, "agent:main:subagent:move-route-helper");
+    await built.sessions.updateTitle(helper, "Scrape pricing pages");
+    const actor = { id: "internal:owner", type: "internal" as const };
+    await built.runs.enqueue({
+      sessionId: helperThread,
+      request: {
+        actor,
+        conversation: { kind: "dm" as const, threadRef: helperThread, audience: [actor] },
+        origin: { kind: "direct" as const },
+        text: "Keep going",
+      },
+    });
+    const busy = await move(working, "owner", { scopeId: scope, audience: ["member"] });
+    assert.deepEqual(((await busy.json()) as { held: unknown[] }).held, [
+      {
+        sessionId: working,
+        reason: "busy",
+        subagent: { title: "Scrape pricing pages" },
+        message:
+          'This chat\'s subagent "Scrape pricing pages" is still running. Stop it or wait for it to finish, then move the chat.',
+      },
+    ]);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("the title the mover gave a personal chat becomes its title for the project", async () => {
+  const { built, scope, personal, move } = await setup();
+  const sid = await personal("owner", "web:owner:move-title", "Draft the pricing page");
+  await built.app.updateSession(sid, { actorId: "owner" }, { title: "Pricing page" });
+  assert.equal((await move(sid, "owner", scope, { audience: ["member"] })).outcome, "moved");
+  assert.equal((await built.app.getSessionForViewer(sid, { actorId: "member" }))!.session.title, "Pricing page");
+  assert.equal((await built.app.getSessionForViewer(sid, { actorId: "owner" }))!.session.title, "Pricing page");
+
+  await built.app.updateSession(sid, { actorId: "member" }, { title: "Member's own name for it" });
+  const other = await built.app.createProject("owner", "Other");
+  assert.ok(other);
+  assert.equal((await built.app.addProjectMember(other.id, "owner", "member")).status, "ok");
+  assert.equal((await move(sid, "member", projectScopeId(other.id))).outcome, "moved");
+  assert.equal(
+    (await built.app.getSessionForViewer(sid, { actorId: "owner" }))!.session.title,
+    "Pricing page",
+    "between projects, one member's rename stays theirs",
+  );
+});
+
+test("a loop whose owner can't read the destination project stops posting there, and the move names it", async () => {
+  const { built, project, scope, personal, move } = await setup();
+  assert.equal((await built.app.addProjectMember(project.id, "owner", "outsider")).status, "ok");
+  const sid = await personal("owner", "web:owner:move-loop", "Triage the inbox");
+  await built.app.updateSession(sid, { actorId: "owner" }, { title: "Inbox" });
+  assert.equal((await move(sid, "owner", scope, { audience: ["member", "outsider"] })).outcome, "moved");
+  const thread = (await built.sessions.get(sid))!.threadRef;
+  const posting = (owner: string, name: string) =>
+    built.loops.store.create({
+      ownerScopeId: scope,
+      owner,
+      createdBy: owner,
+      destination: { type: "web", target: thread, audienceScopeId: scope },
+      name,
+      playbook: "Triage new mail.",
+      successCondition: "Mail is triaged.",
+    });
+  const { loop: kept } = await posting("member", "Inbox triage");
+  const { loop: stopped } = await posting("outsider", "Inbox digest");
+
+  const solo = await built.app.createProject("owner", "Owner and member");
+  assert.ok(solo);
+  assert.equal((await built.app.addProjectMember(solo.id, "owner", "member")).status, "ok");
+  const to = projectScopeId(solo.id);
+  const out = await move(sid, "owner", to);
+  assert.ok(out.outcome === "moved");
+  assert.deepEqual(out.stoppedLoops, [{ name: "Inbox digest", chat: "Inbox" }]);
+  const stillPosting = (await built.loops.store.get(kept.id))!;
+  assert.equal(stillPosting.ownerScopeId, scope);
+  assert.deepEqual(stillPosting.destination, { type: "web", target: thread, audienceScopeId: to });
+  assert.equal((await built.loops.store.get(stopped.id))!.destination, undefined);
 });
 
 test("the confirmation names the chat, the project, and everyone who gains access", () => {

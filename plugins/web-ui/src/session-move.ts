@@ -115,6 +115,7 @@ export async function runSessionMove(
     if (moved.length === ids.length)
       summary = moved.length === 1 ? `Moved to ${io.project}` : `Moved ${moved.length} chats to ${io.project}`;
     else if (moved.length) summary = `Moved ${moved.length} of ${ids.length} chats to ${io.project}.`;
+    if (summary && notes.length && !summary.endsWith(".")) summary += ".";
     return { moved, toast: [summary, ...notes].filter(Boolean).join(" ") || null };
   };
   const notes: string[] = [];
@@ -124,7 +125,7 @@ export async function runSessionMove(
     for (;;) {
       const out = await io.move(ready, audience);
       notes.push(...explain(out.held));
-      if ("sessions" in out) return finish(out.sessions, notes);
+      if ("sessions" in out) return finish(out.sessions, [...notes, ...(out.notices ?? [])]);
       ready = ready.filter((id) => !out.held.some((h) => h.sessionId === id));
       if (!io.confirm(out.question)) return finish([], notes);
       audience = out.confirm.map((g) => g.principalId);

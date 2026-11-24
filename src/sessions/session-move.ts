@@ -6,7 +6,14 @@ import type { ProcessRecord, ProcessRegistry } from "../processes/process-regist
 import { reconcileProcesses } from "../processes/reconcile.ts";
 import { supportsProcessSessions, type Sandbox } from "../sandbox/sandbox.ts";
 import type { Tenant } from "../tenants/context.ts";
-import type { ChildIsolation, Principal, ScopeId, Session, SpawnMeta } from "../types.ts";
+import {
+  parseScopeId,
+  type ChildIsolation,
+  type Principal,
+  type ScopeId,
+  type Session,
+  type SpawnMeta,
+} from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { WebhookStore } from "../webhooks/webhook-store.ts";
 import type { SessionStore } from "./session-store.ts";
@@ -58,7 +65,7 @@ export interface ChatMoveDeps {
   crons: Pick<CronStore, "rehome">;
   webhooks: Pick<WebhookStore, "rehome">;
   monitors?: Pick<MonitorStore, "rehome">;
-  loops?: Pick<LoopStore, "releaseMovedDestinations">;
+  loops?: Pick<LoopStore, "retargetMovedDestinations">;
 }
 
 export type ChatTree = readonly Session[];
@@ -66,6 +73,11 @@ export type ChatTree = readonly Session[];
 export interface JobHold {
   purpose: string;
   chat?: string;
+}
+
+interface StoppedLoop {
+  name: string;
+  chat: string;
 }
 
 export async function chatTrees(deps: ChatMoveDeps, roots: readonly Session[]): Promise<ChatTree[]> {
@@ -124,6 +136,16 @@ export function runningJob(tree: ChatTree, jobs: readonly ProcessRecord[]): JobH
   };
 }
 
+export function busyHold(
+  tree: ChatTree,
+  active: { has(threadRef: string): boolean },
+): { subagent?: { title?: string } } | undefined {
+  if (active.has(tree[0]!.threadRef)) return {};
+  const child = tree.find((s) => active.has(s.threadRef));
+  if (!child) return undefined;
+  return { subagent: child.title ? { title: child.title } : {} };
+}
+
 export function moveConfirmation(titles: readonly string[], project: string, readers: readonly string[]): string {
   const list = readers.length > 1 ? `${readers.slice(0, -1).join(", ")} and ${readers.at(-1)}` : (readers[0] ?? "");
   const one = titles.length === 1;
@@ -156,15 +178,16 @@ export async function carryChatsAlong(
   to: ScopeId,
   members: readonly string[],
   target: MoveTarget,
-): Promise<void> {
+  mover: string,
+): Promise<StoppedLoop[]> {
   const threads = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!.scopeId] as const)));
   const move = { threads, to };
 
-  await Promise.all([
+  const [, , , stopped = []] = await Promise.all([
     deps.crons.rehome(move),
     deps.webhooks.rehome(move),
     deps.monitors?.rehome(move),
-    deps.loops?.releaseMovedDestinations(move),
+    deps.loops?.retargetMovedDestinations(move, members),
   ]);
   const sessions = trees.flat();
   const isolations = sessions.flatMap((s) => s.spawnMeta?.isolation ?? []);
@@ -180,5 +203,16 @@ export async function carryChatsAlong(
     { type: "group", scopeId: to, channelName: target.channelName },
     members,
     spawnMeta,
+    {
+      principalId: mover,
+      sessionIds: trees.flatMap((tree) =>
+        parseScopeId(tree[0]!.scopeId).kind === "personal" ? tree.map((s) => s.id) : [],
+      ),
+    },
   );
+  const chatOf = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!] as const)));
+  return stopped.map((loop) => ({
+    name: loop.name,
+    chat: chatOf.get(loop.destination!.target)?.title ?? "Untitled chat",
+  }));
 }

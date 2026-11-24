@@ -398,7 +398,7 @@ export interface HeldSessionMove {
 }
 
 export type SessionMoveResult =
-  | { sessions: CoreSession[]; held: HeldSessionMove[] }
+  | { sessions: CoreSession[]; held: HeldSessionMove[]; notices?: string[] }
   | { confirm: MoveAudienceMember[]; question: string; held: HeldSessionMove[] };
 
 export async function moveSessions(

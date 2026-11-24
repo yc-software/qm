@@ -217,6 +217,10 @@ const HELD_MESSAGES = {
 } as const;
 
 function heldMessage(held: HeldChat): string {
+  if (held.reason === "busy" && held.subagent) {
+    const which = held.subagent.title ? `This chat's subagent "${held.subagent.title}"` : "A subagent of this chat";
+    return `${which} is still running. Stop it or wait for it to finish, then move the chat.`;
+  }
   if (held.reason !== "job_running") return HELD_MESSAGES[held.reason];
   const where = held.job.chat ? `in this chat's subagent "${held.job.chat}"` : "in this chat";
   return `The background job "${held.job.purpose}" ${where} is still running. Stop it or wait for it to finish, then move the chat.`;
@@ -258,7 +262,10 @@ async function moveSessions(ctx: ApiCtx): Promise<void> {
       held,
       message: out.question,
     });
-  return sendJson(ctx.res, 200, { sessions: out.sessions, held });
+  const notices = out.stoppedLoops.map(
+    (loop) => `The loop "${loop.name}" no longer posts to "${loop.chat}": its owner isn't a member of this project.`,
+  );
+  return sendJson(ctx.res, 200, { sessions: out.sessions, held, notices });
 }
 
 function agentConversation(session: Session) {

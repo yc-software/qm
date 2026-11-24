@@ -218,10 +218,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return out;
     },
 
-    async rehome(tenant, sessionIds, target, memberIds, spawnMeta): Promise<void> {
+    async rehome(tenant, sessionIds, target, memberIds, spawnMeta, titlesOf): Promise<void> {
       await db.forTenant(tenant).q(
         `WITH moved AS (
-           UPDATE sessions s SET scope_id = $3, type = $4, channel_name = $5, spawn_meta = COALESCE(m.meta, s.spawn_meta)
+           UPDATE sessions s SET scope_id = $3, type = $4, channel_name = $5, spawn_meta = COALESCE(m.meta, s.spawn_meta),
+                  title = CASE WHEN s.id = ANY($9::text[]) THEN COALESCE(
+                    (SELECT NULLIF(btrim(p.title), '') FROM participants p
+                      WHERE p.tenant_id = $1 AND p.session_id = s.id AND p.principal_id = $8), s.title) ELSE s.title END
              FROM unnest($2::text[], $7::text[]) AS m(id, meta)
             WHERE s.tenant_id = $1 AND s.id = m.id
            RETURNING s.id
@@ -243,6 +246,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             const meta = spawnMeta.get(id);
             return meta ? JSON.stringify(meta) : null;
           }),
+          titlesOf.principalId,
+          [...titlesOf.sessionIds],
         ],
       );
     },
