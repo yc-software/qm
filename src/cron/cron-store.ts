@@ -215,9 +215,9 @@ export function createCronStore(
       return rehomeTriggers(
         backing,
         move,
-        (cron) => !cron.loopId && [...move.threadRefs].some((threadRef) => cronTiedTo(cron, threadRef)),
-        (cron, before) => {
-          if (before.ownerScopeId !== move.from || !cron.script?.sandboxId) return cron;
+        (cron, threadRefs) => !cron.loopId && [...threadRefs].some((threadRef) => cronTiedTo(cron, threadRef)),
+        (cron) => {
+          if (!cron.script?.sandboxId) return cron;
           const { sandboxId: _sandboxId, ...script } = cron.script;
           return { ...cron, script };
         },

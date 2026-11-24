@@ -112,7 +112,7 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
       await backing.merge(id, { lastError: error });
     },
     rehome(move) {
-      return rehomeTriggers(backing, move, (m) => move.threadRefs.has(m.threadRef) || postsInto(m, move.threadRefs));
+      return rehomeTriggers(backing, move, (m, threadRefs) => threadRefs.has(m.threadRef) || postsInto(m, threadRefs));
     },
   };
 }

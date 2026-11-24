@@ -1240,23 +1240,25 @@ export function createSessionMethods(
         const [active, approvals, sourceMembers, people] = await Promise.all([
           deps.runs.activeForThreads(all.map((s) => s.threadRef)),
           deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: all.map((s) => s.id) } }) ?? [],
-          Promise.all(
-            [...new Set(trees.map((tree) => tree[0]!.scopeId))].map(async (scope) => {
-              const from = parseScopeId(scope);
-              return [scope, from.kind === "group" ? ((await projects.members(from.ref)) ?? []) : null] as const;
+          projects.membersMany(
+            trees.flatMap((tree) => {
+              const from = parseScopeId(tree[0]!.scopeId);
+              return from.kind === "group" ? [from.ref] : [];
             }),
           ),
           deps.directory.getMany(members),
         ]);
-        const pending = new Set<string>();
-        for (const [, record] of approvals)
-          if (
-            await approvalRecordIsCurrent(
+        const current = await Promise.all(
+          approvals.map(async ([, record]) =>
+            (await approvalRecordIsCurrent(
               record,
               all.find((s) => s.id === record.sessionId),
-            )
-          )
-            pending.add(record.sessionId);
+            ))
+              ? [record.sessionId]
+              : [],
+          ),
+        );
+        const pending = new Set(current.flat());
         trees = trees.filter((tree) => {
           const sessionId = tree[0]!.id;
           const job = runningJob(tree, jobs);
@@ -1266,7 +1268,12 @@ export function createSessionMethods(
           else return true;
           return false;
         });
-        const scoped = new Map(sourceMembers.flatMap(([scope, ids]) => (ids ? [[scope, ids] as const] : [])));
+        const scoped = new Map(
+          trees.flatMap((tree) => {
+            const from = parseScopeId(tree[0]!.scopeId);
+            return from.kind === "group" ? [[tree[0]!.scopeId, sourceMembers.get(from.ref) ?? []] as const] : [];
+          }),
+        );
         const nameOf = (id: string) => people.get(id)?.displayName;
         const gains = (await newChatReaders(deps, tenant, trees, members, scoped)).map((id) => ({
           principalId: id,

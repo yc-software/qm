@@ -134,7 +134,7 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       });
     },
     rehome(move) {
-      return rehomeTriggers(backing, move, (webhook) => postsInto(webhook, move.threadRefs));
+      return rehomeTriggers(backing, move, (webhook, threadRefs) => postsInto(webhook, threadRefs));
     },
   };
 }

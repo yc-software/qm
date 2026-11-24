@@ -149,23 +149,24 @@ export async function carryChatsAlong(
   members: readonly string[],
   target: MoveTarget,
 ): Promise<void> {
-  const bySource = new Map<ScopeId, Set<string>>();
-  for (const tree of trees)
-    for (const s of tree)
-      bySource.set(tree[0]!.scopeId, (bySource.get(tree[0]!.scopeId) ?? new Set()).add(s.threadRef));
-  const loops = deps.loops;
-  await Promise.all(
-    [...bySource].map(async ([from, threadRefs]) => {
-      const triggers = { threadRefs, from, to };
-      await Promise.all([deps.crons.rehome(triggers), deps.webhooks.rehome(triggers), deps.monitors?.rehome(triggers)]);
-      if (loops)
-        await Promise.all(
-          (await loops.ownedBy(from))
-            .filter((loop) => postsInto(loop, threadRefs))
-            .map((loop) => loops.update(loop.id, { destination: null })),
-        );
-    }),
-  );
+  const threads = new Map(trees.flatMap((tree) => tree.map((s) => [s.threadRef, tree[0]!.scopeId] as const)));
+  const threadsFrom = (scope: ScopeId) =>
+    new Set([...threads].flatMap(([threadRef, from]) => (from === scope ? [threadRef] : [])));
+  const move = { threads, to };
+  const clearLoops = async (loops: Pick<LoopStore, "ownedBy" | "update">) => {
+    const owned = await loops.ownedBy([...new Set(threads.values())]);
+    await Promise.all(
+      owned
+        .filter((loop) => postsInto(loop, threadsFrom(loop.ownerScopeId)))
+        .map((loop) => loops.update(loop.id, { destination: null })),
+    );
+  };
+  await Promise.all([
+    deps.crons.rehome(move),
+    deps.webhooks.rehome(move),
+    deps.monitors?.rehome(move),
+    deps.loops && clearLoops(deps.loops),
+  ]);
   const sessions = trees.flat();
   const isolations = sessions.flatMap((s) => s.spawnMeta?.isolation ?? []);
   const own = new Set(isolations.flatMap((i) => (i.mode === "sandbox" && i.sandboxId ? [i.sandboxId] : [])));

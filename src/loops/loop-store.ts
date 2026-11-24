@@ -65,7 +65,7 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
-  ownedBy(scopeId: string): Promise<Loop[]>;
+  ownedBy(scopeIds: readonly string[]): Promise<Loop[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
@@ -195,7 +195,7 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    ownedBy: (scopeId) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [scopeId] } }),
+    ownedBy: (scopeIds) => backing.select({ where: { field: "ownerScopeId", anyOfFold: [...scopeIds] } }),
     claimTenants: () => backing.claimTenants(),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;

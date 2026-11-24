@@ -15,11 +15,15 @@ import { isUserItem } from "../src/sessions/items.ts";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import type { PendingApprovalRecord } from "../src/types.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
 async function setup() {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-move-")) }));
+  const databaseUrl = testMigratedDatabaseUrl();
+  const built = buildApp(testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "session-move-")) }));
+  const approvals = createPostgresMapFactory(databaseUrl).map<PendingApprovalRecord>("approvals", ["sessionId"]);
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "member", displayName: "Member", type: "internal" },
@@ -45,7 +49,7 @@ async function setup() {
   };
   const move = (sid: string, principal: string, scope: string, opts?: { audience?: string[] }) =>
     built.app.moveSessions(tenant, principal, [sid], scope as `group:${string}`, opts);
-  return { built, project, scope: projectScopeId(project.id), personal, subagent, move };
+  return { built, project, scope: projectScopeId(project.id), personal, subagent, move, approvals };
 }
 
 async function soloProject(built: Awaited<ReturnType<typeof setup>>["built"]) {
@@ -211,7 +215,7 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
 });
 
 test("only work that is running right now holds a move back", async () => {
-  const { built, personal, subagent } = await setup();
+  const { built, personal, subagent, approvals } = await setup();
   const scope = await soloProject(built);
   const moveAll = (ids: string[]) => built.app.moveSessions(tenant, "owner", ids, scope);
   const free = await personal("owner", "web:owner:move-free", "Idle work");
@@ -249,6 +253,23 @@ test("only work that is running right now holds a move back", async () => {
     { sessionId: sid, reason: "busy" },
     { sessionId: other, reason: "job_running", job: { purpose: "Building the site" } },
   ]);
+  const otherThread = (await built.sessions.get(other))!.threadRef;
+  await approvals.put("move-card", {
+    sessionId: other,
+    command: "rm -rf build",
+    summary: "Clean the build",
+    createdAt: Date.now(),
+    blocksInput: true,
+    request: {
+      surface: "web",
+      actor: { externalId: "owner" },
+      conversation: { kind: "dm", threadRef: otherThread },
+      text: "clean it",
+    },
+  });
+  const carded = await moveAll([other]);
+  assert.deepEqual(carded.outcome === "moved" && carded.held, [{ sessionId: other, reason: "awaiting_approval" }]);
+  await approvals.delete("move-card");
   await built.processes!.markStatus("p-move-job", "exited");
   const second = await moveAll([other]);
   assert.ok(second.outcome === "moved" && second.sessions.length === 1, "a finished job no longer holds it back");
