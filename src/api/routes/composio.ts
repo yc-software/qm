@@ -217,7 +217,11 @@ function catalogEntry(item: unknown): { app: CatalogApp; keyFields: KeyField[] |
   const schemes = Array.isArray(item.auth_schemes)
     ? item.auth_schemes.filter((scheme): scheme is string => typeof scheme === "string")
     : [];
-  if (schemes.includes("DCR_OAUTH") || (schemes.length && schemes.every((scheme) => scheme === "NO_AUTH"))) return null;
+  if (
+    schemes.includes("DCR_OAUTH") ||
+    (Array.isArray(item.auth_schemes) && schemes.every((scheme) => scheme === "NO_AUTH"))
+  )
+    return null;
   const meta = isObj(item.meta) ? item.meta : {};
   return {
     app: {
