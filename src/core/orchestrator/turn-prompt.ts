@@ -3,9 +3,9 @@ import type { DirectoryMember, DirectoryStore } from "../../directory/directory-
 import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keychain.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
-import { isPollSurface } from "../../triggers/run-trigger.ts";
+import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { ownReplySinceTyped, type Item } from "../../sessions/items.ts";
+import { isAgentReply, typedBy, type Item } from "../../sessions/items.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -39,7 +39,6 @@ export async function appendTurnGuidance(turn: {
   actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
   actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
-  automatedTurn: boolean;
   ephemeral?: boolean;
 }): Promise<string> {
   const {
@@ -56,7 +55,6 @@ export async function appendTurnGuidance(turn: {
     actorIsOrgAdmin,
     actorAdminRole,
     orgMemoryWritable,
-    automatedTurn,
   } = turn;
   let { systemPrompt } = turn;
   if (appConnections)
@@ -125,7 +123,7 @@ export async function appendTurnGuidance(turn: {
         "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.",
     );
   }
-  if (automatedTurn && input.surface && isPollSurface(input.surface)) {
+  if (firedByPoll(input)) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
     );
@@ -134,12 +132,22 @@ export async function appendTurnGuidance(turn: {
 }
 
 export async function replyToRewrite(
-  flags: OrchestratorDeps["featureFlags"],
+  deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
   personId: string,
   history: readonly Item[],
 ): Promise<Item | undefined> {
-  const reply = ownReplySinceTyped(history);
-  return reply && (await flags?.enabled("wake_reply_rewrite", personalScope(personId))) ? reply : undefined;
+  const typed = history.findLastIndex(typedBy);
+  if (typed >= 0 && !samePerson(typedBy(history[typed]!), personId)) return undefined;
+  const replies = history
+    .slice(typed + 1)
+    .filter((item) => isAgentReply(item) && !!item.text?.trim() && typeof item.body.via !== "string");
+  if (!replies.length || !(await deps.featureFlags?.enabled("wake_reply_rewrite", personalScope(personId))))
+    return undefined;
+  for (const reply of replies.reverse()) {
+    const run = reply.turnId ? await deps.runs?.get(reply.turnId) : null;
+    if (run && !firedByPoll(run.request)) return reply;
+  }
+  return undefined;
 }
 
 export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {

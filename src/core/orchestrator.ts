@@ -4,11 +4,11 @@ import { personLabel } from "../identity/person-names.ts";
 import {
   isAgentReply,
   isOverheard,
-  isTypedByPerson,
   isUserItem,
   type Item,
   type NewItem,
   stepMessage,
+  typedBy,
 } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -84,7 +84,7 @@ import { promptChanges, systemPromptSnapshot, turnFrameNote } from "./orchestrat
 import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
-import { isPollSurface } from "../triggers/run-trigger.ts";
+import { firedByPoll } from "../triggers/run-trigger.ts";
 import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
@@ -1486,7 +1486,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           conversation,
           tenant,
           orgMemoryWritable,
-          automatedTurn,
           ephemeral,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
@@ -1946,10 +1945,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
-        const rewrites =
-          wakeTurn && isWeb && conversation.kind === "dm"
-            ? await replyToRewrite(deps.featureFlags, actor.id, history)
-            : undefined;
+        const rewrites = wakeTurn && isWeb ? await replyToRewrite(deps, actor.id, history) : undefined;
         if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
@@ -2094,7 +2090,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnInput = `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${baseText}`;
         }
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
-        const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
+        const isPollFire = firedByPoll(input);
         const replyOptional = isPollFire || childWake;
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
@@ -2257,7 +2253,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
                 if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
                 const replaces = rewrites && isAgentReply(entry) && !!entry.text?.trim() && !body.stopped;
-                if (replaces && !emittedEntries.some(isTypedByPerson)) body.supersedes = rewrites.seq;
+                if (replaces && !emittedEntries.some(typedBy)) body.supersedes = rewrites.seq;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;

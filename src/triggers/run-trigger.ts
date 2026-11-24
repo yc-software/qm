@@ -82,7 +82,8 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
 }
 
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
-export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
+export const firedByPoll = (turn: Partial<Pick<TurnRequest, "origin" | "surface">>): boolean =>
+  turn.origin?.kind === "automation" && !!turn.surface && POLL_SURFACES.has(turn.surface);
 
 function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResult): DeliveryProvenance {
   return {
