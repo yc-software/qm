@@ -1129,6 +1129,7 @@ window.addEventListener("popstate", () => {
 });
 
 document.addEventListener("visibilitychange", reloadIntoServedRelease);
+window.addEventListener("online", reloadIntoServedRelease);
 
 window.addEventListener("focus", () => {
   if (!appState.me || reloadIntoServedRelease()) return;
