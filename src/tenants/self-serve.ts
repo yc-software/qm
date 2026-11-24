@@ -108,15 +108,6 @@ export function createSelfServe(
   pg: Pick<PgPool, "q">,
   provision: (request: WorkspaceProvisionRequest) => Promise<string>,
 ): SelfServe {
-  const settingUp = new Map<string, Promise<void>>();
-  const setUp = (request: WorkspaceProvisionRequest): void => {
-    if (settingUp.has(request.tenant)) return;
-    const run = provision(request)
-      .then((key) => markSelfServeProvisioned(pg, request.tenant, key))
-      .catch((error: unknown) => reportFailure("self-serve workspace setup", error, request.tenant))
-      .finally(() => settingUp.delete(request.tenant));
-    settingUp.set(request.tenant, run);
-  };
   return {
     async workspace(issuer, subject, org) {
       if (bootTenant() !== undefined) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
@@ -124,8 +115,12 @@ export function createSelfServe(
       const workspace = await selfServeTenant(pg, issuer, org);
       if (!workspace) throw new AdminError(403, "self-serve workspaces need a multitenant deployment");
       if (workspace.provisioned && !workspace.serving) throw new AdminError(503, "this workspace is switched off");
-      if (!workspace.provisioned) setUp({ tenant: workspace.tenant, brandName: org.name, issuer, externalOrg: org });
-      return { tenant: workspace.tenant, created: workspace.created, ready: workspace.provisioned };
+      const { tenant } = workspace;
+      if (!workspace.provisioned)
+        void provision({ tenant, brandName: org.name, issuer, externalOrg: org })
+          .then((key) => markSelfServeProvisioned(pg, tenant, key))
+          .catch((error: unknown) => reportFailure("self-serve workspace setup", error, tenant));
+      return { tenant, created: workspace.created, ready: workspace.provisioned };
     },
   };
 }

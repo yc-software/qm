@@ -57,7 +57,7 @@ export async function selfServeWorkspace(
   if (!response.ok) throw new Error(`Self-serve workspace failed: HTTP ${response.status} ${await response.text()}`);
   const { tenant, ready } = (await response.json()) as { tenant?: unknown; ready?: unknown };
   if (!isTenantId(tenant)) throw new Error("Self-serve workspace failed: no workspace returned");
-  return { tenant, ready: ready !== false };
+  return { tenant, ready: ready === true };
 }
 
 export async function provisionTrustedAdmin(
