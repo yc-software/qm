@@ -22,7 +22,7 @@ type SlackSetupStatus = {
   };
 };
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, token: string | undefined = "SENTINEL-bridge") {
   const map = testMap();
   const store = createSlackInstallationStore(
     "test",
@@ -33,7 +33,7 @@ async function fixture(t: test.TestContext) {
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({
     serviceUrl: "https://bridge.example",
-    token: "SENTINEL-bridge",
+    ...(token ? { token } : {}),
     store,
     fetchImpl: (async (url: URL, init: RequestInit) => {
       calls.push({ path: url.pathname, body: init.body as string | undefined });
@@ -115,20 +115,55 @@ test("environment-backed bot skips service lookup and missing service status rem
   assert.equal(legacy.installAvailable, true);
 });
 
-test("shared app status links the settings Add to Slack page even when setup status is unavailable", async (t) => {
+test("shared app status links the settings Add to Slack page only while setup status is readable", async (t) => {
   const f = await fixture(t);
   const installUrl = "https://agent.example/settings/slack-settings?slack=install";
-  for (const response of [new Response("", { status: 404 }), new Response("", { status: 503 })]) {
-    f.remote(response);
-    const status = (await (await f.request()).json()) as SlackSetupStatus;
-    assert.equal(status.setup, undefined);
-    assert.equal(status.installAvailable, true);
-    assert.equal(status.installUrl, installUrl);
-  }
+  f.remote(new Response("", { status: 404 }));
+  const shared = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.equal(shared.setup, undefined);
+  assert.equal(shared.setupUnavailable, false);
+  assert.equal(shared.installAvailable, true);
+  assert.equal(shared.installUrl, installUrl);
+  f.remote(new Response("", { status: 503 }));
+  const failed = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.equal(failed.setupUnavailable, true);
+  assert.equal(failed.installAvailable, false);
+  assert.equal(failed.installUrl, undefined);
   f.remote(Response.json({ companyOwned: true, appReady: false, connected: false }));
   const owned = (await (await f.request()).json()) as SlackSetupStatus;
   assert.equal(owned.installUrl, installUrl);
   assert.equal(owned.setup?.installUrl, installUrl);
+});
+
+test("a workspace without a Slack service credential is reported unavailable and start explains why", async (t) => {
+  const f = await fixture(t, undefined);
+  const status = (await (await f.request()).json()) as SlackSetupStatus;
+  assert.equal(status.setupUnavailable, true);
+  assert.equal(status.installAvailable, false);
+  assert.equal(status.installUrl, undefined);
+  const start = await f.request("POST", { step: "install" });
+  assert.equal(start.status, 502);
+  assert.deepEqual(await start.json(), {
+    error: "slack_installation_unavailable",
+    message: "Slack installation isn't enabled for this workspace yet.",
+  });
+  assert.equal(f.calls.length, 0);
+});
+
+test("a failing Slack service gives a retry message without internal detail", async (t) => {
+  const f = await fixture(t);
+  f.remote(new Response("", { status: 503 }));
+  const failing = createManagedSlack({
+    serviceUrl: "https://bridge.example",
+    token: "SENTINEL-bridge",
+    store: f.store,
+    fetchImpl: (async () => new Response("", { status: 500 })) as unknown as typeof fetch,
+  });
+  f.deps.managedSlack = failing;
+  const start = await f.request("POST", { step: "install" });
+  assert.equal(start.status, 502);
+  const body = (await start.json()) as { message?: string };
+  assert.equal(body.message, "The Slack installation service didn't respond. Try again in a few minutes.");
 });
 
 test("explicit browser start selects setup or installation and rejects arbitrary steps", async (t) => {

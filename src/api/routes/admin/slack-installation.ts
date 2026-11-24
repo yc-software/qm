@@ -6,6 +6,7 @@ import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
+import { SlackInstallStartError } from "../../../surfaces/slack-managed.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
@@ -61,16 +62,17 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
           statusUrl: new URL("/api/admin/slack-installation", origin).href,
         };
       }
-    } catch {
+    } catch (error) {
       setupUnavailable = true;
+      console.warn(`[slack-installation] setup status unavailable: ${errMessage(error)}`);
     }
     return sendJson(ctx.res, 200, {
       ...status,
       setup,
       setupUnavailable,
       source: installation?.appToken ? "admin" : "service",
-      installAvailable: true,
-      installUrl,
+      installAvailable: !setupUnavailable,
+      ...(setupUnavailable ? {} : { installUrl }),
       createUrl,
     });
   }
@@ -172,8 +174,15 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
     const origin = ctx.req.headers.origin;
     const result = await ctx.deps.managedSlack.start(step, typeof origin === "string" ? origin : undefined);
     return sendJson(ctx.res, 200, result);
-  } catch {
-    return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
+  } catch (error) {
+    console.warn(`[slack-installation] start failed: ${errMessage(error)}`);
+    return sendJson(ctx.res, 502, {
+      error: "slack_installation_unavailable",
+      message:
+        error instanceof SlackInstallStartError
+          ? error.message
+          : "The Slack installation service didn't respond. Try again in a few minutes.",
+    });
   }
 }
 

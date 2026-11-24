@@ -8,6 +8,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
   let status: Record<string, unknown> = { configured: false, installAvailable: true };
   let statusCode = 200;
   let launchCode = 200;
+  let launchMessage: string | undefined;
   let releaseStatus: () => void = () => {};
   const initialStatus = new Promise<void>((resolve) => {
     releaseStatus = resolve;
@@ -20,6 +21,8 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     }
     if (String(input) === "/api/admin/slack-installation/start") {
       launches.push(init!);
+      if (launchMessage)
+        return Response.json({ error: "slack_installation_unavailable", message: launchMessage }, { status: 502 });
       return Response.json({ url: "https://slack-service.example/install/launch?ticket=test" }, { status: launchCode });
     }
     return previousFetch(input, init);
@@ -112,6 +115,11 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     assert.equal(closed, true);
     assert.match(element.textContent ?? "", /Could not start Slack installation/);
     assert.equal(element.querySelector<HTMLButtonElement>(".welcome-slack")!.disabled, false);
+    launchMessage = "Slack installation isn't enabled for this workspace yet.";
+    element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
+    await settle();
+    assert.match(element.textContent ?? "", /isn't enabled for this workspace yet/);
+    launchMessage = undefined;
     statusCode = 200;
     status = { configured: false };
     window.dispatchEvent(new window.Event("focus"));

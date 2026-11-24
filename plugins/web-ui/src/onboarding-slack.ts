@@ -107,6 +107,7 @@ export class OnboardingSlack extends LitElement {
     popup.document.body.textContent = "Opening Slack…";
     this.busy = true;
     this.error = "";
+    let failure = "Could not start Slack installation. Please try again.";
     try {
       const response = await fetch(`${INSTALLATION_API}/start`, {
         method: "POST",
@@ -117,7 +118,10 @@ export class OnboardingSlack extends LitElement {
         signal: AbortSignal.timeout(15000),
       });
       const result = await response.json();
-      if (!response.ok || typeof result.url !== "string") throw new Error();
+      if (!response.ok || typeof result.url !== "string") {
+        if (typeof result.message === "string" && result.message) failure = result.message;
+        throw new Error();
+      }
       const target = new URL(result.url);
       if (target.protocol !== "https:" || target.username || target.password || popup.closed) throw new Error();
       const form = popup.document.createElement("form");
@@ -129,7 +133,7 @@ export class OnboardingSlack extends LitElement {
       void this.refresh();
     } catch {
       popup.close();
-      this.error = "Could not start Slack installation. Please try again.";
+      this.error = failure;
     } finally {
       this.busy = false;
     }

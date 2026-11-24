@@ -15,6 +15,8 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { tenantSettings } from "../tenants/settings.ts";
 
+export class SlackInstallStartError extends Error {}
+
 export function createManagedSlack(opts: {
   serviceUrl: string;
   token?: string;
@@ -38,7 +40,7 @@ export function createManagedSlack(opts: {
   const bridgeToken = (): string | undefined => tenantSettings().slackBridgeToken ?? opts.token;
   const credential = (): string => {
     const token = bridgeToken();
-    if (!token) throw new Error("Slack service credential is not configured");
+    if (!token) throw new SlackInstallStartError("Slack installation isn't enabled for this workspace yet.");
     return token;
   };
   const bearerMatches = (req: IncomingMessage, token: string | undefined): boolean => {
@@ -71,7 +73,7 @@ export function createManagedSlack(opts: {
     },
     async start(step: "setup" | "install" = "install", origin?: string): Promise<{ url: string }> {
       if (!(await opts.store.enableManaged()))
-        throw new Error("Disconnect your own Slack app before installing the managed app");
+        throw new SlackInstallStartError("Disconnect your own Slack app before installing the managed app.");
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/start", serviceUrl), {
         method: "POST",
         headers: { authorization: `Bearer ${credential()}`, "content-type": "application/json" },
