@@ -232,8 +232,8 @@ function catalogEntry(item: unknown): { app: CatalogApp; keyFields: KeyField[] |
 
 export async function toolkitEntry(ctx: ApiCtx, key: string, toolkit: string) {
   const data = await request(ctx, key, "/toolkits/multi", { toolkits: [toolkit] });
-  const found = Array.isArray(data.items) ? data.items.find((item) => isObj(item) && item.slug === toolkit) : null;
-  return catalogEntry(found);
+  if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
+  return catalogEntry(data.items.find((item) => isObj(item) && item.slug === toolkit));
 }
 
 async function catalog(ctx: ApiCtx): Promise<void> {

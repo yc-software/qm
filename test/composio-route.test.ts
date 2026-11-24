@@ -1493,5 +1493,7 @@ test("API-key apps ask for a key and MCP-server apps are left to connectors, nev
     [409, "connect_api_key", ["OPENAI_API_KEY"]],
     [409, "connect_api_key", ["ACME_USERNAME", "ACME_PASSWORD"]],
   ]);
+  f.replies.push({ error: "unexpected" });
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 502);
   assert.equal(f.calls.filter((call) => call.url.includes("/tool_router/")).length, 0);
 });
