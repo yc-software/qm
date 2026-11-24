@@ -52,6 +52,13 @@ Check `connections` before work that depends on an app. If the app is in the cat
 
 Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, give the person its `connectUrl` as a plain link, in any surface, and say you'll continue when they reply. Don't show a connect card or call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
 
+## Apps that take an API key or are MCP servers
+
+Composio is only for apps people sign in to. In `toolkits`, an app with `connect: "api_key"` takes an API key and one with `connect: "mcp"` is an MCP server; `authorize` refuses both with `409` (`connect_api_key` or `connect_mcp_server`) and creates nothing. Existing Composio connections to them keep working.
+
+- `api_key`: mint a keychain drop (the `secret-drop` skill) with the app's `keyFields` as `fields`, give the person the link, then call the app's API yourself with that credential. In web chat, `::connect-apps{toolkit="openai"}` does the same: its button opens the key form.
+- `mcp`: an org admin adds the server once with `PUT /v1/admin/mcp-servers/<id>` and its MCP endpoint URL, listing the toolkit in its `apps`; it then appears under Apps connected somewhere else. Until then, tell the person their admin needs to add it. Don't show a connect card.
+
 ## Reconnect or disconnect an app
 
 Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection was never asked for. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.

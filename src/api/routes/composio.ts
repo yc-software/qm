@@ -17,9 +17,16 @@ import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, activeRun, audit } from "./shared.ts";
+import { activePrincipal, activeRun, audit, isObj } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
-import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
+import {
+  connectorApps,
+  directConnect,
+  isToolkitId,
+  withConnectorApps,
+  type CatalogApp,
+  type ConnectorApp,
+} from "../../mcp/connector-apps.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 const NO_COMPOSIO: Record<string, unknown> = { items: [] };
@@ -204,6 +211,28 @@ export async function externalApps(ctx: ApiCtx): Promise<ConnectorApp[]> {
   return connectorApps((await ctx.deps.mcpServers?.list()) ?? []);
 }
 
+function catalogApp(item: unknown): CatalogApp | null {
+  if (!isObj(item) || !isToolkitId(item.slug) || typeof item.name !== "string") return null;
+  const schemes = Array.isArray(item.auth_schemes)
+    ? item.auth_schemes.filter((scheme): scheme is string => typeof scheme === "string")
+    : [];
+  if (schemes.length && schemes.every((scheme) => scheme === "NO_AUTH")) return null;
+  const meta = isObj(item.meta) ? item.meta : {};
+  return {
+    id: item.slug,
+    logoUrl: `https://logos.composio.dev/api/${item.slug}`,
+    name: item.name,
+    description: typeof meta.description === "string" ? meta.description : "",
+    ...(schemes.length ? directConnect(item.slug, item.name, schemes) : null),
+  };
+}
+
+export async function toolkitApp(ctx: ApiCtx, key: string, toolkit: string): Promise<CatalogApp | null> {
+  const data = await request(ctx, key, "/toolkits/multi", { toolkits: [toolkit] });
+  const found = Array.isArray(data.items) ? data.items.find((item) => isObj(item) && item.slug === toolkit) : null;
+  return catalogApp(found);
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx, true);
   if (!access) return;
@@ -220,23 +249,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
     if (access.key && only) data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
     else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
-    const items = data.items.flatMap((item) => {
-      if (
-        !item ||
-        !isToolkitId(item.slug) ||
-        typeof item.name !== "string" ||
-        (Array.isArray(item.auth_schemes) && item.auth_schemes.every((scheme: unknown) => scheme === "NO_AUTH"))
-      )
-        return [];
-      return [
-        {
-          id: item.slug,
-          logoUrl: `https://logos.composio.dev/api/${item.slug}`,
-          name: item.name,
-          description: typeof item.meta?.description === "string" ? item.meta.description : "",
-        },
-      ];
-    });
+    const items = data.items.flatMap((item) => catalogApp(item) ?? []);
     return sendJson(ctx.res, 200, {
       items: withConnectorApps(items, only ? apps.filter((app) => app.toolkit === only) : apps, !cursor),
       nextCursor: !only && typeof data.next_cursor === "string" ? data.next_cursor : null,

@@ -10,6 +10,8 @@ export interface ConnectionService {
   popularity: number;
   logoUrl?: string;
   connectUrl?: string;
+  connect?: "mcp" | "api_key";
+  keyFields?: Array<{ key: string; label: string; secret: boolean }>;
   connected?: boolean;
   stale?: boolean;
 }

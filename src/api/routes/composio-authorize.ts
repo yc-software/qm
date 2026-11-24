@@ -9,8 +9,16 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { refuseWithoutPerson, sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
-import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
-import { isToolkitId } from "../../mcp/connector-apps.ts";
+import {
+  ACCOUNT_ID,
+  composioUnavailable,
+  composioUserId,
+  credential,
+  externalApps,
+  request,
+  toolkitApp,
+} from "./composio.ts";
+import { isToolkitId, type CatalogApp } from "../../mcp/connector-apps.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -35,6 +43,21 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
   target.hash = "";
   target.searchParams.set("composioReturn", state);
   return target.href;
+}
+
+function directConnectRefusal(toolkit: string, app: CatalogApp): Record<string, unknown> {
+  if (app.connect === "mcp")
+    return {
+      error: "connect_mcp_server",
+      toolkit,
+      message: `${app.name} is an MCP server, so QM connects to it directly instead of through Composio. An org admin adds it once with PUT /v1/admin/mcp-servers/<id> and its MCP endpoint URL (QM finds its sign-in and registers itself) and lists ${toolkit} in that server's apps; each person then signs in through that connector. Until it is added, tell the person to ask their admin.`,
+    };
+  return {
+    error: "connect_api_key",
+    toolkit,
+    fields: app.keyFields,
+    message: `${app.name} uses an API key, so QM does not connect it through Composio. Ask for the key with a keychain drop (the secret-drop skill) using these fields, then call ${app.name}'s API directly with that credential.`,
+  };
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
@@ -74,6 +97,8 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
   }
   const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
+    const app = await toolkitApp(ctx, access.key, toolkit);
+    if (app?.connect) return sendJson(ctx.res, 409, directConnectRefusal(toolkit, app));
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
       toolkits: { enable: [toolkit] },
