@@ -6,6 +6,7 @@ import {
   type Model,
   type StreamOptions,
 } from "@earendil-works/pi-ai";
+import { createParser, type EventSourceMessage } from "eventsource-parser";
 import { MAX_PROVIDER_ERROR_BODY_CHARS, truncateErrorText } from "@earendil-works/pi-ai/utils/error-body";
 import { isRecord } from "../agent/provider-payload.ts";
 
@@ -20,7 +21,7 @@ export type CapturedAssistantMessage = AssistantMessage & { providerError?: Prov
 
 type CaptureOptions = Pick<StreamOptions, "fetch" | "onPayload" | "onProviderStreamEvent" | "signal">;
 
-const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses"]);
+const SERVED_TIER_APIS = new Set(["openai-responses", "azure-openai-responses", "openai-codex-responses"]);
 const SERVED_TIER_EVENTS = new Set(["response.completed", "response.incomplete"]);
 
 function servedTierOf(api: string, data: unknown): string | undefined {
@@ -65,40 +66,31 @@ function errorInfo(status: number | undefined, parsed: unknown): ProviderErrorIn
   };
 }
 
-function streamErrorInfo(api: string, block: string): ProviderErrorInfo | undefined {
-  let event = "";
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-  }
-  if (!data.length || !data.some((part) => part.includes("error"))) return undefined;
-  const parsed = parseBody(data.join("\n"));
-  if (api === "anthropic-messages") return event === "error" ? errorInfo(undefined, parsed) : undefined;
-  return isRecord(parsed) && isRecord(parsed.error) ? errorInfo(undefined, parsed) : undefined;
+function streamErrorInfo(message: EventSourceMessage): ProviderErrorInfo | undefined {
+  if (message.event !== undefined && message.event !== "error") return undefined;
+  const parsed = parseBody(message.data);
+  return message.event === "error" || (isRecord(parsed) && isRecord(parsed.error))
+    ? errorInfo(undefined, parsed)
+    : undefined;
 }
 
-function watchEventStream(api: string, body: ReadableStream<Uint8Array>, found: (info: ProviderErrorInfo) => void) {
+function watchEventStream(body: ReadableStream<Uint8Array>, found: (info: ProviderErrorInfo) => void) {
   const decoder = new TextDecoder();
-  let buffer = "";
-  const scan = (final: boolean) => {
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = final ? "" : (blocks.pop() ?? "");
-    for (const block of blocks) {
-      const info = streamErrorInfo(api, block);
+  const parser = createParser({
+    onEvent: (message) => {
+      const info = streamErrorInfo(message);
       if (info) found(info);
-    }
-  };
+    },
+  });
   return body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         controller.enqueue(chunk);
-        buffer += decoder.decode(chunk, { stream: true });
-        scan(false);
+        parser.feed(decoder.decode(chunk, { stream: true }));
       },
       flush() {
-        buffer += decoder.decode();
-        scan(true);
+        parser.feed(decoder.decode());
+        parser.reset({ consume: true });
       },
     }),
   );
@@ -121,13 +113,13 @@ export function captureProviderResponse<T extends CaptureOptions | undefined>(
     failure = undefined;
     if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) return response;
     return new Response(
-      watchEventStream(api, response.body, (info) => (failure = info)),
+      watchEventStream(response.body, (info) => (failure = info)),
       response,
     );
   };
   const captured = {
     ...options,
-    ...(api.startsWith("google-") ? {} : { fetch }),
+    fetch,
     onPayload: async (payload: unknown, payloadModel: Model<Api>) => {
       try {
         return options?.onPayload ? await options.onPayload(payload, payloadModel) : undefined;

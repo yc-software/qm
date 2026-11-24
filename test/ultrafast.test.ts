@@ -93,9 +93,7 @@ for (const [baseId, shortCost, longCost] of [
 test("an Ultrafast request served on another tier is charged what Pi charges the base model on that tier", async (t) => {
   const runtime = await buildModelRuntime({ openai: "test-key" });
   const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
+  t.after(() => (globalThis.fetch = originalFetch));
   const tokens = { input_tokens: 12_000, output_tokens: 3_000, total_tokens: 15_000 };
   for (const servedTier of ["flex", "priority", "default"]) {
     globalThis.fetch = (async () => {

@@ -201,7 +201,7 @@ test("a stop the provider made on purpose is not retried; every other error stop
     ["anthropic-messages", "new_reason", "new_reason", "unknown", true],
     ["openai-responses", "content_filter", "incomplete.content_filter", "unknown", false],
     ["openai-responses", "new_reason", "incomplete.new_reason", "unknown", true],
-    ["openai-completions", "content_filter", "content_filter", "unknown", false],
+    ["openai-completions", "content_filter", "content_filter", "refusal", false],
     ["openai-completions", "network_error", "network_error", "unknown", true],
     ["openai-completions", "new_reason", "new_reason", "unknown", true],
     ..."guardrail_intervened content_filtered SAFETY RECITATION BLOCKLIST PROHIBITED_CONTENT SPII IMAGE_SAFETY IMAGE_PROHIBITED_CONTENT IMAGE_RECITATION"

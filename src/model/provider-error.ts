@@ -11,9 +11,8 @@ const POLICY_CODES = new Set(["cyber_policy"]);
 const ACCOUNT_CODES = new Set(["insufficient_credits", "insufficient_quota"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 const DELIBERATE_STOP_REASONS = new Set([
-  "refusal",
+  ...REFUSAL_STOP_REASONS,
   "sensitive",
-  "content_filter",
   "incomplete.content_filter",
   "guardrail_intervened",
   "content_filtered",
