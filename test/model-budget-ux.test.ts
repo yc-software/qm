@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { handleModelBudgetCap } from "../src/core/orchestrator/model-budget.ts";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { adminStatusFromGrants, type AdminGrant, type AdminService } from "../src/admin/admin-service.ts";
+import type { AdminGrant, AdminService } from "../src/admin/admin-service.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { scopeId, type Principal } from "../src/types.ts";
@@ -17,9 +17,8 @@ const grants: AdminGrant[] = [
   { principalId: "owner1@example.com", role: "owner", scopeId: scopeId("org", "acme") },
 ];
 const fakeAdmin = {
-  adminStatusOf: async (_t, p) => adminStatusFromGrants(grants, p.id),
   listGrants: async () => grants,
-} as Pick<AdminService, "adminStatusOf" | "listGrants"> as AdminService;
+} as Pick<AdminService, "listGrants"> as AdminService;
 const userCreds = {} as NonNullable<Parameters<typeof handleModelBudgetCap>[0]["userModelCredentials"]>;
 
 test("cap hit in DM tailors copy for admin vs member, notifies admins once per day, and shields external audiences", () =>
