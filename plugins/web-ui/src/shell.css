@@ -4490,6 +4490,28 @@ qm-draft .draft-card-body {
   flex: 0 0 auto;
   color: var(--muted-foreground);
 }
+.emoji-completion,
+.mention-completion {
+  width: min(300px, calc(100vw - 36px));
+}
+:is(.emoji-completion, .mention-completion) .slash-option {
+  gap: 9px;
+  padding: 5px 8px;
+}
+:is(.emoji-completion, .mention-completion) .slash-icon {
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+.mention-completion .slash-icon .inbox-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 10px;
+}
 .slash-name {
   flex: 0 0 auto;
   max-width: 40%;

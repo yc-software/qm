@@ -61,6 +61,12 @@ export function createReadOnlySession(deps: ReadOnlySessionDeps): ReadOnlySessio
     if (replyEl) {
       replyEl.sessionId = s.id;
       replyEl.user = appState.me?.user ?? "";
+      const seen = new Map<string, string>();
+      for (const m of messages) {
+        const { speaker, speakerId } = m as { speaker?: string; speakerId?: string };
+        if (speaker && speakerId && speakerId !== replyEl.user) seen.set(speakerId, speaker);
+      }
+      replyEl.participants = [...seen].map(([id, name]) => ({ id, name }));
       if (!priorReply) {
         deps.slackOutbox.listen(replyEl, {
           queued: () => {

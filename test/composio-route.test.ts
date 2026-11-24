@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
@@ -1463,4 +1464,60 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
+});
+
+test("native Slack replies upload attachments into the thread as the user", async () => {
+  const f = await nativeSlackFixture();
+  const blobId = "a".repeat(32);
+  f.deps.blobTransfer = {
+    open: async (id: string) =>
+      id === blobId ? { blobId, sizeBytes: 3, stream: Readable.from([Buffer.from("png")]) } : null,
+  } as never;
+  const uploaded: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    uploaded.push(String(url));
+    return new Response("OK");
+  }) as typeof fetch;
+  try {
+    f.nativeReplies.push(
+      f.nativeIdentity,
+      { ok: true },
+      { ok: true, upload_url: "https://files.slack.com/upload/1", file_id: "F1" },
+      { ok: true },
+      { ok: true, file: { shares: { public: { C123: [{ ts: "123.999" }] } } } },
+    );
+    const result = await f.invoke("/v1/composio/slack/reply", {
+      ...f.message,
+      attachments: [{ name: "shot.png", blobId }],
+    });
+    assert.equal(result.data.ts, "123.999");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(uploaded, ["https://files.slack.com/upload/1"]);
+  const complete = f.nativeCalls.find((c) => c.method === "files.completeUploadExternal")!;
+  assert.equal(complete.token, "alice-user");
+  assert.deepEqual(complete.payload, {
+    files: JSON.stringify([{ id: "F1", title: "shot.png" }]),
+    channel_id: "C123",
+    thread_ts: "123.456",
+    initial_comment: "Hello",
+  });
+});
+
+test("native Slack links without files:write are asked to reconnect", async () => {
+  const f = await nativeSlackFixture();
+  const blobId = "b".repeat(32);
+  f.deps.blobTransfer = {
+    open: async () => ({ blobId, sizeBytes: 1, stream: Readable.from([Buffer.from("x")]) }),
+  } as never;
+  f.nativeReplies.push(f.nativeIdentity, { ok: true }, { ok: false, error: "missing_scope" });
+  const result = await f.invoke("/v1/composio/slack/reply", { ...f.message, attachments: [{ name: "a.txt", blobId }] });
+  assert.equal(result.status, 409);
+  assert.equal(result.data.error, "slack_files_scope");
+  assert.equal(
+    f.nativeCalls.some((c) => c.method === "chat.postMessage" || c.method === "files.completeUploadExternal"),
+    false,
+  );
 });
