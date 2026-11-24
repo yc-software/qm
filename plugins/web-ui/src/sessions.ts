@@ -125,7 +125,7 @@ import {
   splitInterceptsOpen,
   splitState,
 } from "./split";
-import { liveTurnThreadRef } from "./working-dot";
+import { liveTurnOf } from "./working-dot";
 import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
@@ -936,18 +936,17 @@ export const syncWorkingPulse = (el?: Element): void => {
 function liveThreads(): ReadonlySet<string> {
   const live = new Set<string>();
   for (const conv of allConversations()) {
-    const ref = liveTurnThreadRef({
-      mountedThreadRef: conv.state.threadRef,
-      isStreaming: Boolean(conv.state.agent?.state.isStreaming),
-      pendingSend: conv.state.pendingSend,
-    });
+    const ref = liveTurnOf(conv.state);
     if (ref) live.add(ref);
   }
   return live;
 }
 
+export const workingMark = (): TemplateResult =>
+  html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>`;
+
 function statusMarks(ind: RowIndicators): TemplateResult {
-  return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
+  return html`${ind.working ? workingMark() : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }`;
 }

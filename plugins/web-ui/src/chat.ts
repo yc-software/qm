@@ -182,7 +182,6 @@ import {
   relTime,
   sheenLabel,
   waveLoader,
-  workingWave,
 } from "./ui";
 import { icon } from "./icons";
 import { animateDetailsToggle } from "./details-motion";
@@ -207,7 +206,7 @@ import {
   sessionSlackUrl,
   defaultSessionTitle,
   openSession,
-  syncWorkingPulse,
+  workingMark,
 } from "./sessions";
 import {
   backgroundLabel,
@@ -221,7 +220,7 @@ import {
   repliesAsViewer,
   watchActivityLabel,
 } from "./session-list";
-import { liveTurnThreadRef } from "./working-dot";
+import { liveTurnOf } from "./working-dot";
 import {
   GOAL_RESUME_PROMPT,
   goalElapsedLabel,
@@ -605,11 +604,7 @@ export function createChatSurface(
   }
 
   function preserveOutgoingWorkingDot(nextThreadRef: string | null): void {
-    const live = liveTurnThreadRef({
-      mountedThreadRef: chatState.threadRef,
-      isStreaming: Boolean(chatState.agent?.state.isStreaming),
-      pendingSend: chatState.pendingSend,
-    });
+    const live = liveTurnOf(chatState);
     if (!live || live === nextThreadRef) return;
     sessionsState.list = markWorking(sessionsState.list, live);
   }
@@ -884,6 +879,7 @@ export function createChatSurface(
   let catchingUp = false;
 
   function catchUp(): void {
+    sideChats.catchUp();
     if (readOnlyView) return onDelivery(readOnlyView.threadRef);
     const { agent, threadRef, normalStreamFn, onWork } = chatState;
     if (!agent || agent.state.isStreaming || !threadRef || catchingUp) return;
@@ -1321,11 +1317,7 @@ export function createChatSurface(
 
   function postCurrentPaneState(): void {
     if (!ctx.pane) return;
-    const live = liveTurnThreadRef({
-      mountedThreadRef: chatState.threadRef,
-      isStreaming: Boolean(chatState.agent?.state.isStreaming),
-      pendingSend: chatState.pendingSend,
-    });
+    const live = liveTurnOf(chatState);
     ctx.onState?.({
       threadRef: chatState.threadRef ?? chatState.rememberedThreadRef,
       sessionId: chatState.sessionId ?? chatState.rememberedSessionId,
@@ -3058,7 +3050,7 @@ export function createChatSurface(
     const title = row.session.title?.trim() || "Subagent";
     return html`<div class="subagent-row ${row.state}" style=${`--subagent-depth:${row.depth - 1}`}>
       <button type="button" class="subagent-row-head" @click=${() => void openSessionById(row.session.id)}>
-        ${row.state === "working" ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
+        ${row.state === "working" ? workingMark() : nothing}
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
