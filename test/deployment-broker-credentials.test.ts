@@ -107,6 +107,7 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     ],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /valid HTTP header value/],
     [[{ ...entry, displayName: "" }], /displayName/],
+    [[{ slug: "c", secretEnv: "SEARCH_KEY", composio: true, host: "x.example" }], /host does not apply/],
   ];
   for (const [list, pattern, extra] of cases) {
     assert.throws(
@@ -220,7 +221,8 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
 }
 
 test("admin settings show a deployment credential read-only and refuse to edit, delete or shadow it", async () => {
-  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true);
+  const composio = { slug: "composio", name: "C", host: "", secret: KEY, composio: true as const };
+  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true, [...deploymentCreds(), composio]);
   try {
     const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${ORG}`, { headers: ADMIN })).json()) as {
       serviceCredentials: Array<{ slug: string; source?: string; hasSecret: boolean; maxRequestsPerDay?: number }>;
@@ -246,6 +248,26 @@ test("admin settings show a deployment credential read-only and refuse to edit, 
       assert.equal(json.error, "deployment_credential");
       assert.match(String(json.message), /supplied by this deployment/);
     }
+    const own = {
+      slug: "composio",
+      name: "Own",
+      delivery: "env",
+      envKey: "COMPOSIO_API_KEY",
+      secret: "s",
+      grantees: [ORG],
+    };
+    const put = (body: object) =>
+      fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put(own)).status, 200);
+    const { updatedAt } = (await srv.built.serviceCreds.listServiceCredentials(ORG)).find(
+      (c) => c.slug === "composio",
+    )!;
+    assert.equal((await put({ slug: "composio", delete: true, expectedUpdatedAt: updatedAt })).status, 200);
+    assert.equal((await srv.built.acl.grantsFor(tenant, ORG, "service-cred:composio")).length, 1);
   } finally {
     await srv.close();
   }

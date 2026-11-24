@@ -28,6 +28,7 @@ import type {
 import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
+import type { ByteRange } from "../files/durable-byte-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
@@ -59,7 +60,7 @@ import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CronFireRecord } from "../cron/fire-store.ts";
-import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { WebhookStore, WebhookEvent, CreateWebhookInput, WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
   ChannelMembership,
@@ -447,6 +448,12 @@ export interface App {
   ): Promise<{ resumed: true; goal: GoalView } | { resumed: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
+  deleteEphemeralSession(
+    tenant: Tenant,
+    threadRef: string,
+    principalId: string,
+  ): Promise<{ deleted: true } | { deleted: false; reason: "not_found" | "in_flight" }>;
+  purgeExpiredEphemeralSessions(cutoffMs: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
   forkSession(
     sessionId: string,
     principalId: string,
@@ -469,6 +476,11 @@ export interface App {
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
+  cronAdministration(
+    tenant: Tenant,
+    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    crons: readonly Cron[],
+  ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -482,6 +494,7 @@ export interface App {
     id: string,
     principalId: string,
     ownScopeBotWork: boolean,
+    range?: (sizeBytes: number) => ByteRange | undefined,
   ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
@@ -494,6 +507,7 @@ export interface App {
   grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  isOrgAdmin(principalId: string): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
@@ -544,7 +558,7 @@ export interface App {
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
-  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
+  updateWebhook(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
@@ -753,6 +767,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -772,6 +787,7 @@ export interface AppDeps {
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
+  promptSnapshots?: { delete(id: string): Promise<void> };
   signals?: RunSignalStore;
   settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
@@ -862,6 +878,7 @@ interface OpenedFile {
   mimetype: string;
   sizeBytes: number;
   stream: Readable;
+  range?: ByteRange;
 }
 
 export interface ScopeApp {

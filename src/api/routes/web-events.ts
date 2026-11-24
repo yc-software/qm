@@ -148,7 +148,7 @@ export function createWebEvents(
       res.write(": open\n\n");
       const set = clients.get(key) ?? new Set();
       clients.set(key, set.add(res));
-      const beat = setInterval(() => res.write(": ping\n\n"), HEARTBEAT_MS);
+      const beat = setInterval(() => res.write("event: ping\ndata: {}\n\n"), HEARTBEAT_MS);
       beat.unref?.();
       res.on("close", () => {
         clearInterval(beat);

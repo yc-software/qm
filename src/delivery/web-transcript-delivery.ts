@@ -39,6 +39,12 @@ function classify(d: Delivery): Disposition {
 
 const transcribed = (type: string): boolean => type === "web";
 
+function viaBody(d: Delivery, via: string): Record<string, unknown> {
+  const sourceTitle = d.provenance?.sourceTitle?.trim();
+  const sourceId = d.provenance?.sourceId;
+  return { via, ...(sourceTitle ? { sourceTitle } : {}), ...(sourceId ? { sourceId } : {}) };
+}
+
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,
   sessions: WebTranscriptSessions,
@@ -77,7 +83,14 @@ export function withWebTranscriptDeliveries(
     } else if (failure) {
       item = turnFailureItem(d.text, failure.runId);
     } else {
-      item = { kind: "AgentMessage", text: d.text, body: via ? { via } : {} };
+      item = {
+        kind: "AgentMessage",
+        text: d.text,
+        body: {
+          ...(via ? viaBody(d, via) : {}),
+          ...(d.destination.persona ? { personaId: d.destination.persona.id } : {}),
+        },
+      };
     }
     const inserted = await sessions.appendDelivery({ sessionId: session.id, turnId }, item);
     if (!inserted) return true;

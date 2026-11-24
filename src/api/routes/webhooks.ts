@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
-import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
+import type { CreateWebhookInput, WebhookPatch } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
+import { administersWebhook, canAdministerWebhook, editWebhook } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
@@ -97,6 +97,8 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
     };
   const action = String(body.action ?? "").trim();
   if (!action) return { error: "action_required", message: "an action (the agent's instructions) is required" };
+  if (body.title !== undefined && typeof body.title !== "string")
+    return { error: "bad_request", message: "title must be a string" };
   const verification = {
     scheme: isObj(v) ? v.scheme : "hmac-sha256",
     secret: isObj(v) && v.secret ? String(v.secret) : randomBytes(32).toString("hex"),
@@ -106,6 +108,7 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
     ownerScopeId: `personal:${owner}`,
     owner,
     createdBy: owner,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
     action,
     verification: verification as Webhook["verification"],
     ...(body.filters ? { filters: body.filters as Webhook["filters"] } : {}),
@@ -115,8 +118,16 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
 async function createWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
   if (capability) {
-    const b = body as { verification?: unknown; action?: unknown; filters?: unknown; destinationKey?: unknown };
+    const b = body as {
+      title?: unknown;
+      verification?: unknown;
+      action?: unknown;
+      filters?: unknown;
+      destinationKey?: unknown;
+    };
     const ver = isObj(b.verification) ? (b.verification as { scheme?: unknown; secret?: unknown }) : undefined;
+    if (b.title !== undefined && typeof b.title !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: "title must be a string" });
     if (!ver || !isWebhookVerification(ver) || typeof b.action !== "string") {
       return sendJson(res, 400, { error: "bad_request", message: VERIFICATION_MESSAGE });
     }
@@ -125,6 +136,7 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
     }
     const result = await deps.control.createWebhook(
       {
+        ...(typeof b.title === "string" ? { title: b.title } : {}),
         action: b.action,
         verification: { scheme: ver.scheme as Webhook["verification"]["scheme"], secret: ver.secret as string },
         ...(Array.isArray(b.filters) ? { filters: b.filters as Webhook["filters"] } : {}),
@@ -173,7 +185,7 @@ async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const webhook = await app.getWebhook(params.id!);
   const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, capability ?? { actorId: viewer }))) {
+  if (!viewer || !webhook || !(await administersWebhook(app, webhook, capability ?? { actorId: viewer }))) {
     return sendJson(res, 404, { error: "not_found" });
   }
   return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
@@ -186,7 +198,7 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   if (!webhook) return sendJson(res, 404, { error: "not_found" });
   const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 404, { error: "not_found" });
-  if (!(await canAdministerWebhook(app, webhook, capability ?? { actorId: principalId }))) {
+  if (!(await administersWebhook(app, webhook, capability ?? { actorId: principalId }))) {
     return sendJson(res, capability ? 403 : 404, {
       error: capability ? "forbidden" : "not_found",
       ...(capability ? { message: "not your webhook" } : {}),
@@ -198,12 +210,18 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
 
 async function updateWebhook(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, params, capability, actor, url, body } = ctx;
-  const action = isObj(body) && typeof body.action === "string" ? body.action : "";
+  const patch: WebhookPatch = {};
+  for (const field of ["title", "action"] as const) {
+    const value = isObj(body) ? body[field] : undefined;
+    if (value !== undefined && typeof value !== "string")
+      return sendJson(res, 400, { error: "bad_request", message: `${field} must be a string` });
+    if (typeof value === "string") patch[field] = value;
+  }
   const principalId = actor?.p ?? url.searchParams.get("principalId");
   if (!capability && !principalId) return sendJson(res, 404, { error: "not_found" });
   const r = capability
-    ? await deps.control.updateWebhook(params.id!, { action }, capability)
-    : await editWebhookTask(app, params.id!, action, principalId!);
+    ? await deps.control.updateWebhook(params.id!, patch, capability)
+    : await editWebhook(app, params.id!, patch, { actorId: principalId! });
   if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
   return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
 }
@@ -235,6 +253,7 @@ export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   {
     method: "POST",
     path: "/v1/webhooks/:id/update",
+    browser: true,
     actor: "query.principalId",
     auth: "either",
     handle: updateWebhook,

@@ -1,4 +1,4 @@
-type ExternalRole = "member" | "org_admin";
+type ExternalRole = "member" | "owner" | "org_admin";
 
 export interface ExternalMember {
   email: string;

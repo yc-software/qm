@@ -6,7 +6,7 @@ export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, 
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id`;
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 export const OWN_CHAT = (s: string): string =>
-  `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
+  `${s}.parent_session_id IS NULL AND NOT ${s}.ephemeral AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 export const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 export const BOT_VISIBLE = (botActor: boolean | undefined): string => (botActor === true ? " AND s.bot_work" : "");
 
@@ -39,6 +39,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
     ...(r.bot_work === true ? { botWork: true as const } : {}),
+    ...(r.ephemeral === true ? { ephemeral: true as const } : {}),
     ...((r.slack_binding as { author?: unknown } | null)?.author
       ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
       : {}),

@@ -149,6 +149,7 @@ export interface Session {
   channelName?: string;
   title?: string | null;
   archived?: boolean;
+  ephemeral?: true;
   pinned?: boolean;
   color?: string;
   unread?: boolean;
@@ -247,6 +248,7 @@ export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {
 
 export interface DeliveryProvenance {
   sourceTitle?: string;
+  sourceId?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;
   fireKey: string;
@@ -418,6 +420,7 @@ export interface TurnRequest {
   thinkingLevel?: string;
   fastMode?: boolean;
   readOnly?: boolean;
+  ephemeral?: boolean;
   skipMemory?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;

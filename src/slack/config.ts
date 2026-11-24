@@ -4,6 +4,7 @@ import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 import { trimTrailing, trimTrailingSlashes } from "../util/text.ts";
+import { errMessage } from "../util/errors.ts";
 
 export const NO_RETRY = { retryConfig: { retries: 0 } } as const;
 export const HISTORY_NO_RETRY = { ...NO_RETRY, rejectRateLimitedCalls: true } as const;
@@ -128,7 +129,7 @@ export function slackAccountConfigsFromEnv(env: Record<string, string | undefine
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`SLACK_ACCOUNTS is not valid JSON: ${err instanceof Error ? err.message : String(err)}`, {
+    throw new Error(`SLACK_ACCOUNTS is not valid JSON: ${errMessage(err)}`, {
       cause: err,
     });
   }

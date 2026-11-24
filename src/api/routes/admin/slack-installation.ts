@@ -38,7 +38,8 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
-  const createUrl = slackBotManifestCreationUrl(branding.selfLabel);
+  const name = ctx.url.searchParams.get("name")?.trim();
+  const createUrl = slackBotManifestCreationUrl(name || branding.selfLabel);
   if (ctx.deps.managedSlack) {
     const status = await ctx.deps.slackInstallation.status();
     if (!status.managed && ctx.deps.slackEnvironmentState === "configured") {

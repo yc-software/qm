@@ -14,7 +14,7 @@ import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
-import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
+import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
@@ -55,7 +55,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, introducesUser, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -120,8 +120,6 @@ import { artifactImageLoader } from "../agent/replay-images.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import {
-  INBOX_DIR,
-  TURN_FILES_DIR,
   inboundIssuesNote,
   materializeInbound,
   turnFileId,
@@ -133,6 +131,7 @@ import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
   recordedMessageTimestamps,
+  seedPriorTurns,
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
@@ -738,6 +737,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           conversation.channelName,
           input.surface,
           desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+          input.ephemeral ? { ephemeral: true } : undefined,
         );
         screenSession.id = session.id;
         if (!input.sessionParticipantIds?.length && !automatedTurn)
@@ -813,6 +813,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               continueTurn: (input.attempt ?? 1) > 1,
               scopeLabel: scopeId,
               conversation: conversation.kind,
+              context: [input.conversationHeader?.trim(), ...seedPriorTurns(input.priorTurns ?? []).map((m) => m.text)]
+                .filter(Boolean)
+                .join("\n\n"),
             }),
             {
               tenant,
@@ -824,7 +827,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         : undefined;
       const routed =
-        external || ambientTurn || !deps.personas || !turnDecisions
+        external || ambientTurn || input.personaId || !deps.personas || !turnDecisions
           ? undefined
           : (await turnDecisions()).find((r) => r.persona);
       const { turn: personaTurn, note: personaNote } =
@@ -838,7 +841,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               scopeId,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
-      if (persona) resolution.readOnlyScopeIds.push(persona.scope);
+      if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
       const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
       const scopeKeychainGrants = async () => {
         const rows = (
@@ -875,6 +878,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
+        ...(persona && (actsAsScope(actor.id, persona.scope) || (persona.pinned && allInternal && !notebookOnly))
+          ? { sharedNotebook: persona.scope }
+          : {}),
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,
@@ -882,7 +888,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         directory: deps.directory,
         projects: deps.projects,
       });
-      const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
+      const { sharingSources, memoryScopeId, notebookScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
@@ -928,9 +934,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         orgName,
         web: isWeb,
         surfaceLinks: surfaceHints?.linkSyntax ?? "",
-        sessions: isWeb && surfaceName === "web" && Boolean(sessionSyscalls) && !input.swarm,
+        sessions: Boolean(sessionSyscalls) && !input.swarm,
       });
-      const personaBlock = persona ? personaPrompt(persona) : "";
+      const personaBlock = persona ? personaPrompt(persona, memoryAccess?.write === persona.scope) : "";
       const basePrompt = [resolution.systemPrompt, personaBlock].filter(Boolean).join("\n\n");
       let systemPrompt = `${basePrompt}\n\n${sharedCore}`;
       if (external && surfaceOrigin.guests)
@@ -1024,9 +1030,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
-      const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
-      const turnFilesDir = `${turnSessionDir}/${transferId}`;
-      const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
+      const turnSessionKey = hashId([conversation.threadRef], 24);
 
       if (!external && deps.deploymentLayer?.hints.length) {
         systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
@@ -1043,7 +1047,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (sharedFilesBlock) turnContextBlocks["Files"] = sharedFilesBlock;
 
       const timeBlock = currentTimeBlock(turnTimezone ?? DEFAULT_CRON_TIMEZONE, Date.now());
-      const memoryHeading = "## What you remember\n";
+      const memoryHeading = `## What you remember\n${RECALL_CHECKED}\n`;
 
       const onboardingBlock = isIdeasConversation(input)
         ? "## Ideas conversation\nThe user chose to explore ideas in this conversation. Skip the onboarding skill and setup flow for this entire conversation, including follow-ups. Do not mark onboarding completed or dismissed in memory. Use available authorized company context and answer their request directly."
@@ -1064,6 +1068,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ownsSessionContext(conversation.threadRef, input)
             ? { context: sessionContextOf({ ...input, botActor: botRequest }) }
             : {}),
+          ...(input.ephemeral ? { ephemeral: true as const } : {}),
         },
       );
       const session =
@@ -1076,9 +1081,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
+      const ephemeral = Boolean(session.ephemeral);
       const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
         try {
-          await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId });
+          await deps.sessions.recordLlmRequest(session.id, {
+            ...rec,
+            ...(ephemeral ? { promptEnvelope: undefined } : {}),
+            scopeLabel: scopeId,
+          });
         } catch (err) {
           reportFailure("orchestrator: persist LLM request snapshot", err);
         }
@@ -1103,7 +1113,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const titleText = input.displayText?.trim() || input.text;
       let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
-        if (!session.title && !syntheticInput && !input.approval)
+        if (!ephemeral && !session.title && !syntheticInput && !input.approval)
           firstMessageTitle = titles.titleFromFirstMessage(session, scopeId, titleText);
       };
 
@@ -1230,6 +1240,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const {
         actorIsOrgAdmin,
+        actorAdminRole,
         orgMemoryWritable,
         controlClaims,
         sandboxTokenExpiry,
@@ -1347,8 +1358,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryScopeId,
         transferId,
         swarmSandboxId: swarmBinding?.sandboxId,
-        turnSessionDir,
-        turnFilesDir,
+        turnSessionKey,
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
@@ -1421,18 +1431,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         void earlyRecall?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
-        const captureDependencies = () => [
-          ...memoryView.facts,
-          ...(!memoryView.complete ||
-          memoryWindow.items.length > 0 ||
-          toolCalls > 0 ||
-          input.priorTurns?.length ||
-          input.overheard?.length ||
-          input.attachments?.length ||
-          input.inboundNotes
-            ? [UNTRACKED_PROVENANCE]
-            : []),
-        ];
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
         const turnWindow = async () => (historyAppended ? historyWindow() : memoryWindow);
         const approvalTurn: ApprovalDecisionTurn = {
@@ -1467,6 +1465,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnContextBlocks,
           appConnections,
           actorIsOrgAdmin,
+          actorAdminRole,
           turnEvents,
           external,
           strictReadOnly,
@@ -1475,6 +1474,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgMemoryWritable,
           automatedTurn,
           childWake,
+          ephemeral,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,
@@ -1575,9 +1575,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
           deps.turnStream.begin(input.runId);
+          if (wornPersona) deps.turnStream.notePersona(input.runId, wornPersona);
         }
 
         const { backgroundBroker, monitorBroker } = createTurnBrokers({
+          tenant,
           deps,
           input,
           actor,
@@ -1769,6 +1771,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
                   operationsAvailable: actorIsOrgAdmin,
+                  ...(actorAdminRole ? { role: actorAdminRole } : {}),
                 },
               }
             : {}),
@@ -1781,8 +1784,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
-          memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
           ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
@@ -1841,22 +1843,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,
           registration: ArtifactRegistration,
-          inboxDir: string,
           requestText: string,
         ): ReturnType<typeof materializeInbound> =>
           attachments?.length && !strictReadOnly
-            ? materializeInbound(
-                deps.sandbox,
-                provision,
-                attachments,
-                blobTransfer,
-                registration,
-                inboxDir,
-                screenInboundFile(requestText),
-              )
-            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
-          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
+            ? materializeInbound(attachments, blobTransfer, registration, screenInboundFile(requestText))
+            : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unsaved: [], unscreened: [] };
+        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration) =>
+          intakeOf(await receiveInbound(message.attachments, registration, message.text), message, {
             strictReadOnly,
             enforceScreen,
           });
@@ -1873,7 +1866,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.inboundNotes ? { notes: input.inboundNotes } : {}),
           },
           fileRegistration,
-          turnInboxDir,
         );
 
         const importedOverheard: OverheardEntryPayload[] = [];
@@ -2091,6 +2083,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         if (
           !strictReadOnly &&
+          !ephemeral &&
           sessionUsedTools &&
           !isPollFire &&
           (boundSandboxId || (await deps.sandboxResources?.resolve(memoryScopeId)) !== null)
@@ -2358,7 +2351,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               recordScreenRequest,
               takeIn,
               fileRegistration,
-              turnInboxDir,
               ingestDocuments,
               initialDocuments,
               documentInputs,
@@ -2418,6 +2410,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             documents: initialDocuments,
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
+            ...(ephemeral ? { ephemeral: true } : {}),
             ...(input.botActor ? { botActor: true } : {}),
             ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
             surfaceName,
@@ -2617,7 +2610,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const pausing = outcome.paused;
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
-        const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
+        const onTurnEnd = ephemeral ? undefined : memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         startMemoryCapture({
           tenant,
           deps,
@@ -2625,7 +2618,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           actor,
           session,
           scopeId,
-          memoryScopeId,
+          memoryScopeId: notebookScopeId,
           audienceScopeId,
           memoryPolicy,
           pendingCaptures,
@@ -2634,7 +2627,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           cancelStopped,
           personConversationTurn,
           useMemory,
-          captureDependencies,
           turnInput,
           reply,
           spine,
@@ -2643,6 +2635,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const tail = async (): Promise<void> => {
           try {
             if (
+              !ephemeral &&
               !pausing &&
               turnCompleted &&
               !session.title &&

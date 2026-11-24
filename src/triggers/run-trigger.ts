@@ -43,6 +43,7 @@ export interface TriggerSpec extends Pick<
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
+  sourceId?: string;
   owner: string;
   ownerScopeId: ScopeId;
   input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
@@ -92,6 +93,7 @@ function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResu
     sourceScopeId: spec.ownerScopeId,
     sourceThreadRef: threadRef,
     ...(spec.title ? { sourceTitle: spec.title } : {}),
+    ...(spec.sourceId ? { sourceId: spec.sourceId } : {}),
     ...(res?.sessionId ? { sourceSessionId: res.sessionId } : {}),
     ...(res?.sourceUserSeq !== undefined ? { sourceUserSeq: res.sourceUserSeq } : {}),
     ...(res?.sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq: res.sourceAssistantEntrySeq } : {}),

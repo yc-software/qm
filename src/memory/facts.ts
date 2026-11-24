@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 import { dateStr } from "./notebook.ts";
 
 export type MemorySensitivity = "ordinary" | "unknown" | "sensitive" | "restricted";
@@ -22,11 +22,8 @@ export interface MemoryFact extends MemoryProvenance {
 export interface MemoryCaptureMetadata {
   conversationScopeId?: ScopeId;
   sessionId?: string;
-  sensitivity?: MemorySensitivity;
-  inheritedFacts?: readonly MemoryProvenance[];
+  sensitivities?: readonly MemorySensitivity[];
 }
-
-export const UNTRACKED_PROVENANCE: MemoryProvenance = { sensitivity: "unknown", sources: [], sourceUnknown: true };
 
 export class MemoryFactsMissing extends Error {
   readonly ids: readonly string[];
@@ -46,26 +43,32 @@ export function isMemorySensitivity(value: unknown): value is MemorySensitivity 
   return sensitivityOrder.includes(value as MemorySensitivity);
 }
 
+export function stricterSensitivity(a: MemorySensitivity | undefined, b: MemorySensitivity): MemorySensitivity {
+  return sensitivityOrder[Math.max(sensitivityOrder.indexOf(a ?? "ordinary"), sensitivityOrder.indexOf(b))]!;
+}
+
 export function mergeProvenance(
   items: readonly MemoryProvenance[],
   sensitivity: MemorySensitivity = "ordinary",
 ): MemoryProvenance {
   const sources = new Set<ScopeId>();
   for (const item of items) {
-    if (sensitivityOrder.indexOf(item.sensitivity) > sensitivityOrder.indexOf(sensitivity))
-      sensitivity = item.sensitivity;
+    sensitivity = stricterSensitivity(sensitivity, item.sensitivity);
     for (const source of item.sources) sources.add(source);
   }
   return { sensitivity, sources: [...sources], sourceUnknown: items.some((item) => item.sourceUnknown) };
 }
 
-export function captureProvenance(scope: ScopeId, context: MemoryCaptureMetadata | undefined): MemoryProvenance {
-  const merged = mergeProvenance(context?.inheritedFacts ?? [], context?.sensitivity ?? "unknown");
-  const source = context?.conversationScopeId ?? scope;
+export function captureProvenance(
+  scope: ScopeId,
+  context: MemoryCaptureMetadata | undefined,
+  index: number,
+): MemoryProvenance {
+  const source = parseScopeId(scope).kind === "persona" ? scope : (context?.conversationScopeId ?? scope);
   return {
-    sensitivity: merged.sensitivity,
-    sources: merged.sources.includes(source) ? merged.sources : [...merged.sources, source],
-    sourceUnknown: merged.sourceUnknown || context?.inheritedFacts === undefined,
+    sensitivity: context?.sensitivities?.[index] ?? "unknown",
+    sources: [source],
+    sourceUnknown: false,
   };
 }
 

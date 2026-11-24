@@ -3,6 +3,7 @@ import { samePerson } from "../directory/person.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import { errText } from "../util/errors.ts";
 
 export interface BackgroundWatchArmedResult {
   monitorId: string;
@@ -134,7 +135,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         try {
           compileMonitorPattern(opts.pattern);
         } catch (e) {
-          throw new Error(`invalid pattern: ${e instanceof Error ? e.message : "unsafe regex"}`, { cause: e });
+          throw new Error(`invalid pattern: ${errText(e, "unsafe regex")}`, { cause: e });
         }
       }
       const existing = (await deps.store.list()).find(

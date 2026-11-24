@@ -21,6 +21,7 @@ export interface Me {
   chatSurfaces?: { kind: string; label: string; mark?: string }[];
   impersonatedBy?: string | null;
   displayName?: string | null;
+  teammate?: string;
   permissions?: string[];
 }
 

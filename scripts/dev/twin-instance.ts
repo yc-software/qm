@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } 
 import { join } from "node:path";
 import { provisionTwinEnvironment, teardownTwinEnvironment } from "../../test/live-slack/arga-provision.ts";
 import { readEnvFile } from "../../cli/src/util.ts";
-import { swallowAs } from "../../src/util/errors.ts";
+import { errMessage, swallowAs } from "../../src/util/errors.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const dir = join(root, ".twin-instance");
@@ -88,6 +88,6 @@ if (!run) {
   process.exit(2);
 }
 run().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
+  console.error(errMessage(err));
   process.exit(1);
 });

@@ -1578,7 +1578,8 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
+  const want = ["finish_silently", "history", "memory", "runtime", "sessions", "subagents"];
+  assert.deepEqual([...names(readOnly)].sort(), want);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
@@ -2272,6 +2273,20 @@ test("webhook create surfaces BOTH the url and the secret verbatim", async () =>
   assert.match(out, /won't fire until the sender is pointed/);
 });
 
+test("webhook create and update carry the title, like cron", async () => {
+  const seen: unknown[] = [];
+  const base = fakeToolContext();
+  const t = tool("webhook", {
+    ...base,
+    webhookCreate: async (req) => (seen.push(req), base.webhookCreate(req)),
+    webhookUpdate: async (id, patch) => (seen.push([id, patch]), base.webhookUpdate(id, patch)),
+  } as ToolContext);
+  await call(t, { action: "create", title: "PR review", task: "x", verification: { scheme: "github", secret: "s" } });
+  await call(t, { action: "update", id: "wh-1", title: "PR triage" });
+  assert.equal((seen[0] as { title?: string }).title, "PR review");
+  assert.deepEqual(seen[1], ["wh-1", { title: "PR triage" }]);
+});
+
 test("webhook create requires task + verification; list and disable dispatch", async () => {
   assert.match(
     textOut(await call(tool("webhook"), { action: "create", task: "x" })),
@@ -2279,6 +2294,7 @@ test("webhook create requires task + verification; list and disable dispatch", a
   );
   assert.match(textOut(await call(tool("webhook"), { action: "list" })), /wh-1/);
   assert.match(textOut(await call(tool("webhook"), { action: "disable", id: "wh-1" })), /Disabled webhook wh-1/);
+  assert.match(textOut(await call(tool("webhook"), { action: "update" })), /\[error\].*requires `id`/);
   assert.match(textOut(await call(tool("webhook"), { action: "disable" })), /\[error\].*requires `id`/);
 });
 
@@ -4287,12 +4303,13 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   );
 });
 
-test("sessions is a web UI tool: Slack turns get subagents only", () => {
-  const slack = createAgentTools({ current: fakeToolContext() }, { surfaceName: "slack" });
-  assert.ok(slack.some((tool) => tool.name === "subagents"));
-  assert.ok(!slack.some((tool) => tool.name === "sessions"));
-  assert.doesNotMatch(slack.find((tool) => tool.name === "subagents")!.description, /use sessions/);
-  assert.ok(!createAgentTools({ current: fakeToolContext() }).some((tool) => tool.name === "sessions"));
+test("sessions is available across surfaces unless sessionTools is disabled", () => {
+  for (const surfaceName of ["web", "slack", "cron", undefined]) {
+    const tools = createAgentTools({ current: fakeToolContext() }, surfaceName ? { surfaceName } : undefined);
+    assert.ok(tools.some((tool) => tool.name === "subagents"));
+    assert.ok(tools.some((tool) => tool.name === "sessions"));
+    assert.match(tools.find((tool) => tool.name === "subagents")!.description, /use sessions/);
+  }
 });
 
 test("background process guidance reflects the configured sandbox token lifetime", () => {

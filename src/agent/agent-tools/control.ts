@@ -1,4 +1,4 @@
-import { adminOperations } from "../../tools/admin.ts";
+import { OWNER_ADMIN_ACTIONS, adminOperations } from "../../tools/admin.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { splitToScope } from "../../api/artifact-share.ts";
@@ -18,10 +18,10 @@ export function controlPlaneTools(kit: ToolKit) {
     label: "webhook",
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
-      "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
+      'create: always set `title`, a distinctive 2-5 word label for what the webhook is FOR (e.g. "GitHub PR review"), never the command or a generic word; `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). ' +
       "For hmac-sha256 and token (senders that cannot sign) generate a strong random secret; for every other scheme the user supplies the sender's signing secret. " +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
-      "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
+      "list: 25 per page, secrets elided. update: replace one's title and/or task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),
@@ -30,6 +30,11 @@ export function controlPlaneTools(kit: ToolKit) {
         Type.Literal("disable"),
       ]),
       id: Type.Optional(Type.String({ description: "update/disable: the webhook id." })),
+      title: Type.Optional(
+        Type.String({
+          description: "create/update: the webhook's label.",
+        }),
+      ),
       task: Type.Optional(Type.String({ description: "create/update: what to do on each event." })),
       verification: Type.Optional(
         Type.Object(
@@ -72,6 +77,7 @@ export function controlPlaneTools(kit: ToolKit) {
             );
           }
           const r = await tc.webhookCreate({
+            ...(params.title !== undefined ? { title: params.title } : {}),
             action: params.task,
             verification: params.verification,
             ...(params.filters?.length ? { filters: params.filters } : {}),
@@ -102,7 +108,7 @@ export function controlPlaneTools(kit: ToolKit) {
           const { page, offset, note } = pageOf([...r].sort(listOrder), params);
           const lines = page.map(
             (w) =>
-              `- ${w.id} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
+              `- ${w.id}${w.title ? ` "${w.title}"` : ""} (${w.verification.scheme}${w.enabled ? "" : ", paused"}): ${previewText(w.action, WEBHOOK_ACTION_PREVIEW_CHARS)}`,
           );
           return recordResult(
             callId,
@@ -127,22 +133,24 @@ export function controlPlaneTools(kit: ToolKit) {
         }
         case "update": {
           const id = typeof params.id === "string" && params.id ? params.id : null;
-          const task = typeof params.task === "string" ? params.task : "";
           if (!id)
             return recordResult(
               callId,
               { tool: "webhook", error: "id required" },
-              text("[error] webhook update requires `id` and the new `task`."),
+              text("[error] webhook update requires `id` and a new `title` and/or `task`."),
               true,
             );
-          const r = await tc.webhookUpdate(id, task);
+          const r = await tc.webhookUpdate(id, {
+            ...(params.title !== undefined ? { title: params.title } : {}),
+            ...(params.task !== undefined ? { action: params.task } : {}),
+          });
           if (isUnavailable(r)) return unavailable(callId, "webhook");
           if (!r.ok)
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);
           return recordResult(
             callId,
             { tool: "webhook", id, updated: true },
-            text(`Updated webhook ${id}. The next delivery uses the new task; URL and secret are unchanged.`),
+            text(`Updated webhook ${id}. The next delivery uses the change; URL and secret are unchanged.`),
           );
         }
       }
@@ -335,7 +343,7 @@ export function controlPlaneTools(kit: ToolKit) {
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "cron")
       description =
-        "Share a cron you own. If it posts to your own DM, a teammate (a name or personal:<id>) gets their own linked copy that runs as them, posts to their DM and keeps its persona and project: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Your later edits reach every copy its owner hasn't edited. A cron that posts to a channel or group stays one cron, so sharing it, like permission=write or any other scope, gets access to this cron itself instead.";
+        "Share a cron you own or manage via its persona. Unless it posts to a channel or group, a teammate (name or personal:<id>) gets a linked copy that runs as them, posts to their DM and keeps its persona and project: an admin's share starts it; anyone else's waits paused until they turn it on (accept) or delete it (decline). Later edits reach every unedited copy. Channel/group crons, permission=write, or other scopes grant access to this cron itself.";
     if (type === "file")
       description =
         "Share a Files record by ID (upload a sandbox path with the helper from GET /v1/files/upload-client first).";
@@ -461,14 +469,22 @@ export function controlPlaneTools(kit: ToolKit) {
     });
   }
 
+  const adminRole = ref.current?.admin?.role;
+  let exposedAdminOps: Record<string, (typeof adminOperations)[keyof typeof adminOperations]> = {
+    whoami: adminOperations.whoami,
+  };
+  if (ref.current === null || (ref.current.admin?.operationsAvailable && adminRole !== "owner")) {
+    exposedAdminOps = adminOperations;
+  } else if (ref.current.admin?.operationsAvailable) {
+    exposedAdminOps = Object.fromEntries(
+      Object.entries(adminOperations).filter(([action]) => OWNER_ADMIN_ACTIONS.has(action)),
+    );
+  }
+
   const admin = resourceTool(
     "admin",
     Object.fromEntries(
-      Object.entries(
-        ref.current === null || ref.current.admin?.operationsAvailable
-          ? adminOperations
-          : { whoami: adminOperations.whoami },
-      ).map(([action, operation]) => [
+      Object.entries(exposedAdminOps).map(([action, operation]) => [
         action,
         defineTool({
           name: action,
@@ -505,7 +521,9 @@ export function controlPlaneTools(kit: ToolKit) {
 
   if (ref.current === null || ref.current.admin?.operationsAvailable)
     admin.description =
-      "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
+      (adminRole === "owner"
+        ? "Admin API (org owner); authority is rechecked on every call and audited. Org-wide settings, org memory, models, connectors, spend, and member roster/external invites are available; reading other people's private content requires org_admin. Role changes and teammate invitations are portal-only. Confirm every mutation and report exactly what changed. Never put secrets in arguments.\n\n"
+        : "Admin API; authority is rechecked on every call and audited. Private content needs the admin in a DM or Open conversation; a cron, webhook or loop fire carries its owner's authority. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n") +
       admin.description;
 
   return { webhook, guidance, sharingTool, admin };

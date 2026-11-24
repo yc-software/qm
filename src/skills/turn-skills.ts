@@ -23,7 +23,7 @@ export interface TurnSkillsContext {
   deps: Pick<OrchestratorDeps, "sandbox" | "skills" | "skillBundles" | "errors">;
   scopeId: ScopeId;
   sessionId: string;
-  turnSessionDir: string;
+  turnSessionKey: string;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
   accessResource: (id: string) => Promise<SandboxAccessPlan>;
   provisionResource: (access: SandboxAccessPlan) => Promise<SandboxHandle>;
@@ -36,14 +36,14 @@ export function createTurnSkills(ctx: TurnSkillsContext) {
     deps,
     scopeId,
     sessionId,
-    turnSessionDir,
+    turnSessionKey,
     visibleSkillsForTurn,
     accessResource,
     provisionResource,
     provision,
   } = ctx;
   const skillsRoot = (r: SkillResolution) =>
-    `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}/${hashId([r.skill!.id, String(r.skill!.version)], 16)}`;
+    `${SKILLS_ROOT}/${turnSessionKey}/${hashId([r.skill!.id, String(r.skill!.version)], 16)}`;
   const laidTrees = new Set<string>();
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;

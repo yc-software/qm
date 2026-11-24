@@ -64,15 +64,15 @@ type Received = Awaited<ReturnType<typeof materializeInbound>>;
 export function intakeOf(
   received: Received,
   message: IncomingMessage,
-  inboxDir: string,
   posture: { strictReadOnly: boolean; enforceScreen: boolean },
 ) {
   return {
     received,
-    manifest: inboundManifest(received.metas, inboxDir, received.unstaged, message.sharer, received.shortened),
+    manifest: inboundManifest(received.metas, message.sharer, received.shortened),
     issues: inboundIssueList({
       tooMany: received.tooMany,
       unavailable: received.unavailable,
+      unsaved: received.unsaved,
       blocked: received.blocked,
       surfaceNotes: [
         ...(message.notes ?? []),
@@ -131,13 +131,8 @@ export interface SteerTurn {
   speakerLine: (speaker: Speaker) => string;
   classifyAs: ClassifyAs;
   recordScreenRequest: (rec: TurnLlmRequestRecord) => Promise<void>;
-  takeIn: (
-    message: IncomingMessage,
-    registration: ArtifactRegistration,
-    inboxDir: string,
-  ) => Promise<ReturnType<typeof intakeOf>>;
+  takeIn: (message: IncomingMessage, registration: ArtifactRegistration) => Promise<ReturnType<typeof intakeOf>>;
   fileRegistration: ArtifactRegistration;
-  turnInboxDir: string;
   ingestDocuments: (
     metas: readonly AttachmentMeta[],
     requestText: string,
@@ -163,7 +158,6 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
     recordScreenRequest,
     takeIn,
     fileRegistration,
-    turnInboxDir,
     ingestDocuments,
     initialDocuments,
     documentInputs,
@@ -246,7 +240,6 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
         ...(request.inboundNotes ? { notes: request.inboundNotes } : {}),
       },
       { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
-      `${turnInboxDir}/${randomUUID()}`,
     );
     const steeredDocuments = await ingestDocuments(intake.received.metas, text, initialDocuments);
     documentInputs.documents.push(...steeredDocuments.documents);

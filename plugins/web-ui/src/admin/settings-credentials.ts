@@ -258,11 +258,12 @@ export async function loadCredentials(view: AdminPage) {
   Object.assign(credentialState, { rows: [], listMessage: "Loading credentials…", listRetry: false });
   keychain = null;
   draw();
-  void view.api("GET", "/api/keychain?summary=1").then((res) => {
-    if (!view.current()) return;
-    keychain = res.ok ? res.data : null;
-    draw();
-  });
+  if (view.fullAdmin)
+    void view.api("GET", "/api/keychain?summary=1").then((res) => {
+      if (!view.current()) return;
+      keychain = res.ok ? res.data : null;
+      draw();
+    });
   const r = await view.api("GET", scopeUrl(view, "?view=credentials"));
   if (!view.current()) return;
   if (!r.ok) {
@@ -394,6 +395,7 @@ export const credentialActions = () =>
       + Add credential
     </button>`;
 export const keychainCard = () => {
+  if (!page.fullAdmin) return "";
   const ready = keychain && keychain.enabled !== false;
   return settingsSection(
     "Personal keychains",

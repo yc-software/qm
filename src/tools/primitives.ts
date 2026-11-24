@@ -10,7 +10,6 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -91,6 +90,7 @@ import type {
 } from "../api/control-service.ts";
 import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
+import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
@@ -329,7 +329,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
   webhookUpdate(
     id: string,
-    action: string,
+    patch: WebhookPatch,
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
@@ -519,7 +519,6 @@ export interface ToolContextDeps {
   config?: ScopedConfigStore;
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
-  memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
@@ -1187,7 +1186,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         facts,
         turnAuthority(deps.createdBy, deps.memoryAccess),
         {
-          ...deps.memoryCaptureMetadata?.(),
+          ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
           mode: "explicit",
           ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
           conversationScopeId: writableScopeId,
@@ -1200,7 +1199,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
-        ...deps.memoryCaptureMetadata?.(),
+        ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
         conversationScopeId: writableScopeId,
       });
       return true;
@@ -1356,7 +1355,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronCreate(req) {
       return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
     },
-    cronList: () => controlOp((c, cl) => c.listCrons(cl)),
+    cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     cronPatch(id, req) {
@@ -1370,7 +1369,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
-    webhookUpdate: (id, action) => controlOp((c, cl) => c.updateWebhook(id, { action }, cl)),
+    webhookUpdate: (id, patch) => controlOp((c, cl) => c.updateWebhook(id, patch, cl)),
     soulRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);

@@ -1064,7 +1064,7 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
 });
 
-test("steered files materialize in separate inboxes and keep distinct durable artifacts", async () => {
+test("steered files keep distinct durable artifacts and are never written to the computer", async () => {
   const blobTransfer = createMemoryBlobTransferStore();
   const first = await blobTransfer.put(Buffer.from("first file"));
   const second = await blobTransfer.put(Buffer.from("second file"));
@@ -1098,17 +1098,13 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
-  const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
-  assert.equal(inboundWrites.length, 2);
-  assert.deepEqual(
-    inboundWrites.map(([, content]) => content),
-    ["first file", "second file"],
-  );
-  for (const [i, [path]] of inboundWrites.entries()) {
-    assert.ok(prepared[i]!.text.includes(path));
-    assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+  assert.deepEqual([...writes.keys()], []);
+  for (const [i, steer] of prepared.entries()) {
+    const artifactId = steer.attachments![0]!.artifactId!;
+    assert.ok(steer.text.includes(`Files ID ${artifactId}`));
+    assert.ok(await files.get(artifactId));
     assert.equal(
-      Buffer.from(prepared[i]!.documents![0]!.dataBase64, "base64").toString(),
+      Buffer.from(steer.documents![0]!.dataBase64, "base64").toString(),
       i === 0 ? "first file" : "second file",
     );
   }

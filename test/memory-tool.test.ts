@@ -124,7 +124,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.ok(memoryTool, "the `memory` tool must be on the surface");
 
   const hit = textOf(await call(memoryTool, { action: "search", query: "billing" }));
-  assert.match(hit, /^```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
+  assert.match(hit, /\n```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
 
   const miss = textOf(await call(memoryTool, { action: "search", query: "kubernetes" }));
   assert.match(miss, /no remembered facts match/);
@@ -153,7 +153,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
     /Remembered 2 facts/,
   );
   assert.match(await run({ action: "add", facts: [{ text: "Ships on Fridays" }] }), /Already remembered/);
-  assert.match(await run({ action: "read" }), /^```untrusted-data\n#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
+  assert.match(await run({ action: "read" }), /\n```untrusted-data\n#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
 
   assert.match(
     await run({
@@ -412,7 +412,7 @@ test("the `memory` tool quotes what it reads", async () => {
   }).find((t) => t.name === "memory");
   assert.match(
     textOf(await call(memoryTool, { action: "read" })),
-    /^```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
+    /\n```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
   );
 });
 

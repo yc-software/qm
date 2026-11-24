@@ -1,17 +1,19 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { turnFailureText } from "../surfaces/turn-flow.ts";
+import type { WornPersona } from "../types.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
 import {
   type StoredApproval,
   approvalDecisionMessage,
   approvalMessage,
+  batchPostMessageArgs,
   clip,
   createApprovalRegistry,
   createThreadTracker,
   recoveredApprovalContext,
   resolveReactionTargets,
-  slackReplyArgs,
+  slackPersonaReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -74,6 +76,7 @@ export function createApprovals(deps: {
   flow: TurnFlow;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
+  webUiPublicUrl?: string;
 }): Approvals {
   const { core, flow, directory, threads } = deps;
 
@@ -129,13 +132,26 @@ export function createApprovals(deps: {
       if (!stored) return { state: "gone" };
       return { state: "found", stored: stored as StoredApproval };
     } catch (err) {
-      console.error("[slack-plugin] approval recovery fetch failed:", (err as Error).message);
+      console.error("[slack-plugin] approval recovery fetch failed:", errMessage(err));
       return { state: "unavailable" };
     }
   }
 
-  async function postApprovalFollowup(client: any, ctx: SlackApprovalContext, text: string): Promise<void> {
-    await client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
+  async function postApprovalFollowup(
+    client: any,
+    ctx: SlackApprovalContext,
+    text: string,
+    persona?: WornPersona,
+  ): Promise<void> {
+    const args = slackPersonaReplyArgs(ctx.channel, text, ctx.replyThreadTs, {
+      threadOnly: ctx.threadOnly,
+      unfurlLinks: false,
+      persona,
+      webUiPublicUrl: deps.webUiPublicUrl,
+    });
+    for (const batch of batchPostMessageArgs(args)) {
+      await client.chat.postMessage(batch);
+    }
   }
 
   async function handleApprovalAction({ ack, body, action, client }: ActionArgs): Promise<void> {
@@ -357,9 +373,9 @@ export function createApprovals(deps: {
         let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (cardIsRemote || !reply) {
+        if (cardIsRemote || !reply || result.persona) {
           await updateCard(decisionCard());
-          if (reply) await postApprovalFollowup(client, ctx, reply);
+          if (reply) await postApprovalFollowup(client, ctx, reply, result.persona);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
           await updateSlackMessage(
@@ -374,8 +390,8 @@ export function createApprovals(deps: {
           try {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
-            await postApprovalFollowup(client, ctx, uploadFailureNote(err));
+            console.error("[slack-plugin] file upload failed:", errMessage(err));
+            await postApprovalFollowup(client, ctx, uploadFailureNote(err), result.persona);
           }
         }
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());

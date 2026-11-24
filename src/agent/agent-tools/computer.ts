@@ -65,7 +65,7 @@ export function computerTools(kit: ToolKit) {
     credentials: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no shared workspace files: fetch scripts from Files or git in the command); a background job naming them gets its own computer that nothing else can reach.",
+          "Exact authorized credential handles to materialize for this command only (for a background job, until it exits). Newly granted handles are accepted. In a shared conversation, credentials other than brokered org services run on this turn's scratch computer instead, even with sandbox_id (no conversation workspace files: fetch scripts from Files or git in the command), and so does a saved file login in any conversation; a background job naming them gets its own computer that nothing else can reach.",
       }),
     ),
   };
@@ -104,7 +104,7 @@ export function computerTools(kit: ToolKit) {
       const resultScope = scratchReroute ? { scope: "scratch" } : scopeNote;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const placePrefix = scratchReroute
-        ? "[ran on this turn's scratch computer, not the shared one, because it names a private credential; its files are discarded after the turn]\n"
+        ? "[ran on this turn's scratch computer, not the conversation's computer, because it names a private credential; its files are discarded after the turn]\n"
         : "";
       const localExec = !route?.scratch && !scratchReroute;
       const pressureNote =
@@ -173,27 +173,34 @@ export function computerTools(kit: ToolKit) {
       credentials?: string[];
     },
   ) => {
-    const scratch = (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
+    const scratch = opts?.ephemeral === true || (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
     return runExecute(callId, params, { scratch });
   };
 
   const runCommand = (
     callId: string,
     params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
-  ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
+  ) =>
+    params.background && !opts?.ephemeral ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params);
 
+  const { background: _bg, sandbox_id: _sb, ...ephemeralExecParams } = executeBaseParams;
   const execute = defineTool({
     name: "execute",
     label: "execute",
-    description: scopeDescription,
-    parameters: Type.Object({
-      ...executeBaseParams,
-      scope: Type.Optional(
-        Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-          description: "Which computer runs this; see the tool description.",
+    description: opts?.ephemeral
+      ? "Run a shell command in a blank per-turn scratch computer discarded after this turn. " +
+        EXECUTE_TIMEOUT_GUIDANCE
+      : scopeDescription,
+    parameters: opts?.ephemeral
+      ? Type.Object(ephemeralExecParams)
+      : Type.Object({
+          ...executeBaseParams,
+          scope: Type.Optional(
+            Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+              description: "Which computer runs this; see the tool description.",
+            }),
+          ),
         }),
-      ),
-    }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
   });
 

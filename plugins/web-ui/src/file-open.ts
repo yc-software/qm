@@ -1,3 +1,6 @@
+import { reportHandledError } from "./browser-errors.ts";
+import { mediaKind } from "./media-layout.ts";
+
 export function filePreviewKind(name: string, mimetype = ""): "markdown" | "csv" | "tsv" | "text" | null {
   const mime = mimetype.split(";", 1)[0].trim().toLowerCase();
   if (/\.(md|markdown)$/i.test(name) || mime === "text/markdown") return "markdown";
@@ -16,10 +19,21 @@ export function filePreviewKind(name: string, mimetype = ""): "markdown" | "csv"
 }
 
 export function previewFile(event: MouseEvent, name: string, href: string, mimetype?: string): void {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const kind = filePreviewKind(name, mimetype);
-  if (!kind || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const media = kind ? null : mediaKind(name, mimetype);
+  if (!kind && (!media || media === "audio")) return;
   event.preventDefault();
-  void import("./file-viewer.ts")
-    .then(({ openFileViewer }) => openFileViewer(name, href, kind, mimetype))
-    .catch(() => window.open(href, "_blank", "noopener,noreferrer"));
+  const origin = event.currentTarget as Element | null;
+  const opened = media
+    ? import("./media.ts").then(({ openMediaViewer }) =>
+        openMediaViewer([{ kind: media, name, src: href, download: href }], 0, {
+          originOf: () => origin?.querySelector("img") ?? null,
+        }),
+      )
+    : import("./file-viewer.ts").then(({ openFileViewer }) => openFileViewer(name, href, kind!, mimetype));
+  void opened.catch((error: unknown) => {
+    reportHandledError("web:file_preview", error);
+    window.open(href, "_blank", "noopener,noreferrer");
+  });
 }

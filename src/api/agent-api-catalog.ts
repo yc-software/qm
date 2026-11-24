@@ -11,6 +11,7 @@ interface AgentApiRoute {
 interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
+  role?: string;
   swarmsEnabled: boolean;
   personasEnabled: boolean;
 }
@@ -110,7 +111,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon, and one whose members are all from the organization saves memory to its notebook, which every conversation using it reads; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",
@@ -361,7 +362,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations",
         summary:
-          "list the asking person's own conversations (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
+          "list the asking person's own conversations/sessions (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
       },
       {
         method: "GET",
@@ -573,7 +574,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin, org owner for org brains, or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -698,7 +699,84 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.isAdmin && livePersonCapability(v.claims),
+    when: (v) => v.role === "owner" && livePersonCapability(v.claims),
+    guidance:
+      "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, the org memory-brain registry, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
+    routes: [
+      { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
+      { method: "GET", path: "/v1/admin/resources", summary: "list configurable org resources" },
+      {
+        method: "GET",
+        path: "/v1/admin/scopes/:orgScopeId",
+        summary: "org scope resolved config: command policy, SOUL, egress, flags, connectors, service credentials",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/scopes/:orgScopeId/:resource",
+        summary:
+          "govern the org scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime",
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/v1/admin/memory?scope=:orgScopeId",
+        summary: "read or update org-wide notebook facts ({facts:[text]}, {facts:[{id,text}]}, {ids})",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/memory-registry",
+        summary: "org-level memory brains, their bindings, and the memberBrains switch (DM or effective Open sharing)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/brains/:id",
+        summary:
+          "read or configure an org memory brain without clientSecret or moving url (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/bindings/:id",
+        summary:
+          "read or configure a binding for an org memory brain (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/memory-registry/member-brains",
+        summary:
+          "turn members' own memory brains on or off for the whole org ({enabled}); off stops every one at once (DM or effective Open sharing)",
+      },
+      { method: "GET", path: "/v1/admin/spend", summary: "org-wide spend summary" },
+      { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
+      { method: "GET", path: "/v1/admin/users", summary: "org roster and external users" },
+      {
+        method: "POST",
+        path: "/v1/admin/external-users",
+        summary: "invite an outside collaborator by email ({email, expiresAt}); role changes are portal-only",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/external-users/:email",
+        summary: "revoke an external member's access",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/offboard",
+        summary:
+          "revoke a member's access and sign them out without inspecting or handing over private items ({apply?:true}; cannot remove an org_admin or the last owner; DM or effective Open sharing)",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/reactivate",
+        summary: "turn a deactivated member's sign-in back on (cannot manage an org_admin)",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/directory?q=",
+        summary: "resolve a name or principal id to org-directory candidates",
+      },
+    ],
+  },
+  {
+    when: (v) => v.isAdmin && v.role !== "owner" && livePersonCapability(v.claims),
     guidance:
       "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
@@ -783,6 +861,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/admin/keychain",
         summary: "person-owned keychain metadata, grants, and asks (DM or effective Open sharing)",
       },
+      {
+        method: "POST",
+        path: "/v1/admin/keychain/grants",
+        summary:
+          "grant any person's keychain credential to a scope so admin work can use it — {credentialId, purpose, scope? (default: this conversation)}; audited",
+      },
     ],
   },
 ];
@@ -811,6 +895,7 @@ export function renderAgentApis(
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
+    ...(admin.role ? { role: admin.role } : {}),
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };

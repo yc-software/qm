@@ -97,17 +97,6 @@ const upstream = createServer((req, res) => {
         JSON.stringify(host === "alpha-dash.apps.test" ? { tenant: alpha, app: true } : { tenant: null }),
       );
     }
-    if (path === "/v1/auth/broker/workspace") {
-      const handle = new URL(req.url!, origin).searchParams.get("handle");
-      const workspaces: Record<string, unknown> = {
-        beta7: {
-          tenant: beta,
-          trustedClient: { clientId: "company-client", clientSecret: "company-client-secret-0123456789abcdef" },
-        },
-        alpha1: { tenant: alpha },
-      };
-      return void res.end(JSON.stringify(workspaces[handle ?? ""] ?? { tenant: null }));
-    }
     if (path === "/v1/auth/broker/email-allowed") {
       admissions.push(identityTenant(req.headers["x-portal-identity"]));
       return void res.end(JSON.stringify({ allowed: admitted }));
@@ -368,7 +357,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
   selfServe = true;
   const principal = trustedPrincipal(upstreamUrl, "idp-subject");
   try {
-    orgs = [{ id: "42", name: "Acme" }, { id: "" }, "junk"];
+    orgs = [{ id: "42", name: "Acme", partnerChatAccount: "4242" }, { id: "" }, "junk"];
     const one = await trustedCallback("founder@acme.test");
     assert.equal(one.status, 302);
     assert.deepEqual([sessionOf(one)?.sub, sessionOf(one)?.t], [principal, alpha]);
@@ -377,7 +366,7 @@ test("a trusted founder with no workspace opens or joins their company's, and pi
       [selfServed[0]!.purpose, selfServed[0]!.issuer, selfServed[0]!.subject, selfServed[0]!.email, selfServed[0]!.org],
       ["trusted-self-serve", upstreamUrl, "idp-subject", "founder@acme.test", "org:acme"],
     );
-    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme" });
+    assert.deepEqual(selfServed[0]!.externalOrg, { id: "42", name: "Acme", partnerChatAccount: "4242" });
 
     orgs = [
       { id: "42", name: "Acme" },
@@ -601,59 +590,17 @@ test("signing in for a company's app with an account outside it shows no access 
   assert.equal(pair(denied.cookies, "portal_session"), undefined);
 });
 
-async function workspaceSignIn(handle: string, audienceFor: string): Promise<HostResponse & { client: string | null }> {
-  const start = await onHost("portal.test", `/auth/trusted/login?workspace=${handle}&returnTo=%2Finbox`);
-  const authorize = new URL(start.location);
-  assert.equal(authorize.searchParams.get("redirect_uri"), `${origin}/auth/trusted/callback`);
-  const tmpCookie = pair(start.cookies, "portal_trusted_tmp")!;
-  const tmp = open(readCookie(tmpCookie, "portal_trusted_tmp"), deriveKey(secret, "trusted-entry-tmp"))!;
-  nonce = tmp.nonce as string;
-  audience = audienceFor;
-  email = null;
-  try {
-    const done = await onHost(
+test("trusted sign-in ignores a workspace parameter instead of revealing which workspaces exist", async () => {
+  const plain = await onHost("portal.test", "/auth/trusted/login?returnTo=%2Finbox");
+  const clientOf = (r: HostResponse) => new URL(r.location).searchParams.get("client_id");
+  for (const handle of ["beta7", "nosuch", "Bad!"]) {
+    const r = await onHost(
       "portal.test",
-      `/auth/trusted/callback?code=test&state=${tmp.state as string}`,
-      tmpCookie,
+      `/auth/trusted/login?workspace=${encodeURIComponent(handle)}&returnTo=%2Finbox`,
     );
-    return { ...done, client: authorize.searchParams.get("client_id") };
-  } finally {
-    audience = "portal-client";
-    email = "founder@company.test";
-  }
-}
-
-test("a workspace link signs in through that company's own trusted client on the shared callback and binds it with no chooser", async () => {
-  shared = true;
-  principalTenants = [
-    { id: alpha, brandName: "Alpha" },
-    { id: beta, brandName: "Beta" },
-  ];
-  const done = await workspaceSignIn("beta7", "company-client");
-  assert.equal(done.client, "company-client");
-  assert.equal(done.status, 302);
-  assert.equal(done.location, "/inbox");
-  const session = open(readCookie(pair(done.cookies, "portal_session")!, "portal_session"), sessionKey);
-  assert.deepEqual([session?.sub, session?.t], [trustedPrincipal(upstreamUrl, "idp-subject"), beta]);
-
-  const plain = await workspaceSignIn("alpha1", "trusted-client");
-  assert.equal(plain.client, "trusted-client");
-  assert.equal(open(readCookie(pair(plain.cookies, "portal_session")!, "portal_session"), sessionKey)?.t, alpha);
-  principalTenants = [];
-});
-
-test("a workspace link refuses an identity that company has not admitted, and an unknown workspace before any redirect", async () => {
-  shared = true;
-  principalTenants = [{ id: alpha, brandName: "Alpha" }];
-  const denied = await workspaceSignIn("beta7", "company-client");
-  principalTenants = [];
-  assert.equal(denied.status, 403);
-  assert.match(denied.body, /No access to this workspace/);
-  assert.equal(pair(denied.cookies, "portal_session"), undefined);
-  for (const handle of ["nosuch", "Bad!"]) {
-    const unknown = await onHost("portal.test", `/auth/trusted/login?workspace=${encodeURIComponent(handle)}`);
-    assert.equal(unknown.status, 404);
-    assert.equal(pair(unknown.cookies, "portal_trusted_tmp"), undefined);
+    assert.equal(r.status, 302);
+    assert.equal(clientOf(r), clientOf(plain));
+    assert.ok(pair(r.cookies, "portal_trusted_tmp"));
   }
 });
 

@@ -26,7 +26,7 @@ export function renderSandboxProviders(
   ];
   const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
   const network = behindProxy.length
-    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node with NODE_USE_ENV_PROXY=1.`
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node's fetch.`
     : "";
   return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
@@ -281,11 +281,11 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
   const schedules = crons
     .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map((c) => ({ title: c.title || "Untitled scheduled task", ...scheduleLabel(c) }));
+    .map((c) => ({ title: summary(c.title || "Untitled scheduled task"), ...scheduleLabel(c) }));
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
     ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.title || w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
@@ -318,6 +318,7 @@ export function currentTimeBlock(timezone: string, nowMs: number): string {
 
 const SYSTEM_CONTEXT_ORDER = [
   "Where you are",
+  "Ephemeral session",
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",

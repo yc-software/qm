@@ -6,6 +6,7 @@ import { states, load, patternError, type GovernanceState } from "./governance-s
 import { putSetting } from "./setting-state.ts";
 import { pageHeader } from "./shared.ts";
 import type { AdminPage } from "./sections.ts";
+import { errMessage } from "../../../chassis/src/errors.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "security-posture": (s) =>
@@ -573,7 +574,7 @@ async function simulate() {
   try {
     policy = state.collect();
   } catch (error) {
-    return say(error instanceof Error ? error.message : "Policy is invalid.", "danger");
+    return say(errMessage(error, "Policy is invalid."), "danger");
   }
   tester.busy = true;
   say("Evaluating with the server’s command scanner…");
@@ -644,7 +645,7 @@ async function save(key: string) {
   try {
     body = state.collect();
   } catch (error) {
-    state.message = error instanceof Error ? error.message : "Could not save.";
+    state.message = errMessage(error, "Could not save.");
     state.tone = "err";
     return draw();
   }
@@ -704,7 +705,7 @@ export async function mount(next: AdminPage) {
   const token = ++generation;
   if (scope !== loadedScope) failure = "";
   draw();
-  if (!orgScope() && !labels)
+  if (!orgScope() && !labels && page.fullAdmin)
     void page.api("GET", "/api/scopes").then((r) => {
       if (!r.ok) return;
       labels = Object.fromEntries((r.data.scopes || []).map((row: any) => [row.scopeId, row.label || ""]));

@@ -12,7 +12,7 @@ import { inboxPreviewEnabled } from "./loops.ts";
 import { postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
 import { ownsWebThread } from "../../directory/person.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { type ApiCtx, type Route, tenantOf } from "./route.ts";
 
 type WebConversation = TurnRequest["conversation"];
 type Refusal = { error: string; message: string };
@@ -203,6 +203,13 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   const resolved = await resolveWebConversation(ctx, user, threadRef, scope, trimmed(p.channelName, 200));
   if ("error" in resolved) return sendJson(ctx.res, 403, resolved);
   const privateConversation = ownsWebThread(threadRef, user) && resolved.conversation.kind === "dm";
+  const ephemeral = p.ephemeral === true;
+  if (ephemeral && (!privateConversation || ctx.actor?.imp))
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "ephemeral chats are only available in your own DM" });
+  if (ephemeral) {
+    const existing = await ctx.deps.sessions?.getByThread(threadRef);
+    if (existing && !existing.ephemeral) return sendJson(ctx.res, 409, { error: "not_ephemeral" });
+  }
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
   const desktopClientId =
     typeof p.desktopClientId === "string" && p.desktopClientId.length === 36 ? p.desktopClientId : undefined;
@@ -218,6 +225,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
+    ...(ephemeral ? { ephemeral: true } : {}),
     ...(proactiveOpener ? { proactiveOpener: true } : {}),
     ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -299,8 +307,26 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
   });
 }
 
+async function webDeleteEphemeral(ctx: ApiCtx): Promise<void> {
+  const user = ctx.actor?.p;
+  if (!user) return sendJson(ctx.res, 401, { error: "unauthorized" });
+  if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
+  const threadRef = webThreadRef(ctx.url.searchParams.get("threadRef"));
+  if (!threadRef || !ownsWebThread(threadRef, user)) return sendJson(ctx.res, 403, { error: "forbidden" });
+  const result = await ctx.app.deleteEphemeralSession(tenantOf(ctx), threadRef, user);
+  return sendJson(ctx.res, 200, result);
+}
+
 export const webTurnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/web/turn", browser: "embed", actor: "person", auth: "source", handle: webTurn },
+  {
+    method: "DELETE",
+    path: "/v1/web/ephemeral",
+    browser: "embed",
+    actor: "person",
+    auth: "source",
+    handle: webDeleteEphemeral,
+  },
   {
     method: "POST",
     path: "/v1/web/approvals/:requestId",

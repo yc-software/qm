@@ -44,6 +44,7 @@ export function forceThroughProxyEnv(
     http_proxy: url,
     no_proxy: noProxy,
     GIT_HTTP_PROXY_AUTHMETHOD: "basic",
+    NODE_USE_ENV_PROXY: "1",
   };
 }
 

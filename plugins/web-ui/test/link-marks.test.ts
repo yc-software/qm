@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
 
-const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost" });
-for (const key of ["window", "document", "Element", "Node"] as const) {
+const dom = new JSDOM("<!doctype html><body></body>", { url: "https://qm.example.com/" });
+for (const key of ["window", "document", "Element", "Node", "location"] as const) {
   Object.defineProperty(globalThis, key, { value: dom.window[key], configurable: true });
 }
 const { marked } = await import("marked");
@@ -28,14 +28,14 @@ test("prefixes github.com links with the GitHub mark", () => {
     "https://www.github.com/evebouf",
   ]) {
     const link = render(`See [the link](${url}).`).querySelector("a")!;
-    assert.equal(link.firstElementChild?.getAttribute("class"), "github-mark", url);
+    assert.equal(link.querySelector("svg")?.getAttribute("class"), "github-mark", url);
     assert.equal(link.textContent, "the link", url);
   }
 });
 
 test("marks bare github.com URLs", () => {
   const link = render("See https://github.com/yc-software/qm/pull/2848").querySelector("a")!;
-  assert.equal(link.firstElementChild?.getAttribute("class"), "github-mark");
+  assert.equal(link.querySelector("svg")?.getAttribute("class"), "github-mark");
 });
 
 test("leaves other links alone", () => {
@@ -47,4 +47,16 @@ test("leaves other links alone", () => {
   ]) {
     assert.equal(render(`[x](${url})`).querySelector(".github-mark"), null, url);
   }
+});
+
+test("prefixes links to QM conversations with the conversation mark, and nothing else", () => {
+  const marked = (url: string) => render(`[x](${url})`).querySelector("svg")?.getAttribute("class");
+  for (const url of ["https://qm.example.com/s/a1", "https://qm.example.com/c/a1?seq=4", "/sessions/a1"])
+    assert.equal(marked(url), "conversation-mark", url);
+  for (const url of [
+    "https://qm.example.com/files",
+    "https://qm.example.com/settings/history/s/a1",
+    "https://x.com/s/a1",
+  ])
+    assert.equal(marked(url), undefined, url);
 });

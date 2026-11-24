@@ -2,14 +2,20 @@ import { marked } from "marked";
 import type { ReplyVerdict } from "../agent/agent.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  asError,
   classifierKey,
+  expandPersonaRule,
+  hasWildcardPersona,
   runHook,
+  settle,
   type DecisionBackend,
   type DecisionHook,
   type DecisionResult,
   type DecisionRule,
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
+import type { PersonaSummary } from "../personas/persona-store.ts";
+import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -24,6 +30,7 @@ export function turnStartState(turn: {
   continueTurn?: boolean;
   scopeLabel: string;
   conversation?: string;
+  context?: string;
 }): string {
   const requested = turn.runtime?.modelId ? turn.runtime.modelId : "none (org default applies)";
   return [
@@ -36,6 +43,7 @@ export function turnStartState(turn: {
     `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
     `- continued turn: ${turn.continueTurn ? "yes, resuming an interrupted turn" : "no"}`,
     "",
+    ...(turn.context ? ["Conversation so far:", turn.context, ""] : []),
     "Latest message:",
     turn.input,
   ].join("\n");
@@ -90,11 +98,29 @@ export interface DecisionTurn {
   cancel?: AbortSignal;
 }
 
-export function createDecisionHooks(store: DecisionStore | undefined, backend: DecisionBackend, audit: AuditLog) {
+export function createDecisionHooks(
+  store: DecisionStore | undefined,
+  backend: DecisionBackend,
+  audit: AuditLog,
+  personas?: (tenant: Tenant, actorId: string, scope: ScopeId) => Promise<readonly PersonaSummary[]>,
+) {
   const run = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
     if (!rules.length) return [];
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
-    const { results } = await runHook(turn.tenant, rules, hook, state, backend, signal);
+    let active = rules;
+    let failed: DecisionResult[] = [];
+    if (rules.some(hasWildcardPersona)) {
+      try {
+        const list =
+          turn.actorId && personas ? await personas(turn.tenant, turn.actorId, turn.scopeLabel as ScopeId) : [];
+        active = rules.map((r) => expandPersonaRule(r, list)).filter((r): r is DecisionRule => r !== undefined);
+      } catch (error) {
+        failed = rules.filter(hasWildcardPersona).map((r) => settle(r, asError(error)));
+        active = rules.filter((r) => !hasWildcardPersona(r));
+      }
+    }
+    const { results } = await runHook(turn.tenant, active, hook, state, backend, signal);
+    results.push(...failed);
     for (const result of results)
       audit.record(turn.tenant, {
         at: Date.now(),

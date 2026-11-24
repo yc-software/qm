@@ -25,6 +25,7 @@ import { createPostgresProcessRegistry } from "../src/processes/process-registry
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
+import { startedBy } from "./support/live-run.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -343,8 +344,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     scopeId: "personal:alice",
     memoryScopeId: "personal:alice",
     transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
+    turnSessionKey: "s",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
@@ -679,7 +679,8 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const registry = createPostgresProcessRegistry(url);
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -698,7 +699,8 @@ test("retirement waits for background startup to commit its live registry row", 
     await release.promise;
     return register(row);
   };
-  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
+  const alice = await startedBy(url, "alice");
+  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0, ...alice });
   const starting = broker.start(handle, "sleep 60", "Run background tests");
   await entering.promise;
   let destroyed = false;
@@ -1033,8 +1035,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
       scopeId: "personal:alice",
       memoryScopeId: "personal:alice",
       transferId: runId,
-      turnSessionDir: `turn/${sessionId}`,
-      turnFilesDir: `turn/${sessionId}/${runId}`,
+      turnSessionKey: sessionId,
       connectorEnv: {},
       visibleSkills: [],
       visibleSkillsForTurn: async () => [],
@@ -1066,8 +1067,7 @@ test("same-name skills from distinct sources keep their materialized assets sepa
     scopeId: "personal:alice",
     memoryScopeId: "personal:alice",
     transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
+    turnSessionKey: "s",
     connectorEnv: {},
     visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
       sources.map((source) => ({
