@@ -34,7 +34,7 @@ export interface SkillEditor {
 }
 
 export function triggerBlocksSharedSkill(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
-  return isMultiMemberSkillScope(homeScope) && !(editor?.liveActor === true && editor.internalAudience === true);
+  return isMultiMemberSkillScope(homeScope) && !internalLivePerson(editor);
 }
 
 export function livePersonCapability(
