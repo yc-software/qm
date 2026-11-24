@@ -100,6 +100,7 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
     `status=${entry.status ?? "unknown"}`,
     lifecycle,
     `fireKey=${entry.fireKey}`,
+    entry.sessionId ? `session=${entry.sessionId}` : null,
     entry.note ? `note=${entry.note}` : null,
     entry.reply ? `reply=${entry.reply}` : null,
   ].filter((bit): bit is string => bit !== null);

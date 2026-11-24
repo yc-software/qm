@@ -310,6 +310,25 @@ describe("agent conversations self-API", async () => {
     assert.equal(conversation.title, "Launch plan");
     assert.equal(conversation.pinned, true);
   });
+
+  it("inspects own fire sessions from a DM, not from shared rooms or for other users", async () => {
+    const fireId = (
+      await built.app.turn({
+        surface: "cron",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "cron:c1:1" },
+        text: "run digest",
+        origin: { kind: "automation" },
+      })
+    ).sessionId!;
+    assert.equal((await built.sessions.participantsOf(fireId)).length, 0);
+    const own = await get(`/v1/conversations/${fireId}`, await capFor("U1"));
+    assert.equal(own.status, 200);
+    const body = (await own.json()) as { items: Item[] };
+    assert.ok(body.items.some((i) => i.kind === "AgentMessage"));
+    assert.equal((await get(`/v1/conversations/${fireId}`, await capFor("U2"))).status, 404);
+    assert.equal((await get(`/v1/conversations/${fireId}`, await capFor("U1", scopeId("channel", "C1")))).status, 404);
+  });
 });
 
 test("bot work in a person's name sees only conversations bot work ran in; the person still sees all of theirs", async (t) => {
