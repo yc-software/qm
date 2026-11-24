@@ -233,6 +233,7 @@ import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { postedWith, spineReplies, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, unavailableApprovalRefusal } from "./approval-requester.ts";
+import { handleModelBudgetCap } from "./orchestrator/model-budget.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -2783,6 +2784,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           err,
         );
+        const failureText = budget
+          ? await handleModelBudgetCap(deps, tenant, conversation, actor, external)
+          : turnFailureMessage(err);
         if ((isNonRetryable(err) || input.finalAttempt) && !input.cancel?.aborted) {
           if (failureUserItem) {
             await deps.sessions
@@ -2790,14 +2794,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
           }
           await deps.sessions
-            .append(writer, turnFailureItem(turnFailureMessage(err), input.runId))
+            .append(writer, turnFailureItem(failureText, input.runId))
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
         if (budget)
           return {
             status: "refused",
             sessionId: session.id,
-            reason: turnFailureMessage(err),
+            reason: failureText,
             refusalKind: "model_budget",
           };
         throw err;
