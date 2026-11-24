@@ -202,14 +202,19 @@ export function createGenericChatApprovals(deps: {
     if (command) {
       const record = await deps.app.getApproval(parsed.value);
       const request = record?.request;
-      const ref = request?.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
+      const target =
+        request?.deliveryTarget ??
+        (request?.origin?.kind === "automation" && request.origin.destination?.type === GENERIC_CHAT
+          ? request.origin.destination.target
+          : undefined);
+      const ref = target ? parseGenericChatRef(target) : null;
       if (!record || !request || ref?.account !== click.account || ref.chat !== click.chat)
         return settle({ body: `_${APPROVAL_EXPIRED}_`, actions: [] });
       if (!samePerson(request.actor.externalId, click.actor.externalId)) return tell(APPROVAL_REQUESTER_ONLY);
       const decision = approvalDecision(command);
       const queued = await deps.app.turn({
         ...replayableTurn(request),
-        surface: GENERIC_CHAT,
+        surface: request.surface ?? GENERIC_CHAT,
         actor: click.actor,
         approval: {
           requestId: parsed.value,

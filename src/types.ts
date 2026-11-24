@@ -408,7 +408,6 @@ export interface TurnRequest {
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;
-  noApprover?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardMessage[];

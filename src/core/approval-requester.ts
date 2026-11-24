@@ -3,16 +3,12 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { APPROVAL_LIFETIME_MS, type PendingApprovalRecord, type ScopeId, type TurnResult } from "../types.ts";
-import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 
 export const BOT_REQUESTER_APPROVAL_NOTE =
   "This request came from a bot or app, not a person. Only the person who asked can approve a step that needs approval, so no approval was requested and the step did not run. Continue without it, and tell the thread that a person has to ask for this step themselves.";
 
 export const BOT_REQUESTER_REFUSAL =
   "This request came from a bot or app, and the next step needs a person's approval. A person has to ask for it directly.";
-
-export const webApprovableThread = (threadRef: string): boolean =>
-  threadRef.startsWith("web:") || threadRef.startsWith("swarm:") || isSubagentThreadRef(threadRef);
 
 export function unavailableApprovalRefusal(
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void,
@@ -32,7 +28,7 @@ export function unavailableApprovalRefusal(
     sessionId,
     reason: botRequester
       ? BOT_REQUESTER_REFUSAL
-      : `This step needs approval (${reason}) and can't be approved in this run, so it did not run: ${command}.`,
+      : `This step needs approval (${reason}) and has no person who can approve it, so it did not run.`,
     ...(botRequester ? { refusalKind: "approval_denied" as const } : {}),
   };
 }

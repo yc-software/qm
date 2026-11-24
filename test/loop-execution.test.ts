@@ -111,9 +111,11 @@ for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
     assert.deepEqual(stages, ["intake", "work", "judge"]);
     const held = await outputs.awaitingReview(loop.id);
     if (checkResult === "gated") {
-      await assert.rejects(fire.shipOutput(loop.id, held[0]!.id, "U1"), (e: Error) => e.message.includes(GATED));
+      await assert.rejects(fire.shipOutput(loop.id, held[0]!.id, "U1"), /a step needed an approval/);
       assert.equal((await outputs.get(held[0]!.id))?.state, "unconfirmed");
-      assert.equal(await built.app.pendingApprovalForThread(shipThread), null);
+      const pending = await built.app.pendingApprovalForThread(shipThread);
+      const card = (await built.deliveries.pending("principal")).find((d) => d.destination.commandApprovalId);
+      assert.equal(card?.destination.commandApprovalId, pending?.pendingApprovals?.[0]?.requestId);
     } else if (checkResult === "passed") {
       assert.equal(result.summary?.ready.length, 1);
       assert.equal(held.length, 1);

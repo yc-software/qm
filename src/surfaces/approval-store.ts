@@ -1,11 +1,31 @@
 import { swallowAs } from "../util/errors.ts";
-import type { Destination, PendingApprovalRecord, TurnRequest } from "../types.ts";
+import { isSystemActor, type Destination, type PendingApprovalRecord, type TurnRequest } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { approvalDeliveryKey } from "./approval-cards.ts";
 
 export type ApprovalCardRoute = (request: TurnRequest) => Destination | undefined;
+
+export function triggerApprovalCardRoute(
+  slackRoute: ApprovalCardRoute,
+  genericChatRoute: ApprovalCardRoute,
+  genericChatType: string,
+): ApprovalCardRoute {
+  return (request) => {
+    const generic = genericChatRoute(request);
+    if (generic) return generic;
+    if (
+      request.origin?.kind === "automation" &&
+      request.origin.destination?.type === genericChatType &&
+      !isSystemActor(request.actor.externalId)
+    )
+      return request.origin.destination;
+    const threadRef = request.conversation?.threadRef ?? "";
+    if (threadRef.startsWith("web:") || threadRef.startsWith("swarm:")) return undefined;
+    return slackRoute(request);
+  };
+}
 
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,

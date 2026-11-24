@@ -239,7 +239,7 @@ export function createTurnMethods(
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
       const sameApprovedMessage =
         approvedRequest?.text === req.text &&
-        approvedRequest.actor.externalId === req.actor.externalId &&
+        samePerson(approvedRequest.actor.externalId, req.actor.externalId) &&
         approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
@@ -341,7 +341,6 @@ export function createTurnMethods(
           ? { personaId: req.personaId }
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
-        ...(req.noApprover ? { noApprover: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),

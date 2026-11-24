@@ -41,25 +41,34 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const surfaceOrigin = run.request.surfaceOrigin;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
-  if (!target || !surface) return null;
+  const automationDestination =
+    origin.kind === "automation" &&
+    origin.destination &&
+    !run.request.surfaceTools &&
+    run.request.approval?.approved === true
+      ? origin.destination
+      : undefined;
+  if (!automationDestination && (!target || !surface)) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  const webTranscript = webTranscriptNote(run, surface, failed);
-  const destination: Destination = {
-    type: surface,
-    target,
-    ...(surfaceOrigin
-      ? {
-          account: {
-            id: surfaceOrigin.author.account,
-            workspace: surfaceOrigin.workspace,
-            ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
-          },
-        }
-      : {}),
-    ...(editRef ? { editRef } : {}),
-    ...(webTranscript ? { webTranscript } : {}),
-  };
+  const webTranscript = automationDestination ? undefined : webTranscriptNote(run, surface!, failed);
+  const destination: Destination = automationDestination
+    ? automationDestination
+    : {
+        type: surface!,
+        target: target!,
+        ...(surfaceOrigin
+          ? {
+              account: {
+                id: surfaceOrigin.author.account,
+                workspace: surfaceOrigin.workspace,
+                ...(surfaceOrigin.policyNamespace ? { policyNamespace: surfaceOrigin.policyNamespace } : {}),
+              },
+            }
+          : {}),
+        ...(editRef ? { editRef } : {}),
+        ...(webTranscript ? { webTranscript } : {}),
+      };
   const idempotencyKey = `run:${run.id}`;
   const provenance = turnDeliveryProvenance({
     origin,

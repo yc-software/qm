@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
+import {
+  createApprovalStore as createRoutedApprovalStore,
+  triggerApprovalCardRoute,
+} from "../src/surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
+import { genericChatApprovalCardRoute } from "../src/surfaces/generic-chat/approvals.ts";
+import { GENERIC_CHAT } from "../src/surfaces/generic-chat/protocol.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
@@ -141,4 +146,21 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   assert.equal(delivery?.destination.target, "U9");
   assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
   assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+});
+
+test("triggerApprovalCardRoute routes background approvals to Slack DM or generic chat and keeps web threads inline", () => {
+  const route = triggerApprovalCardRoute(slackApprovalCardRoute, genericChatApprovalCardRoute, GENERIC_CHAT);
+  const base = {
+    surface: "cron",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "cron:c1:1", audience: [{ externalId: "U1" }] },
+    text: "run",
+  };
+  assert.deepEqual(route(base), { type: "principal", target: "U1", audienceScopeId: "personal:U1", onBehalfOf: "U1" });
+  assert.equal(route({ ...base, conversation: { ...base.conversation, threadRef: "web:U1:s1" } }), undefined);
+  assert.deepEqual(
+    route({ ...base, origin: { kind: "automation", destination: { type: GENERIC_CHAT, target: "acc:room" } } }),
+    { type: GENERIC_CHAT, target: "acc:room" },
+  );
+  assert.equal(route({ ...base, actor: { externalId: "system:channel:C1" } }), undefined);
 });

@@ -1,4 +1,5 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { samePerson } from "../directory/person.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { turnFailureText } from "../surfaces/turn-flow.ts";
 import type { WornPersona } from "../types.ts";
@@ -85,7 +86,10 @@ export function createApprovals(deps: {
     runId?: string;
   }
 
-  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+  async function runTurn(
+    body: CoreTurnBody,
+    hooks: { onQueued?: (runId: string) => void; deferDeliveryAck?: boolean } = {},
+  ): Promise<TurnOutcome> {
     if (deps.externalAccess && body.conversation.kind !== "dm")
       throw new Error("Continue this request privately instead of resuming a shared approval.");
     let runId: string | undefined;
@@ -249,7 +253,8 @@ export function createApprovals(deps: {
 
     const requesterMatches =
       clickerId === ctx.requesterId ||
-      (ctx.recovered === true && (await directory.classifyActor(client, clickerId)).externalId === ctx.requesterId);
+      (ctx.recovered === true &&
+        samePerson((await directory.classifyActor(client, clickerId)).externalId, ctx.requesterId));
     if (!requesterMatches) {
       await client.chat
         .postEphemeral({
@@ -288,6 +293,8 @@ export function createApprovals(deps: {
     };
 
     const delegated = isSubagentThreadRef(ctx.turn.conversation.threadRef);
+    const automationDestination = ctx.turn.origin?.kind === "automation" ? ctx.turn.origin.destination : undefined;
+    const deliversElsewhere = Boolean(automationDestination && !ctx.turn.surfaceTools);
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
     const decided: ApprovalDecisionRecord = { decision: selected, by: clickerId, at: Date.now(), state: "done" };
@@ -300,7 +307,7 @@ export function createApprovals(deps: {
     try {
       const approver = await directory.classifyActor(client, clickerId);
       const onQueued =
-        messageTs && !cardIsRemote && !delegated
+        messageTs && !cardIsRemote && !delegated && !deliversElsewhere
           ? (runId: string): void => {
               void core
                 .reportRunEditRef(runId, messageTs)
@@ -343,7 +350,10 @@ export function createApprovals(deps: {
         return;
       }
 
-      const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
+      const outcome = await runTurn(
+        { ...ctx.turn, actor: approver, approval },
+        { ...(onQueued ? { onQueued } : {}), ...(deliversElsewhere ? { deferDeliveryAck: true } : {}) },
+      );
       const result = outcome.result;
       settle();
 
@@ -366,10 +376,18 @@ export function createApprovals(deps: {
       }
 
       if (result.status === "ok") {
+        if (deliversElsewhere) {
+          await updateCard(decisionCard(["Results will be delivered to the destination."]));
+          return;
+        }
         if (ctx.threadOnly && ctx.replyThreadTs) threads.mark(ctx.channel, ctx.replyThreadTs, true);
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions } = cleanedContinuation;
+        if (ctx.turn.surfaceTools && !replyBody && !result.attachments?.length && !reactions.length) {
+          await updateCard(decisionCard());
+          return;
+        }
         let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";

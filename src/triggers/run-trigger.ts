@@ -6,7 +6,6 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { webApprovableThread } from "../core/approval-requester.ts";
 import { releasesQuarantinedContent } from "../core/orchestrator/approvals.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
@@ -79,8 +78,16 @@ export interface TriggerOutcome {
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
-  return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
+  return (
+    outcome.ran &&
+    outcome.status !== undefined &&
+    outcome.status !== "ok" &&
+    outcome.status !== "silent" &&
+    outcome.status !== "pending_approval"
+  );
 }
+
+export const TRIGGER_APPROVAL_SURFACES = ["cron", "loop", "webhook", "monitor", "keychain-ask", "secret-drop"] as const;
 
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
 export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
@@ -309,7 +316,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
-      ...(webApprovableThread(threadRef) ? {} : { noApprover: true }),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
@@ -340,7 +346,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `is waiting for an approval on its thread${reasons ? `: ${reasons}` : ""}`;
+      note = `waiting for approval${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

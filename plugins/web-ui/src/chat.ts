@@ -1540,7 +1540,6 @@ export function createChatSurface(
     };
     const current = (): boolean => readonlyRedraw === draw;
     const refreshApprovals = async (): Promise<void> => {
-      if (!s.threadRef.startsWith("swarm:")) return;
       const result = await fetchSessionApprovals(s.id);
       if (!current()) return;
       approvals = result?.approvals ?? [];

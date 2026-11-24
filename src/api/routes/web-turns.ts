@@ -4,7 +4,7 @@ import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 
 const FAILURE_HEADER_LINES = 5;
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
-import { webApprovableThread } from "../../core/approval-requester.ts";
+import { samePerson } from "../../directory/person.ts";
 import type { TurnRequest } from "../../types.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
@@ -240,10 +240,8 @@ async function visibleApprovalThread(ctx: ApiCtx, user: string, threadRef: strin
       ? await ctx.app.getSessionForViewer(sessionId, { actorId: user }, { tailTurns: 1 })
       : null;
   if (!found) return false;
-  if (!threadRef.startsWith("swarm:") && !isSubagentThreadRef(threadRef)) return true;
-  return (
-    (!threadRef.startsWith("swarm:") || found.session.surface === "swarm") && found.session.threadRef === threadRef
-  );
+  if (threadRef.startsWith("swarm:") && found.session.surface !== "swarm") return false;
+  return found.session.threadRef === threadRef;
 }
 
 async function webApproval(ctx: ApiCtx): Promise<void> {
@@ -259,8 +257,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
   if (!record) return sendJson(res, 404, { error: "not_found" });
   const request = record.request;
   const threadRef = typeof request?.conversation?.threadRef === "string" ? request.conversation.threadRef : "";
-  if (!request || !webApprovableThread(threadRef) || request.actor?.externalId !== user)
-    return sendJson(res, 404, { error: "not_found" });
+  if (!request || !samePerson(request.actor?.externalId, user)) return sendJson(res, 404, { error: "not_found" });
   if (/^web:.+:inbox$/.test(threadRef)) {
     const resolved = await resolveWebConversation(ctx, user, threadRef);
     if ("error" in resolved) return sendJson(res, 403, resolved);
