@@ -446,6 +446,12 @@ test("a loop whose owner can't read the destination project stops posting there,
   assert.equal(stillPosting.ownerScopeId, scope);
   assert.deepEqual(stillPosting.destination, { type: "web", target: thread, audienceScopeId: to });
   assert.equal((await built.loops.store.get(stopped.id))!.destination, undefined);
+
+  const third = await built.app.createProject("owner", "Third");
+  assert.ok(third);
+  assert.equal((await built.app.addProjectMember(third.id, "owner", "member")).status, "ok");
+  assert.equal((await move(sid, "owner", projectScopeId(third.id))).outcome, "moved");
+  assert.equal((await built.loops.store.get(kept.id))!.destination!.audienceScopeId, projectScopeId(third.id));
 });
 
 test("a personal loop that kept posting into a moved chat follows it on the next move", async () => {

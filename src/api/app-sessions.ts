@@ -1305,7 +1305,6 @@ export function createSessionMethods(
           members,
           { groupRef: target.ref, channelName: project.name, audience, version },
           principalId,
-          scoped,
         );
         for (const tree of trees)
           h.recordAudit({

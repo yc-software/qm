@@ -202,12 +202,9 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    async retargetMovedDestinations(move, members, ownerScopes) {
-      const owned = await backing.selectEntries({
-        where: { field: "ownerScopeId", anyOfFold: [...new Set(ownerScopes)] },
-      });
+    async retargetMovedDestinations(move, members) {
       const moved = new Set(move.threads.keys());
-      const tied = owned.filter(([, loop]) => postsInto(loop, moved));
+      const tied = (await backing.entries()).filter(([, loop]) => postsInto(loop, moved));
       const stays = (loop: Loop) => members.some((member) => samePerson(member, loop.owner));
       if (tied.length)
         await backing.mutateMany(
