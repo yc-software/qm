@@ -1,5 +1,4 @@
 import type { Tenant } from "../tenants/context.ts";
-import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS, type ToolOutputStore } from "../sessions/tool-output.ts";
@@ -653,11 +652,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   const runId = deps.runId;
-
-  const trialOn =
-    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
-    (script) =>
-      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
 
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
@@ -1352,15 +1346,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate(req) {
-      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
-    },
+    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
     cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch(id, req) {
-      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
-    },
+    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),

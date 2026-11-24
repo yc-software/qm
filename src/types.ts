@@ -405,6 +405,7 @@ export interface TurnRequest {
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
   cronScript?: import("./triggers/types.ts").CronScript;
+  cronScriptTrial?: boolean;
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;

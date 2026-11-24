@@ -114,7 +114,7 @@ import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
-import { runCronScript } from "../cron/script.ts";
+import { runCronScript, trialCronScript } from "../cron/script.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
@@ -1842,22 +1842,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           withdrawCallApprovals(pending, session.id, actor.id, card, audit);
         const externalDenial = external && surfaceOrigin.guests ? GUEST_CHAT_DENIAL : undefined;
         const tools = external ? externalTools(baseTools, accessResource, externalDenial) : baseTools;
-        const cronScript =
-          input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
-            ? await runCronScript(
-                input.cronScript,
-                {
-                  execute: (command, opts) => tools.execute(command, opts),
-                  screening: securityPolicy.screening,
-                  classify: classifyAs(
-                    { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
-                    recordScreenRequest,
-                  ),
-                  toolOutput: deps.toolOutput,
-                },
-                turnAbort.signal,
-              )
-            : undefined;
+        const script = input.surface === "cron" && !input.sessionSenderId && !isRetry ? input.cronScript : undefined;
+        if (script && input.cronScriptTrial) {
+          const trial = await trialCronScript(
+            script,
+            (command, opts) => tools.execute(command, opts),
+            deps.toolOutput,
+            turnAbort.signal,
+          );
+          return trial.passed
+            ? { status: "silent", sessionId: session.id, scriptVerdict: trial.exit }
+            : { status: "refused", sessionId: session.id, reason: trial.exit, reply: trial.output };
+        }
+        const cronScript = script
+          ? await runCronScript(
+              script,
+              {
+                execute: (command, opts) => tools.execute(command, opts),
+                screening: securityPolicy.screening,
+                classify: classifyAs(
+                  { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
+                  recordScreenRequest,
+                ),
+                toolOutput: deps.toolOutput,
+              },
+              turnAbort.signal,
+            )
+          : undefined;
         if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.audit });
         if (cronScript?.handled) return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
