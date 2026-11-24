@@ -4,7 +4,9 @@ import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keyc
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { isPollSurface } from "../../triggers/run-trigger.ts";
-import type { ScopeId, Session } from "../../types.ts";
+import { personalScope, type ScopeId, type Session } from "../../types.ts";
+import { ownReplySinceTyped, type Item } from "../../sessions/items.ts";
+import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "../side-chat-context.ts";
@@ -38,7 +40,6 @@ export async function appendTurnGuidance(turn: {
   actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
   automatedTurn: boolean;
-  childWake: boolean;
   ephemeral?: boolean;
 }): Promise<string> {
   const {
@@ -56,7 +57,6 @@ export async function appendTurnGuidance(turn: {
     actorAdminRole,
     orgMemoryWritable,
     automatedTurn,
-    childWake,
   } = turn;
   let { systemPrompt } = turn;
   if (appConnections)
@@ -130,12 +130,27 @@ export async function appendTurnGuidance(turn: {
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
     );
   }
-  if (childWake) {
-    turnEvents.push(
-      "This turn was started by one of your subagents, not a person typing. To end it without posting, call `finish_silently` and write no text; anything you write is shown to the person.",
-    );
-  }
   return systemPrompt;
+}
+
+export async function replyToRewrite(
+  flags: OrchestratorDeps["featureFlags"],
+  personId: string,
+  history: readonly Item[],
+): Promise<Item | undefined> {
+  const reply = ownReplySinceTyped(history);
+  return reply && (await flags?.enabled("wake_reply_rewrite", personalScope(personId))) ? reply : undefined;
+}
+
+export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
+  const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;
+  if (!rewrites)
+    return `${started} To end it without posting, call \`finish_silently\` and write no text; anything you write is shown to the person.`;
+  return (
+    `${started} Your reply replaces your last message to the person, the one beginning "${snippet(rewrites.text ?? "", 60)}", which they may not have read. ` +
+    "Write the whole message they should find when they return: keep what still holds, fold in what is new, drop what is no longer true, and keep one list of what is waiting on them. Keep it as short as the news allows." +
+    (childWake ? " To leave that message as it is, call `finish_silently` and write no text." : "")
+  );
 }
 
 export async function addConversationBlocks(turn: {

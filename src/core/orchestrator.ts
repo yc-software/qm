@@ -1,7 +1,15 @@
 import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
-import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
+import {
+  isAgentReply,
+  isOverheard,
+  isTypedByPerson,
+  isUserItem,
+  type Item,
+  type NewItem,
+  stepMessage,
+} from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -195,7 +203,13 @@ import { appSourceShown } from "./orchestrator/app-source.ts";
 import { openSegmentGoal, segmentEnvironment } from "./orchestrator/run-segment.ts";
 import { selectTurnResult, startMemoryCapture } from "./orchestrator/settle.ts";
 import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
-import { addConversationBlocks, appendTurnGuidance, finishSystemPrompt } from "./orchestrator/turn-prompt.ts";
+import {
+  addConversationBlocks,
+  appendTurnGuidance,
+  finishSystemPrompt,
+  replyToRewrite,
+  wakeTurnEvent,
+} from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
   countSkills,
@@ -1106,6 +1120,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await deps.sessions.get(input.sessionSenderId)
           : null;
       const childWake = wakingChild?.parentSessionId === session.id && isSubagentThreadRef(wakingChild.threadRef);
+      const wakeTurn = !!wakingChild && input.envelopeWrapped === true;
       const syntheticInput =
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
@@ -1472,7 +1487,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tenant,
           orgMemoryWritable,
           automatedTurn,
-          childWake,
           ephemeral,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
@@ -1932,6 +1946,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }),
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
+        const rewrites =
+          wakeTurn && isWeb && conversation.kind === "dm"
+            ? await replyToRewrite(deps.featureFlags, actor.id, history)
+            : undefined;
+        if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2237,6 +2256,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                 if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
                 if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
+                const replaces = rewrites && isAgentReply(entry) && !!entry.text?.trim() && !body.stopped;
+                if (replaces && !emittedEntries.some(isTypedByPerson)) body.supersedes = rewrites.seq;
                 return { ...entry, body };
               }
               if (entry.kind !== "UserMessage" && entry.kind !== "SteeringMessage") return entry;

@@ -26,6 +26,11 @@ export const FEATURES = {
     personalOnly: true,
     hint: "After each reply in the web app, predicts the selected people's likely next message and shows it in their empty composer; Tab fills it in. Each suggestion is one extra model call on their conversation. Turning it on applies on their next page load.",
   },
+  wake_reply_rewrite: {
+    label: "Wake reply rewrite (experimental)",
+    personalOnly: true,
+    hint: "In the selected people's web DMs, a reply to a turn started by a subagent or another conversation replaces the agent's latest reply since the person last typed, instead of adding a message below it. The replaced reply stays in the transcript. Applies from their next such turn.",
+  },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   team_scopes: { label: "Team scopes" },
