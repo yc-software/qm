@@ -79,13 +79,13 @@ export class SlackReply extends LitElement {
       this.observedInput = input;
     }
     if (!input) return;
-    resizeComposerInput(input, 30);
+    resizeComposerInput(input, 32);
     if (!this.inputObserver && typeof ResizeObserver !== "undefined") {
       let width = input.clientWidth;
       this.inputObserver = new ResizeObserver(() => {
         if (width === input.clientWidth) return;
         width = input.clientWidth;
-        resizeComposerInput(input, 30);
+        resizeComposerInput(input, 32);
       });
       this.inputObserver.observe(input);
     }
@@ -176,7 +176,7 @@ export class SlackReply extends LitElement {
 
   protected render() {
     if (this.connected !== false)
-      return html`<form class="composer-wrap slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
+      return html`<form class="slack-reply-pill" @submit=${(e: Event) => void this.send(e)}>
         ${avatarTpl({ key: this.user, name: this.label || this.user, avatarUrl: speakerAvatar(this.user) })}
         ${composerInput({
           value: this.text,
@@ -192,18 +192,16 @@ export class SlackReply extends LitElement {
             void this.send(e);
           },
         })}
-        <div class="composer-toolbar">
-          <div class="composer-right">
-            <button
-              class="send-btn"
-              type="submit"
-              aria-label="Send to Slack"
-              ${tip("Send to Slack")}
-              ?disabled=${!this.text.trim()}
-            >
-              ${icon(ArrowUp, 16)}
-            </button>
-          </div>
+        <div class="slack-reply-actions">
+          <button
+            class="send-btn"
+            type="submit"
+            aria-label="Send to Slack"
+            ${tip("Send to Slack")}
+            ?disabled=${!this.text.trim()}
+          >
+            ${icon(ArrowUp, 16)}
+          </button>
         </div>
         ${this.error ? html`<div class="composer-error" role="alert">${this.error}</div>` : nothing}
       </form>`;
