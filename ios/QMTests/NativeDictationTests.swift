@@ -85,7 +85,8 @@ final class NativeDictationTests: XCTestCase {
     XCTAssertEqual(transcript.update("Hello there.", segmentDone: true), "Hello there.")
     XCTAssertEqual(transcript.update("", segmentDone: false), "Hello there.")
     XCTAssertEqual(transcript.update("How", segmentDone: false), "Hello there. How")
-    XCTAssertEqual(transcript.update("How are you?", segmentDone: true), "Hello there. How are you?")
+    XCTAssertEqual(
+      transcript.update("How are you?", segmentDone: true), "Hello there. How are you?")
   }
 
   @MainActor
