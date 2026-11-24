@@ -68,6 +68,7 @@ export async function processRun(
           run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
         "qm.surface": request.surface,
         "qm.origin": "origin" in request ? request.origin.kind : undefined,
+        "qm.tenant": run.tenantId,
       },
       () => attemptRun(tenant, deps, { ...run, request }, opts),
       (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
