@@ -1307,16 +1307,20 @@ export function createSessionMethods(
               gains: gains.map((g) => g.principalId),
             }),
           });
-        const moved = await deps.sessions.getMany({ ids: trees.map((tree) => tree[0]!.id), threadRefs: [] });
-        const sessions = await Promise.all(
-          moved.map(async (session) => ({
-            ...session,
-            canContinue: await canContinueOnWeb(principalId, session, access),
-          })),
-        );
-        return { outcome: "moved", sessions, held };
+        movedIds = trees.map((tree) => tree[0]!.id);
+        return { outcome: "moved", sessions: [], held };
       };
-      return (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
+      let movedIds: string[] = [];
+      const result = (await projects.withRosterLock(projectId, decide)) ?? { outcome: "not_project" };
+      if (result.outcome !== "moved" || !movedIds.length) return result;
+      const moved = await deps.sessions.getMany({ ids: movedIds, threadRefs: [] });
+      const sessions = await Promise.all(
+        moved.map(async (session) => ({
+          ...session,
+          canContinue: await canContinueOnWeb(principalId, session, access),
+        })),
+      );
+      return { ...result, sessions };
     },
 
     async spawnSession(principalId, opts) {
