@@ -4669,7 +4669,7 @@ summary.stopped-head:focus-visible {
 .slack-thread-chat .chat-scroll {
   scrollbar-gutter: stable both-edges;
 }
-.slack-thread-chat .chat-topbar {
+:where(.slack-thread-chat) .chat-topbar {
   height: 48px;
   gap: 14px;
   padding: 0 20px;
@@ -4730,6 +4730,22 @@ summary.stopped-head:focus-visible {
   max-width: none;
   padding: 0 0 0 48px;
   transition: opacity 0.2s ease;
+}
+@media (hover: none) {
+  .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) {
+    padding-bottom: var(--meta-lane);
+  }
+}
+@media (max-width: 860px) {
+  .chat-participant-names,
+  .open-in-surface > :not(.slack-mark) {
+    display: none;
+  }
+  .open-in-surface {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
 }
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row).continued-row {
   margin-top: -14px;
