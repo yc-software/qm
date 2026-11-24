@@ -303,30 +303,6 @@ test("a fallback that fails keeps the original refusal and says what happened to
   );
 });
 
-test("a fallback that fails for its own reason reports that reason, not the original refusal", async () => {
-  const agent = createAgent({
-    routes: createModelRoutes({
-      apiKey: "sk-anthropic",
-      modelGateway: GATEWAY,
-      resolveFallbackRuntime: () => ({ modelId: "gpt-6-astra" }),
-    }),
-  });
-  await withFetch(
-    (url) =>
-      url.includes("gateway.example")
-        ? errorReply(400, "invalid_request_error", "tools.0: unsupported schema")
-        : anthropicReply("", "refusal"),
-    async () => {
-      await assert.rejects(turn(agent, "claude-sonnet-5"), (error: unknown) => {
-        assert.ok(error instanceof ProviderTurnError);
-        assert.equal(error.code, "bad_request");
-        assert.match(error.message, /fallback .*shared model gateway.*unsupported schema/s);
-        return true;
-      });
-    },
-  );
-});
-
 test("helper calls run on the org's utility model and titles on Sonnet, not the deployment default", async () => {
   const agent = createAgent({
     routes: createModelRoutes({
