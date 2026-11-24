@@ -40,6 +40,7 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.tenant",
   "qm.cancelled",
   "qm.facts",
   "qm.recalled",
