@@ -49,15 +49,14 @@ function trustedOrgs(...sources: Record<string, unknown>[]): ExternalOrg[] {
   const orgs = new Map<string, ExternalOrg>();
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { id, name, partnerChatAccount } = entry as Record<string, unknown>;
-    const org = { id: orgText(id), name: orgText(name), partnerChatAccount: orgText(partnerChatAccount) };
+    const { id, name } = entry as Record<string, unknown>;
+    const org = { id: orgText(id), name: orgText(name) };
     if (!org.id || !org.name || orgs.has(org.id)) continue;
-    if (org.partnerChatAccount !== undefined && org.partnerChatAccount !== org.id) continue;
     orgs.set(org.id, { id: org.id, name: org.name });
   }
   if (orgs.size < raw.length)
     console.warn(
-      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need one unique id and a name)`,
+      `[portal] trusted orgs claim: kept ${orgs.size} of ${raw.length} entries (need a unique id and a name)`,
     );
   return [...orgs.values()];
 }

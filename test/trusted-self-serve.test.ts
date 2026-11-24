@@ -180,7 +180,6 @@ test("self-serve rejects forged, unrelated, expired and replayed assertions, and
     { email: "not-an-email" },
     { externalOrg: { id: "", name: "x" } },
     { externalOrg: { id: "1", name: " " } },
-    { externalOrg: { id: "41896", name: "Two Ids", partnerChatAccount: "41954" } },
     { externalOrg: undefined },
     { jti: "" },
   ])

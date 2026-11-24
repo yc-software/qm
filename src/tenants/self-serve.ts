@@ -12,15 +12,10 @@ export const externalOrgSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().trim().min(1),
-    partnerChatAccount: z.string().min(1).optional(),
   })
-  .strip()
-  .refine((org) => org.partnerChatAccount === undefined || org.partnerChatAccount === org.id, {
-    message: "an external organization has exactly one id",
-  })
-  .transform(({ id, name }) => ({ id, name }));
+  .strip();
 
-type ExternalOrg = z.output<typeof externalOrgSchema>;
+type ExternalOrg = z.infer<typeof externalOrgSchema>;
 
 interface ExternalOrgTenant {
   tenant: string;
