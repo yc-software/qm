@@ -1073,7 +1073,6 @@ export function buildApp(
             ...(modal.snapshotRetentionSec !== undefined
               ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 }
               : {}),
-            ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
           }),
       ),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),

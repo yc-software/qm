@@ -236,7 +236,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       const merged = await store.merge(scope, {
         sandboxId: adopted.sandboxId,
         lastActivityMs: Date.now(),
-        egressPolicy: egress.createdPolicy(adopted.sandboxId),
+        egressPolicy: egress.createdPolicy(adopted),
       });
       if (!merged) {
         await store.put(scope, {
@@ -257,7 +257,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
       createdAtMs: Date.now(),
       lastActivityMs: Date.now(),
       orgId: configOrgId(),
-      egressPolicy: egress.createdPolicy(session.sandboxId),
+      egressPolicy: egress.createdPolicy(session),
     });
     const terminateOrphan = (): Promise<unknown> =>
       session.terminate().then(
@@ -369,7 +369,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             }
           }
           try {
-            await session.terminate();
+            await session.terminate({ wait: true });
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               if (egressStale) throw egressReplaceFailed(e);
@@ -861,7 +861,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await snapshotHome(scopeId, session).catch((error: unknown) => {
               if (!(error instanceof ModalSandboxGoneError)) throw error;
             });
-          await session.terminate().catch((error: unknown) => {
+          await session.terminate({ wait: true }).catch((error: unknown) => {
             if (!(error instanceof ModalSandboxGoneError)) throw error;
           });
         }

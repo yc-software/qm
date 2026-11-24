@@ -288,9 +288,8 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
     cpus: 4,
     regions: ["us-west-2"],
     idleTimeoutMs: 6 * 3600_000 + 1,
-    egressProxyUrl: "https://egress.example.com",
   });
-  await tuned.create({ memoryGb: 8 });
+  await tuned.create({ memoryGb: 8, egressProxyUrl: "https://egress.example.com" });
   assert.deepEqual(modalCreateParams[1], {
     timeoutMs: 24 * 3600_000,
     idleTimeoutMs: 6 * 3600_000 + 1000,

@@ -21,7 +21,7 @@ export interface ModalSession {
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }>;
   restoreHome(imageId: string): Promise<void>;
-  terminate(): Promise<void>;
+  terminate(opts?: { wait?: boolean }): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
   constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
@@ -64,7 +64,6 @@ export interface SdkModalClientOptions {
   idleTimeoutMs?: number;
   maxCommandMs?: number;
   snapshotRetentionMs?: number;
-  egressProxyUrl?: string;
 }
 
 const MAX_LIFETIME_MS = 24 * 3600_000;
@@ -133,7 +132,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   if (!Number.isFinite(snapshotRetentionMs) || snapshotRetentionMs <= 0)
     throw new Error("Modal snapshot retention must be a positive finite duration");
   const snapshotTtlMs = wholeSeconds(snapshotRetentionMs);
-  const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
   type SdkClient = InstanceType<ModalSdk["ModalClient"]>;
   type SdkApp = Awaited<ReturnType<SdkClient["apps"]["fromName"]>>;
   type SdkImage = ReturnType<SdkClient["images"]["fromRegistry"]>;
@@ -224,9 +222,10 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const { client } = await loadCtx();
       await sbx.mountImage("/root", await client.images.fromId(imageId));
     },
-    async terminate(): Promise<void> {
+    async terminate(terminateOpts): Promise<void> {
       try {
-        await sbx.terminate({ wait: true });
+        if (terminateOpts?.wait) await sbx.terminate({ wait: true });
+        else await sbx.terminate();
       } catch (err) {
         if (!isSandboxGoneError(sdk, err)) throw err;
       }
@@ -247,7 +246,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           memoryMiB: createOpts.memoryGb ? createOpts.memoryGb * 1024 : DEFAULT_MEMORY_MB,
           ...(createOpts.memoryGb ? { memoryLimitMiB: createOpts.memoryGb * 1024 } : {}),
           ...(opts.regions?.length ? { regions: opts.regions } : {}),
-          ...(createOpts.egressProxyUrl ? modalEgressAllowlist(createOpts.egressProxyUrl) : network),
+          ...(createOpts.egressProxyUrl ? modalEgressAllowlist(createOpts.egressProxyUrl) : {}),
         });
         return wrap(sdk, sbx);
       } catch (err) {

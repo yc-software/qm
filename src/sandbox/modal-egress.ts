@@ -9,7 +9,7 @@ export interface ModalEgressRecord {
 export interface ModalEgress {
   proxyUrl(): string | undefined;
   client(base: ModalClient): ModalClient;
-  createdPolicy(sandboxId: string): string | undefined;
+  createdPolicy(session: ModalSession): string | undefined;
   stale(record: ModalEgressRecord | null | undefined): boolean;
   retireStaleScratch(held: ModalSession | undefined, active: number): Promise<boolean>;
 }
@@ -19,7 +19,7 @@ const policyOf = (egressProxyUrl: string | undefined): string =>
 
 export function createModalEgress(deploymentProxyUrl: string | undefined): ModalEgress {
   const deploymentPolicy = policyOf(deploymentProxyUrl);
-  const createdWith = new Map<string, string>();
+  const createdWith = new WeakMap<ModalSession, string>();
   const proxyUrl = (): string | undefined => tenantEgressProxyUrl(deploymentProxyUrl);
   const want = (): string => policyOf(proxyUrl());
   return {
@@ -30,14 +30,14 @@ export function createModalEgress(deploymentProxyUrl: string | undefined): Modal
         const egressProxyUrl = proxyUrl();
         const policy = policyOf(egressProxyUrl);
         const session = await base.create({ ...createOpts, ...(egressProxyUrl ? { egressProxyUrl } : {}) });
-        createdWith.set(session.sandboxId, policy);
+        createdWith.set(session, policy);
         return session;
       },
     }),
-    createdPolicy: (sandboxId) => createdWith.get(sandboxId),
+    createdPolicy: (session) => createdWith.get(session),
     stale: (record) => !!record && (record.egressPolicy ?? deploymentPolicy) !== want(),
     async retireStaleScratch(held, active): Promise<boolean> {
-      if (!held || (createdWith.get(held.sandboxId) ?? deploymentPolicy) === want()) return false;
+      if (!held || (createdWith.get(held) ?? deploymentPolicy) === want()) return false;
       if (active > 0) throw egressReplaceFailed(new Error("this scratch computer is still in use"));
       await held.terminate().catch(swallowAs("modal-egress: retire scratch with a stale egress setting", undefined));
       return true;
