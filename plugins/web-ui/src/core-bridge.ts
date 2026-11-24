@@ -387,7 +387,7 @@ export async function forkSession(
   );
 }
 
-export interface MoveAudienceMember {
+interface MoveAudienceMember {
   principalId: string;
   displayName: string;
 }
