@@ -894,15 +894,19 @@ test("a guest in the room: the person's turn mints presence without an internal 
   const s = await start();
   const captured = captureProvision(s.built.sandbox);
   try {
-    const tokenFor = async (publishMembers: TurnRequest["conversation"]["publishMembers"], thread: string) => {
+    await s.built.directory.replaceChannels(
+      ["C1", "C2"].map((channelId) => ({ channelId, name: channelId, isPrivate: false })),
+      ["C1", "C2"].map((channelId) => ({ channelId, principalId: "admin-alice" })),
+    );
+    const tokenFor = async (publishMembers: TurnRequest["conversation"]["publishMembers"], channel: string) => {
       captured.opts = undefined;
       const turn = await s.built.app.turn({
         surface: "test",
         actor: { externalId: "admin-alice" },
         conversation: {
           kind: "channel",
-          threadRef: thread,
-          channelRef: "C1",
+          threadRef: `${channel}:t`,
+          channelRef: channel,
           audience: [{ externalId: "admin-alice" }],
           publishMembers,
         },
@@ -912,10 +916,10 @@ test("a guest in the room: the person's turn mints presence without an internal 
       assert.equal(turn.status, "ok", JSON.stringify(turn));
       return captured.opts!.env!.AGENT_API_TOKEN!;
     };
-    const internal = await tokenFor([{ externalId: "admin-alice" }, { externalId: "U1" }], "C1:internal");
+    const internal = await tokenFor([{ externalId: "admin-alice" }, { externalId: "U1" }], "C1");
     const guest = await tokenFor(
       [{ externalId: "admin-alice" }, { externalId: "visitor", isExternalGuest: true }],
-      "C1:guest",
+      "C2",
     );
     const spend = (token: string) => fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": token } });
     assert.equal((await spend(internal)).status, 200);

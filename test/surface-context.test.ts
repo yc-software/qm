@@ -154,7 +154,7 @@ describe("surface-context pulls", async () => {
             ts: "1700.1",
             rateLimitRecipient: { target: "SECRET", user: "OTHER" },
           },
-          { "x-agent-capability": await cap({ liveActor }) },
+          { "x-agent-capability": await cap({ internalAudience: true, liveActor }) },
         );
         const query = await fulfillNext(() => ({ messages: [] }));
         assert.deepEqual(query.rateLimitRecipient, liveActor ? { target: "C9:1700.0001", user: "U1" } : undefined);
