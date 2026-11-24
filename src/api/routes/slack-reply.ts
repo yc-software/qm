@@ -143,6 +143,12 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       });
       if (!done?.ok) throw new Error(done?.error ?? "Slack rejected file share");
       const ts = await sharedTs(connection, uploads[0]!.id, target.container);
+      if (!ts)
+        reportFailure(
+          "slack reply: file share timestamp",
+          new Error(`files.info showed no share of ${uploads[0]!.id} in ${target.container}`),
+          `session=${body.sessionId}`,
+        );
       return recordReply(ts, connection.user ?? ctx.actor!.p);
     }
     attemptedSend = true;

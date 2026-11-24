@@ -1,7 +1,7 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
-import type { MentionSource } from "./emoji-completion";
+import { slackComposerForm, type SlackSkin } from "./composer-slack";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
@@ -198,11 +198,7 @@ export interface ComposerOptions {
   placeholder?: string;
   preferenceKey?: string;
   runtimeAccount?: "company";
-  slack?: {
-    avatar: () => TemplateResult;
-    label: string;
-    mentions: MentionSource;
-  };
+  slack?: SlackSkin;
 }
 
 export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {}): ComposerSurface {
@@ -571,26 +567,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function slackForm(agent: Agent, slack: NonNullable<ComposerOptions["slack"]>): TemplateResult {
-    let notice: TemplateResult | typeof nothing = nothing;
-    if (composerState.processingFiles) notice = html`<div class="composer-note">Preparing files...</div>`;
-    else if (composerState.error) notice = html`<div class="composer-error" role="alert">${composerState.error}</div>`;
-    return html`<form class="slack-reply-pill" @submit=${(e: Event) => submitComposer(e, agent)}>
-        ${attachmentStrip(agent)} ${slack.avatar()}
-        ${composerInput({
-          value: composerState.draft,
-          placeholder: "Reply in thread…",
-          disabled: false,
-          label: `Reply in Slack as ${slack.label}`,
-          maxLength: 4000,
-          mentions: slack.mentions,
-          onInput: (e) => onDraftInput(e, agent),
-          onKeydown: (e) => onComposerKeydown(e, agent),
-          onPaste: (e) => void onComposerPaste(e, agent),
-        })}
-        <div class="slack-reply-actions">${sendButton("Send to Slack")}</div>
-        ${notice}
-      </form>
-      ${pasteViewDialog(agent)}`;
+    return slackComposerForm({
+      ...slack,
+      draft: composerState.draft,
+      status: composerState.processingFiles ? "Preparing files..." : "",
+      error: composerState.error,
+      attachments: attachmentStrip(agent),
+      send: sendButton("Send to Slack"),
+      pasteView: pasteViewDialog(agent),
+      onSubmit: (e) => submitComposer(e, agent),
+      onInput: (e) => onDraftInput(e, agent),
+      onKeydown: (e) => onComposerKeydown(e, agent),
+      onPaste: (e) => void onComposerPaste(e, agent),
+    });
   }
 
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
