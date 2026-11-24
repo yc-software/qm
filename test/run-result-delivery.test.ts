@@ -553,3 +553,14 @@ test("an approved automation replay delivers its result to origin.destination un
   assert.equal(runResultDelivery(run({ request: { ...req, surfaceTools: true } })), null);
   assert.equal(runResultDelivery(run({ request: { ...req, approval: undefined } })), null);
 });
+
+test("an approval continuation started by a trigger leaves its reply to the trigger's own delivery", () => {
+  const destination = { type: "slack", target: "D1" };
+  const req = {
+    ...turn("set it"),
+    surface: "approval",
+    origin: { kind: "automation" as const, fire: true as const, destination },
+    approval: { requestId: "a-2", approved: true, scope: "once" as const },
+  };
+  assert.equal(runResultDelivery(run({ request: req, result: { status: "ok", reply: "done" } })), null);
+});
