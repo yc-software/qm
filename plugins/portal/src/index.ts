@@ -106,6 +106,7 @@ import {
   isLoopbackUrl,
   isSecureOrLoopbackUrl,
   KEEP_ALIVE_TIMEOUT_MS,
+  destroyIfRequestFailed,
   logUnansweredCloses,
 } from "../../chassis/src/http.ts";
 import {
@@ -711,6 +712,7 @@ const server = createServer((req, res) => {
       );
   });
   void withRequestContext("portal", req, res, () => handle(req, res)).catch((err: unknown) => {
+    if (destroyIfRequestFailed(req, res, err)) return;
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
