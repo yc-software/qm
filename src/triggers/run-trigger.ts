@@ -46,7 +46,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "approval"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -315,6 +315,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
+        fire: true,
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
       },
@@ -334,6 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
+      ...(spec.approval ? { approval: spec.approval } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
@@ -352,7 +354,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `waiting for approval${reasons ? `: ${reasons}` : ""}`;
+      note = `is waiting on an approval card sent to its owner${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

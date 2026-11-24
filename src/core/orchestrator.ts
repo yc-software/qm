@@ -104,7 +104,7 @@ import {
   approvalView,
   createApprovalDecisions,
   createApprovalLedger,
-  grantModesWithin,
+  newApprovalRecord,
   resolveLiveApproval,
   withdrawCallApprovals,
   type ApprovalDecisionTurn,
@@ -650,15 +650,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
       ): Promise<PendingApproval> => {
-        const { grantModes, ...rest } = fields;
-        const record: PendingApprovalRecord = {
-          ...(Object.fromEntries(
-            Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
-          ) as typeof rest),
-          createdAt: Date.now(),
-          request: replayableRequest(input),
-          ...grantModesWithin(resolution.approvalGrantModes, grantModes),
-        };
+        const record = newApprovalRecord(fields, input, resolution.approvalGrantModes);
         await pending.put(requestId, record);
         return approvalView(requestId, record);
       };

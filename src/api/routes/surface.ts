@@ -21,7 +21,7 @@ import { runtimeConfigBody, userRuntimeConfigBody, withAppEditRuntime } from "..
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import { SHARE_ERROR_STATUS } from "./sharing.ts";
-import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
+import type { Grant, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import type { ItemKind } from "../../sessions/items-schema.ts";
@@ -38,6 +38,7 @@ import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
+import { cardsShownInSession } from "../session-approval-cards.ts";
 import { sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
@@ -337,28 +338,7 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
   const approvals = await app.listSessionApprovals(id, viewer);
-  return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
-}
-
-async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: string): Promise<PendingApproval[]> {
-  const kc = ctx.deps.keychain;
-  const approvals = ctx.deps.keychainApprovals;
-  if (!kc || !approvals) return [];
-  const out: PendingApproval[] = [];
-  for (const ask of await kc.listAsks({ ownerId: viewer })) {
-    if (ask.status !== "pending") continue;
-    const view = await approvals.get(ask.id, viewer);
-    if (!view || (view.sessionId !== sessionId && view.requesterSessionId !== sessionId)) continue;
-    out.push({
-      requestId: `keychain:${ask.id}`,
-      command: view.accountLabel ? `${view.service} (${view.accountLabel})` : view.service,
-      summary: `Use your ${view.service} credential in ${view.conversation}`,
-      reason: "Credential approval",
-      grantModes: { session: false, always: true },
-      blocksInput: false,
-    });
-  }
-  return out;
+  return sendJson(res, 200, { approvals: [...approvals, ...(await cardsShownInSession(ctx, id, viewer))] });
 }
 
 async function getSessionBackground(ctx: ApiCtx): Promise<void> {

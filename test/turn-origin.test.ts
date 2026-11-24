@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopClientForTurn, introducesUser, mayDriveDesktop } from "../src/core/turn-origin.ts";
+import { desktopClientForTurn, introducesUser, mayDriveDesktop, sessionTurnOrigin } from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
@@ -39,4 +39,12 @@ test("only messages a person sent may drive their desktop, from any client", () 
     assert.equal(mayDriveDesktop({ origin: { kind } }), false);
   for (const patch of [{ botActor: true }, { proactiveOpener: true }, { surfaceOrigin: { audience: "external" } }])
     assert.equal(mayDriveDesktop({ origin: { kind: "human" }, ...patch } as never), false);
+});
+
+test("a session message from a fire does not carry the fire marker", () => {
+  assert.deepEqual(sessionTurnOrigin({ kind: "automation", fire: true, ownerFire: true }, "hi"), {
+    kind: "automation",
+    ownerFire: true,
+    screenData: "hi",
+  });
 });
