@@ -295,7 +295,9 @@ export function createSideChatController(ctx: ConvCtx) {
         const listed = result.sessions ?? [];
         const finished = new Set(chats.filter((chat) => chat.working).map((chat) => chat.id));
         const changed = (chat: CoreSession) => fresh.includes(chat.id) || (finished.has(chat.id) && !chat.working);
-        await Promise.all(listed.filter((chat) => chat.id !== active?.id && changed(chat)).map(loadPreview));
+        const loaded = listed.filter((chat) => chat.id !== active?.id && changed(chat));
+        await Promise.all(loaded.map(loadPreview));
+        if (loaded.length) await new Promise((resolve) => window.requestAnimationFrame(resolve));
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
         chats = listed.toSorted((left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity));
