@@ -515,7 +515,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => personAtKeyboard(v.claims) && v.claims.internalAudience === true,
+    when: (v) => personAtKeyboard(v.claims) && !!v.claims.internalAudience,
     routes: [
       {
         method: "GET|PUT|DELETE",
@@ -740,7 +740,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.role === "owner" && livePersonCapability(v.claims) && v.claims.internalAudience === true,
+    when: (v) => v.role === "owner" && livePersonCapability(v.claims) && !!v.claims.internalAudience,
     guidance:
       "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, the org memory-brain registry, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
     routes: [
@@ -817,8 +817,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) =>
-      v.isAdmin && v.role !== "owner" && livePersonCapability(v.claims) && v.claims.internalAudience === true,
+    when: (v) => v.isAdmin && v.role !== "owner" && livePersonCapability(v.claims) && !!v.claims.internalAudience,
     guidance:
       "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
@@ -914,7 +913,7 @@ const FAMILIES: AgentApiFamily[] = [
 ];
 
 const WHOAMI_FOR_ALL: AgentApiFamily = {
-  when: (v) => !(v.isAdmin && livePersonCapability(v.claims) && v.claims.internalAudience === true),
+  when: (v) => !(v.isAdmin && livePersonCapability(v.claims) && !!v.claims.internalAudience),
   routes: [
     { method: "GET", path: "/v1/admin/whoami", summary: "this user's org capabilities: {permissions, isAdmin, role?}" },
   ],

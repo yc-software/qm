@@ -32,7 +32,6 @@ export interface CredentialCatalogTurn {
   conversation: OrchestratorInput["conversation"];
   external: boolean;
   strictReadOnly: boolean;
-  allInternal: boolean;
   internalAudience: boolean;
   liveAuthorTurn: boolean;
   scopeId: ScopeId;
@@ -304,7 +303,7 @@ export async function registerServiceCredentials(
     conversation,
     external,
     strictReadOnly,
-    allInternal,
+    internalAudience,
     resolution,
     serviceAllowed,
     grantedServiceCredSlugs,
@@ -357,7 +356,7 @@ export async function registerServiceCredentials(
     })());
   for (const credential of available) {
     if (credential.delivery === "env") {
-      if ((!allInternal && !external) || !credential.envKey) continue;
+      if ((!internalAudience && !external) || !credential.envKey) continue;
       addCredential(
         {
           handle: credential.slug,

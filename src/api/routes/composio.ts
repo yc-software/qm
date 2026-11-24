@@ -3,7 +3,7 @@ import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { COMPOSIO_ENV_KEY, isBackendCredential, isUsableComposioKey } from "../../credentials/keychain.ts";
-import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -13,11 +13,11 @@ import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
-import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, activeRun, audit } from "./shared.ts";
+import { activePrincipal, activeRun, audit, livePersonTurn } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
 
@@ -70,7 +70,6 @@ export async function credential(
       cap.botActor ||
       (shared &&
         livePersonCapability(cap) &&
-        cap.internalAudience === true &&
         (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
     ) {
       sendJson(ctx.res, 403, {
@@ -390,8 +389,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
-  if (ctx.capability && !(personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true))
-    return refuseWithoutPerson(ctx.res);
+  if (!livePersonTurn(ctx)) return;
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;

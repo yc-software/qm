@@ -62,6 +62,18 @@ export async function personOrOwningBot(
   );
 }
 
+export type ActingClaims = Pick<
+  CapabilityClaims,
+  "actorId" | "botActor" | "internalAudience" | "liveActor" | "liveAuthor"
+> & {
+  scopeId?: string;
+};
+
+export type ScopeAuthorizationClaims = Pick<
+  CapabilityClaims,
+  "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "liveActor" | "members"
+>;
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
@@ -224,9 +236,7 @@ export async function verifyBlobTransferCapability(
 
 export async function asOrgAdmin(
   admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
-  actor: Pick<CapabilityClaims, "actorId" | "botActor" | "internalAudience" | "liveActor" | "liveAuthor"> & {
-    scopeId?: string;
-  },
+  actor: ActingClaims,
 ): Promise<boolean> {
   if (actor.botActor === true) return false;
   if (actor.scopeId !== undefined && !(actor.internalAudience === true && (actor.liveActor || actor.liveAuthor)))

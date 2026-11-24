@@ -1226,7 +1226,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation,
         external,
         strictReadOnly,
-        allInternal,
         internalAudience,
         liveAuthorTurn: livePersonTurn,
         scopeId,

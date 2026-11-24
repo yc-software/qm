@@ -55,7 +55,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims, ScopeAuthorizationClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
@@ -487,12 +487,7 @@ export interface App {
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
-  authorizesCapabilityScope(
-    claims: Pick<
-      CapabilityClaims,
-      "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "liveActor" | "members"
-    >,
-  ): Promise<boolean>;
+  authorizesCapabilityScope(claims: ScopeAuthorizationClaims): Promise<boolean>;
   openFileForViewer(
     tenant: Tenant,
     id: string,
