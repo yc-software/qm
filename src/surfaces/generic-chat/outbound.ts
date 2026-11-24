@@ -7,7 +7,12 @@ import { genericChatCard } from "./approvals.ts";
 import { GenericChatHttpError } from "./client.ts";
 import { uploadGenericChatFiles, type GenericChatUploads } from "./files.ts";
 import { deleteGenericChatMessage, editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { genericChatMessageId, genericChatMessageIdSchema, parseGenericChatRef } from "./protocol.ts";
+import {
+  genericChatMessageId,
+  genericChatMessageIdSchema,
+  parseGenericChatAccount,
+  parseGenericChatRef,
+} from "./protocol.ts";
 import { UnknownGenericChatReaction, setGenericChatReaction } from "./reactions.ts";
 
 class UnsupportedDelivery extends Error {}
@@ -30,7 +35,7 @@ export function genericChatSender(
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parseGenericChatRef(d.destination.target);
     if (!ref) throw new UnsupportedDelivery(`generic-chat: unroutable target ${d.destination.target}`);
-    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
+    if ((await deps.app.tenantFor("partner_chat", parseGenericChatAccount(ref.account)!.id)) !== tenant.id)
       throw new UnsupportedDelivery(`generic-chat: account ${ref.account} is not bound to this workspace`);
     const card = await genericChatCard(deps, d);
     if (card === null) return;

@@ -17,6 +17,7 @@ import {
   chatContainer,
   findMessage,
   genericChatRef,
+  genericChatAccount,
   genericChatTs,
   parseGenericChatEvent,
   parseGenericChatRef,
@@ -111,6 +112,7 @@ export function createGenericChatInbound(deps: {
       console.log(`[generic-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
+    if (event.origin !== undefined) event.account = genericChatAccount(event.account, event.origin);
     return inTenant(tenant, (): Promise<{ status: number; body: Record<string, unknown> }> => {
       switch (event.type) {
         case "reaction.added":
