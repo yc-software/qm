@@ -12,7 +12,7 @@ export interface MentionRow {
 export type MentionSource = (query: string) => MentionRow[] | Promise<MentionRow[]>;
 type Row = { lead: unknown; label: string; insert: string };
 
-export function emojiToken(
+function emojiToken(
   value: string,
   caret: number,
 ): { start: number; end: number; query: string; complete: boolean } | null {
