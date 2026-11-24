@@ -318,10 +318,11 @@ test("authorization supplies the callback and account binding without accepting 
   }
   assert.equal(f.calls.length, 0);
   const callbackUrl = "https://qm.example/s/chat?composioReturn=nonce";
+  f.replies.push({ items: [] });
   f.link();
   const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, null, privateCap);
   assert.equal(r.data.accountId, "ca_test");
-  assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
+  assert.equal(JSON.parse(String(f.calls[2]!.init?.body)).callback_url, callbackUrl);
 });
 
 test("connections return only this actor's active accounts and strip credentials", async () => {
@@ -1462,4 +1463,18 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
+});
+
+test("an agent gets no new connect link after repeated unfinished attempts", async () => {
+  const f = fixture();
+  await f.own();
+  const at = new Date().toISOString();
+  const attempt = { status: "EXPIRED", status_reason: "not completed", created_at: at };
+  f.replies.push({ items: [attempt, attempt, attempt] });
+  const refused = await f.invoke("/v1/composio/authorize", { toolkit: "twitter" }, null, privateCap);
+  assert.deepEqual([refused.status, refused.data.error], [429, "connect_attempts_unfinished"]);
+  assert.match(f.calls[0]!.url, /user_ids=.*toolkit_slugs=twitter/);
+  f.replies.push({ items: [{ ...attempt, status: "ACTIVE" }, attempt, attempt] });
+  f.link();
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "twitter" }, null, privateCap)).status, 200);
 });
