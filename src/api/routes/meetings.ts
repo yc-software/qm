@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { reportBackendError } from "../../../plugins/chassis/src/error-reporting.ts";
 import { overheardItem } from "../../agent/replay.ts";
 import { isValidCapabilityTimezone } from "../../auth/capability-token.ts";
@@ -13,19 +12,17 @@ import { transcribeUpload, voiceKey } from "./voice.ts";
 import { meetingThread, webTurnBase } from "./web-turns.ts";
 
 const CHECK_IN_MS = 120_000;
-const PROMPT_CHARS = 1_000;
+const WHISPER_PROMPT_CHARS = 1_000;
 const PROMPT_LINES = 12;
 const TEXT_BYTES = 64_000;
 const START_WAIT_MS = 10_000;
-const START_POLL_MS = 100;
-const NOTES_CHARS = 20_000;
-const RUN_LIMIT = 500;
 
 const CHECK_IN =
   "Meeting check-in. Reply only with something worth a glance mid-meeting: a claim you checked that is wrong or materially off (what was said, what is true, the source), or context the person would want right now. One or two lines, no summaries. Otherwise end with finish_silently.";
 
 interface Meeting {
   user: string;
+  id: string;
   threadRef: string;
 }
 
@@ -69,7 +66,8 @@ async function openMeeting(ctx: ApiCtx, id: unknown): Promise<Meeting | undefine
     return undefined;
   }
   const user = ctx.actor!.p;
-  return { user, threadRef: meetingThread(user, parsed.data.toLowerCase()) };
+  const meetingId = parsed.data.toLowerCase();
+  return { user, id: meetingId, threadRef: meetingThread(user, meetingId) };
 }
 
 async function meetingTurn(ctx: ApiCtx, meeting: Meeting, text: string): Promise<TurnRequest> {
@@ -92,7 +90,7 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
   const app = typeof p.app === "string" && p.app.trim() ? p.app.trim() : undefined;
   const spawned = await ctx.app.spawnSession(meeting.user, {
     scopeId: scopeId("personal", meeting.user),
-    threadRef: meeting.threadRef,
+    meeting: { threadRef: meeting.threadRef, id: meeting.id },
     title: `${app ? `${app} meeting` : "Meeting"} · ${clock(startedAt, timezone, true)}`,
   });
   if (!spawned) return sendJson(ctx.res, 403, { error: "forbidden" });
@@ -110,12 +108,12 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
     },
   );
   if (refused) return sendJson(ctx.res, 403, { error: "refused", message: refused });
-  let started: Run | null = null;
-  for (let waited = 0; waited < START_WAIT_MS; waited += START_POLL_MS) {
-    started = await ctx.deps.runs!.getByDedupKey(`${meeting.threadRef}:start`);
-    if (!started || started.turnUserSeq !== null || started.status === "done" || started.status === "failed") break;
-    await sleep(START_POLL_MS);
-  }
+  const runs = ctx.deps.runs!;
+  const queued = await runs.getByDedupKey(`${meeting.threadRef}:start`);
+  const started =
+    queued && !isTerminal(queued.status)
+      ? await runs.waitFor(queued.id, START_WAIT_MS).catch(() => runs.get(queued.id))
+      : queued;
   return sendJson(ctx.res, 201, {
     path: `/s/${encodeURIComponent(spawned.session.id)}`,
     prompt: started ? transcriptionPrompt(started, []) : "",
@@ -123,8 +121,8 @@ async function startMeeting(ctx: ApiCtx): Promise<void> {
 }
 
 function transcriptionPrompt(started: Run, recent: string[]): string {
-  const brief = (started.result?.reply ?? "").slice(0, PROMPT_CHARS / 2);
-  const tail = [...new Set(recent)].join("\n").slice(-(PROMPT_CHARS - brief.length));
+  const brief = (started.result?.reply ?? "").slice(0, WHISPER_PROMPT_CHARS / 2);
+  const tail = [...new Set(recent)].join("\n").slice(-(WHISPER_PROMPT_CHARS - brief.length));
   return [brief, tail].filter(Boolean).join("\n");
 }
 
@@ -138,9 +136,16 @@ async function heardText(ctx: ApiCtx, prompt: string): Promise<string | null | u
     });
     return undefined;
   }
-  const body: unknown = await readRawBody(ctx.req, TEXT_BYTES)
-    .then(JSON.parse)
-    .catch(() => undefined);
+  let body: unknown;
+  try {
+    body = JSON.parse(await readRawBody(ctx.req, TEXT_BYTES));
+  } catch (error) {
+    sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `The segment could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return undefined;
+  }
   if (isObj(body) && typeof body.text === "string") return body.text.trim();
   sendJson(ctx.res, 400, { error: "bad_request", message: "A segment transcribed on the Mac needs its text." });
   return undefined;
@@ -174,6 +179,7 @@ async function meetingSpeech(ctx: ApiCtx): Promise<void> {
     overheardItem({
       overheard: true,
       ts: `${(at / 1000).toFixed(3)}:${speaker}`,
+      speakerId: speaker,
       name: speaker === "me" ? ctx.actor!.n?.trim() || "Me" : "Others",
       text,
     }),
@@ -203,6 +209,7 @@ async function afterSpeech(ctx: ApiCtx, meeting: Meeting, sessionId: string, sta
     ...checkIn,
     surface: "meeting",
     origin: { kind: "automation" },
+    skipMemory: true,
     idempotencyKey: `${meeting.threadRef}:check-in:${slot}`,
     async: true,
   });
@@ -246,26 +253,34 @@ async function notesPin(ctx: ApiCtx, sessionId: string) {
   return (await ctx.deps.sessions!.listPins(sessionId)).find((pin) => pin.addedBy === author);
 }
 
-function heardLine(item: Pick<Item, "externalId" | "text">) {
-  const [seconds, speaker] = (item.externalId ?? "").split(":");
-  return { at: Math.round(Number(seconds) * 1000), speaker: speaker === "me" ? "me" : "others", text: item.text ?? "" };
+function heardLine(item: Item) {
+  const body = item.body as { speakerId?: string };
+  return {
+    seq: item.seq,
+    at: Math.round(Number(item.externalId?.split(":")[0]) * 1000),
+    speaker: body.speakerId === "me" ? "me" : "others",
+    text: item.text ?? "",
+  };
 }
 
 async function meetingNote(ctx: ApiCtx): Promise<void> {
   const meeting = await openMeeting(ctx, ctx.params.id);
   if (!meeting) return;
   const sessions = ctx.deps.sessions!;
+  const runs = ctx.deps.runs!;
+  const after = Number(ctx.url.searchParams.get("after") ?? -1);
   const session = await sessions.getByThread(meeting.threadRef);
-  if (!session) return sendJson(ctx.res, 404, { error: "not_found" });
-  const [items, runs, notes] = await Promise.all([
-    sessions.getItems(session.id, { messagesOnly: true }),
-    ctx.deps.runs!.list({ threadRef: meeting.threadRef, limit: RUN_LIMIT }),
+  const [started, stopped] = await Promise.all([
+    runs.getByDedupKey(`${meeting.threadRef}:start`),
+    runs.getByDedupKey(`${meeting.threadRef}:stop`),
+  ]);
+  if (!session || !started) return sendJson(ctx.res, 404, { error: "not_found" });
+  const checkIns = Math.floor(((stopped?.createdAt ?? Date.now()) - started.createdAt) / CHECK_IN_MS) + 1;
+  const [items, flags, notes] = await Promise.all([
+    sessions.getItems(session.id, { messagesOnly: true, sinceSeq: Number.isSafeInteger(after) ? after + 1 : 0 }),
+    runs.list({ threadRef: meeting.threadRef, surface: "meeting", limit: checkIns }),
     notesPin(ctx, session.id),
   ]);
-  const keyed = (suffix: string) => runs.find((run) => run.dedupKey === `${meeting.threadRef}:${suffix}`);
-  const [started, stopped] = [keyed("start"), keyed("stop")];
-  if (!started) return sendJson(ctx.res, 404, { error: "not_found" });
-  const checkIn = `${meeting.threadRef}:check-in:`;
   return sendJson(ctx.res, 200, {
     app: started.request.displayText?.split(" · ").slice(1, -1)[0] ?? null,
     startedAt: started.createdAt,
@@ -273,8 +288,8 @@ async function meetingNote(ctx: ApiCtx): Promise<void> {
     brief: started.result?.reply ?? null,
     notes: notes?.text ?? "",
     transcript: items.filter(isOverheard).map(heardLine),
-    flags: runs
-      .filter((run) => run.dedupKey?.startsWith(checkIn) && run.result?.status === "ok" && run.result.reply)
+    flags: flags
+      .filter((run) => run.result?.status === "ok" && run.result.reply)
       .map((run) => ({ at: run.createdAt, text: run.result!.reply! }))
       .reverse(),
     writeup: stopped?.result?.reply ?? null,
@@ -286,11 +301,7 @@ async function saveNotes(ctx: ApiCtx): Promise<void> {
   const meeting = await openMeeting(ctx, ctx.params.id);
   if (!meeting) return;
   const notes = isObj(ctx.body) && typeof ctx.body.notes === "string" ? ctx.body.notes.trim() : undefined;
-  if (notes === undefined || notes.length > NOTES_CHARS)
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: `notes must be text of at most ${NOTES_CHARS} characters.`,
-    });
+  if (notes === undefined) return sendJson(ctx.res, 400, { error: "bad_request", message: "notes must be text." });
   const sessions = ctx.deps.sessions!;
   const session = await sessions.getByThread(meeting.threadRef);
   if (!session) return sendJson(ctx.res, 404, { error: "not_found" });

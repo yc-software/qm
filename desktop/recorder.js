@@ -8,8 +8,8 @@
     try {
       const audio = await new OfflineAudioContext(1, 1, 16_000).decodeAudioData(await blob.arrayBuffer());
       return new Uint8Array(Float32Array.from(audio.getChannelData(0)).buffer);
-    } catch {
-      return new Uint8Array();
+    } catch (error) {
+      return `${error.name}: ${error.message}`;
     }
   };
 

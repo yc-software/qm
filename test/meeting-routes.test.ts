@@ -15,19 +15,21 @@ const turns: TurnRequest[] = [];
 const appended: NewItem[] = [];
 const runs = new Map<
   string,
-  { createdAt: number; result: { reply?: string; status?: string }; request: TurnRequest }
+  { id: string; status: string; createdAt: number; result: { reply?: string; status?: string }; request: TurnRequest }
 >();
 const pins: { id: string; text: string; addedBy: string }[] = [];
 let pending = false;
 
 const app = {
-  spawnSession: async (_user: string, opts: { threadRef?: string; title?: string }) => {
-    assert.equal(opts.threadRef, thread);
+  spawnSession: async (_user: string, opts: { meeting?: { threadRef: string; id: string }; title?: string }) => {
+    assert.deepEqual(opts.meeting, { threadRef: thread, id });
     return { session: { id: "meeting-session", title: opts.title } };
   },
   turn: async (req: TurnRequest) => {
     turns.push(req);
     runs.set(req.idempotencyKey!, {
+      id: req.idempotencyKey!,
+      status: "running",
       createdAt: Date.now(),
       result: { reply: "Weekly sync with Dana Kowalczyk" },
       request: req,
@@ -44,8 +46,9 @@ const deps = {
   openaiApiKey: "meeting-test-key",
   featureFlags: { enabled: async (name: string, scope: string) => flagged.has(`${name}:${scope}`) },
   sessions: {
-    getByThread: async (ref: string) => (ref === thread ? { id: "meeting-session" } : null),
-    getItems: async () => appended.map((item) => ({ ...item, seq: 1, createdAt: 0 })),
+    getByThread: async (ref: string) => (ref === thread ? { id: "meeting-session", meetingId: id } : null),
+    getItems: async (_session: string, opts?: { sinceSeq?: number }) =>
+      appended.map((item, seq) => ({ ...item, seq, createdAt: 0 })).slice(opts?.sinceSeq ?? 0),
     appendDelivery: async (_writer: unknown, item: NewItem) => {
       if (appended.some((seen) => seen.externalId === item.externalId)) return false;
       appended.push(item);
@@ -61,8 +64,10 @@ const deps = {
   },
   runs: {
     getByDedupKey: async (key: string) => runs.get(key) ?? null,
+    waitFor: async (key: string) => runs.get(key),
     inFlightForThread: async () => (pending ? [{ status: "pending" }] : []),
-    list: async () => [...runs].map(([dedupKey, run]) => ({ ...run, dedupKey })).reverse(),
+    list: async (opts: { surface?: string }) =>
+      [...runs.values()].filter((run) => run.request.surface === opts.surface).reverse(),
   },
 };
 const server = createServer(app, deps as unknown as ServerDeps);
@@ -121,7 +126,7 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
       kind: "UserMessage",
       externalId: "1795000000.000:others",
       text: "Dana said revenue tripled.",
-      body: { overheard: true, name: "Others" },
+      body: { overheard: true, speakerId: "others", name: "Others" },
     },
   ]);
   assert.equal(turns.length, 1);
@@ -136,8 +141,8 @@ test("a meeting opens with a brief, stores speech once as overheard lines, check
   spoken.push("And margins are flat.");
   await speech(1_795_000_010_000);
   assert.deepEqual(
-    [turns[1]!.surface, turns[1]!.origin, turns[1]!.deliveryTarget],
-    ["meeting", { kind: "automation" }, undefined],
+    [turns[1]!.surface, turns[1]!.origin, turns[1]!.deliveryTarget, turns[1]!.skipMemory],
+    ["meeting", { kind: "automation" }, undefined, true],
   );
   const stop = await post(`/api/meetings/${id}/stop`, { endedAt: Date.UTC(2026, 10, 23, 18, 47) });
   assert.equal(stop.status, 202);
@@ -199,12 +204,20 @@ test("the meeting note carries the brief, lines heard, flags and the person's no
     ],
   );
   const checkIn = (slot: number, status: string, reply: string) =>
-    runs.set(`${thread}:check-in:${slot}`, { createdAt: slot, result: { status, reply }, request: {} as TurnRequest });
+    runs.set(`${thread}:check-in:${slot}`, {
+      id: String(slot),
+      status: "done",
+      createdAt: slot,
+      result: { status, reply },
+      request: { surface: "meeting" } as TurnRequest,
+    });
   checkIn(1, "ok", "Revenue doubled, not tripled.");
   checkIn(2, "silent", "");
   await post(`/api/meetings/${id}/stop`, { endedAt: Date.UTC(2026, 10, 23, 18, 48) });
   assert.equal(turns.at(-1)!.text.endsWith("build the write-up around them:\nAsk about churn and hiring"), true);
-  const note = (await (await fetch(`${base}/api/meetings/${id}`, { headers })).json()) as Record<string, unknown[]>;
+  const read = async (after = -1) =>
+    (await (await fetch(`${base}/api/meetings/${id}?after=${after}`, { headers })).json()) as Record<string, unknown[]>;
+  const note = await read();
   assert.deepEqual(
     [note.app, note.brief, note.notes, note.flags, note.writing, note.transcript![0]],
     [
@@ -213,7 +226,8 @@ test("the meeting note carries the brief, lines heard, flags and the person's no
       "Ask about churn and hiring",
       [{ at: 1, text: "Revenue doubled, not tripled." }],
       true,
-      { at: 1_795_000_000_000, speaker: "others", text: "Dana said revenue tripled." },
+      { seq: 0, at: 1_795_000_000_000, speaker: "others", text: "Dana said revenue tripled." },
     ],
   );
+  assert.deepEqual((await read(appended.length - 1)).transcript, []);
 });

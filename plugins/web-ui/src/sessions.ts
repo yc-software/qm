@@ -1,7 +1,7 @@
 import { openSessionShare } from "./session-share";
 import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { meetingId, meetingsReady, meetingsSidebar, mountMeetingNote } from "./meeting-note";
+import { meetingOf, meetingsReady, meetingsSidebar, mountMeetingNote } from "./meeting-note";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -371,8 +371,8 @@ export function renderList(): void {
   if (chatsPageShowing()) drawChatsPage();
   if (!appState.listEl) return;
   const visible = visibleSessions();
-  const meetings = visible.filter((s) => !s.archived && meetingId(s.threadRef));
-  const active = visible.filter((s) => !s.archived && !meetingId(s.threadRef));
+  const meetings = visible.filter((s) => !s.archived && meetingOf(s));
+  const active = visible.filter((s) => !s.archived && !meetingOf(s));
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
   const shownThreads = new Set(visible.map((session) => session.threadRef));
@@ -2240,7 +2240,7 @@ export async function openSessionInto(
     conv.catchUp();
     return true;
   }
-  const meeting = s.threadRef.includes(":meeting:") && (await meetingsReady()) ? meetingId(s.threadRef) : null;
+  const meeting = s.threadRef.includes(":meeting:") && (await meetingsReady()) ? meetingOf(s) : null;
   if (meeting) {
     if (tracked) sessionsState.openingKey = null;
     conv.mountMeeting(s, (host) => mountMeetingNote(host, sessionTitle(s), s.id, meeting));

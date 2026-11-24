@@ -3,11 +3,10 @@ import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { AudioLines, Plus } from "lucide";
 import "./meeting-note.css";
-import { api } from "./core-bridge";
+import { api, type CoreSession } from "./core-bridge";
 import { QM_MAC_DOWNLOAD_URL } from "./desktop-computer";
 import { icon } from "./icons";
 import { markdown } from "./message-markdown";
-import { appState } from "./shell-state";
 
 type Recorder = { recording: false } | { recording: true; path?: string; startedAt: number; stopping: boolean };
 
@@ -19,6 +18,7 @@ interface DesktopMeetings {
 }
 
 interface Line {
+  seq: number;
   at: number;
   speaker: "me" | "others";
   text: string;
@@ -74,9 +74,8 @@ export function meetingsReady(): Promise<boolean> {
   return flag;
 }
 
-export function meetingId(threadRef: string): string | null {
-  const prefix = `web:${appState.me?.user ?? ""}:meeting:`;
-  return enabled && threadRef.startsWith(prefix) ? threadRef.slice(prefix.length) : null;
+export function meetingOf(session: CoreSession): string | null {
+  return enabled ? (session.meetingId ?? null) : null;
 }
 
 const sessionOf = (path: string): string => path.split("/").pop() ?? "";
@@ -137,6 +136,8 @@ export function meetingsSidebar(
   </div>`;
 }
 
+const problem = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
@@ -161,7 +162,7 @@ function transcriptView(note: Note): TemplateResult {
   for (const line of note.transcript) {
     flush(line.at);
     rows.push({
-      key: `${line.at}:${line.speaker}`,
+      key: String(line.seq),
       tpl: html`<p class="meeting-line">
         <span class="meeting-who ${line.speaker}">${line.speaker === "me" ? "Me" : "Them"}</span>${line.text}
       </p>`,
@@ -184,18 +185,18 @@ function status(n: Note): TemplateResult {
 
 export function mountMeetingNote(host: HTMLElement, title: string, sessionId: string, id: string): void {
   let note: Note | null = null;
-  let failed = false;
+  let failed: string | null = null;
   let notes: string | null = null;
   let saveTimer: number | undefined;
-  let saveError = false;
+  let saveError: string | null = null;
   const save = async () => {
     window.clearTimeout(saveTimer);
     if (notes === null) return;
     try {
       await api(`/api/meetings/${encodeURIComponent(id)}/notes`, { method: "PUT", body: JSON.stringify({ notes }) });
-      saveError = false;
-    } catch {
-      saveError = true;
+      saveError = null;
+    } catch (error) {
+      saveError = problem(error);
     }
     draw();
   };
@@ -208,7 +209,7 @@ export function mountMeetingNote(host: HTMLElement, title: string, sessionId: st
   const view = (): TemplateResult => {
     if (!note)
       return html`<div class="meeting-note">
-        <p class="meeting-empty">${failed ? "Couldn't load this meeting." : "Loading…"}</p>
+        <p class="meeting-empty">${failed ? `Couldn't load this meeting: ${failed}` : "Loading…"}</p>
       </div>`;
     const n = note;
     const stopping = recorder.recording && recorder.stopping;
@@ -250,7 +251,7 @@ export function mountMeetingNote(host: HTMLElement, title: string, sessionId: st
           @input=${onNotes}
           @blur=${() => void save()}
         ></textarea>
-        ${saveError ? html`<p class="meeting-empty" role="alert">Couldn't save your notes. Keep typing to retry.</p>` : nothing}
+        ${saveError ? html`<p class="meeting-empty" role="alert">Couldn't save your notes (${saveError}). Keep typing to retry.</p>` : nothing}
         ${writeup}
       </article>
       <aside class="meeting-transcript" aria-label="Transcript">
@@ -277,10 +278,12 @@ export function mountMeetingNote(host: HTMLElement, title: string, sessionId: st
     window.clearTimeout(pollTimer);
     if (!host.isConnected) return;
     try {
-      note = await api<Note>(`/api/meetings/${encodeURIComponent(id)}`);
-      failed = false;
-    } catch {
-      failed = true;
+      const after = note?.transcript.at(-1)?.seq ?? -1;
+      const next = await api<Note>(`/api/meetings/${encodeURIComponent(id)}?after=${after}`);
+      note = { ...next, transcript: [...(note?.transcript ?? []), ...next.transcript] };
+      failed = null;
+    } catch (error) {
+      failed = problem(error);
     }
     draw();
     if (!note || note.endedAt === null || note.writing) pollTimer = window.setTimeout(() => void load(), POLL_MS);

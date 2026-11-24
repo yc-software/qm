@@ -231,7 +231,8 @@ function fail(current, error) {
 }
 
 async function transcribeHere(current, pcm) {
-  if (!pcm.length) throw Object.assign(new Error("The audio could not be decoded"), { segmentOnly: true });
+  if (typeof pcm === "string")
+    throw Object.assign(new Error(`The audio could not be decoded (${pcm})`), { segmentOnly: true });
   const { signal } = current.controller;
   const file = await Promise.race([
     prepareModel(),

@@ -53,7 +53,7 @@
 }
 .meeting-body h1 {
   margin: 0 0 4px;
-  font-size: 26px;
+  font-size: var(--font-26);
 }
 .meeting-meta {
   display: flex;
@@ -139,7 +139,7 @@
 .meeting-who {
   display: block;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--font-12);
   font-weight: 700;
   text-transform: uppercase;
 }

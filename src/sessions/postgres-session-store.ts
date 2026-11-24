@@ -118,7 +118,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, ephemeral) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, ephemeral, meeting_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10,$11) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -130,6 +130,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
           facts?.ephemeral === true,
+          facts?.meetingId ?? null,
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);

@@ -392,6 +392,7 @@ interface SessionFacts {
   surfaceBinding?: Session["surfaceBinding"];
   context?: SpawnMeta;
   ephemeral?: true;
+  meetingId?: string;
 }
 
 export interface SessionStore {

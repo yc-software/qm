@@ -134,6 +134,8 @@ export async function webTurnBase(
   const displayName = ctx.actor?.n;
   const appSlug = appEditSlug(threadRef, user);
   const inbox = threadRef === `web:${user}:inbox` ? await inboxContext(ctx) : undefined;
+  const meeting =
+    ownsWebThread(threadRef, user) && (await ctx.deps.sessions?.getByThread(threadRef))?.meetingId !== undefined;
   const liveEdit = appSlug ? await ctx.app.appLiveEdit(appSlug) : null;
   const failure = liveEdit?.draft?.failure;
   const failedPublish =
@@ -149,7 +151,7 @@ export async function webTurnBase(
     deliveryTarget: threadRef,
     ...(inbox ? { conversationHeader: inbox } : {}),
     ...(appSlug ? { conversationHeader: appEditNote(appSlug, liveEdit !== null, failedPublish) } : {}),
-    ...(threadRef.startsWith(meetingThread(user, "")) ? { conversationHeader: MEETING_NOTE } : {}),
+    ...(meeting ? { conversationHeader: MEETING_NOTE } : {}),
     text,
   };
 }

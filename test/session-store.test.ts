@@ -47,6 +47,17 @@ test(`fork provenance is available through get and participant lists`, async () 
   assert.equal((await store.listByParticipant("U1"))[0]?.forkBoundarySeq, 7);
 });
 
+test("a meeting conversation keeps its meeting id through get and participant lists", async () => {
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const meetingId = "6f1c2a4e-0b7d-4c55-9a8e-3d2f1e0c9b8a";
+  const session = await store.getOrCreateByThread("web:U1:m", "dm", scopeId("personal", "U1"), undefined, "web", {
+    meetingId,
+  });
+  await store.addParticipant(session.id, "U1");
+  assert.equal((await store.get(session.id))?.meetingId, meetingId);
+  assert.equal((await store.listByParticipant("U1")).find((s) => s.id === session.id)?.meetingId, meetingId);
+});
+
 test(`one session per thread (getOrCreateByThread is idempotent)`, async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");

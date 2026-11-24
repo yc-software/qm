@@ -30,7 +30,7 @@ export function registerRecorder() {
       return run(active, ...args);
     });
   handle("qm:recorder-segment", (current, speaker, at, bytes) => {
-    if (!speakers.has(speaker) || !Number.isFinite(at) || !(bytes instanceof Uint8Array))
+    if (!speakers.has(speaker) || !Number.isFinite(at) || !(bytes instanceof Uint8Array || typeof bytes === "string"))
       throw new Error("Invalid recorder segment");
     current.segment(speaker, at, bytes);
   });

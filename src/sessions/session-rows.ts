@@ -3,7 +3,7 @@ import type { SessionOrigin } from "./session-store.ts";
 import { isWebThread } from "./session-store.ts";
 
 export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id, s.meeting_id`;
 export const AUTOMATION_SESSION_SURFACES = new Set(["cron", "webhook", "loop"]);
 const AUTOMATION_SURFACES = `(${[...AUTOMATION_SESSION_SURFACES].map((s) => `'${s}'`).join(", ")})`;
 export const NOT_AUTOMATION_SURFACE = (s: string): string =>
@@ -47,6 +47,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
       : {}),
     ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
     ...(r.persona_id != null ? { personaId: r.persona_id as string } : {}),
+    ...(r.meeting_id != null ? { meetingId: r.meeting_id as string } : {}),
   };
 }
 

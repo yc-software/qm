@@ -177,6 +177,7 @@ export interface CoreSession {
   workingSince?: number;
   purpose?: string;
   personaId?: string;
+  meetingId?: string;
 }
 
 export interface SessionPageQuery {
