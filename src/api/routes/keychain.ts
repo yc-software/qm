@@ -236,16 +236,18 @@ const startLogin = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }
   if (!livePersonTurn(ctx)) return;
   return kc.withLoginLock(`${actorId}:${service}`, async () => {
     const now = Date.now();
-    const waiting = (await drops.logins(actorId, service, now)).find(
-      (rec) => rec.threadRef !== threadRef && now - rec.createdAt < LOGIN_APPROVAL_MS,
-    );
+    const started = await drops.logins(actorId, service, now);
+    const waiting = started.find(
+      ([, rec]) => rec.threadRef !== threadRef && now - rec.createdAt < LOGIN_APPROVAL_MS,
+    )?.[1];
     if (waiting) {
       const minutes = Math.ceil((waiting.createdAt + LOGIN_APPROVAL_MS - now) / 60_000);
       return sendJson(res, 409, {
         error: "login_in_progress",
-        message: `A ${service} sign-in started in another conversation is still waiting for its code to be approved. Don't start another or show a new code: ask the person to finish that one, then use the saved ${service} login. If it was abandoned, a new sign-in can start in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+        message: `A sign-in for ${service} started in another conversation is still waiting for its code to be approved. Don't start another or show a new code: ask the person to finish that one, then use the saved ${service} login. If it was abandoned, a new sign-in can start in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
       });
     }
+    await Promise.all(started.filter(([, rec]) => rec.threadRef === threadRef).map(([id]) => drops.redeem(id)));
     const { dropId } = await drops.mint(
       {
         kind: "login",

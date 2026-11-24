@@ -1368,9 +1368,11 @@ describe("/v1/keychain routes (capability-authed)", () => {
     const loser = racing.find(({ status }) => status === 409)!;
     assert.match(
       loser.body.message!,
-      /aws sign-in started in another conversation is still waiting.*can start in 15 minutes/,
+      /sign-in for aws started in another conversation is still waiting.*can start in 15 minutes/,
     );
-    assert.equal((await start(conversation(winner))).status, 200);
+    const restarted = await start(conversation(winner));
+    await built.secretDrops!.redeem(restarted.body.loginTicket!);
+    assert.equal((await start(conversation(winner === "dm:a" ? "dm:b" : "dm:a"))).status, 200);
     assert.equal((await start(conversation("dm:c"), "gh")).status, 200);
 
     const other = "SIGNIN_ABANDONED";

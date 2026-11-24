@@ -189,7 +189,7 @@ async function removeDirectory(sandbox: Sandbox, handle: SandboxHandle, director
 function orphanNote(processes: readonly string[]): string {
   const one = processes.length === 1;
   return (
-    `[credentials] ${processes.join(", ")} started by this command ${one ? "is" : "are"} still running with its private credential home, which was removed when the command ended. ` +
+    `[credentials] ${processes.join(", ")} started by this command ${one ? "is" : "are"} still running with the command's private credential home, which was removed when the command ended. ` +
     `Anything ${one ? "it writes" : "they write"} there from now on is lost, including a sign-in approved later. ` +
     `Keep a process that needs a saved login in a background job that names the credential, and sign in again with the interactive-login skill.`
   );

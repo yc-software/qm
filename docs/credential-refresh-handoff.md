@@ -30,7 +30,8 @@ login saves without one. Under an advisory lock on owner and service, it also an
 `login_in_progress` while an unredeemed ticket another conversation minted for the same owner
 and service is under 15 minutes old, the longest device-code lifetime among the CLIs the
 skill covers. That keeps several conversations that hit the same expired login from each
-asking the person to approve a code. The same conversation may always start again, and an
+asking the person to approve a code. The same conversation may always start again, which
+replaces its earlier ticket, and an
 abandoned sign-in stops blocking others when its 15 minutes pass. The script exits non-zero
 on any refusal or network failure, so the agent stops before showing a code.
 

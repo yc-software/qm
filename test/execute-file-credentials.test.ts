@@ -656,7 +656,7 @@ test("a command that leaves a process running on its credential home says so on 
   assert.match(
     result.stderr,
     new RegExp(
-      `^\\[credentials\\] sleep \\(pid ${pid}\\) started by this command is still running with its private credential home`,
+      `^\\[credentials\\] sleep \\(pid ${pid}\\) started by this command is still running with the command's private credential home`,
     ),
   );
   assert.equal((await f.context().execute("true", { credentials: ["aws"] })).stderr, "");
