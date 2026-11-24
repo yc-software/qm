@@ -33,6 +33,7 @@ const meetingApps = [
 const trackNames = { me: "Microphone", others: "Computer audio" };
 const meetingEndGrace = 20_000;
 const silenceLimit = 15 * 60_000;
+const othersQuietWarning = 2 * 60_000;
 const quitFlushWait = 10_000;
 
 export function meetingApp(apps) {
@@ -95,6 +96,7 @@ function render() {
     status = `Recording since ${new Date(recording.startedAt).toLocaleTimeString([], { timeStyle: "short" })}`;
   const problems = [
     ...Object.entries(recording?.tracks ?? {}).map(([speaker, problem]) => `${trackNames[speaker]}: ${problem}`),
+    ...(recording?.othersQuiet ? ["Computer audio: nothing heard for 2 minutes"] : []),
     ...(recording?.uploadProblem ? [`Upload retrying: ${recording.uploadProblem}`] : []),
     ...(detectionProblem ? [`Meeting detection unavailable: ${detectionProblem}`] : []),
   ];
@@ -196,6 +198,13 @@ function fail(current, error) {
 
 function upload(current, speaker, at, bytes) {
   current.lastSpeech = Date.now();
+  if (speaker === "others") {
+    current.othersHeard = true;
+    if (current.othersQuiet) {
+      current.othersQuiet = false;
+      render();
+    }
+  }
   current.uploads[speaker] = current.uploads[speaker].then(async () => {
     if (current.failure) return;
     try {
@@ -241,12 +250,28 @@ async function startRecording(detected) {
       current.silent = true;
       void stopRecording();
     }
+    if (
+      current.capturing &&
+      !current.othersHeard &&
+      !current.othersQuiet &&
+      !current.tracks.others &&
+      Date.now() - current.capturing > othersQuietWarning
+    ) {
+      current.othersQuiet = true;
+      render();
+      if (current.detected)
+        notify(
+          `No sound from ${current.app}`,
+          "QM has heard nothing from your computer for 2 minutes. If others are talking, allow QM in System Settings › Privacy & Security › Screen & System Audio Recording.",
+        );
+    }
     showTime();
   }, 1000);
   render();
   if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("microphone") !== "granted")
     await systemPreferences.askForMediaAccess("microphone");
   if (recording !== current || current.stopping) return;
+  current.capturing = Date.now();
   current.stopCapture = startCapture(
     (speaker, at, bytes) => upload(current, speaker, at, bytes),
     (speaker, problem) => trackProblem(current, speaker, problem),
