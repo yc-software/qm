@@ -49,6 +49,18 @@ export function personAtKeyboard(
   return livePersonCapability(c) && c?.triggered !== true;
 }
 
+export function internalLivePerson(
+  c: (Parameters<typeof livePersonCapability>[0] & { internalAudience?: boolean }) | undefined,
+): boolean {
+  return livePersonCapability(c) && c?.internalAudience === true;
+}
+
+export function internalPerson(
+  c: (Parameters<typeof personAtKeyboard>[0] & { internalAudience?: boolean }) | undefined,
+): boolean {
+  return personAtKeyboard(c) && c?.internalAudience === true;
+}
+
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number] & ResourceKind;
 

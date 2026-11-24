@@ -5,7 +5,7 @@ import { sendJson } from "../http.ts";
 import { isObj, livePersonTurn } from "./shared.ts";
 import { scopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { isArtifactType, personAtKeyboard, type ArtifactType } from "../artifact-share.ts";
+import { isArtifactType, internalPerson, type ArtifactType } from "../artifact-share.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
@@ -96,8 +96,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
       await app.setAppPublic(params.id!, b.public, {
         createdBy: claims.actorId,
         botActor: claims.botActor,
-        personAtKeyboard:
-          !ctx.capability || (personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true),
+        personAtKeyboard: !ctx.capability || internalPerson(ctx.capability),
       });
     } catch (e) {
       return sendShareFailure(res, e);

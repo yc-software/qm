@@ -24,16 +24,16 @@ import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts"
 import { AdminError } from "../admin/admin-service.ts";
 import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
-  personAtKeyboard,
-  resolveShareTarget,
-  SHARED_SKILL_TRIGGER_REFUSAL,
-  shareOffers,
   type ArtifactHome,
   type ArtifactType,
+  isMultiMemberSkillScope,
+  internalPerson,
+  resolveShareTarget,
   type ShareAccessResult,
   type ShareArtifactRequest,
   type ShareArtifactResult,
-  isMultiMemberSkillScope,
+  SHARED_SKILL_TRIGGER_REFUSAL,
+  shareOffers,
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import { administersCron, canAdministerCron, managesPersonaCron, ownsCron } from "./cron-administration.ts";
@@ -564,7 +564,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         createdBy: capability.actorId,
         ownerScopeId,
         ...(capability.botActor ? { botActor: true } : {}),
-        ...authoredNow(personAtKeyboard(capability) && capability.internalAudience === true),
+        ...authoredNow(internalPerson(capability)),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
@@ -632,7 +632,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
       const rewritesTask = req.action !== undefined || req.text !== undefined;
-      const atKeyboard = personAtKeyboard(capability) && capability.internalAudience === true;
+      const atKeyboard = internalPerson(capability);
       if (rewritesTask || patch.script)
         Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, atKeyboard));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
@@ -781,7 +781,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
-      if (!personAtKeyboard(capability) || capability.internalAudience !== true) {
+      if (!internalPerson(capability)) {
         return {
           ok: false,
           code: "forbidden",
@@ -838,7 +838,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async updateWebhook(id, patch, capability) {
-      if (!personAtKeyboard(capability) || capability.internalAudience !== true)
+      if (!internalPerson(capability))
         return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
       return editWebhook(app, id, patch, capability);
     },
@@ -899,8 +899,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
-      const personInInternalAudience = personAtKeyboard(capability) && capability.internalAudience === true;
-      if (req.type === "deploy" && !personInInternalAudience)
+      const personHere = internalPerson(capability);
+      if (req.type === "deploy" && !personHere)
         return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const remove = req.permission === "none";
@@ -1014,7 +1014,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
             home.id,
             toScope,
             capability.actorId,
-            capability.liveActor === true && personInInternalAudience,
+            capability.liveActor === true && personHere,
           );
           return {
             ok: true,
@@ -1028,7 +1028,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
 
         if (req.move) {
           const deployPersonTransfer =
-            req.type === "deploy" && toKind === "personal" && capability.liveActor === true && personInInternalAudience;
+            req.type === "deploy" && toKind === "personal" && capability.liveActor === true && personHere;
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
@@ -1045,7 +1045,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           }
           if (
             req.type === "skill" &&
-            !personInInternalAudience &&
+            !personHere &&
             (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };

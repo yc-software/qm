@@ -59,9 +59,10 @@ import {
   authorPublishesSkill,
   isArtifactType,
   personAtKeyboard,
-  splitToScope,
+  internalPerson,
   SHARED_SKILL_TRIGGER_REFUSAL,
   type SkillEditor,
+  splitToScope,
 } from "../artifact-share.ts";
 
 function isGrant(b: unknown): b is Grant {
@@ -78,7 +79,7 @@ function isGrant(b: unknown): b is Grant {
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (personAtKeyboard(capability) && capability.internalAudience === true) return null;
+  if (internalPerson(capability)) return null;
   return SHARED_SKILL_TRIGGER_REFUSAL;
 }
 
@@ -1384,7 +1385,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !(personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true))
+  if (ctx.capability && !internalPerson(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
@@ -1438,7 +1439,7 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !(personAtKeyboard(ctx.capability) && ctx.capability.internalAudience === true))
+  if (ctx.capability && !internalPerson(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });

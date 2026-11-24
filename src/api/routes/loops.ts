@@ -2,7 +2,7 @@ import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { authoredNow, reauthored } from "../../cron/authority.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { internalPerson } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -64,8 +64,7 @@ export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
 
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   if (ctx.capability) {
-    const atKeyboard =
-      ctx.capability.internalAudience === true && ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
+    const atKeyboard = ctx.capability.liveActor === true && internalPerson(ctx.capability);
     return {
       actorId: ctx.capability.actorId,
       scopeId: ctx.capability.scopeId as ScopeId,

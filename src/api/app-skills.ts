@@ -7,7 +7,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
-import { authorPublishesSkill, triggerBlocksSharedSkill, type SkillEditor } from "./artifact-share.ts";
+import { authorPublishesSkill, type SkillEditor, triggerBlocksSharedSkill } from "./artifact-share.ts";
 import { asOrgAdmin } from "../auth/capability-token.ts";
 import type { Skill } from "../skills/skill-store.ts";
 
