@@ -22,6 +22,7 @@ import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/go
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
+import { reconcileProcesses } from "../processes/reconcile.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
@@ -1231,9 +1232,11 @@ export function createSessionMethods(
             )
           )
             return { moved: false, reason: "awaiting_approval" };
-        const jobs = ((await deps.processes?.listLive()) ?? []).filter(
-          (rec) => rec.kind === "background" && rec.sessionRef && threadRefs.has(rec.sessionRef),
-        );
+        const liveJobs = async () =>
+          ((await deps.processes?.listLive()) ?? []).filter(
+            (rec) => rec.kind === "background" && rec.sessionRef && threadRefs.has(rec.sessionRef),
+          );
+        let jobs = await liveJobs();
         const childComputerIds = tree.flatMap((s) => s.spawnMeta?.isolation?.sandboxId ?? []);
         const computerIds = [...new Set([...jobs.flatMap((rec) => rec.sandboxId ?? []), ...childComputerIds])];
         const projectComputers = new Set(
@@ -1241,7 +1244,31 @@ export function createSessionMethods(
             .filter((computer) => computer.ownerScopeId === targetScopeId)
             .map((computer) => computer.id),
         );
-        const stranded = jobs.find((rec) => !rec.sandboxId || !projectComputers.has(rec.sandboxId));
+        const strandedIn = (list: typeof jobs) =>
+          list.filter((rec) => !rec.sandboxId || !projectComputers.has(rec.sandboxId));
+        if (strandedIn(jobs).length && deps.processes && deps.sandbox && supportsProcessSessions(deps.sandbox)) {
+          const sandbox = deps.sandbox;
+          const registry = deps.processes;
+          const hosts = new Map(
+            strandedIn(jobs).flatMap((rec) => (rec.sandboxId ? [[rec.sandboxId, rec.scopeId]] : [])),
+          );
+          await Promise.all(
+            [...hosts].map(([sandboxId, scopeId]) =>
+              (async () => {
+                const handle = await sandbox.provision(scopeId, { sandboxId });
+                try {
+                  await reconcileProcesses(sandbox, handle, registry, scopeId);
+                } finally {
+                  await sandbox
+                    .teardown(handle, { keepWarm: true })
+                    .catch(swallowAs("app sessions: release move job sandbox", undefined));
+                }
+              })().catch(swallowAs("app sessions: check a moving chat's jobs", undefined)),
+            ),
+          );
+          jobs = await liveJobs();
+        }
+        const stranded = strandedIn(jobs)[0];
         if (stranded) {
           const chat = tree.find((s) => s.threadRef === stranded.sessionRef);
           return {

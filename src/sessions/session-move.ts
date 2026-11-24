@@ -14,11 +14,12 @@ export function rehomedSpawnMeta(
 ): SpawnMeta {
   const { isPrivate: _isPrivate, isMpim: _isMpim, teamIds: _teamIds, ...conversation } = meta.conversation;
   const { scopeVersion: _scopeVersion, isolation, ...rest } = meta;
-  const unbound = (child: ChildIsolation): ChildIsolation => {
+  const rebound = (child: ChildIsolation): ChildIsolation => {
+    const computer = child.sandboxId ? computers.get(child.sandboxId) : undefined;
+    if (computer === undefined) return child;
     const { sandboxId: _sandboxId, ...kept } = child;
-    return kept;
+    return computer ? { ...kept, sandboxId: computer } : kept;
   };
-  const computer = isolation?.sandboxId ? computers.get(isolation.sandboxId) : undefined;
   return {
     ...rest,
     conversation: {
@@ -31,12 +32,7 @@ export function rehomedSpawnMeta(
     },
     sessionParticipantIds: target.audience.map((principal) => principal.id),
     ...(target.version ? { scopeVersion: target.version } : {}),
-    ...(isolation
-      ? {
-          isolation:
-            computer === undefined ? isolation : computer ? { ...isolation, sandboxId: computer } : unbound(isolation),
-        }
-      : {}),
+    ...(isolation ? { isolation: rebound(isolation) } : {}),
   };
 }
 
