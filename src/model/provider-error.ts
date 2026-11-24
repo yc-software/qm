@@ -1,6 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
-import { modelDisplayName } from "./pi-models.ts";
 
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
@@ -24,8 +23,7 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage"> &
-  Partial<Pick<AssistantMessage, "model">>;
+type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
 
 function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   const { status, type, code, body } = failed.providerError ?? {};
@@ -73,6 +71,5 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
     : raw || "The agent stopped with an error";
   const retryable =
     RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
-  const modelName = failed.model ? modelDisplayName(failed.model) : undefined;
-  return new ProviderTurnError(message, { code, retryable, status, raw, modelName });
+  return new ProviderTurnError(message, { code, retryable, status, raw });
 }

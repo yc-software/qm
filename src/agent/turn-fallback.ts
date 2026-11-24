@@ -25,7 +25,6 @@ export function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute,
       retryable: false,
       status: failure.status,
       raw: `${failure.raw}\n${error instanceof ProviderTurnError ? error.raw : errMessage(error)}`,
-      modelName: failure.modelName,
     },
   );
 }
@@ -36,7 +35,6 @@ export function routeFailed(failure: ProviderTurnError, route: ModelRoute): Prov
     retryable: failure.retryable,
     status: failure.status,
     raw: failure.raw,
-    modelName: failure.modelName,
   });
 }
 

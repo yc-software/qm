@@ -4,7 +4,6 @@ import test from "node:test";
 import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-completions";
 import { providerTurnError } from "../src/model/provider-error.ts";
-import { turnFailureMessage } from "../src/core/turn-error.ts";
 
 test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerError", async (t) => {
   const body = {
@@ -49,21 +48,6 @@ test("vendored pi-ai keeps a LiteLLM 429 budget_exceeded as structured providerE
   assert.match(failed.errorMessage ?? "", /^429: /, "errorMessage keeps stock pi-ai formatting");
   const err = providerTurnError(failed);
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
-});
-
-test("refusals and key-account failures name the model in a plain notice", () => {
-  const notice = (rawStopReason?: string, providerError?: AssistantMessage["providerError"]) =>
-    turnFailureMessage(
-      providerTurnError({ model: "claude-opus-4-8", rawStopReason, errorMessage: "blocked", providerError }),
-    );
-  assert.equal(
-    notice("refusal"),
-    `Claude Opus 4.8 declined this request under the provider's usage policy ("blocked"). Rephrase, or switch model.`,
-  );
-  assert.equal(
-    notice(undefined, { status: 402 }),
-    `The model key for Claude Opus 4.8 was refused by the provider ("blocked"). Whoever owns that key needs to fix its billing or access, or replace it.`,
-  );
 });
 
 test("providerTurnError maps documented status, type and code without reading errorMessage", () => {
