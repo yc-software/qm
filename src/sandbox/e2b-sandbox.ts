@@ -112,6 +112,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
 
   const sessionByName = new Map<string, E2bSession>();
   const pauseFailed = new Set<string>();
+  const busyPauseReported = new Set<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -597,13 +598,15 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
       sessionByName.delete(handle.id);
       pauseFailed.delete(handle.id);
+      busyPauseReported.delete(scope);
     } catch (error) {
       pauseFailed.add(handle.id);
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
       const busy = error instanceof E2bSandboxBusyError;
-      if (!busy || stored?.preservationState !== "pause_failed")
+      if (!busy || !busyPauseReported.has(scope))
         reportError("sandbox_preservation", "pause_failed", errMessage(error), scope, error);
       if (!busy) throw error;
+      busyPauseReported.add(scope);
     }
   }
 
