@@ -41,7 +41,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "POST",
         path: "/v1/composio/authorize",
-        summary: "{toolkit} creates a personal consent link on a human-started turn",
+        summary:
+          "{toolkit} creates a personal consent link on a human-started turn; an app that takes an API key gets 409 connect_api_key with the key fields instead",
       },
       {
         method: "POST",

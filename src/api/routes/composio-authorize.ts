@@ -9,7 +9,15 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { personAtKeyboard } from "../artifact-share.ts";
 import { refuseWithoutPerson, sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
-import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
+import {
+  ACCOUNT_ID,
+  composioUnavailable,
+  composioUserId,
+  credential,
+  externalApps,
+  request,
+  toolkitEntry,
+} from "./composio.ts";
 import { isToolkitId } from "../../mcp/connector-apps.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -74,6 +82,20 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
   }
   const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
+    const entry = await toolkitEntry(ctx, access.key, toolkit);
+    if (!entry)
+      return sendJson(ctx.res, 404, {
+        error: "not_composio_app",
+        toolkit,
+        message: `${toolkit} doesn't connect through Composio. If it has an MCP server, an org admin adds it with PUT /v1/admin/mcp-servers/<id> and lists ${toolkit} in that server's apps; otherwise use the app's own API.`,
+      });
+    if (entry.keyFields)
+      return sendJson(ctx.res, 409, {
+        error: "connect_api_key",
+        toolkit,
+        fields: entry.keyFields,
+        message: `${entry.app.name} takes an API key or password, not a sign-in. Ask for it with a keychain drop (the secret-drop skill) using these fields, then call ${entry.app.name}'s API directly with that credential.`,
+      });
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
       toolkits: { enable: [toolkit] },

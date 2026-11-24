@@ -513,6 +513,10 @@ export class OnboardingWelcome extends LitElement {
         body: JSON.stringify({ toolkit: service.id, returnTo: location.pathname + location.search, state }),
       });
       const result = await response.json();
+      if (result.error === "connect_api_key") {
+        clearConnectionAttempt(this.previewUser());
+        return await this.openKeyForm(service.name, result.fields);
+      }
       if (!response.ok) throw new Error(result.message ?? "Could not open authorization. Please try again.");
       if (typeof result.accountId !== "string" || !ACCOUNT_ID.test(result.accountId))
         throw new Error("Could not start authorization. Please try again.");
@@ -523,6 +527,21 @@ export class OnboardingWelcome extends LitElement {
     } finally {
       this.authorizing = "";
     }
+  }
+  private async openKeyForm(name: string, fields: unknown): Promise<void> {
+    const response = await fetch(`${this.base}api/keychain/drops`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service: name,
+        purpose: `Give QM your ${name} credentials so it can use ${name} for you.`,
+        fields,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || typeof result.url !== "string")
+      throw new Error(result.message ?? "Could not open the key form. Please try again.");
+    if (!(await openDesktopBrowser(result.url))) window.open(result.url, "_blank", "noopener");
   }
   private get seeded(): ActivitySeeds | undefined {
     return this.setupOnly ? undefined : this.me?.welcome;

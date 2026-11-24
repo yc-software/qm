@@ -10,11 +10,32 @@ export interface ConnectorApp extends McpServerApp {
   connector: string;
 }
 
+export interface KeyField {
+  key: string;
+  label: string;
+  secret: boolean;
+}
+
 export interface CatalogApp {
   id: string;
   logoUrl: string;
   name: string;
   description: string;
+}
+
+const KEY_SCHEMES = new Set(["API_KEY", "BEARER_TOKEN", "BASIC", "BASIC_WITH_JWT"]);
+
+export function keyFields(toolkit: string, name: string, schemes: string[]): KeyField[] | null {
+  const auth = schemes.filter((scheme) => scheme !== "NO_AUTH");
+  if (!auth.length || !auth.every((scheme) => KEY_SCHEMES.has(scheme))) return null;
+  const upper = toolkit.toUpperCase().replaceAll("-", "_");
+  const prefix = "0123456789".includes(upper[0]!) ? `APP_${upper}` : upper;
+  if (auth.every((scheme) => scheme === "BASIC"))
+    return [
+      { key: `${prefix}_USERNAME`, label: `${name} username`, secret: false },
+      { key: `${prefix}_PASSWORD`, label: `${name} password`, secret: true },
+    ];
+  return [{ key: `${prefix}_API_KEY`, label: `${name} API key`, secret: true }];
 }
 
 export function connectorApps(servers: McpServer[]): ConnectorApp[] {

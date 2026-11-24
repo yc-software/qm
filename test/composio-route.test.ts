@@ -124,9 +124,10 @@ function fixture() {
         grantedBy: "admin",
       });
   }
-  const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test") =>
-    replies.push({ session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
-  return { invoke, own, shared, link, calls, replies, deps, app, audits };
+  const oauthApp = (slug: string) => ({ items: [{ slug, name: slug, auth_schemes: ["OAUTH2"] }] });
+  const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test", toolkit = "gmail") =>
+    replies.push(oauthApp(toolkit), { session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
+  return { invoke, own, shared, link, oauthApp, calls, replies, deps, app, audits };
 }
 
 const SETTINGS = "https://qm.example/?view=settings";
@@ -263,17 +264,18 @@ test("authorization binds the session to the authenticated actor, ignoring suppl
     const f = fixture();
     await f.own();
     f.replies.push(
+      f.oauthApp("gmail"),
       { session_id: "trs_test" },
       { redirect_url: link, connected_account_id: "ca_test", secret: "hidden" },
     );
     const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", user_id: "bob", principalId: "bob" });
     assert.equal(r.status, 200);
     assert.deepEqual(r.data, { url: link, accountId: "ca_test" });
-    const payload = JSON.parse(String(f.calls[0]!.init?.body));
+    const payload = JSON.parse(String(f.calls[1]!.init?.body));
     assert.equal(payload.user_id, composioUserId(orgId(), "alice"));
     assert.deepEqual(payload.toolkits, { enable: ["gmail"] });
     assert.deepEqual(payload.manage_connections, { enable: false });
-    assert.equal(f.calls[1]!.url.endsWith("/tool_router/session/trs_test/link"), true);
+    assert.equal(f.calls[2]!.url.endsWith("/tool_router/session/trs_test/link"), true);
   }
 });
 
@@ -289,7 +291,7 @@ test("invalid toolkits and unsafe authorization destinations are rejected", asyn
     "http://connect.composio.dev/link/lk_test",
     "https://connect.composio.dev/other",
   ]) {
-    f.replies.push({ session_id: "trs_test" }, { redirect_url, connected_account_id: "ca_test" });
+    f.replies.push(f.oauthApp("gmail"), { session_id: "trs_test" }, { redirect_url, connected_account_id: "ca_test" });
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 502);
   }
 });
@@ -321,7 +323,7 @@ test("authorization supplies the callback and account binding without accepting 
   f.link();
   const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl }, null, privateCap);
   assert.equal(r.data.accountId, "ca_test");
-  assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
+  assert.equal(JSON.parse(String(f.calls[2]!.init?.body)).callback_url, callbackUrl);
 });
 
 test("connections return only this actor's active accounts and strip credentials", async () => {
@@ -499,10 +501,10 @@ test("Slack connection links verified workspace identity to the web owner and pe
   f.deps.slackEnvBotToken = "bot-test";
   f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
   try {
-    f.link();
+    f.link(undefined, undefined, "slack");
     const started = await f.invoke("/v1/composio/slack/authorize", { returnTo: "/settings", state: STATE });
     assert.equal(started.status, 200);
-    const callback = JSON.parse(String(f.calls[1]!.init?.body)).callback_url;
+    const callback = JSON.parse(String(f.calls[2]!.init?.body)).callback_url;
     assert.equal(callback, `https://qm.example/settings?slackReturn=${STATE}`);
     const account = {
       id: "ca_test",
@@ -748,7 +750,7 @@ test("callback completion is browser-only and preserves the durable return URL",
   f.replies.push({ connected_account_id: "ca_test", toolkit_slug: "gmail" });
   const verified = await f.invoke("/v1/composio/callback?session_uri=opaque&user_id=bob");
   assert.deepEqual([verified.status, verified.location], [303, url]);
-  assert.deepEqual(JSON.parse(f.calls[2]!.init!.body as string), {
+  assert.deepEqual(JSON.parse(f.calls[3]!.init!.body as string), {
     session_uri: "opaque",
     user_id: composioUserId(orgId(), "alice"),
   });
@@ -762,7 +764,7 @@ test("callback completion is browser-only and preserves the durable return URL",
 test("connects without a return page are still audited on completion, and failed completions too", async () => {
   const f = fixture();
   await f.own();
-  f.link();
+  f.link(undefined, undefined, "outlook");
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "outlook" })).status, 200);
   f.replies.push({ connected_account_id: "ca_test" });
   assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).location, SETTINGS);
@@ -1031,7 +1033,7 @@ test("consent and browser verification use the canonical identity when signed in
       aliasId,
     );
     assert.equal(started.status, 200);
-    assert.equal(JSON.parse(String(f.calls[0]!.init?.body)).user_id, userId);
+    assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).user_id, userId);
     assert.equal((await f.deps.composioReturns!.get(`${userId}:ca_linked`))?.url, callbackUrl);
     f.replies.push({ connected_account_id: "ca_linked", toolkit_slug: "gmail" });
     const result = await f.invoke("/v1/composio/callback?session_uri=opaque", undefined, aliasId);
@@ -1105,7 +1107,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
     await f.deps.slackAccounts.delete("alice");
     f.link();
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, "oidc:alice")).status, 200);
-    assert.equal(JSON.parse(String(f.calls[3]!.init?.body)).user_id, canonical);
+    assert.equal(JSON.parse(String(f.calls[4]!.init?.body)).user_id, canonical);
     await f.deps.principalLinks.unlink("oidc:alice");
     f.replies.push({ items: [account], next_cursor: null });
     assert.deepEqual((await f.invoke("/v1/composio/connections")).data.items, []);
@@ -1462,4 +1464,36 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
+});
+
+test("API-key apps ask for a key and MCP-server apps are left to connectors, never starting a Composio connection", async () => {
+  const f = fixture();
+  await f.own();
+  const item = (slug: string, ...auth_schemes: string[]) => ({ slug, name: slug.toUpperCase(), auth_schemes });
+  const catalog = [
+    item("gmail", "OAUTH2"),
+    item("notion", "OAUTH2", "API_KEY"),
+    item("granola_mcp", "DCR_OAUTH"),
+    item("openai", "API_KEY", "NO_AUTH"),
+    item("acme", "BASIC"),
+  ];
+  f.replies.push({ items: catalog });
+  assert.deepEqual(
+    (await f.invoke("/v1/composio/toolkits")).data.items.map((app: { id: string }) => app.id),
+    ["gmail", "notion", "openai", "acme"],
+  );
+  const refusals = [];
+  for (const app of catalog.slice(2)) {
+    f.replies.push({ items: [app] });
+    const r = await f.invoke("/v1/composio/authorize", { toolkit: app.slug });
+    refusals.push([r.status, r.data.error, r.data.fields?.map((field: { key: string }) => field.key)]);
+  }
+  assert.deepEqual(refusals, [
+    [404, "not_composio_app", undefined],
+    [409, "connect_api_key", ["OPENAI_API_KEY"]],
+    [409, "connect_api_key", ["ACME_USERNAME", "ACME_PASSWORD"]],
+  ]);
+  f.replies.push({ error: "unexpected" });
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 502);
+  assert.equal(f.calls.filter((call) => call.url.includes("/tool_router/")).length, 0);
 });
