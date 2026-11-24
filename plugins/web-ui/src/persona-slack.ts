@@ -249,13 +249,13 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
                         />
                       </label>
                       ${
-                      isOrgAdmin
-                        ? html`<label class="checkbox-row">
-                            <input name="saveOrg" type="checkbox" checked ?disabled=${current.busy} />
-                            Save for this workspace so future persona apps are 1-click
-                          </label>`
-                        : nothing
-                    }
+                        isOrgAdmin
+                          ? html`<label class="checkbox-row">
+                              <input name="saveOrg" type="checkbox" checked ?disabled=${current.busy} />
+                              Save for this workspace so future persona apps are 1-click
+                            </label>`
+                          : nothing
+                      }
                       <div class="actions">
                         <button class="btn primary small" type="submit" ?disabled=${current.busy}>
                           ${current.busy ? "Creating…" : "Create Slack app"}
