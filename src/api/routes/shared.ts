@@ -13,7 +13,7 @@ import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { internalPerson } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -95,7 +95,7 @@ export function resolveSelfRead(
 }
 
 export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+  if (!ctx.capability || internalPerson(ctx.capability)) return true;
   refuseWithoutPerson(ctx.res);
   return false;
 }

@@ -297,7 +297,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       "x-agent-capability": await capFor(
         who,
         { write: scopeId("personal", who), read: [] },
-        { ...liveRunClaims(who), liveActor: true },
+        { ...liveRunClaims(who), internalAudience: true, liveActor: true },
       ),
     });
     const body = { facts: ["persona note"], scope: `persona:${pid}` };

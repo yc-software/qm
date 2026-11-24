@@ -55,7 +55,7 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims, ScopeAuthorizationClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
@@ -91,7 +91,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import { lentConnectors, type PublishedApp, type AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
-import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
+import { type ArtifactHome, type ArtifactType, type ShareAccess, type SkillEditor } from "./artifact-share.ts";
 import type {
   DeployService,
   DeployInput,
@@ -487,9 +487,7 @@ export interface App {
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
-  authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
-  ): Promise<boolean>;
+  authorizesCapabilityScope(claims: ScopeAuthorizationClaims): Promise<boolean>;
   openFileForViewer(
     tenant: Tenant,
     id: string,
@@ -670,12 +668,12 @@ export interface App {
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; botActor?: boolean },
+    opts?: SkillEditor,
   ): Promise<Skill | "trigger_blocked" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean; botActor?: boolean },
+    opts?: SkillEditor,
   ): Promise<Skill | "exists" | "trigger_blocked" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
@@ -693,12 +691,9 @@ export interface App {
     body: string;
     requiredCapabilities?: string[];
   }): Promise<Skill | null>;
-  deleteOwnedSkill(input: {
-    principalId: string;
-    id: string;
-    liveActor?: boolean;
-    botActor?: boolean;
-  }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
+  deleteOwnedSkill(
+    input: SkillEditor & { principalId: string; id: string },
+  ): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;
   restoreApp(id: string, actorId?: string): Promise<PublishedApp>;

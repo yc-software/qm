@@ -1036,7 +1036,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
-    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { liveActor: true });
+    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { internalAudience: true, liveActor: true });
     const registered = keychainRoutes.flatMap((r) => ("path" in r ? [`${r.method} ${r.path}`] : []));
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
@@ -1267,7 +1267,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   }
 
   it("a scheduled personal request can be declined without granting access", async () => {
-    const live = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
+    const live = await capFor("U_ALICE", "personal:U_ALICE", { internalAudience: true, liveActor: true });
     const token = await capFor("U_ALICE", "personal:U_ALICE", { triggered: true });
     const { credential } = (await (
       await post(

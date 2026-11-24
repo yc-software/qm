@@ -60,8 +60,8 @@ const capFor = (
       ...(opts.audienceScopeId ? { audienceScopeId: opts.audienceScopeId } : {}),
       ...(opts.destination ? { destination: opts.destination } : {}),
       ...(opts.memory ? { memory: opts.memory } : {}),
-      ...(opts.liveActor ? { liveActor: true } : {}),
-      ...(opts.liveAuthor ? { liveAuthor: true } : {}),
+      ...(opts.liveActor ? { internalAudience: true, liveActor: true } : {}),
+      ...(opts.liveAuthor ? { internalAudience: true, liveAuthor: true } : {}),
       ...(opts.triggered ? { triggered: true } : {}),
       ...(opts.botActor ? { botActor: true } : {}),
     },
@@ -145,7 +145,7 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
 test("an admin's token carrying no person's authority is shown no admin plane — matching what the gate enforces", async () => {
   const s = await start();
   try {
-    for (const opts of [{}, { liveActor: true, botActor: true }]) {
+    for (const opts of [{}, { internalAudience: true, liveActor: true, botActor: true }]) {
       const { body } = await listApis(s.base, await capFor("admin-alice", opts));
       assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
       const p = paths(body);

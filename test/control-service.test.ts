@@ -43,6 +43,7 @@ function claims(
   return {
     actorId,
     scopeId: scope,
+    internalAudience: true,
     destination: { type: dm.type, target: dm.target, audienceScopeId: dm.audienceScopeId },
     destinations: [dm, ROOM],
     defaultDestinationKey: D1.key,

@@ -91,6 +91,7 @@ const capFor = async (
       scopeId: opts.scope ?? scopeId("personal", actorId),
       ...(aud === null ? {} : { aud }),
       ...liveRunClaims(actorId),
+      internalAudience: true,
       liveActor: opts.live !== false,
       ...(opts.runId ? { runId: opts.runId } : {}),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
@@ -148,6 +149,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
       scopeId: "channel:C1",
       aud: CONTROL_PLANE_AUD,
       ...liveRunClaims("admin-alice"),
+      internalAudience: true,
       liveAuthor: true,
       members,
       keychainMembers: members,
@@ -882,6 +884,52 @@ test("native admin tools use the authenticated handler, including its live autho
     assert.equal((await call({ action: "scopes" })).status, 200);
     await s.built.admin.revokeGrant(tenant, { id: "admin-bob", type: "internal" }, "admin-alice", ORG, "org_admin");
     assert.equal((await call({ action: "memory", scope: target })).status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("a guest in the room: the person's turn mints presence without an internal audience, and the real admin routes refuse it", async () => {
+  const s = await start();
+  try {
+    const replies: Array<[number, string]> = [];
+    const provision = s.built.sandbox.provision.bind(s.built.sandbox);
+    s.built.sandbox.provision = async (owner, opts) => {
+      const cap = opts?.env?.AGENT_API_TOKEN;
+      if (cap) {
+        const res = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": cap } });
+        replies.push([res.status, await res.text()]);
+      }
+      return provision(owner, opts);
+    };
+    const turnIn = async (channel: string, publishMembers: TurnRequest["conversation"]["publishMembers"]) => {
+      await selectDefaultSandbox(s.built, "admin-alice", `channel:${channel}`);
+      const turn = await s.built.app.turn({
+        surface: "test",
+        actor: { externalId: "admin-alice" },
+        conversation: {
+          kind: "channel",
+          threadRef: `${channel}:t`,
+          channelRef: channel,
+          audience: [{ externalId: "admin-alice" }],
+          publishMembers,
+        },
+        text: "!run echo hi",
+        origin: { kind: "human" },
+      });
+      assert.equal(turn.status, "ok", JSON.stringify(turn));
+    };
+    await s.built.directory.replaceChannels(
+      ["C1", "C2"].map((channelId) => ({ channelId, name: channelId, isPrivate: false })),
+      ["C1", "C2"].map((channelId) => ({ channelId, principalId: "admin-alice" })),
+    );
+    await turnIn("C1", [{ externalId: "admin-alice" }, { externalId: "U1" }]);
+    await turnIn("C2", [{ externalId: "admin-alice" }, { externalId: "visitor", isExternalGuest: true }]);
+    assert.deepEqual(
+      replies.map(([status]) => status),
+      [200, 403],
+    );
+    assert.match(replies[1]![1], /carry a person's own authority/);
   } finally {
     await s.close();
   }

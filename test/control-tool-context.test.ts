@@ -79,8 +79,8 @@ test("webhook registration through the tool requires a live person and leaves re
       {},
       { liveActor: false, liveAuthor: false },
       { triggered: true },
-      { triggered: true, liveActor: true },
-      { triggered: true, liveAuthor: true },
+      { triggered: true, internalAudience: true, liveActor: true },
+      { triggered: true, internalAudience: true, liveAuthor: true },
     ]) {
       const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), scopeId: scope, ...extra } });
       const result = await ctx.webhookCreate(request);
@@ -90,7 +90,10 @@ test("webhook registration through the tool requires a live person and leaves re
       assert.deepEqual(await built.auditLog.events(testTenant), auditBefore);
     }
   }
-  for (const extra of [{ liveActor: true }, { liveAuthor: true }]) {
+  for (const extra of [
+    { internalAudience: true, liveActor: true },
+    { internalAudience: true, liveAuthor: true },
+  ]) {
     const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), ...extra } });
     const result = await ctx.webhookCreate(request);
     assert.ok(result.ok, JSON.stringify(result));

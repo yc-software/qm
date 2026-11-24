@@ -179,6 +179,7 @@ async function channelTurn(f: Fixture, actor: Principal, botActor: boolean): Pro
         runAttempt: run.attempts,
         runLeaseToken: run.leaseToken!,
         threadRef: f.root.threadRef,
+        internalAudience: true,
         liveActor: true,
         exp: Date.now() + 60_000,
         ...(botActor ? { botActor: true } : {}),

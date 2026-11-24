@@ -32,7 +32,7 @@ export interface CredentialCatalogTurn {
   conversation: OrchestratorInput["conversation"];
   external: boolean;
   strictReadOnly: boolean;
-  allInternal: boolean;
+  internalAudience: boolean;
   liveAuthorTurn: boolean;
   scopeId: ScopeId;
   environmentId: string;
@@ -59,6 +59,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     actor,
     conversation,
     external,
+    internalAudience,
     liveAuthorTurn,
     scopeId,
     environmentId,
@@ -73,7 +74,10 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const actorKeychain = input.botActor !== true;
   const openSpeakerKeychain =
-    liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
+    liveAuthorTurn &&
+    internalAudience &&
+    conversation.kind !== "dm" &&
+    sharingSources.includes(personalScope(actor.id));
   const openAutomationKeychain =
     actorKeychain &&
     !external &&
@@ -299,7 +303,7 @@ export async function registerServiceCredentials(
     conversation,
     external,
     strictReadOnly,
-    allInternal,
+    internalAudience,
     resolution,
     serviceAllowed,
     grantedServiceCredSlugs,
@@ -352,7 +356,7 @@ export async function registerServiceCredentials(
     })());
   for (const credential of available) {
     if (credential.delivery === "env") {
-      if ((!allInternal && !external) || !credential.envKey) continue;
+      if ((!internalAudience && !external) || !credential.envKey) continue;
       addCredential(
         {
           handle: credential.slug,

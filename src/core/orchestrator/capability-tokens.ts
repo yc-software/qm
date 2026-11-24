@@ -35,6 +35,7 @@ export interface CapabilityTurn {
   external: boolean;
   strictReadOnly: boolean;
   allInternal: boolean;
+  internalAudience: boolean;
   liveTurn: boolean;
   liveAuthorTurn: boolean;
   triggeredTurn: boolean;
@@ -66,6 +67,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     resolution,
     external,
     strictReadOnly,
+    internalAudience,
     liveTurn,
     actAsActor,
   } = turn;
@@ -78,6 +80,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(audienceScopeId ? { audienceScopeId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
+    ...(internalAudience ? { internalAudience: true } : {}),
     ...(liveTurn ? { liveActor: true } : {}),
     ...(turn.session.ephemeral ? { ephemeral: true as const } : {}),
     ...(input.botActor ? { botActor: true } : {}),
@@ -133,6 +136,7 @@ async function mintControlPlaneTokens(
     external,
     strictReadOnly,
     allInternal,
+    internalAudience,
     liveTurn,
     liveAuthorTurn,
     triggeredTurn,
@@ -167,7 +171,7 @@ async function mintControlPlaneTokens(
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && input.botActor !== true && internalAudience && (liveAuthorTurn || liveTurn)) {
       try {
         const status = await deps.admin.adminStatusOf(tenant, actor);
         actorIsOrgAdmin = status.isAdmin;
@@ -185,7 +189,7 @@ async function mintControlPlaneTokens(
     controlClaims = {
       ...scopeAttestation,
       aud: CONTROL_PLANE_AUD,
-      ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
+      ...(internalAudience && ownCredentialsAllowed ? { ownerConnections: true } : {}),
       exp: sandboxTokenExpiry,
       ...(turnTimezone ? { timezone: turnTimezone } : {}),
       ...(destination ? { destination } : {}),

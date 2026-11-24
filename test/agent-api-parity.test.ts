@@ -10,12 +10,18 @@ const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Dat
 function advertised(): Array<{ method: string; path: string }> {
   const listings = [
     renderAgentApis(
-      { ...base, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
+      { ...base, internalAudience: true, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
       { isAdmin: true },
       { swarmsEnabled: true, personasEnabled: true },
     ),
     renderAgentApis(
-      { ...base, liveActor: true, triggered: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
+      {
+        ...base,
+        internalAudience: true,
+        liveActor: true,
+        triggered: true,
+        memory: { read: ["personal:U1"], write: "personal:U1" },
+      },
       { isAdmin: true },
       { swarmsEnabled: true, personasEnabled: true },
     ),

@@ -209,7 +209,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   let built: BuiltApp;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    mintCapabilityToken(
+      { actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, internalAudience: true, ...extra },
+      SECRET,
+    );
   const post = (path: string, body: unknown, cap?: string) =>
     fetch(`${base}${path}`, {
       method: "POST",

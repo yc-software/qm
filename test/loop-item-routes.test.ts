@@ -164,7 +164,14 @@ async function call(
   return out;
 }
 
-const CAP = { actorId: "josh", scopeId: "personal:josh", audienceScopeId: "personal:josh", liveActor: true, exp: 0 };
+const CAP = {
+  actorId: "josh",
+  scopeId: "personal:josh",
+  audienceScopeId: "personal:josh",
+  internalAudience: true,
+  liveActor: true,
+  exp: 0,
+};
 
 const PORTAL = null;
 

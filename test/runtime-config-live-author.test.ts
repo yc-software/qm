@@ -62,7 +62,7 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
   const srv = start();
   try {
     await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    const res = await put(srv.base, await token({ liveAuthor: true }));
+    const res = await put(srv.base, await token({ internalAudience: true, liveAuthor: true }));
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string; effortLevel: string; fastMode: boolean };

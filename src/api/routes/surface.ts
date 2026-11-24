@@ -57,10 +57,12 @@ import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
   authorPublishesSkill,
+  internalPerson,
   isArtifactType,
   personAtKeyboard,
-  splitToScope,
   SHARED_SKILL_TRIGGER_REFUSAL,
+  type SkillEditor,
+  splitToScope,
 } from "../artifact-share.ts";
 
 function isGrant(b: unknown): b is Grant {
@@ -77,8 +79,17 @@ function isGrant(b: unknown): b is Grant {
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (personAtKeyboard(capability)) return null;
+  if (internalPerson(capability)) return null;
   return SHARED_SKILL_TRIGGER_REFUSAL;
+}
+
+function skillEditor(capability: ApiCtx["capability"]): SkillEditor {
+  if (!capability) return { liveActor: true, internalAudience: true };
+  return {
+    liveActor: personAtKeyboard(capability),
+    internalAudience: capability.internalAudience === true,
+    botActor: capability.botActor === true,
+  };
 }
 
 function isConversationColor(value: unknown): value is string | null {
@@ -823,7 +834,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     else if (personaScope) {
       if (
         capability.memory?.write &&
-        personAtKeyboard(capability) &&
+        internalPerson(capability) &&
         (await ctx.app.managesScope(capability.actorId, personaScope))
       )
         write = personaScope;
@@ -897,7 +908,7 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
     turnAuthority(
       capability.actorId,
       capability.memory,
-      personAtKeyboard(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
+      internalPerson(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
     ),
     capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
@@ -1016,11 +1027,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
-  const liveActor = ctx.capability ? personAtKeyboard(ctx.capability) : true;
-  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, {
-    liveActor,
-    botActor: ctx.capability?.botActor === true,
-  });
+  const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, skillEditor(ctx.capability));
   if (restored === "trigger_blocked")
     return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (restored === "exists")
@@ -1060,11 +1067,7 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
   if (patch.description?.trim() === "" || patch.body?.trim() === "") {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
-  const liveActor = capability ? personAtKeyboard(capability) : true;
-  const updated = await app.updateOwnedSkill(id, principalId, patch, {
-    liveActor,
-    botActor: capability?.botActor === true,
-  });
+  const updated = await app.updateOwnedSkill(id, principalId, patch, skillEditor(capability));
   if (updated === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
@@ -1094,13 +1097,7 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
     }
     principalId = b.principalId;
   }
-  const liveActor = capability ? personAtKeyboard(capability) : true;
-  const outcome = await app.deleteOwnedSkill({
-    principalId,
-    id,
-    liveActor,
-    botActor: capability?.botActor === true,
-  });
+  const outcome = await app.deleteOwnedSkill({ principalId, id, ...skillEditor(capability) });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
   if (outcome === "trigger_blocked")
     return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
@@ -1385,7 +1382,7 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !personAtKeyboard(ctx.capability))
+  if (ctx.capability && !internalPerson(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
@@ -1439,7 +1436,7 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !personAtKeyboard(ctx.capability))
+  if (ctx.capability && !internalPerson(ctx.capability))
     return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
