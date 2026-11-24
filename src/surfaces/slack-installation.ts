@@ -67,7 +67,7 @@ interface StoredSlackConfigToken {
 
 export type StoredSlackInstallation = ActiveSlackInstallation | DisabledSlackInstallation | StoredSlackConfigToken;
 
-export interface SlackInstallation {
+interface SlackInstallation {
   personaId?: string;
   botToken: string;
   appToken?: string;
@@ -82,7 +82,7 @@ export interface SlackInstallation {
   version: string;
 }
 
-export interface SlackInstallationStatus {
+interface SlackInstallationStatus {
   configured: boolean;
   managed: boolean;
   teamId?: string;
@@ -92,7 +92,7 @@ export interface SlackInstallationStatus {
   version?: string;
 }
 
-export interface SlackConfigTokenStatus {
+interface SlackConfigTokenStatus {
   configured: boolean;
   hasRefreshToken: boolean;
   expiresAt?: number;
@@ -100,7 +100,7 @@ export interface SlackConfigTokenStatus {
   updatedBy?: string;
 }
 
-export interface SlackAppProvisionStatus {
+interface SlackAppProvisionStatus {
   status: "unconnected" | "pending_install" | "connected";
   appId?: string;
   teamId?: string;
