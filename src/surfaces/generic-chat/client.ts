@@ -1,5 +1,12 @@
 import { trimTrailingSlashes } from "../../util/text.ts";
-import { ACCOUNT_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER, signGenericChatRequest } from "./protocol.ts";
+import { publicFetch } from "../../util/network.ts";
+import {
+  ACCOUNT_HEADER,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  parseGenericChatAccount,
+  signGenericChatRequest,
+} from "./protocol.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 export const GENERIC_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
@@ -26,30 +33,68 @@ export type GenericChatClient = ReturnType<typeof createGenericChatClient>;
 export function createGenericChatClient(deps: {
   url: string;
   secret: string;
+  allowedOrigins?: readonly string[];
   fetch?: typeof fetch;
   now?: () => number;
 }) {
   const base = trimTrailingSlashes(deps.url);
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
+  const allowedOrigins = (deps.allowedOrigins ?? []).map((origin) => {
+    const url = new URL(origin);
+    if (
+      url.protocol !== "https:" ||
+      url.origin !== origin ||
+      url.username ||
+      url.password ||
+      (url.hostname.includes("*") && (!url.hostname.startsWith("*.") || url.hostname.slice(2).includes("*")))
+    )
+      throw new Error(
+        "Generic chat allowed origins must be HTTPS origins, with an optional leading wildcard subdomain",
+      );
+    return url;
+  });
+
+  function acceptsOrigin(origin: string): boolean {
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      return false;
+    }
+    if (url.protocol !== "https:" || url.origin !== origin || url.username || url.password) return false;
+    return allowedOrigins.some((pattern) => {
+      return (
+        pattern.protocol === url.protocol &&
+        pattern.port === url.port &&
+        (pattern.origin === origin ||
+          (pattern.hostname.startsWith("*.") && url.hostname.endsWith(pattern.hostname.slice(1))))
+      );
+    });
+  }
 
   async function call(
     account: string,
     path: string,
     payload: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const body = JSON.stringify(payload);
+    const source = parseGenericChatAccount(account);
+    if (!source || (source.origin && !acceptsOrigin(source.origin)))
+      throw new GenericChatHttpError(403, "unsupported origin");
+    const body = JSON.stringify({ ...payload, ...(source.origin ? { origin: source.origin } : {}) });
     const timestamp = String(Math.floor(now() / 1000));
-    const res = await send(`${base}${path}`, {
+    const request = source.origin ? (deps.fetch ?? publicFetch) : send;
+    const res = await request(`${source.origin ?? base}${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        [ACCOUNT_HEADER]: account,
+        [ACCOUNT_HEADER]: source.id,
         [TIMESTAMP_HEADER]: timestamp,
-        [SIGNATURE_HEADER]: signGenericChatRequest(deps.secret, timestamp, account, path, body),
+        [SIGNATURE_HEADER]: signGenericChatRequest(deps.secret, timestamp, source.id, path, body),
       },
       body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: "error",
     });
     const reply = await res.text();
     const parsed = parseJson(reply);
@@ -61,5 +106,5 @@ export function createGenericChatClient(deps: {
     return parsed;
   }
 
-  return { call };
+  return { call, acceptsOrigin };
 }

@@ -30,6 +30,7 @@ const eventSchema = z.object({
   event_id: z.string().min(1),
   type: z.enum(["message.created", "message.updated", "message.deleted"]),
   account: id,
+  origin: z.string().optional(),
   chat: z.object({ id, kind: z.enum(["group", "dm"]), name: z.string().optional(), members: z.array(user) }),
   thread_id: genericChatMessageIdSchema.nullish(),
   message: z.object({
@@ -90,6 +91,18 @@ export const TIMESTAMP_HEADER = "x-agent-app-request-timestamp";
 export const SIGNATURE_HEADER = "x-agent-app-signature";
 export const ACCOUNT_HEADER = "x-agent-app-account";
 
+export function genericChatAccount(id: string, origin: string): string {
+  return `${id}@${Buffer.from(origin).toString("base64url")}`;
+}
+
+export function parseGenericChatAccount(account: string): { id: string; origin?: string } | null {
+  const [id, encodedOrigin, ...rest] = account.split("@");
+  if (!id || !ID.test(id) || rest.length) return null;
+  if (encodedOrigin === undefined) return { id };
+  const origin = Buffer.from(encodedOrigin, "base64url").toString();
+  return origin && Buffer.from(origin).toString("base64url") === encodedOrigin ? { id, origin } : null;
+}
+
 export function signGenericChat(secret: string, timestamp: string, rawBody: string): string {
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }
@@ -132,7 +145,7 @@ export function parseGenericChatRef(ref: string): GenericChatRef | null {
     surface !== GENERIC_CHAT ||
     !account ||
     !chat ||
-    !ID.test(account) ||
+    !parseGenericChatAccount(account) ||
     !ID.test(chat) ||
     rest.length ||
     (kind !== "group" && kind !== "dm")
