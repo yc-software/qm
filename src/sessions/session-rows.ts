@@ -6,10 +6,8 @@ export const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, 
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat, s.persona_id`;
 export const AUTOMATION_SESSION_SURFACES = new Set(["cron", "webhook", "loop"]);
 const AUTOMATION_SURFACES = `(${[...AUTOMATION_SESSION_SURFACES].map((s) => `'${s}'`).join(", ")})`;
-export const NOT_AUTOMATION_SURFACE = (s: string): string =>
-  `(${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 export const OWN_CHAT = (s: string): string =>
-  `${s}.parent_session_id IS NULL AND NOT ${s}.ephemeral AND ${NOT_AUTOMATION_SURFACE(s)}`;
+  `${s}.parent_session_id IS NULL AND NOT ${s}.ephemeral AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 export const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 export const BOT_VISIBLE = (botActor: boolean | undefined): string => (botActor === true ? " AND s.bot_work" : "");
 
