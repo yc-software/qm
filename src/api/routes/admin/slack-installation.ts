@@ -220,9 +220,16 @@ export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
 export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
   const slack = ctx.deps.managedSlack;
   if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const tenant = await managedSlackTenant(ctx, slackTeam(ctx.body));
+  const teamId = slackTeam(ctx.body);
+  const tenant = await managedSlackTenant(ctx, teamId);
   if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if ((await ctx.app.tenantFor("slack_team", slackTeam(ctx.body))) !== tenant)
+  const resolvedTenant = await ctx.app.tenantFor("slack_team", teamId);
+  if (resolvedTenant !== tenant) {
+    console.warn(
+      "[slack-installation] installation_mismatch",
+      JSON.stringify({ teamId: teamId ?? null, tenant, resolvedTenant: resolvedTenant ?? null }),
+    );
     return sendJson(ctx.res, 409, { error: "installation_mismatch" });
+  }
   return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
 }
