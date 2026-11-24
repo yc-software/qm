@@ -4774,9 +4774,11 @@ summary.stopped-head:focus-visible {
   }
 }
 @media (hover: none) {
-  .slack-thread-chat .message-stack > .user-row > .message-meta {
+  .slack-thread-chat .message-stack > .user-row > .message-meta,
+  .slack-thread-chat .message-stack > .assistant-row > .assistant-body .message-meta {
     left: 48px;
     right: auto;
+    margin: 0;
     padding: 0;
   }
 }
