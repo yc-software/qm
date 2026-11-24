@@ -11,6 +11,7 @@ import { MemoryProviderDisabled } from "./provider-outcome.ts";
 import { createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
 import {
   readRegistry,
+  openBrainSecrets,
   resolveMemoryRegistry,
   type DisabledRegistryRoute,
   type MemoryRegistryStore,
@@ -70,7 +71,11 @@ export function createRegistryMemoryService(opts: {
     if (version === slot.snapshot.version) return slot.snapshot;
     try {
       const registry = readRegistry(record);
-      const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
+      const { config, disabled } = resolveMemoryRegistry(
+        registry,
+        opts.registry,
+        await openBrainSecrets(registry, opts.registry),
+      );
       slot.snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),

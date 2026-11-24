@@ -1,5 +1,10 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
 
 interface ActiveSlackInstallation {
@@ -84,8 +89,17 @@ export function createSlackInstallationStore(
   orgId: string,
   map: DurableMap<StoredSlackInstallation>,
   keyMaterial: Buffer | string,
+  secretStore: SecretStoreFactory = createEncryptedSecretStore,
 ): SlackInstallationStore {
-  const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const secrets = secretStore(deriveConnectorKey(keyMaterial, "slack-installation"));
+  const botTokenName = `slack-installation/${orgId}/bot`;
+  const appTokenName = `slack-installation/${orgId}/app`;
+  const liveTokens = (record: StoredSlackInstallation | null | undefined) =>
+    record && !record.disabled ? [record.botTokenEnc, record.appTokenEnc] : [];
+  const deleteDroppedTokens = (
+    previous: StoredSlackInstallation | null | undefined,
+    next: StoredSlackInstallation | null | undefined,
+  ) => deleteReplacedSecrets(secrets, liveTokens(previous), liveTokens(next));
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
       ? {
@@ -107,8 +121,8 @@ export function createSlackInstallationStore(
       const record = await map.get(orgId);
       if (!record || record.disabled) return null;
       return {
-        botToken: decryptSecret(record.botTokenEnc, key),
-        ...(record.appTokenEnc ? { appToken: decryptSecret(record.appTokenEnc, key) } : {}),
+        botToken: await secrets.get(record.botTokenEnc),
+        ...(record.appTokenEnc ? { appToken: await secrets.get(record.appTokenEnc) } : {}),
         ...(record.appId ? { appId: record.appId } : {}),
         ...(record.installId ? { installId: record.installId } : {}),
         ...(record.installedAt ? { installedAt: record.installedAt } : {}),
@@ -128,8 +142,8 @@ export function createSlackInstallationStore(
         orgId,
         disabled: false,
         serviceBlocked: true,
-        botTokenEnc: encryptSecret(input.botToken, key),
-        ...(input.appToken ? { appTokenEnc: encryptSecret(input.appToken, key) } : {}),
+        botTokenEnc: await secrets.put(botTokenName, input.botToken),
+        ...(input.appToken ? { appTokenEnc: await secrets.put(appTokenName, input.appToken) } : {}),
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.installId ? { installId: input.installId } : {}),
         ...(input.teamId ? { teamId: input.teamId } : {}),
@@ -139,15 +153,21 @@ export function createSlackInstallationStore(
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
       await map.putIfAbsent(orgId, record);
-      const stored = await map.update(orgId, (current) => ({
-        ...record,
-        ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
-      }));
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (current) => {
+        previous = current;
+        return {
+          ...record,
+          ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
+        };
+      });
       if (!stored) throw new Error("Slack installation disappeared during update");
+      await deleteDroppedTokens(previous, stored);
       for (const listener of setListeners) listener();
       return publicStatus(stored);
     },
     async setManaged(input) {
+      const botTokenEnc = await secrets.put(botTokenName, input.botToken);
       await map.putIfAbsent(orgId, {
         orgId,
         disabled: true,
@@ -156,7 +176,9 @@ export function createSlackInstallationStore(
         version: "initial",
       });
       let accepted = false;
-      await map.update(orgId, (record) => {
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (record) => {
+        previous = record;
         if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
         if (!record.disabled && record.installId === input.installId) {
           accepted =
@@ -169,7 +191,7 @@ export function createSlackInstallationStore(
         return {
           orgId,
           disabled: false,
-          botTokenEnc: encryptSecret(input.botToken, key),
+          botTokenEnc,
           appId: input.appId,
           installId: input.installId,
           installedAt: input.installedAt,
@@ -180,6 +202,8 @@ export function createSlackInstallationStore(
           version: crypto.randomUUID(),
         };
       });
+      await deleteDroppedTokens(previous, stored);
+      await deleteReplacedSecrets(secrets, [botTokenEnc], liveTokens(stored));
       return accepted;
     },
     async enableManaged() {
@@ -195,9 +219,11 @@ export function createSlackInstallationStore(
     },
     async disableManaged(installId) {
       let disabled = false;
-      await map.update(orgId, (record) => {
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (record) => {
         if (record.disabled || record.installId !== installId) return record;
         disabled = true;
+        previous = record;
         return {
           orgId,
           disabled: true,
@@ -207,19 +233,27 @@ export function createSlackInstallationStore(
           version: crypto.randomUUID(),
         };
       });
+      if (disabled) await deleteDroppedTokens(previous, stored);
       return disabled;
     },
     async delete(updatedBy) {
-      const record = await map.update(orgId, (current) => ({
-        orgId,
-        disabled: true,
-        serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-        ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-        updatedAt: Date.now(),
-        updatedBy,
-        version: crypto.randomUUID(),
-      }));
-      if (record) return;
+      let previous: StoredSlackInstallation | undefined;
+      const record = await map.update(orgId, (current) => {
+        previous = current;
+        return {
+          orgId,
+          disabled: true,
+          serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
+          ...(current.installedAt ? { installedAt: current.installedAt } : {}),
+          updatedAt: Date.now(),
+          updatedBy,
+          version: crypto.randomUUID(),
+        };
+      });
+      if (record) {
+        await deleteDroppedTokens(previous, record);
+        return;
+      }
       const updatedAt = Date.now();
       await map.put(orgId, {
         orgId,

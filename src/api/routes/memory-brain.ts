@@ -6,6 +6,7 @@ import {
   putMemberBrain,
   readRegistry,
   redactBrain,
+  openBrainSecrets,
   resolveMemoryRegistry,
   type MemoryRegistry,
   type MemoryRegistryStore,
@@ -46,16 +47,17 @@ async function member(ctx: ApiCtx) {
   return { owner, registry: deps.memoryRegistry };
 }
 
-function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
+async function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
   const id = memberBrainId(owner);
   const brain = record.brains.find((entry) => entry.id === id && entry.owner === owner);
   const bindings = brain ? record.bindings.filter((binding) => binding.brain === id) : [];
+  const own = brain ? { ...record, brains: [brain], bindings } : undefined;
   return {
     principalId: owner,
     memberBrains: memberBrainsOn(record),
     brain: brain ? redactBrain(brain) : null,
     binding: bindings[0] ?? null,
-    disabled: brain ? resolveMemoryRegistry({ ...record, brains: [brain], bindings }, registry).disabled : [],
+    disabled: own ? resolveMemoryRegistry(own, registry, await openBrainSecrets(own, registry)).disabled : [],
   };
 }
 
@@ -75,7 +77,7 @@ async function getOwnBrain(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return registryError(ctx, error);
   }
-  return sendJson(ctx.res, 200, ownBrain(record, registry, owner));
+  return sendJson(ctx.res, 200, await ownBrain(record, registry, owner));
 }
 
 async function changeOwnBrain(

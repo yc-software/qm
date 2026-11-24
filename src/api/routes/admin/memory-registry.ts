@@ -9,7 +9,9 @@ import {
   readRegistry,
   redactBrain,
   REGISTRY_ERRORS,
+  openBrainSecrets,
   resolveMemoryRegistry,
+  brainSecretName,
   setMemberBrains,
   type MemoryRegistry,
   type MemoryRegistryStore,
@@ -38,7 +40,7 @@ function forbidMemberBrain(record: MemoryRegistry, brainId: unknown, orgOnly: bo
     throw new MemoryRegistryError(403, "org admin access required");
 }
 
-function view(record: MemoryRegistry, registry: MemoryRegistryStore, orgOnly = false) {
+async function view(record: MemoryRegistry, registry: MemoryRegistryStore, orgOnly = false) {
   const hidden = orgOnly ? memberBrainIds(record) : null;
   const scoped: MemoryRegistry = hidden
     ? {
@@ -51,7 +53,7 @@ function view(record: MemoryRegistry, registry: MemoryRegistryStore, orgOnly = f
     memberBrains: memberBrainsOn(scoped),
     brains: scoped.brains.map(redactBrain),
     bindings: scoped.bindings,
-    disabled: resolveMemoryRegistry(scoped, registry).disabled,
+    disabled: resolveMemoryRegistry(scoped, registry, await openBrainSecrets(scoped, registry)).disabled,
     overlay: [...registry.overlayIds],
   };
 }
@@ -69,30 +71,52 @@ export async function writeRegistry(
     action: string;
     resource: string;
     apply: (record: MemoryRegistry, change: RegistryChange) => MemoryRegistry;
-    show: (record: MemoryRegistry) => object;
+    show: (record: MemoryRegistry) => object | Promise<object>;
+    brainId?: string;
   },
 ): Promise<void> {
   const { actor, registry } = write;
+  let clientSecretRef: string | undefined;
   try {
+    const clientSecret = isObj(ctx.body) ? ctx.body.clientSecret : undefined;
+    if (registry.secrets && write.brainId && typeof clientSecret === "string" && clientSecret.trim())
+      clientSecretRef = await registry.secrets.put(brainSecretName(write.brainId), clientSecret);
     const record = await registry.update((current) =>
-      write.apply(current, { actor, now: Date.now(), overlayIds: registry.overlayIds, key: registry.key }),
+      write.apply(current, {
+        actor,
+        now: Date.now(),
+        overlayIds: registry.overlayIds,
+        key: registry.key,
+        ...(registry.secrets ? { secrets: registry.secrets } : {}),
+        ...(clientSecretRef ? { clientSecretRef } : {}),
+      }),
     );
+    await discardUnusedSecret(registry, clientSecretRef);
     audit(ctx, {
       principalId: actor,
       action: write.action,
       resource: write.resource,
       scopeLabel: orgScope(ctx.deps),
     });
-    return sendJson(ctx.res, 200, { ok: true, ...write.show(record) });
+    return sendJson(ctx.res, 200, { ok: true, ...(await write.show(record)) });
   } catch (error) {
+    await discardUnusedSecret(registry, clientSecretRef);
     return registryError(ctx, error);
   }
+}
+
+export async function discardUnusedSecret(registry: MemoryRegistryStore, ref?: string): Promise<void> {
+  if (!registry.secrets || !ref) return;
+  const stored = readRegistry((await registry.current()).record);
+  if (stored.brains.some((brain) => brain.auth.clientSecretEnc === ref)) return;
+  await registry.secrets.delete(ref);
 }
 
 async function change(
   ctx: ApiCtx,
   action: string,
   apply: (record: MemoryRegistry, change: RegistryChange, orgOnly: boolean) => MemoryRegistry,
+  brainId?: string,
 ): Promise<void> {
   const authorized = await registryAdmin(ctx);
   if (!authorized) return;
@@ -105,10 +129,11 @@ async function change(
     resource: ctx.params.id ?? "memory-registry",
     apply: (record, c) => apply(record, c, orgOnly),
     show: (record) => view(record, registry, orgOnly),
+    ...(brainId ? { brainId } : {}),
   });
 }
 
-async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => object | undefined): Promise<void> {
+async function read(ctx: ApiCtx, pick?: (full: Awaited<ReturnType<typeof view>>) => object | undefined): Promise<void> {
   const authorized = await registryAdmin(ctx);
   if (!authorized) return;
   const { actor, registry } = authorized;
@@ -118,9 +143,9 @@ async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => objec
     resource: ctx.params.id ?? "memory-registry",
     scopeLabel: orgScope(ctx.deps),
   });
-  let full: ReturnType<typeof view>;
+  let full: Awaited<ReturnType<typeof view>>;
   try {
-    full = view(readRegistry((await registry.current()).record), registry, actor.role === "owner");
+    full = await view(readRegistry((await registry.current()).record), registry, actor.role === "owner");
   } catch (error) {
     return registryError(ctx, error);
   }
@@ -156,11 +181,16 @@ function putAgentBrain(record: MemoryRegistry, id: string, body: unknown, c: Reg
 }
 
 export const putMemoryBrain = (ctx: ApiCtx) =>
-  change(ctx, "memory-registry.brain.update", (record, c, orgOnly) => {
-    const id = ctx.params.id ?? "";
-    forbidMemberBrain(record, id, orgOnly);
-    return (ctx.capability ? putAgentBrain : putBrain)(record, id, ctx.body, c);
-  });
+  change(
+    ctx,
+    "memory-registry.brain.update",
+    (record, c, orgOnly) => {
+      const id = ctx.params.id ?? "";
+      forbidMemberBrain(record, id, orgOnly);
+      return (ctx.capability ? putAgentBrain : putBrain)(record, id, ctx.body, c);
+    },
+    ctx.capability ? undefined : ctx.params.id,
+  );
 
 export const deleteMemoryBrain = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.brain.delete", (record, _c, orgOnly) => {
