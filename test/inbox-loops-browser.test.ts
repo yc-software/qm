@@ -136,8 +136,6 @@ test("loop grants and decisions need the person's own session or running turn", 
   const late = await asEnded(`/v1/loops/${loopId}/grants`, { shipAction: "send" });
   assert.deepEqual([late.status, ((await late.json()) as { error: string }).error], [403, "human_required"]);
   assert.deepEqual(await built.loops.grants.byLoop(loopId), []);
-  const made = await asEnded("/v1/loops", { name: "Late", playbook: "Review.", successCondition: "Reviewed." });
-  assert.equal(((await made.json()) as { loop: { taskAuthor?: string } }).loop.taskAuthor, "automation");
 });
 
 test("an inbox item image is served only as a sandboxed, non-sniffable image", async () => {

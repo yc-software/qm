@@ -14,7 +14,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));
+const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-body-guard-")) }));
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
@@ -27,64 +27,6 @@ const base = `http://localhost:${(core.address() as AddressInfo).port}`;
 after(async () => {
   await new Promise<void>((r) => core.close(() => r()));
   await built.runtime.stop();
-});
-
-test("POST /v1/turns strips the owner-keychain union from the external body but keeps other fields", async () => {
-  const body = JSON.stringify({
-    surface: "cron",
-    actor: { externalId: "internal:owner" },
-    conversation: {
-      kind: "channel",
-      channelRef: "C9",
-      threadRef: "t-union-guard",
-      audience: [{ externalId: "internal:owner" }],
-    },
-    text: "x",
-    origin: { kind: "automation", useOwnerKeychain: true },
-    readOnly: true,
-    skipMemory: true,
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(
-    run?.request.origin,
-    { kind: "automation" },
-    "external union injection is removed while trigger provenance survives",
-  );
-  assert.equal(run?.request.readOnly, true, "non-internal fields are still forwarded");
-  assert.equal(run?.request.skipMemory, true, "the source-authenticated memory opt-out is forwarded");
-});
-
-test("POST /v1/turns strips the owner-keychain union and the owner-fire mark from a typed automation origin", async () => {
-  const body = JSON.stringify({
-    surface: "cron",
-    actor: { externalId: "internal:owner" },
-    conversation: {
-      kind: "channel",
-      channelRef: "C9",
-      threadRef: "t-typed-union-guard",
-      audience: [{ externalId: "internal:owner" }],
-    },
-    text: "x",
-    origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true, ownerFire: true },
-    async: true,
-  });
-  const r = await fetch(`${base}/v1/turns`, {
-    method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
-    body,
-  });
-  assert.equal(r.status, 202);
-  const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {

@@ -1,5 +1,5 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
-import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
+import type { ClientToolDeclaration, SurfaceBriefing, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { isTerminal } from "../../runs/run-store.ts";
@@ -106,12 +106,6 @@ export function zodMessage(field: string, error: z.ZodError): string {
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
-function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
-  if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ownerFire: _fireOnly, ...safe } = origin;
-  return safe;
-}
-
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
     surfaceOrigin: _surfaceOrigin,
@@ -123,7 +117,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   } = body;
   if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
-  const origin = publicOrigin(safeBody.origin);
   const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
   if (!z.enum(["steer", "queue"]).optional().safeParse(rest.midTurn).success)
     return { error: "midTurn must be steer or queue" };
@@ -149,7 +142,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
       ...rest,
       ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
-      ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
     },
   };

@@ -1,4 +1,3 @@
-import type { TurnOrigin } from "../src/types.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -103,25 +102,6 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   assert.ok(asText.ok, JSON.stringify(asText));
   assert.equal(asText.cron.owner, "U1", "a `text` rewrite by someone else hands ownership back the same way");
   assert.equal(asText.cron.message, "digest is done");
-});
-
-test("a task an automated turn wrote fires without its owner's authority until the owner rewrites it at the keyboard", async () => {
-  const { built, control } = setup();
-  const typed = claims("U1", undefined, { liveActor: true });
-  const fire = claims("U1", undefined, { liveActor: true, triggered: true });
-  const byFire = await control.createCron({ schedule: { everyMs: 60_000 }, action: "read every transcript" }, fire);
-  assert.ok(byFire.ok, JSON.stringify(byFire));
-  assert.equal(byFire.cron.taskAuthor, "automation");
-  const retitled = await control.patchCron(byFire.cron.id, { title: "sweep" }, typed);
-  assert.equal(retitled.ok && retitled.cron.taskAuthor, "automation", "only rewriting the task makes it the person's");
-  const rewritten = await control.patchCron(byFire.cron.id, { action: "summarise spend" }, typed);
-  assert.equal(rewritten.ok && rewritten.cron.taskAuthor, undefined);
-  const byPerson = await control.createCron({ schedule: { everyMs: 60_000 }, action: "summarise spend" }, typed);
-  assert.ok(byPerson.ok, JSON.stringify(byPerson));
-  assert.equal(byPerson.cron.taskAuthor, undefined);
-  const hijacked = await control.patchCron(byPerson.cron.id, { action: "read every transcript" }, fire);
-  assert.equal(hijacked.ok && hijacked.cron.taskAuthor, "automation", "a fire rewriting a task forfeits its authority");
-  assert.equal((await built.app.getCron(byPerson.cron.id))?.taskAuthor, "automation");
 });
 
 test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {
@@ -569,43 +549,6 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   });
   const viaOldGrant = await control.patchCron(personal.cron.id, { action: "exfiltrate" }, claims("U2"));
   assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
-});
-
-test("app.turn forwards origin.useOwnerKeychain onto the persisted run request (else scheduled fires lose the union)", async () => {
-  const { built } = setup();
-  const base = {
-    surface: "cron",
-    actor: { externalId: "U1" },
-    conversation: {
-      kind: "channel" as const,
-      channelRef: "C9",
-      threadRef: "t-union",
-      audience: [{ externalId: "U1" }],
-    },
-    text: "compute digest",
-    origin: { kind: "automation" } as TurnOrigin,
-    async: true,
-  };
-  const withUnion = await built.app.turn({ ...base, origin: { kind: "automation", useOwnerKeychain: true } });
-  assert.equal(withUnion.status, "queued");
-  const runU = await built.runs.get((withUnion as { runId?: string }).runId!);
-  assert.deepEqual(
-    runU?.request.origin,
-    { kind: "automation", useOwnerKeychain: true },
-    "the union flag must survive app.turn → persisted run origin",
-  );
-
-  const without = await built.app.turn({ ...base, conversation: { ...base.conversation, threadRef: "t-nounion" } });
-  const runN = await built.runs.get((without as { runId?: string }).runId!);
-  assert.deepEqual(runN?.request.origin, { kind: "automation" });
-
-  const typed = await built.app.turn({
-    ...base,
-    conversation: { ...base.conversation, threadRef: "t-typed-origin" },
-    origin: { kind: "automation", screenData: "external event" },
-  });
-  const runT = await built.runs.get((typed as { runId?: string }).runId!);
-  assert.deepEqual(runT?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {
