@@ -10,41 +10,31 @@ export interface ConnectorApp extends McpServerApp {
   connector: string;
 }
 
-interface KeyField {
+export interface KeyField {
   key: string;
   label: string;
   secret: boolean;
 }
-
-export type DirectConnect = { connect: "mcp" } | { connect: "api_key"; keyFields: KeyField[] };
 
 export interface CatalogApp {
   id: string;
   logoUrl: string;
   name: string;
   description: string;
-  connect?: DirectConnect["connect"];
-  keyFields?: KeyField[];
 }
 
-const OAUTH_SCHEMES = new Set(["OAUTH1", "OAUTH2", "S2S_OAUTH2"]);
-const KEY_SCHEMES = new Set(["API_KEY", "BEARER_TOKEN"]);
+const KEY_SCHEMES = new Set(["API_KEY", "BEARER_TOKEN", "BASIC", "BASIC_WITH_JWT"]);
 
-export function directConnect(toolkit: string, name: string, schemes: string[]): DirectConnect | null {
-  if (schemes.includes("DCR_OAUTH")) return { connect: "mcp" };
-  if (schemes.some((scheme) => OAUTH_SCHEMES.has(scheme))) return null;
+export function keyFields(toolkit: string, name: string, schemes: string[]): KeyField[] | null {
+  if (!schemes.length || !schemes.every((scheme) => KEY_SCHEMES.has(scheme))) return null;
   const upper = toolkit.toUpperCase().replaceAll("-", "_");
   const prefix = "0123456789".includes(upper[0]!) ? `APP_${upper}` : upper;
-  const basic = schemes.includes("BASIC") && !schemes.some((scheme) => KEY_SCHEMES.has(scheme));
-  return {
-    connect: "api_key",
-    keyFields: basic
-      ? [
-          { key: `${prefix}_USERNAME`, label: `${name} username`, secret: false },
-          { key: `${prefix}_PASSWORD`, label: `${name} password`, secret: true },
-        ]
-      : [{ key: `${prefix}_API_KEY`, label: `${name} API key`, secret: true }],
-  };
+  if (schemes.every((scheme) => scheme === "BASIC"))
+    return [
+      { key: `${prefix}_USERNAME`, label: `${name} username`, secret: false },
+      { key: `${prefix}_PASSWORD`, label: `${name} password`, secret: true },
+    ];
+  return [{ key: `${prefix}_API_KEY`, label: `${name} API key`, secret: true }];
 }
 
 export function connectorApps(servers: McpServer[]): ConnectorApp[] {

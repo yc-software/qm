@@ -124,9 +124,10 @@ function fixture() {
         grantedBy: "admin",
       });
   }
-  const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test") =>
-    replies.push({ items: [] }, { session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
-  return { invoke, own, shared, link, calls, replies, deps, app, audits };
+  const oauthApp = (slug: string) => ({ items: [{ slug, name: slug, auth_schemes: ["OAUTH2"] }] });
+  const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test", toolkit = "gmail") =>
+    replies.push(oauthApp(toolkit), { session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
+  return { invoke, own, shared, link, oauthApp, calls, replies, deps, app, audits };
 }
 
 const SETTINGS = "https://qm.example/?view=settings";
@@ -263,7 +264,7 @@ test("authorization binds the session to the authenticated actor, ignoring suppl
     const f = fixture();
     await f.own();
     f.replies.push(
-      { items: [] },
+      f.oauthApp("gmail"),
       { session_id: "trs_test" },
       { redirect_url: link, connected_account_id: "ca_test", secret: "hidden" },
     );
@@ -290,7 +291,7 @@ test("invalid toolkits and unsafe authorization destinations are rejected", asyn
     "http://connect.composio.dev/link/lk_test",
     "https://connect.composio.dev/other",
   ]) {
-    f.replies.push({ items: [] }, { session_id: "trs_test" }, { redirect_url, connected_account_id: "ca_test" });
+    f.replies.push(f.oauthApp("gmail"), { session_id: "trs_test" }, { redirect_url, connected_account_id: "ca_test" });
     assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 502);
   }
 });
@@ -500,7 +501,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
   f.deps.slackEnvBotToken = "bot-test";
   f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
   try {
-    f.link();
+    f.link(undefined, undefined, "slack");
     const started = await f.invoke("/v1/composio/slack/authorize", { returnTo: "/settings", state: STATE });
     assert.equal(started.status, 200);
     const callback = JSON.parse(String(f.calls[2]!.init?.body)).callback_url;
@@ -763,7 +764,7 @@ test("callback completion is browser-only and preserves the durable return URL",
 test("connects without a return page are still audited on completion, and failed completions too", async () => {
   const f = fixture();
   await f.own();
-  f.link();
+  f.link(undefined, undefined, "outlook");
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "outlook" })).status, 200);
   f.replies.push({ connected_account_id: "ca_test" });
   assert.equal((await f.invoke("/v1/composio/callback?session_uri=opaque")).location, SETTINGS);
@@ -1465,49 +1466,32 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal(bare.calls.length, 0);
 });
 
-test("API-key and MCP apps get their own connect path and never start a Composio connection", async () => {
+test("API-key apps ask for a key and MCP-server apps are left to connectors, never starting a Composio connection", async () => {
   const f = fixture();
   await f.own();
-  const item = (slug: string, name: string, ...auth_schemes: string[]) => ({ slug, name, auth_schemes });
+  const item = (slug: string, ...auth_schemes: string[]) => ({ slug, name: slug.toUpperCase(), auth_schemes });
   const catalog = [
-    item("gmail", "Gmail", "OAUTH2"),
-    item("notion", "Notion", "OAUTH2", "API_KEY"),
-    item("granola_mcp", "Granola MCP", "DCR_OAUTH"),
-    item("openai", "OpenAI", "API_KEY"),
-    item("acme", "Acme", "BASIC"),
+    item("gmail", "OAUTH2"),
+    item("notion", "OAUTH2", "API_KEY"),
+    item("granola_mcp", "DCR_OAUTH"),
+    item("openai", "API_KEY"),
+    item("acme", "BASIC"),
   ];
   f.replies.push({ items: catalog });
   assert.deepEqual(
-    (await f.invoke("/v1/composio/toolkits")).data.items.map((app: Record<string, unknown>) => [
-      app.id,
-      app.connect,
-      app.keyFields,
-    ]),
-    [
-      ["gmail", undefined, undefined],
-      ["notion", undefined, undefined],
-      ["granola_mcp", "mcp", undefined],
-      ["openai", "api_key", [{ key: "OPENAI_API_KEY", label: "OpenAI API key", secret: true }]],
-      [
-        "acme",
-        "api_key",
-        [
-          { key: "ACME_USERNAME", label: "Acme username", secret: false },
-          { key: "ACME_PASSWORD", label: "Acme password", secret: true },
-        ],
-      ],
-    ],
+    (await f.invoke("/v1/composio/toolkits")).data.items.map((app: { id: string }) => app.id),
+    ["gmail", "notion", "openai", "acme"],
   );
-  f.replies.push({ items: [catalog[2]] }, { items: [catalog[3]] });
-  const mcp = await f.invoke("/v1/composio/authorize", { toolkit: "granola_mcp" });
-  const key = await f.invoke("/v1/composio/authorize", { toolkit: "openai" });
-  assert.deepEqual(
-    [mcp.status, mcp.data.error, key.status, key.data.error],
-    [409, "connect_mcp_server", 409, "connect_api_key"],
-  );
-  assert.deepEqual(key.data.fields, [{ key: "OPENAI_API_KEY", label: "OpenAI API key", secret: true }]);
-  assert.deepEqual(
-    f.calls.map((call) => new URL(call.url).pathname),
-    ["/api/v3.1/toolkits", "/api/v3.1/toolkits/multi", "/api/v3.1/toolkits/multi"],
-  );
+  const refusals = [];
+  for (const app of catalog.slice(2)) {
+    f.replies.push({ items: [app] });
+    const r = await f.invoke("/v1/composio/authorize", { toolkit: app.slug });
+    refusals.push([r.status, r.data.error, r.data.fields?.map((field: { key: string }) => field.key)]);
+  }
+  assert.deepEqual(refusals, [
+    [404, "not_composio_app", undefined],
+    [409, "connect_api_key", ["OPENAI_API_KEY"]],
+    [409, "connect_api_key", ["ACME_USERNAME", "ACME_PASSWORD"]],
+  ]);
+  assert.equal(f.calls.filter((call) => call.url.includes("/tool_router/")).length, 0);
 });

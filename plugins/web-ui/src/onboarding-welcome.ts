@@ -447,11 +447,7 @@ export class OnboardingWelcome extends LitElement {
         if (!response.ok)
           throw new Error(result.message ?? "App connections are unavailable right now. Please try again.");
         for (const item of result.items as Array<Omit<ConnectionService, "popularity">>) {
-          if (
-            item.id !== "slack" &&
-            (item.connect !== "mcp" || item.connectUrl) &&
-            !services.some((service) => service.id === item.id)
-          )
+          if (item.id !== "slack" && !services.some((service) => service.id === item.id))
             services.push({ ...item, popularity: 100000 - services.length });
         }
         cursor = typeof result.nextCursor === "string" ? result.nextCursor : "";
@@ -488,7 +484,6 @@ export class OnboardingWelcome extends LitElement {
       if (!(await openDesktopBrowser(service.connectUrl))) window.open(service.connectUrl, "_blank", "noopener");
       return;
     }
-    if (service.connect === "api_key" && !this.preview) return this.requestKey(service);
     if (this.preview) {
       startPreviewAttempt(this.previewUser(), service, this.pickerState, this.closest(".chat-scroll")?.scrollTop ?? 0);
       return;
@@ -518,6 +513,10 @@ export class OnboardingWelcome extends LitElement {
         body: JSON.stringify({ toolkit: service.id, returnTo: location.pathname + location.search, state }),
       });
       const result = await response.json();
+      if (result.error === "connect_api_key") {
+        clearConnectionAttempt(this.previewUser());
+        return await this.openKeyForm(service.name, result.fields);
+      }
       if (!response.ok) throw new Error(result.message ?? "Could not open authorization. Please try again.");
       if (typeof result.accountId !== "string" || !ACCOUNT_ID.test(result.accountId))
         throw new Error("Could not start authorization. Please try again.");
@@ -529,28 +528,20 @@ export class OnboardingWelcome extends LitElement {
       this.authorizing = "";
     }
   }
-  private async requestKey(service: ConnectionService): Promise<void> {
-    this.authorizing = service.name;
-    this.authorizationError = "";
-    try {
-      const response = await fetch(`${this.base}api/keychain/drops`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          service: service.name,
-          purpose: `Give QM your ${service.name} credentials so it can use ${service.name} for you.`,
-          fields: service.keyFields,
-        }),
-      });
-      const result = await response.json();
-      if (!response.ok || typeof result.url !== "string")
-        throw new Error(result.message ?? "Could not open the key form. Please try again.");
-      if (!(await openDesktopBrowser(result.url))) window.open(result.url, "_blank", "noopener");
-    } catch (error) {
-      this.authorizationError = errMessage(error, "Could not open the key form. Please try again.");
-    } finally {
-      this.authorizing = "";
-    }
+  private async openKeyForm(name: string, fields: unknown): Promise<void> {
+    const response = await fetch(`${this.base}api/keychain/drops`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service: name,
+        purpose: `Give QM your ${name} credentials so it can use ${name} for you.`,
+        fields,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || typeof result.url !== "string")
+      throw new Error(result.message ?? "Could not open the key form. Please try again.");
+    if (!(await openDesktopBrowser(result.url))) window.open(result.url, "_blank", "noopener");
   }
   private get seeded(): ActivitySeeds | undefined {
     return this.setupOnly ? undefined : this.me?.welcome;

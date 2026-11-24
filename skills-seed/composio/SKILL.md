@@ -54,10 +54,12 @@ Some apps are served by one of the workspace's connectors instead of Composio. I
 
 ## Apps that take an API key or are MCP servers
 
-Composio is only for apps people sign in to. In `toolkits`, an app with `connect: "api_key"` takes an API key and one with `connect: "mcp"` is an MCP server; `authorize` refuses both with `409` (`connect_api_key` or `connect_mcp_server`) and creates nothing. Existing Composio connections to them keep working.
+Composio is only for apps people sign in to. `authorize` creates nothing for the rest:
 
-- `api_key`: mint a keychain drop (the `secret-drop` skill) with the app's `keyFields` as `fields`, give the person the link, then call the app's API yourself with that credential. In web chat, `::connect-apps{toolkit="openai"}` does the same: its button opens the key form.
-- `mcp`: an org admin adds the server once with `PUT /v1/admin/mcp-servers/<id>` and its MCP endpoint URL, listing the toolkit in its `apps`; it then appears under Apps connected somewhere else. Until then, tell the person their admin needs to add it. Don't show a connect card.
+- An app that takes an API key or password gets `409 connect_api_key` with `fields`. Mint a keychain drop (the `secret-drop` skill) with those `fields`, give the person the link, then call the app's API yourself with that credential. In web chat the connect card does this itself: its button opens the key form.
+- Composio's MCP-server apps are left out of `toolkits`, and `authorize` answers `404 not_composio_app` for them. An org admin adds the server once with `PUT /v1/admin/mcp-servers/<id>`, listing the app in its `apps`; it then appears under Apps connected somewhere else.
+
+Existing Composio connections to either kind keep working.
 
 ## Reconnect or disconnect an app
 
