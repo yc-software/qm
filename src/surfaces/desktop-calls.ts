@@ -11,7 +11,7 @@ export const NO_DESKTOP_TEXT =
   "No QM desktop app answered, so nothing ran on the person's Mac. Ask them to open the QM desktop app on their Mac, then try again.";
 
 export const DESKTOP_PERSON_ONLY_TEXT =
-  "The desktop tool runs only on a message the person addressed to you themselves, or on work that message started. This turn wasn't one, so nothing ran on their Mac.";
+  "The desktop tool runs only in a turn started by a message the person addressed to you themselves, or by work that message started. This turn was started some other way, so nothing ran on their Mac. If they want it done, ask them to send the request as a new message.";
 export const DESKTOP_UNAVAILABLE_TEXT =
   "This server can't relay desktop calls for this turn, so nothing ran on the person's Mac.";
 
