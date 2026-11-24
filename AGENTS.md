@@ -1,6 +1,6 @@
 # qm
 
-**Read [`docs/SPEC.md`](./docs/SPEC.md) first.** It is the short source of truth for QM's north stars, subsystems and past mistakes. Where another doc disagrees, the spec wins.
+**Read [`docs/SPEC.md`](./docs/SPEC.md) first, then the area spec it routes you to under [`docs/spec/`](./docs/spec/).** The spec is the source of truth for QM's north stars, deployment shapes, what is core and what is optional, subsystems and past mistakes. Where another doc disagrees, the spec wins.
 
 To run and test, see [`README.md`](./README.md).
 
@@ -8,6 +8,17 @@ To run and test, see [`README.md`](./README.md).
 
 Two habits that keep task-focused changes from scarring the rest of the repo:
 
+- **Know which deployments your change reaches.** QM has no single production: package,
+  platform-hosted, source-built and multi-tenant deployments all run `main`, each with
+  different integrations switched on (see
+  [Deployment shapes](./docs/SPEC.md#deployment-shapes)). Before relying on Slack, app
+  connections (Composio), a model gateway, S3, one sandbox or deploy provider, or one
+  organization per database, check [Core and optional](./docs/SPEC.md#core-and-optional):
+  each is off somewhere, and the code must work without it.
+- **Keep the area specs true.** When a change alters what an area spec under
+  `docs/spec/` says about the code, correct that text in the same PR. `docs/SPEC.md`
+  itself stays human-written: apart from Wall of shame entries, change it only when a
+  maintainer asks.
 - **Do not add AI authorship attribution to commits or pull requests.** Omit
   `Co-authored-by` trailers for Codex, Claude, or other AI tools, and omit
   tool-generated attribution footers such as `Generated with Codex`. Preserve
