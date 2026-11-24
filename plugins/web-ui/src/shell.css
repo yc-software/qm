@@ -14526,3 +14526,102 @@ button:disabled .qm-switch {
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Readable tool-call approval cards */
+.approval-call-title {
+  font-size: var(--font-14, 14px);
+  font-weight: 600;
+  color: var(--foreground);
+}
+.approval-via {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.approval-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 4px 0 0;
+  font-size: var(--font-13);
+}
+.approval-field {
+  display: contents;
+}
+.approval-field dt {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.approval-field dd {
+  margin: 0;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.approval-field.long dd {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted-foreground) 8%, var(--background));
+  line-height: 1.45;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.approval-raw > summary {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.approval-batch {
+  gap: 0;
+  padding: 4px 4px 8px;
+}
+.approval-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0 8px;
+}
+.approval-batch-title {
+  font-weight: 600;
+  font-size: var(--font-14, 14px);
+}
+.approval-batch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+.approval-batch-detail {
+  flex: 1;
+  min-width: 0;
+}
+.approval-batch-detail > summary {
+  display: flex;
+  gap: 8px;
+  cursor: pointer;
+  font-size: var(--font-13);
+  min-width: 0;
+  padding-top: 5px;
+}
+.approval-batch-name {
+  flex: none;
+  font-weight: 600;
+}
+.approval-batch-line {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.approval-batch-detail[open] > summary .approval-batch-line {
+  display: none;
+}
+.approval-batch-detail .composer-approval-copy {
+  padding: 8px 0 2px;
+}
+.approval-batch-row .approval-actions {
+  flex: none;
+}

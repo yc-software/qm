@@ -34,6 +34,7 @@ import {
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
+import { allowLabel, approvalCallLine, approvalCallView } from "./approval-call";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { icon } from "./icons";
@@ -950,62 +951,107 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
+  function approvalDecisionButtons(
+    a: PendingApproval,
+    decide: (decision: ApprovalDecision) => void,
+    busy: boolean,
+  ): TemplateResult {
+    return html`<div class="approval-actions">
+      <button
+        class="approval-btn deny"
+        type="button"
+        ?disabled=${busy}
+        @click=${() => decide({ requestId: a.requestId, approved: false })}
+      >
+        Deny
+      </button>
+      <button
+        class="approval-btn ${a.grantModes?.session === false ? "primary" : ""}"
+        type="button"
+        ?disabled=${busy}
+        @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
+      >
+        ${allowLabel(a)}
+      </button>
+      ${
+        a.grantModes?.session === false
+          ? nothing
+          : html`<button
+              class="approval-btn primary"
+              type="button"
+              ?disabled=${busy}
+              @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
+            >
+              Allow for session
+            </button>`
+      }
+      ${
+        a.grantModes?.always === false
+          ? nothing
+          : html`<button
+              class="approval-btn"
+              type="button"
+              ?disabled=${busy}
+              @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
+            >
+              Allow always
+            </button>`
+      }
+    </div>`;
+  }
+
   function composerApprovalPanel(
     approvals: PendingApproval[],
-    resolve: (decision: ApprovalDecision) => void = ctx.chat.resolveCommandApproval,
+    resolve: (decision: ApprovalDecision) => void | Promise<void> = ctx.chat.resolveCommandApproval,
   ): TemplateResult {
+    const resolving = ctx.chat.state.resolvingApprovals;
     const decide = (decision: ApprovalDecision): void => {
-      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
+      if (!resolving.has(decision.requestId)) void resolve(decision);
     };
-    return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
-      ${approvals.map(
-        (a) =>
-          html`<div class="composer-approval">
+    if (approvals.length < 2)
+      return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
+        ${approvals.map(
+          (a) =>
+            html`<div class="composer-approval">
+              <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
+              ${approvalDecisionButtons(a, decide, resolving.has(a.requestId))}
+            </div>`,
+        )}
+      </div>`;
+    // Each call stays its own exact-call decision; "all" just submits them one after another.
+    const decideAll = async (approved: boolean): Promise<void> => {
+      for (const a of approvals) {
+        if (resolving.has(a.requestId)) continue;
+        await resolve({ requestId: a.requestId, approved, ...(approved ? { scope: "once" as const } : {}) });
+      }
+    };
+    const busy = resolving.size > 0;
+    return html`<div class="composer-approval-panel approval-batch" role="group" aria-label="Approvals">
+      <div class="approval-batch-head">
+        <span class="approval-batch-title">${approvals.length} calls need approval</span>
+        <div class="approval-actions">
+          <button class="approval-btn deny" type="button" ?disabled=${busy} @click=${() => void decideAll(false)}>
+            Deny all
+          </button>
+          <button class="approval-btn primary" type="button" ?disabled=${busy} @click=${() => void decideAll(true)}>
+            Allow all ${approvals.length}
+          </button>
+        </div>
+      </div>
+      ${approvals.map((a) => {
+        const call = approvalCallView(a);
+        const line = call ? approvalCallLine(call) : a.summary ?? a.command;
+        return html`<div class="approval-batch-row">
+          <details class="approval-batch-detail">
+            <summary>
+              <span class="approval-batch-name">${call?.title ?? "Call"}</span>
+              <span class="approval-batch-line">${line}</span>
+            </summary>
             <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
-            <div class="approval-actions">
-              <button
-                class="approval-btn deny"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: false })}
-              >
-                Deny
-              </button>
-              <button
-                class="approval-btn"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
-              >
-                Allow once
-              </button>
-              ${
-                a.grantModes?.session === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn primary"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
-                    >
-                      Allow for session
-                    </button>`
-              }
-              ${
-                a.grantModes?.always === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
-                    >
-                      Allow always
-                    </button>`
-              }
-            </div>
-          </div>`,
-      )}
+          </details>
+          ${approvalDecisionButtons(a, decide, resolving.has(a.requestId))}
+        </div>`;
+      })}
     </div>`;
   }
 

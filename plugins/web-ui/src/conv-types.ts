@@ -109,7 +109,7 @@ export interface ChatSurface {
   setTurnRuntime(runtime: TurnRuntime | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
-  resolveCommandApproval(decision: ApprovalDecision): void;
+  resolveCommandApproval(decision: ApprovalDecision): Promise<void>;
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
   syncPaneState(): void;
@@ -144,7 +144,10 @@ interface ComposerState {
 export type SteeringRun = QueuedRun & { attachments?: Attachment[] };
 
 export interface ComposerSurface {
-  composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
+  composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve?: (decision: ApprovalDecision) => void | Promise<void>,
+  ): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;

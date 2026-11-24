@@ -137,6 +137,7 @@ import {
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
+import { approvalCallView, realApprovalReason, type ApprovalCallView } from "./approval-call";
 import {
   buildTimeline,
   rowArgs,
@@ -995,10 +996,10 @@ export function createChatSurface(
     }
   }
 
-  function resolveCommandApproval(decision: ApprovalDecision): void {
+  async function resolveCommandApproval(decision: ApprovalDecision): Promise<void> {
     const ro = readOnly.approve(decision);
-    if (ro) void ro;
-    else if (chatState.agent) void approveCommand(chatState.agent, decision);
+    if (ro) await ro;
+    else if (chatState.agent) await approveCommand(chatState.agent, decision);
   }
 
   function activePendingApprovals(): PendingApproval[] {
@@ -3413,13 +3414,52 @@ export function createChatSurface(
     })}`;
   }
 
+  function approvalCallCard(a: PendingApproval, call: ApprovalCallView, reason: string | undefined): TemplateResult {
+    return html`
+      <div class="approval-head">
+        <span class="approval-call-title">${call.title}</span>
+        ${call.via ? html`<span class="approval-via">via ${call.via}</span>` : nothing}
+        ${reason ? html`<span class="approval-reason-badge">${reason}</span>` : nothing}
+      </div>
+      ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
+      ${
+        call.fields.length
+          ? html`<dl class="approval-fields">
+              ${call.fields.map(
+                (f) =>
+                  html`<div class="approval-field ${f.long ? "long" : ""}">
+                    <dt>${f.label}</dt>
+                    <dd dir="auto">${f.value}</dd>
+                  </div>`,
+              )}
+            </dl>`
+          : nothing
+      }
+      ${
+        a.matched
+          ? html`<div class="approval-match">
+              <span class="approval-match-label">Triggered by</span
+              ><code class="approval-match-snippet">${a.matched}</code>
+            </div>`
+          : nothing
+      }
+      <details class="approval-full approval-raw">
+        <summary>Raw call</summary>
+        <code class="approval-cmd approval-cmd-full">${call.raw}</code>
+      </details>
+    `;
+  }
+
   function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
+    const reason = realApprovalReason(a.reason);
+    const call = approvalCallView(a);
+    if (call) return approvalCallCard(a, call, reason);
     const summary = firstLine(a.command, 80);
     const truncated = a.command.includes("\n") || a.command.length > 80;
     return html`
       <div class="approval-head">
         <span class="approval-title">Approval needed</span>
-        ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
+        ${reason ? html`<span class="approval-reason-badge">${reason}</span>` : nothing}
       </div>
       ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
       ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
@@ -3725,7 +3765,7 @@ export function createChatSurface(
         <span class="tool-icon">${icon(Wrench, 13)}</span>
         <span class="tool-label"
           >Approval
-          needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
+          needed${realApprovalReason(p.reason) ? html` <span class="tool-detail">${firstLine(p.reason!, 90)}</span>` : nothing}</span
         >
       </div>`;
     }
@@ -3737,14 +3777,17 @@ export function createChatSurface(
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
     let label = knownMeta ? meta.attempted : `Tried ${name}`;
-    if (kind === "approval") label = row.pending ? "Approval needed" : "Approval requested";
+    if (kind === "approval")
+      label = row.pending
+        ? `Waiting for approval${row.waiting && row.waiting > 1 ? ` · ${row.waiting} calls` : ""}`
+        : "Approval requested";
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
     } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
-    if (kind === "approval") why = firstLine(result.reason ?? "", 90);
+    if (kind === "approval") why = firstLine(realApprovalReason(result.reason) ?? "", 90);
     else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";

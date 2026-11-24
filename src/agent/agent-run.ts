@@ -1030,7 +1030,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         const pendingApprovals = entry.ref.pendingApprovals ?? [];
         return result(reply, {
           ...(pendingApprovals.length ? { pendingApprovals } : {}),
-          ...(pendingApprovals.length && entry.ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
+          ...(pendingApprovals.length && (entry.ref.pausedOnApproval || entry.ref.awaitingCallApprovals)
+            ? { pausedOnApproval: true }
+            : {}),
           ...(entry.ref.silentRequested ? { silent: true } : {}),
         });
       } finally {

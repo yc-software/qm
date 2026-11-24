@@ -45,6 +45,8 @@ export interface ToolContextRef {
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
+  /** Set when exact-call approvals are waiting but the turn may still propose sibling calls. */
+  awaitingCallApprovals?: boolean;
   approvalUnavailable?: string;
   emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
