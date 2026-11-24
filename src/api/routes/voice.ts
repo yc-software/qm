@@ -58,7 +58,7 @@ function reportVoiceError(error: unknown, code: string, aborted = false): void {
   if (!aborted) reportBackendError(error, code, detail);
 }
 
-function voiceKey(ctx: ApiCtx): string | undefined {
+export function voiceKey(ctx: ApiCtx): string | undefined {
   ctx.res.setHeader("cache-control", "no-store");
   return ctx.actor?.imp ? undefined : ctx.deps.openaiApiKey?.trim() || undefined;
 }
@@ -133,15 +133,20 @@ async function callProvider(
   }
 }
 
-async function dictate(ctx: ApiCtx): Promise<void> {
+export async function transcribeUpload(
+  ctx: ApiCtx,
+  apiKey: string,
+  prompt?: string,
+): Promise<string | null | undefined> {
   const { req, res } = ctx;
-  const apiKey = voiceKey(ctx);
-  if (!apiKey)
-    return sendJson(res, 404, { error: "dictation_disabled", message: "Dictation is not enabled for this account." });
   const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
-  if (!Object.hasOwn(dictationFormats, mimeType)) return sendJson(res, 415, { error: "unsupported_audio" });
+  if (!Object.hasOwn(dictationFormats, mimeType)) {
+    sendJson(res, 415, { error: "unsupported_audio" });
+    return undefined;
+  }
   extendBodyDeadline(req, TRANSCRIBE_TIMEOUT_MS);
-  return callProvider(ctx, apiKey, true, async (caller, clientGone) => {
+  let text: string | null | undefined;
+  await callProvider(ctx, apiKey, true, async (caller, clientGone) => {
     let audio: { file: string; size: number };
     try {
       audio = await spool(req, clientGone);
@@ -157,14 +162,27 @@ async function dictate(ctx: ApiCtx): Promise<void> {
         message: "The server could not store the recording.",
       });
     }
-    let text: string | null = null;
     try {
-      if (audio.size) text = await transcribe(audio.file, audio.size, mimeType, caller(TRANSCRIBE_TIMEOUT_MS));
+      text = audio.size
+        ? await transcribe(audio.file, audio.size, mimeType, caller(TRANSCRIBE_TIMEOUT_MS), prompt)
+        : null;
     } finally {
       await rm(audio.file, { force: true }).catch((error: unknown) => reportVoiceError(error, "dictation_cleanup"));
     }
-    return text === null ? sendJson(res, 400, { error: "empty_audio" }) : sendJson(res, 200, { text });
   });
+  return text;
+}
+
+async function dictate(ctx: ApiCtx): Promise<void> {
+  const apiKey = voiceKey(ctx);
+  if (!apiKey)
+    return sendJson(ctx.res, 404, {
+      error: "dictation_disabled",
+      message: "Dictation is not enabled for this account.",
+    });
+  const text = await transcribeUpload(ctx, apiKey);
+  if (text === undefined) return;
+  return text === null ? sendJson(ctx.res, 400, { error: "empty_audio" }) : sendJson(ctx.res, 200, { text });
 }
 
 async function liveVoice(ctx: ApiCtx): Promise<void> {

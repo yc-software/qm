@@ -102,10 +102,19 @@ async function openai(path: string, body: ReadableStream | string, headers: Reco
   }
 }
 
-export async function transcribe(file: string, size: number, mimeType: string, caller: Caller): Promise<string> {
+export async function transcribe(
+  file: string,
+  size: number,
+  mimeType: string,
+  caller: Caller,
+  prompt?: string,
+): Promise<string> {
   const boundary = `qm-${randomUUID()}`;
+  const field = (name: string, value: string) =>
+    `--${boundary}\r\ncontent-disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
   const head = Buffer.from(
-    `--${boundary}\r\ncontent-disposition: form-data; name="model"\r\n\r\n${TRANSCRIBE_MODEL}\r\n` +
+    field("model", TRANSCRIBE_MODEL) +
+      (prompt ? field("prompt", prompt) : "") +
       `--${boundary}\r\ncontent-disposition: form-data; name="file"; filename="dictation.${dictationFormats[mimeType]}"\r\n` +
       `content-type: ${mimeType}\r\n\r\n`,
   );

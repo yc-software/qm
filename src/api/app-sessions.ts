@@ -1220,7 +1220,7 @@ export function createSessionMethods(
       const scope = opts.scopeId;
       const parsed = parseScopeId(scope);
       const create = async (projectMembers?: readonly string[], channelName?: string) => {
-        const threadRef = `web:${principalId}:${randomUUID()}`;
+        const threadRef = opts.threadRef ?? `web:${principalId}:${randomUUID()}`;
         let kind: "group" | "channel" | "dm" = "dm";
         if (parsed.kind === "group") kind = "group";
         else if (parsed.kind === "channel") kind = "channel";
