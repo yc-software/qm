@@ -152,16 +152,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async sideChatsOf(sessionId, principalId) {
-      const condition = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL
-         AND EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
-           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') ORDER BY s.created_at`;
+      const asked = `EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
+           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') AS asked`;
+      const forks = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL
+         ORDER BY s.created_at`;
       const rows = await q(
         principalId === undefined
-          ? `SELECT s.* FROM sessions s WHERE ${condition}`
-          : participantSessionsSql(` AND ${condition}`),
+          ? `SELECT s.*, ${asked} FROM sessions s WHERE ${forks}`
+          : participantSessionsSql(` AND ${forks}`, `s.*, ${asked}`),
         principalId === undefined ? [sessionId] : [principalId, sessionId],
       );
-      return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
+      const session = principalId === undefined ? rowToSession : rowToParticipantSession;
+      return rows.map((row) => ({ ...session(row), asked: row.asked as boolean }));
     },
 
     async forkOrigin(tenant, sessionId): Promise<Session | null> {

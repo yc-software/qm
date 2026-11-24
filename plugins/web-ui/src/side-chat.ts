@@ -21,6 +21,7 @@ import {
 } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSession, openSessionInto, refreshSessions, syncWorkingPulse } from "./sessions";
+import { markWorking } from "./session-list";
 import { liveWorkDuration } from "./live-work-duration";
 import { liveTurnThreadRef } from "./working-dot";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -29,6 +30,12 @@ import { icon } from "./icons";
 import { brandMark, brandName, sheenLabel, workingWave } from "./ui";
 import { errMessage } from "../../chassis/src/errors";
 import { reportHandledError } from "./browser-errors";
+
+const PREVIEW_NOTE = {
+  loading: "Loading…",
+  ready: "No reply.",
+  failed: "Could not load preview. Open the side chat to retry.",
+};
 
 export function createSideChatController(ctx: ConvCtx) {
   let sourceId: string | null = null;
@@ -51,8 +58,7 @@ export function createSideChatController(ctx: ConvCtx) {
   let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, { text: string; state: "loading" | "ready" | "failed" }>();
-  const sent = new Map<string, number>();
+  const previews = new Map<string, { text: string; state: keyof typeof PREVIEW_NOTE }>();
   let previewFrame: number | null = null;
   let error = "";
   let epoch = 0;
@@ -251,6 +257,7 @@ export function createSideChatController(ctx: ConvCtx) {
     } catch (cause) {
       reportHandledError("web:side_chat_preview", cause);
       if (sourceId !== id || previews.get(session.id) !== preview) return false;
+      preview.text = "";
       preview.state = "failed";
     }
     if (previewFrame === null)
@@ -263,37 +270,34 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function collapsedBody(chat: CoreSession) {
     const preview = previews.get(chat.id);
-    const since = chat.working ? chat.workingSince : sent.get(chat.id);
-    if (!chat.working && since === undefined) {
-      const text =
-        preview?.state === "failed"
-          ? "Could not load preview. Open the side chat to retry."
-          : preview?.text || (preview?.state === "ready" ? "No reply." : "Loading…");
-      return html` <div class="side-chat-preview">${markdown(text)}</div> `;
-    }
-    return html`${preview?.text ? html` <div class="side-chat-preview">${markdown(preview.text)}</div> ` : nothing}
-      <div class="side-chat-working work-head">
-        <span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>${sheenLabel("Working", true)}${
-          since === undefined
-            ? nothing
-            : html`<span class="work-elapsed"
-                >${liveWorkDuration({ status: "working", startedAt: since, activity: [] })}</span
-              >`
-        }
-      </div>`;
+    const text = preview?.text || (chat.working ? "" : PREVIEW_NOTE[preview?.state ?? "loading"]);
+    return html`${text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing}${
+      chat.working
+        ? html`<div class="side-chat-working work-head">
+            <span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>${sheenLabel("Working", true)}${
+              chat.workingSince === undefined
+                ? nothing
+                : html`<span class="work-elapsed"
+                    >${liveWorkDuration({ status: "working", startedAt: chat.workingSince, activity: [] })}</span
+                  >`
+            }
+          </div>`
+        : nothing
+    }`;
   }
 
-  function refreshHighlights(settle = false) {
+  function settle(settled: CoreSession[]) {
+    void Promise.all(settled.map(loadPreview)).then((current) => current.some(Boolean) && refreshHighlights());
+  }
+
+  function refreshHighlights() {
     const id = sourceId;
     if (!id) return;
     void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
       (result) => {
         if (sourceId !== id) return;
         const order = new Map(chats.map((chat, position) => [chat.id, position]));
-        const listed = result.sessions ?? [];
-        if (settle) for (const row of listed) sent.delete(row.id);
-        const unlisted = chats.filter((chat) => sent.has(chat.id) && !listed.some((row) => row.id === chat.id));
-        chats = [...listed, ...unlisted].toSorted(
+        chats = (result.sessions ?? []).toSorted(
           (left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity),
         );
         redraw();
@@ -309,14 +313,16 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function close() {
     if (active) {
+      const chat = active;
+      const id = sourceId;
+      const state = conversation?.state;
       const live = liveTurnThreadRef({
-        mountedThreadRef: conversation?.state.threadRef ?? null,
-        isStreaming: Boolean(conversation?.state.agent?.state.isStreaming),
-        pendingSend: conversation?.state.pendingSend ?? null,
+        mountedThreadRef: state?.threadRef ?? null,
+        isStreaming: Boolean(state?.agent?.state.isStreaming),
+        pendingSend: state?.pendingSend ?? null,
       });
-      if (live) sent.set(active.id, Date.now());
-      void loadPreview(active);
-      refreshHighlights();
+      if (live) chats = markWorking(chats, live);
+      void (state?.agent?.waitForIdle() ?? Promise.resolve()).then(() => sourceId === id && settle([chat]));
     }
     pendingQuote = null;
     pendingAnchor = null;
@@ -350,7 +356,6 @@ export function createSideChatController(ctx: ConvCtx) {
     paintHighlights();
     chats = [];
     previews.clear();
-    sent.clear();
     error = "";
     busy = false;
     refreshHighlights();
@@ -438,7 +443,6 @@ export function createSideChatController(ctx: ConvCtx) {
 
   async function show(session: CoreSession, creating = false) {
     if (!creating) close();
-    sent.delete(session.id);
     active = session;
     includeExcerpt = true;
     maximized = false;
@@ -592,12 +596,10 @@ export function createSideChatController(ctx: ConvCtx) {
     sync,
     onDelivery(threadRef: string) {
       const chat = chats.find((session) => session.threadRef === threadRef);
-      if (!chat) return;
-      void loadPreview(chat).then((current) => current && refreshHighlights(true));
+      if (chat) settle([chat]);
     },
     catchUp() {
-      const inFlight = chats.filter((chat) => chat.id !== active?.id && (chat.working || sent.has(chat.id)));
-      if (inFlight.length) void Promise.all(inFlight.map(loadPreview)).then(() => refreshHighlights(true));
+      settle(chats.filter((chat) => chat.working && chat.id !== active?.id));
     },
     select,
     dismissSelection,

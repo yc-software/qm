@@ -46,7 +46,7 @@ export async function sideChatContext(
   };
   let usedTokens = countTokens(render(true));
   const sessions = (await store.sideChatsOf(parent.id))
-    .filter((session) => !session.sideChat?.expanded && session.scopeId === parent.scopeId)
+    .filter((session) => session.asked && !session.sideChat?.expanded && session.scopeId === parent.scopeId)
     .sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
   if (!sessions.length) return "";
   const parentMembers = await store.participantsOf(parent.id);
