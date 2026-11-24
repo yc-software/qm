@@ -126,6 +126,45 @@ const FAMILIES: AgentApiFamily[] = [
       },
       { method: "DELETE", path: "/v1/personas/:id", summary: "deletes it and detaches its credentials (owner)" },
       {
+        method: "GET",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "dedicated Slack app status (org admin or persona owner): unconnected|pending_install|connected, hasOrgConfigToken, publicUrlConfigured, manifestCreateUrl, oauthAuthorizeUrl",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/slack/create",
+        summary:
+          "{configToken?,refreshToken?,orgDeploy?} creates a dedicated HTTP-Events Slack app via Slack's App Manifest API (uses saved org config token if omitted) and returns oauthAuthorizeUrl for one-click install (org admin or persona owner)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "{botToken,signingSecret,appId?} attaches an existing Slack app to this persona (org admin or persona owner)",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/personas/:id/slack",
+        summary: "{deleteRemote?} disconnects the persona's Slack app (org admin or persona owner)",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: check whether a workspace Slack App Configuration Token is saved",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/slack-config-token",
+        summary:
+          "org admin: {refreshToken?,accessToken?} saves and auto-rotates the workspace Slack App Configuration Token from https://api.slack.com/apps",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: removes the saved workspace Slack App Configuration Token",
+      },
+      {
         method: "PUT",
         path: "/v1/sessions/:id/persona",
         summary:

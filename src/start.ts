@@ -193,11 +193,70 @@ export async function startQm(
     () => void slackRuntime.reconcile().catch(reportFailureAs("slack install start", undefined)),
   );
 
+  const personaSlackRuntimes = new Map<string, { version: string; stop(): Promise<void> }>();
+  let personaSlackRunning = false;
+  let personaSlackInFlight: Promise<void> | null = null;
+  const reconcilePersonaSlack = async (): Promise<void> => {
+    if (!personaSlackRunning) return;
+    const connected = await built.personaSlack.listConnected();
+    const desired = new Map(connected.map((app) => [app.personaId, app]));
+    for (const [personaId, active] of personaSlackRuntimes.entries()) {
+      const next = desired.get(personaId);
+      if (!next || next.version !== active.version) {
+        personaSlackRuntimes.delete(personaId);
+        await active.stop().catch(reportFailureAs("persona slack stop", undefined, `persona=${personaId}`));
+      }
+    }
+    for (const [personaId, app] of desired) {
+      if (!personaSlackRunning || !app.botToken || personaSlackRuntimes.has(personaId)) continue;
+      const plugin = await startSlackPlugin(
+        {
+          botToken: app.botToken,
+          accountId: `persona:${personaId}`,
+          personaId,
+          coreSingleton: false,
+          ...(env.PUBLIC_WEB_URL ? { webUiPublicUrl: env.PUBLIC_WEB_URL } : {}),
+          receiverFactory: (staging) => built.personaSlack.receiver(personaId, staging),
+        },
+        built.slackCore,
+        tenant ?? "",
+      );
+      if (!personaSlackRunning) {
+        await plugin.stop().catch(() => {});
+        return;
+      }
+      personaSlackRuntimes.set(personaId, { version: app.version, stop: plugin.stop });
+    }
+  };
+  const triggerPersonaSlackReconcile = (): Promise<void> => {
+    if (!personaSlackRunning) return Promise.resolve();
+    if (personaSlackInFlight) return personaSlackInFlight;
+    personaSlackInFlight = reconcilePersonaSlack()
+      .catch(reportFailureAs("persona slack reconciliation", undefined))
+      .finally(() => {
+        personaSlackInFlight = null;
+      });
+    return personaSlackInFlight;
+  };
+  const personaSlackRuntime = {
+    start() {
+      personaSlackRunning = true;
+      void triggerPersonaSlackReconcile();
+    },
+    async stop() {
+      personaSlackRunning = false;
+      const active = [...personaSlackRuntimes.values()];
+      personaSlackRuntimes.clear();
+      await Promise.all(active.map((a) => a.stop()));
+    },
+  };
+  built.personaSlack.onChange(() => void triggerPersonaSlackReconcile());
+
   const slackAccountRuntimes = envSlackAccountRuntimes(env, tenant, (desired, accountTenant) =>
     startSlackPlugin(desired, built.slackCore, accountTenant),
   );
 
-  const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
+  const slackRuntimes = [slackRuntime, personaSlackRuntime, ...slackAccountRuntimes];
   inBootTenant(tenant, () =>
     built.runtime.start({
       resume() {
@@ -223,6 +282,9 @@ export async function startQm(
       draining.abort();
       const deadline = sleep(config.shutdownDrainMs);
       void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
+      void personaSlackRuntime
+        .stop()
+        .catch((e: unknown) => console.error("[qm] persona slack stop failed:", errMessage(e)));
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));

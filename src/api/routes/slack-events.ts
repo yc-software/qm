@@ -65,6 +65,16 @@ async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
   });
 }
 
+async function handlePersonaSlackEvents(ctx: BaseCtx): Promise<void> {
+  const personaId = ctx.params.personaId?.trim();
+  if (!ctx.deps.personaSlack || !personaId) {
+    sendJson(ctx.res, 404, { error: "not_found" });
+    return;
+  }
+  await ctx.deps.personaSlack.handleEvent(ctx.req, ctx.res, personaId);
+}
+
 export const slackEventRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { method: "POST", path: "/slack/events", auth: "public", handle: proxySlackEvents },
+  { method: "POST", path: "/slack/events/persona/:personaId", auth: "public", handle: handlePersonaSlackEvents },
 ];

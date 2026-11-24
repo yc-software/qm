@@ -145,6 +145,11 @@ export interface AuthorizedAdmin extends Principal {
   role: AdminRole;
 }
 
+export async function isOrgAdmin(ctx: Pick<ApiCtx, "deps" | "tenant">, principalId: string): Promise<boolean> {
+  const standing = await adminStanding(ctx.deps, tenantOf(ctx), principalId);
+  return standing === "org_admin" || standing === "owner";
+}
+
 export async function authorizeAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "tenant" | "adminAccess">,
   scope: string,

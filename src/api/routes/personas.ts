@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
-import { swallowAs } from "../../util/errors.ts";
-import { audit, isObj, livePersonTurn } from "./shared.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
+import { audit, isObj, isOrgAdmin, livePersonTurn } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
@@ -238,11 +238,149 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.assign(principalId, viewed.session, personaId), "persona");
 }
 
+async function authorizePersonaSlack(
+  ctx: ApiCtx,
+  principalId: string,
+): Promise<{ id: string; name: string; description: string } | null> {
+  const personas = service(ctx);
+  if (!personas) return null;
+  if (!ctx.deps.personaSlack) {
+    sendJson(ctx.res, 404, { error: "not_configured" });
+    return null;
+  }
+  const id = ctx.params.id!;
+  const detail = await personas.detail(principalId, id);
+  if (detail.status === "ok") {
+    if (detail.value.role === "owner" || (await isOrgAdmin(ctx, principalId))) {
+      return { id: detail.value.id, name: detail.value.name, description: detail.value.description };
+    }
+    sendJson(ctx.res, 403, { error: "forbidden", message: "only an org admin or persona owner can manage Slack apps" });
+    return null;
+  }
+  respond(ctx, detail, "persona");
+  return null;
+}
+
+async function getPersonaSlack(ctx: ApiCtx): Promise<void> {
+  const principalId = principalOf(ctx, "query");
+  if (!principalId) return;
+  const persona = await authorizePersonaSlack(ctx, principalId);
+  if (!persona) return;
+  sendJson(ctx.res, 200, await ctx.deps.personaSlack!.status(persona));
+}
+
+async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
+  const principalId = principalOf(ctx, "body");
+  if (!principalId) return;
+  const persona = await authorizePersonaSlack(ctx, principalId);
+  if (!persona) return;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  try {
+    const status = await ctx.deps.personaSlack!.createApp({
+      persona,
+      ...(typeof body.configToken === "string" ? { configToken: body.configToken } : {}),
+      ...(typeof body.refreshToken === "string" ? { refreshToken: body.refreshToken } : {}),
+      ...(body.orgDeploy === true ? { orgDeploy: true } : {}),
+      actorId: principalId,
+    });
+    audit(ctx, {
+      principalId,
+      action: "persona-slack.create",
+      resource: "persona-slack",
+      scopeLabel: scopeId("persona", persona.id),
+    });
+    sendJson(ctx.res, 200, status);
+  } catch (error) {
+    sendJson(ctx.res, 400, { error: "slack_app_create_failed", message: errMessage(error) });
+  }
+}
+
+async function putPersonaSlack(ctx: ApiCtx): Promise<void> {
+  const principalId = principalOf(ctx, "body");
+  if (!principalId) return;
+  const persona = await authorizePersonaSlack(ctx, principalId);
+  if (!persona) return;
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const botToken = typeof body.botToken === "string" ? body.botToken : "";
+  const signingSecret = typeof body.signingSecret === "string" ? body.signingSecret : "";
+  const appId = typeof body.appId === "string" ? body.appId : undefined;
+  try {
+    await ctx.deps.personaSlack!.attachManual({
+      personaId: persona.id,
+      botToken,
+      signingSecret,
+      ...(appId ? { appId } : {}),
+      actorId: principalId,
+    });
+    audit(ctx, {
+      principalId,
+      action: "persona-slack.attach",
+      resource: "persona-slack",
+      scopeLabel: scopeId("persona", persona.id),
+    });
+    sendJson(ctx.res, 200, await ctx.deps.personaSlack!.status(persona));
+  } catch (error) {
+    sendJson(ctx.res, 400, { error: "invalid_persona_slack", message: errMessage(error) });
+  }
+}
+
+async function deletePersonaSlack(ctx: ApiCtx): Promise<void> {
+  const principalId = principalOf(ctx, "body");
+  if (!principalId) return;
+  const persona = await authorizePersonaSlack(ctx, principalId);
+  if (!persona) return;
+  const deleteRemote =
+    ctx.url.searchParams.get("deleteRemote") === "true" || (isObj(ctx.body) && ctx.body.deleteRemote === true);
+  try {
+    await ctx.deps.personaSlack!.disconnect(persona.id, { deleteRemote });
+    audit(ctx, {
+      principalId,
+      action: "persona-slack.delete",
+      resource: "persona-slack",
+      scopeLabel: scopeId("persona", persona.id),
+    });
+    sendJson(ctx.res, 200, await ctx.deps.personaSlack!.status(persona));
+  } catch (error) {
+    sendJson(ctx.res, 400, { error: "slack_app_delete_failed", message: errMessage(error) });
+  }
+}
+
+async function personaSlackOAuthCallback(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.personaSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  const personaId = ctx.params.id!;
+  const slackErr = ctx.url.searchParams.get("error");
+  const base = ctx.deps.publicUrl ?? ctx.deps.portalUrl ?? "";
+  const redirectTo = (query: string) => {
+    const target = base
+      ? `${base.replace(/\/+$/, "")}/personas/${encodeURIComponent(personaId)}?${query}`
+      : `/personas/${encodeURIComponent(personaId)}?${query}`;
+    ctx.res.writeHead(302, { location: target });
+    ctx.res.end();
+  };
+  if (slackErr) return redirectTo(`slack_error=${encodeURIComponent(slackErr)}`);
+  const code = ctx.url.searchParams.get("code") ?? "";
+  const state = ctx.url.searchParams.get("state") ?? "";
+  if (!code || !state) return redirectTo("slack_error=missing_oauth_params");
+  try {
+    await ctx.deps.personaSlack.completeOAuth(personaId, code, state);
+    return redirectTo("slack=connected");
+  } catch (error) {
+    return redirectTo(`slack_error=${encodeURIComponent(errMessage(error))}`);
+  }
+}
+
 export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  {
+    method: "GET",
+    path: "/v1/personas/:id/slack/oauth/callback",
+    auth: "public",
+    handle: personaSlackOAuthCallback,
+  },
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/personas", browser: true, auth: "either", handle: listPersonas },
     { method: "GET", path: "/v1/personas/:id", browser: true, auth: "either", handle: getPersona },
     { method: "GET", path: "/v1/personas/:id/versions", browser: true, auth: "either", handle: listPersonaVersions },
+    { method: "GET", path: "/v1/personas/:id/slack", browser: true, auth: "either", handle: getPersonaSlack },
   ]),
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/personas", browser: true, auth: "either", handle: createPersona },
@@ -264,6 +402,15 @@ export const personaRoutes: ReadonlyArray<Route<ApiCtx>> = [
       auth: "either",
       handle: detachCredential,
     },
+    {
+      method: "POST",
+      path: "/v1/personas/:id/slack/create",
+      browser: true,
+      auth: "either",
+      handle: createPersonaSlack,
+    },
+    { method: "PUT", path: "/v1/personas/:id/slack", browser: true, auth: "either", handle: putPersonaSlack },
+    { method: "DELETE", path: "/v1/personas/:id/slack", browser: true, auth: "either", handle: deletePersonaSlack },
     { method: "PUT", path: "/v1/sessions/:id/persona", browser: true, auth: "either", handle: setSessionPersona },
   ]),
 ];

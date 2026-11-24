@@ -45,6 +45,9 @@ import {
 } from "./admin/slack-mirror.ts";
 import {
   deleteSlackInstallation,
+  getSlackConfigToken,
+  putSlackConfigToken,
+  deleteSlackConfigToken,
   getSlackEmojiList,
   getSlackInstallation,
   putSlackInstallation,
@@ -140,6 +143,27 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: { owner: true },
       handle: deleteSlackInstallation,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/slack-config-token",
+      auth: "either",
+      admin: { owner: true },
+      handle: getSlackConfigToken,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/slack-config-token",
+      auth: "either",
+      admin: { owner: true },
+      handle: putSlackConfigToken,
+    },
+    {
+      method: "DELETE",
+      path: "/v1/admin/slack-config-token",
+      auth: "either",
+      admin: { owner: true },
+      handle: deleteSlackConfigToken,
     },
     {
       method: "GET",

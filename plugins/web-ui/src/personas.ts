@@ -29,6 +29,8 @@ import { deepLinkPath, UI_BASE } from "./deep-link";
 import { renderSidebarTop, switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
+import { loadPersonaSlack, personaSlackSection, resetPersonaSlack } from "./persona-slack";
+import { can } from "./shell-state";
 import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
@@ -1063,6 +1065,7 @@ function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
   resetContextModel();
+  resetPersonaSlack();
   const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
   const draw = () =>
     render(
@@ -1084,6 +1087,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
   actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
+  const canManageSlack = persona.role === "owner" || can("admin") || can("owner");
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
@@ -1117,6 +1121,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
               `
         }
         ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
+        ${canManageSlack ? personaSlackSection(persona.id, draw) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
@@ -1125,6 +1130,8 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
   draw();
   if (editable) void loadContextModel(`persona:${persona.id}`, draw);
   else resetContextModel();
+  if (canManageSlack) void loadPersonaSlack(persona.id, draw);
+  else resetPersonaSlack();
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {

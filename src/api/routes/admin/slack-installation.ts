@@ -233,3 +233,50 @@ export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
   }
   return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
 }
+
+export async function getSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  if (!ctx.deps.personaSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  return sendJson(ctx.res, 200, await ctx.deps.personaSlack.configTokenStatus());
+}
+
+export async function putSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  if (!ctx.deps.personaSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  const body = (ctx.body ?? {}) as { accessToken?: unknown; refreshToken?: unknown };
+  try {
+    const status = await ctx.deps.personaSlack.setConfigToken({
+      ...(typeof body.accessToken === "string" ? { accessToken: body.accessToken } : {}),
+      ...(typeof body.refreshToken === "string" ? { refreshToken: body.refreshToken } : {}),
+      updatedBy: actor.id,
+    });
+    audit(ctx, {
+      principalId: actor.id,
+      action: "slack-config-token.update",
+      resource: "slack-config-token",
+      scopeLabel: scope,
+    });
+    return sendJson(ctx.res, 200, status);
+  } catch (error) {
+    return sendJson(ctx.res, 400, { error: "invalid_config_token", message: errMessage(error) });
+  }
+}
+
+export async function deleteSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  if (!ctx.deps.personaSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
+  await ctx.deps.personaSlack.deleteConfigToken();
+  audit(ctx, {
+    principalId: actor.id,
+    action: "slack-config-token.delete",
+    resource: "slack-config-token",
+    scopeLabel: scope,
+  });
+  return sendJson(ctx.res, 200, { configured: false, hasRefreshToken: false });
+}
