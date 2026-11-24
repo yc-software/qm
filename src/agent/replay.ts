@@ -25,7 +25,7 @@ import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../slack/message-revisions.ts";
 import { contextSummaryHeader, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummary } from "../sessions/session-store.ts";
-import { isoFromTs, messageTag } from "../util/message-tag.ts";
+import { isoFromTs, messageTag, speakerAttrs } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { zeroUsage } from "../model/model-runtime.ts";
@@ -158,12 +158,13 @@ export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
 
 export function renderOverheard(p: OverheardEntryPayload): string {
   const body = p.text || (p.files?.length ? "(shared file)" : "");
+  const from = p.sourceRole ?? "human";
   return messageTag(
     {
       overheard: true,
-      from: p.sourceRole ?? "human",
+      from,
       ...(p.ts ? { id: p.ts, sentAt: isoFromTs(p.ts) } : {}),
-      ...(p.name?.trim() ? { author: p.name.trim() } : {}),
+      ...speakerAttrs(p.name, from),
       ...(p.mentions && Object.keys(p.mentions).length ? { mentions: p.mentions } : {}),
     },
     body,
@@ -485,10 +486,10 @@ export function seedPriorTurns(
     const text = String(t.text ?? "").trim();
     if (!text) continue;
     if (seen.has(normalizeForDedup(text))) continue;
-    const tag =
-      t.role === "assistant"
-        ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: t.role === "bot" ? "bot" : "human", ...(t.name ? { author: t.name } : {}) }, text);
+    let from: "agent" | "bot" | "human" = "human";
+    if (t.role === "assistant") from = "agent";
+    else if (t.role === "bot") from = "bot";
+    const tag = messageTag({ from, ...speakerAttrs(t.name, from) }, text);
     reconciled.push({ role: "user", text: tag });
   }
   const merged: SeededMessage[] = [];

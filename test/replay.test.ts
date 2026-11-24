@@ -431,6 +431,10 @@ test("renderOverheard frames the line as a structured overheard <message>, autho
   assert.match(line, /id="1"/);
   assert.match(line, /here's the logo/);
   assert.match(line, /files="logo\.png"/);
+  const agent = renderOverheard({ overheard: true, ts: "2", sourceRole: "agent", name: "Ada", text: "morning" });
+  assert.match(agent, /from="agent"/);
+  assert.match(agent, /via="Ada"/);
+  assert.doesNotMatch(agent, /author=/);
 });
 
 test("renderOverheard adds a mentions attr when the payload carries resolved mentions", () => {
