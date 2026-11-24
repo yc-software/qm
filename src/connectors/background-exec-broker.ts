@@ -15,7 +15,6 @@ export interface BackgroundExecBrokerDeps {
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
-  livePersonTurn?: boolean;
   sessionRef?: string;
   runId?: string;
   starter?: JobStarter;
@@ -106,9 +105,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     await deps.onExit?.(handle, processId);
   };
   const assertSteerable = async (rec: ProcessRecord) => {
-    if (deps.livePersonTurn || !rec.credentialsPending) return;
-    if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.live))
-      throw new Error("a background job that saves a live sign-in takes input and stop only from a person's live turn");
+    if (deps.starter?.botActor !== true || !rec.credentialsPending) return;
+    if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.writeback))
+      throw new Error("a bot's turn can't send input to or stop a background job that saves a sign-in");
   };
   return {
     async handleFor(processId) {

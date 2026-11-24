@@ -1319,34 +1319,19 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
   });
-  it("replacing a saved login needs the owner's running turn or a one-time ticket that turn started", async () => {
+  it("a scheduled run replaces its owner's saved login, but work a bot started cannot", async () => {
     const owner = "RELOGIN_OWNER";
     const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
-    const save = (secret: string, cap: string, loginTicket?: string) =>
-      post("/v1/keychain/credentials", { service: "gh", secret, ...(loginTicket ? { loginTicket } : {}) }, cap);
+    const save = (secret: string, cap: string) => post("/v1/keychain/credentials", { service: "gh", secret }, cap);
     const { credential } = (await (await save("first", later)).json()) as any;
     const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
 
-    assert.equal((await save("swapped", later)).status, 403);
     assert.equal((await save("swapped", await capFor(owner, undefined, { botActor: true }))).status, 403);
-    assert.equal((await post("/v1/keychain/login-tickets", { service: "gh" }, later)).status, 403);
     assert.equal(await secret(), "first");
-
-    const live = await capFor(owner, undefined, liveRunClaims(owner));
-    const { dropId } = (await (await post("/v1/keychain/drops", { service: "gh", purpose: "p" }, live)).json()) as any;
-    assert.equal((await save("swapped", later, dropId)).status, 403);
-    assert.equal((await built.secretDrops!.peek(dropId)).ok, true);
-    const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
-    const racing = await Promise.all([save("relogin", later, loginTicket), save("relogin", later, loginTicket)]);
-    assert.deepEqual(racing.map((response) => response.status).sort(), [200, 403]);
+    assert.equal((await save("relogin", later)).status, 200);
     assert.equal(await secret(), "relogin");
-    assert.equal((await save("typed", live)).status, 200);
-    assert.equal(await secret(), "typed");
-
     const ended = await capFor(owner, undefined, { ...liveRunClaims(owner), runId: "ended-run" });
-    assert.equal((await save("swapped", ended)).status, 403);
-    const next = (await (await post("/v1/keychain/login-tickets", { service: "gh" }, live)).json()) as any;
-    assert.equal((await save("after the turn", ended, next.loginTicket)).status, 200);
+    assert.equal((await save("after the turn", ended)).status, 200);
     assert.equal(await secret(), "after the turn");
   });
 

@@ -1586,7 +1586,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId,
           memoryScopeId,
-          livePersonTurn,
           defaultDestination,
           provision,
           provisionJobSandbox,
