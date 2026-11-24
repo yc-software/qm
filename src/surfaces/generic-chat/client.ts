@@ -88,7 +88,7 @@ export function createGenericChatClient(deps: {
         token.token_type.toLowerCase() !== "bearer" ||
         typeof token.expires_in !== "number" ||
         !Number.isFinite(token.expires_in) ||
-        requestedAt + token.expires_in * 1000 <= now() + REQUEST_TIMEOUT_MS
+        requestedAt + token.expires_in * 1000 <= now()
       ) {
         console.error("generic-chat token response failed validation", {
           hasAccessToken: typeof token.access_token === "string" && Boolean(token.access_token),
@@ -96,7 +96,7 @@ export function createGenericChatClient(deps: {
           hasUsableLifetime:
             typeof token.expires_in === "number" &&
             Number.isFinite(token.expires_in) &&
-            requestedAt + token.expires_in * 1000 > now() + REQUEST_TIMEOUT_MS,
+            requestedAt + token.expires_in * 1000 > now(),
         });
         throw new Error("generic-chat invalid origin access token response");
       }

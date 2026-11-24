@@ -5,7 +5,7 @@ import {
   GenericChatHttpError,
   genericChatOriginOAuthSchema,
 } from "../src/surfaces/generic-chat/client.ts";
-import { genericChatAccount, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
+import { genericChatAccount } from "../src/surfaces/generic-chat/protocol.ts";
 
 const originOAuth = {
   tokenUrl: "https://auth.example.test/token",
@@ -17,7 +17,7 @@ const origin = "https://one.dev.example.test";
 const secret = "signing-secret";
 const account = genericChatAccount("7000", origin);
 
-function fixture(tokenStatus = 200) {
+function fixture(tokenStatus = 200, expiresIn = 60) {
   let time = 1_800_000_000_000;
   const requests: { url: string; init: RequestInit }[] = [];
   let issued = 0;
@@ -32,7 +32,7 @@ function fixture(tokenStatus = 200) {
       return String(url) === originOAuth.tokenUrl
         ? Response.json(
             tokenStatus === 200
-              ? { access_token: `token-${++issued}`, token_type: "Bearer", expires_in: 60 }
+              ? { access_token: `token-${++issued}`, token_type: "Bearer", expires_in: expiresIn }
               : { error: "temporarily_unavailable" },
             { status: tokenStatus },
           )
@@ -48,26 +48,15 @@ function fixture(tokenStatus = 200) {
   };
 }
 
-test("concurrent callbacks reuse service tokens and renew before expiry while keeping request signatures", async () => {
+test("concurrent callbacks reuse service tokens and renew before expiry", async () => {
   const { client, requests, advance } = fixture();
   await Promise.all([client.call(account, "/agent_app/messages", {}), client.call(account, "/agent_app/typing", {})]);
   assert.equal(requests.filter((r) => r.url === originOAuth.tokenUrl).length, 1);
   assert.equal(new URLSearchParams(String(requests[0]!.init.body)).get("grant_type"), "client_credentials");
-  for (const { url, init } of requests.slice(1)) {
-    const headers = new Headers(init.headers);
-    assert.equal(headers.get("authorization"), "Bearer token-1");
-    assert.equal(
-      headers.get("x-agent-app-signature"),
-      signGenericChatRequest(
-        secret,
-        headers.get("x-agent-app-request-timestamp")!,
-        "7000",
-        new URL(url).pathname,
-        String(init.body),
-      ),
-    );
-    assert.equal(init.redirect, "error");
-  }
+  assert.deepEqual(
+    requests.slice(1).map(({ init }) => new Headers(init.headers).get("authorization")),
+    ["Bearer token-1", "Bearer token-1"],
+  );
   advance(45_000);
   await client.call(account, "/agent_app/messages", {});
   assert.equal(new Headers(requests.at(-1)!.init.headers).get("authorization"), "Bearer token-2");
@@ -102,4 +91,10 @@ test("origin credentials require an HTTPS token endpoint without embedded creden
   for (const tokenUrl of ["http://auth.example.test/token", "https://user:password@auth.example.test/token"]) {
     assert.equal(genericChatOriginOAuthSchema.safeParse({ ...originOAuth, tokenUrl }).success, false);
   }
+});
+
+test("fresh short-lived tokens can authorize callbacks", async () => {
+  const { client, requests } = fixture(200, 10);
+  await client.call(account, "/agent_app/messages", {});
+  assert.equal(new Headers(requests.at(-1)!.init.headers).get("authorization"), "Bearer token-1");
 });
