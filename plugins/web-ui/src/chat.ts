@@ -4,7 +4,7 @@ import { createReadOnlySession } from "./readonly-session";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { viaLine } from "./via-label.ts";
-import { replyVersions, replyVersionsRow, rowEntrySeqs } from "./reply-versions.ts";
+import { replyVersions, replyVersionsLabel, replyVersionsList, rowEntrySeqs } from "./reply-versions.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
@@ -357,6 +357,7 @@ export function createChatSurface(
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
   let continuedSpeakerRows = new Set<AgentMessage>();
   let versions = replyVersions([]);
+  const openVersions = new WeakSet<AgentMessage>();
   let slackReactions = collectReactions([], messageText);
   const slackOutbox = new SlackOutbox();
   const steerMessageCache = new WeakMap<WorkBlock["activity"], Array<{ seq: number; message: AgentMessage }>>();
@@ -2046,7 +2047,7 @@ export function createChatSurface(
     index: number,
     isStreaming: boolean,
   ): TemplateResult | typeof nothing {
-    if (rendersInsideWork(message)) return nothing;
+    if (rendersInsideWork(message) || versions.absorbed.has(message)) return nothing;
     const msg = message as AssistantWork & {
       stopReason?: string;
       errorMessage?: string;
@@ -2124,7 +2125,7 @@ export function createChatSurface(
   ): TemplateResult | typeof nothing {
     if (hiddenMessage(message) || slackReactions.reactionRows.has(message)) return nothing;
     const role = (message as { role?: string }).role;
-    if (!inline && rendersInsideWork(message)) return nothing;
+    if (!inline && (rendersInsideWork(message) || versions.absorbed.has(message))) return nothing;
     if (role === "user" || role === "user-with-attachments") {
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
@@ -2248,7 +2249,9 @@ export function createChatSurface(
       );
     }
     if (role === "assistant") {
-      const msg = (versions.superseded.has(message) ? { ...message, content: [] } : message) as AssistantMessage;
+      const msg = (
+        versions.superseded.has(message) ? { ...message, content: [] } : (versions.folded.get(message) ?? message)
+      ) as AssistantMessage;
       if ((msg as AssistantWork).retryableSend) return nothing;
       const work = (msg as AssistantWork).work;
       const text = assistantDisplayText(messageText(msg)).trim();
@@ -2300,7 +2303,7 @@ export function createChatSurface(
           streaming: isStreaming,
           content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
-          meta: isStreaming ? nothing : messageMeta(msg, index),
+          meta: isStreaming ? nothing : messageMeta(message, index),
         });
       const labeled = chatState.labelSpeakers;
       const workBelow = isReadOnlySlackView();
@@ -2327,7 +2330,8 @@ export function createChatSurface(
             ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
             ${workBelow && workView !== nothing ? html`<div class="slack-work">${workView}</div>` : nothing}
-            ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(msg, index)}
+            ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(message, index)}
+            ${replyVersionsList(versions.earlier.get(message), openVersions.has(message))}
           </div>
         </article>
       `;
@@ -2349,9 +2353,26 @@ export function createChatSurface(
     const forkable = Boolean(
       !readOnly.active() && index >= 0 && chatState.threadRef && chatState.sessionId && chatState.agent,
     );
+    const earlier = versions.earlier.get(message);
     return html`
-      <div class="message-meta">
+      <div class="message-meta ${earlier ? "has-versions" : ""}">
         ${ts !== undefined ? html`<span class="message-time">${formatMessageTime(ts)}</span>` : nothing}
+        ${
+          earlier
+            ? html`<button
+                class="reply-versions-toggle"
+                type="button"
+                aria-expanded=${openVersions.has(message) ? "true" : "false"}
+                @click=${() => {
+                  if (openVersions.has(message)) openVersions.delete(message);
+                  else openVersions.add(message);
+                  drawActiveChat();
+                }}
+              >
+                · ${replyVersionsLabel(earlier)} ${icon(openVersions.has(message) ? ChevronDown : ChevronRight, 12)}
+              </button>`
+            : nothing
+        }
         ${
           text
             ? html`<button
@@ -2534,8 +2555,6 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
-    const earlier = versions.earlier.get(message);
-    if (earlier) parts.push(replyVersionsRow(message, earlier));
     const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
     const finishedWork = isStreaming || !answered ? undefined : (message as AssistantWork).work;
     if (finishedWork)
