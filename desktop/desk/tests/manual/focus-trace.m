@@ -1,6 +1,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -10,16 +11,26 @@ static double elapsed(void) {
     return now.tv_sec + now.tv_nsec / 1e9;
 }
 
+static pid_t front_process_pid(void) {
+    OSErr (*front)(ProcessSerialNumber *) = dlsym(RTLD_DEFAULT, "GetFrontProcess");
+    OSStatus (*resolve)(const ProcessSerialNumber *, pid_t *) = dlsym(RTLD_DEFAULT, "GetProcessPID");
+    ProcessSerialNumber process = {0, 0};
+    pid_t pid = 0;
+    if (front && resolve && front(&process) == noErr) resolve(&process, &pid);
+    return pid;
+}
+
 static pid_t focused_pid(void) {
     AXUIElementRef system = AXUIElementCreateSystemWide();
     AXUIElementRef app = NULL;
     pid_t pid = 0;
-    if (AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute, (CFTypeRef *)&app) == kAXErrorSuccess && app) {
+    AXError status = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute, (CFTypeRef *)&app);
+    if (status == kAXErrorSuccess && app) {
         AXUIElementGetPid(app, &pid);
         CFRelease(app);
     }
     CFRelease(system);
-    return pid;
+    return status == kAXErrorNoValue ? front_process_pid() : pid;
 }
 
 static CGEventRef witness(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *context) {
