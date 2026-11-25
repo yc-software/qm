@@ -21,6 +21,7 @@ import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
+import type { SandboxImages } from "./sandbox-settings.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
@@ -45,6 +46,7 @@ export interface SandboxResource {
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  image?: string;
   swarmId?: string;
   personUsed?: true;
 }
@@ -113,6 +115,7 @@ interface SandboxProviderProfile {
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
   sizesMemory?: boolean;
+  images?: string[];
   actions: string[];
 }
 
@@ -136,7 +139,7 @@ export interface SandboxResources {
     name?: string,
     reservationId?: string,
     jobOnly?: boolean,
-    memoryGb?: number,
+    machine?: { memoryGb?: number; image?: string },
     swarmId?: string,
     personUsed?: boolean,
   ): Promise<SandboxResource>;
@@ -145,6 +148,7 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
+  imageFor(backingScopeId: string): Promise<string | undefined>;
   retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
   use<T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T>;
@@ -252,6 +256,7 @@ export function createSandboxResources(opts: {
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
+  images?: SandboxImages;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
@@ -324,14 +329,38 @@ export function createSandboxResources(opts: {
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         ...(backend.profile.sizesMemory ? { sizesMemory: true } : {}),
+        ...(offered(name).length ? { images: offered(name) } : {}),
         actions: actionsFor(backend),
       }));
+  const images = opts.images ?? {};
+  const offered = (backend: SandboxBackendName): string[] =>
+    opts.backends[backend]?.profile.takesImage ? Object.keys(images).filter((name) => images[name]![backend]) : [];
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
     if (memoryGb === undefined) return;
     if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
   };
+  const imageRef = ({ backend, image }: Pick<SandboxResource, "backend" | "image">): string | undefined => {
+    if (image === undefined) return undefined;
+    if (!Object.hasOwn(images, image))
+      throw new Error(`unknown image ${image}; configured images: ${Object.keys(images).join(", ") || "none"}`);
+    if (offered(backend).includes(image)) return images[image]![backend];
+    const elsewhere = (Object.keys(opts.backends) as SandboxBackendName[]).filter((name) =>
+      offered(name).includes(image),
+    );
+    const where = elsewhere.length ? `; it is available on ${elsewhere.join(", ")}` : "";
+    throw new Error(
+      opts.backends[backend]?.profile.takesImage
+        ? `image ${image} is not set up for ${backend}${where}`
+        : `${backend} computers boot only their provider's own image${where}`,
+    );
+  };
   return {
     profiles,
+    async imageFor(backingScopeId) {
+      const prefix = ["sandbox-", JOB_COMPUTER_SCOPE_PREFIX].find((p) => backingScopeId.startsWith(p));
+      const record = prefix ? await opts.records.get(backingScopeId.slice(prefix.length)) : null;
+      return record?.backingScopeId === backingScopeId ? imageRef(record) : undefined;
+    },
     forTurn: (turn) =>
       createSandboxResources({
         ...opts,
@@ -457,12 +486,14 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, machine, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
+      const { memoryGb, image } = machine ?? {};
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
+      imageRef({ backend: backend as SandboxBackendName, image });
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(
           `background jobs with private credentials need a computer that ${backend} can retire; run the command in the foreground`,
@@ -481,6 +512,7 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(image ? { image } : {}),
         ...(swarmId ? { swarmId } : {}),
         ...(personUsed ? { personUsed } : {}),
       };

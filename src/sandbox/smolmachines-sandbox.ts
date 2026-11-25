@@ -24,7 +24,14 @@ import {
   type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import type { AgentComputerProfile, ComputerStatus, ExecResult, Sandbox, TeardownOptions } from "./sandbox.ts";
+import type {
+  AgentComputerProfile,
+  ComputerStatus,
+  ExecResult,
+  Sandbox,
+  TeardownOptions,
+  ImageFor,
+} from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 const HOME_DIR = "/root";
@@ -71,6 +78,7 @@ export interface StoredSmolmachinesSandbox extends SnapshotBookkeeping {
 }
 
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -169,12 +177,16 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     }
   }
 
-  async function createMachine(name: string, ephemeral: boolean): Promise<{ info: MachineInfo; created: boolean }> {
+  async function createMachine(
+    name: string,
+    ephemeral: boolean,
+    scope?: string,
+  ): Promise<{ info: MachineInfo; created: boolean }> {
     const memoryGb = ephemeral ? undefined : sizeByName.get(name);
     const sized = { ...resources, ...(memoryGb ? { memoryMb: memoryGb * 1024 } : {}) };
     const res = await api("POST", "/v1/machines", {
       name,
-      source: { type: "image", reference: image },
+      source: { type: "image", reference: (scope && (await opts.imageFor?.(scope))) || image },
       ...(Object.keys(sized).length ? { resources: sized } : {}),
       network,
       workdir: HOME_DIR,
@@ -409,7 +421,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     await mergeStored(scope, { initializationPending: true });
     onStatus?.("Preparing the sandbox…");
     try {
-      const info = existing ?? (await createMachine(name, false)).info;
+      const info = existing ?? (await createMachine(name, false, scope)).info;
       idByName.set(name, info.id);
       if (existing && !isRunning(existing)) await startMachine(existing.id);
       const hydrated = homeSnapshots ? await homeSnapshots.hydrateHome(scope, name) : false;
@@ -465,6 +477,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
+    takesImage: true,
     egressEnforcement: egressProxyHost ? "domain" : "none",
     spec: {
       os: `smolmachines microVM booted from the ${image} image (the whole disk persists across stops${idleNote})`,

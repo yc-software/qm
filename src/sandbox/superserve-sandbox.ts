@@ -40,6 +40,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const DEFAULT_HOME_DIR = "/root";
@@ -100,6 +101,7 @@ export function createConfigEpochResolver(
 }
 
 export interface SuperserveSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: SuperserveClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -175,13 +177,15 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
   const configEpoch = async (): Promise<number> =>
     typeof opts.configEpoch === "function" ? opts.configEpoch() : opts.configEpoch;
   void configEpoch().catch(swallowAs("superserve-sandbox: claim config generation", undefined));
-  const scopeMetadata = async (name: string): Promise<Record<string, string>> => ({
+  const templateFor = async (scope: string): Promise<string | undefined> =>
+    (await opts.imageFor?.(scope)) ?? opts.template;
+  const scopeMetadata = async (name: string, template = opts.template): Promise<Record<string, string>> => ({
     [SUPERSERVE_METADATA.epoch]: String(await configEpoch()),
     [SUPERSERVE_METADATA.scope]: name,
     [SUPERSERVE_METADATA.prefix]: prefix,
     [SUPERSERVE_METADATA.kind]: "scope",
     [SUPERSERVE_METADATA.egress]: egressTag,
-    ...(opts.template ? { [SUPERSERVE_METADATA.template]: opts.template } : {}),
+    ...(template ? { [SUPERSERVE_METADATA.template]: template } : {}),
   });
 
   const scopeFilter = (name: string): Record<string, string> => ({ [SUPERSERVE_METADATA.scope]: name });
@@ -251,9 +255,10 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
     const info = await client.info(sandboxId, scopeFilter(name));
     const stampedEpoch = Number(info.metadata[SUPERSERVE_METADATA.epoch] ?? 0);
     if (stampedEpoch > (await configEpoch())) return { session: await client.connect(sandboxId), current: false };
-    if (opts.template && info.metadata[SUPERSERVE_METADATA.template] !== opts.template) {
+    const template = await templateFor(scope);
+    if (template && info.metadata[SUPERSERVE_METADATA.template] !== template) {
       await client.kill(sandboxId);
-      const message = `sandbox ${sandboxId} was built from template ${info.metadata[SUPERSERVE_METADATA.template] ?? "unknown"}, not ${opts.template}; it was destroyed and the next provision creates a replacement`;
+      const message = `sandbox ${sandboxId} was built from template ${info.metadata[SUPERSERVE_METADATA.template] ?? "unknown"}, not ${template}; it was destroyed and the next provision creates a replacement`;
       reportError("sandbox_template", "template_changed", message, scope);
       throw new SuperserveSandboxGoneError(sandboxId, message);
     }
@@ -268,7 +273,7 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
       await client.update(sandboxId, {
         timeoutSeconds: Math.max(info.timeoutSeconds ?? 0, idlePauseSec),
         autoDeleteSeconds: retentionSec,
-        metadata: { ...info.metadata, ...(await scopeMetadata(info.name)) },
+        metadata: { ...info.metadata, ...(await scopeMetadata(info.name, template)) },
         ...(stale ? { network: adoptedNetwork } : {}),
       });
     } catch (err) {
@@ -339,10 +344,11 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
     }
 
     onStatus?.("Creating the sandbox…");
+    const template = await templateFor(scope);
     const session = await client.create({
       name,
-      metadata: await scopeMetadata(name),
-      ...(opts.template ? { template: opts.template } : {}),
+      metadata: await scopeMetadata(name, template),
+      ...(template ? { template } : {}),
       timeoutSeconds: idlePauseSec,
       autoDeleteSeconds: retentionSec,
       ...(network ? { network } : {}),
@@ -448,6 +454,7 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
     backend: "superserve",
     writablePersistence: "resident_disk",
     processSessions: true,
+    takesImage: true,
     egressEnforcement: "none",
     spec: {
       os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; publish durable work to git or Files)",

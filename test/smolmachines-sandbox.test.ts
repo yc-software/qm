@@ -502,3 +502,19 @@ test("destructive teardown waits for another core's lifecycle lock", async () =>
   await Promise.all([holding, teardown]);
   assert.equal(fake.machine(handle.id), null);
 });
+
+test("a computer's chosen image is its machine source; others boot the configured image", async () => {
+  const sources: unknown[] = [];
+  const s = make({
+    image: "qm-base:1",
+    imageFor: async (id: string) => (id === scope ? "yc-dev:1" : undefined),
+    fetchImpl: async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.endsWith("/v1/machines"))
+        sources.push((JSON.parse(String(init.body)) as { source: { reference: string } }).source.reference);
+      return fake.fetchImpl(url, init);
+    },
+  });
+  await s.provision(scope);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(sources, ["yc-dev:1", "qm-base:1"]);
+});

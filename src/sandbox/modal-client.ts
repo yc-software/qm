@@ -40,6 +40,7 @@ interface ModalCreateOpts {
   name?: string;
   tags?: Record<string, string>;
   memoryGb?: number;
+  image?: string;
 }
 
 export interface ModalClient {
@@ -233,8 +234,9 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   return {
     lifetimeMs: sandboxTimeoutMs,
     async create(createOpts): Promise<ModalSession> {
-      const { sdk, client, app, image } = await loadCtx();
+      const { sdk, client, app, image: defaultImage } = await loadCtx();
       try {
+        const image = createOpts.image ? await resolveModalImage(client, createOpts.image) : defaultImage;
         const sbx = await client.sandboxes.create(app, image, {
           ...(createOpts.name ? { name: createOpts.name } : {}),
           ...(createOpts.tags ? { tags: createOpts.tags } : {}),

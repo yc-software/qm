@@ -345,3 +345,26 @@ test("failed overlapping preparation releases only its own sandbox lease", async
   await sb.teardown(first);
   assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
 });
+
+test("a computer's chosen image is the microVM image, without the default image's version", async () => {
+  const fake = installFakeMicrovm();
+  const runs: unknown[] = [];
+  const chosenScope = scopeId("personal", "chosen");
+  const sb = makeSandbox(fake, {
+    imageVersion: "3",
+    imageFor: async (id: string) => (id === chosenScope ? "arn:aws:yc-dev" : undefined),
+    api: {
+      ...fake.api,
+      runMicrovm: (input: Parameters<typeof fake.api.runMicrovm>[0]) => {
+        runs.push([input.imageIdentifier === "arn:aws:yc-dev", input.imageVersion]);
+        return fake.api.runMicrovm(input);
+      },
+    },
+  });
+  await sb.provision(chosenScope);
+  await sb.provision(scopeId("personal", "plain"));
+  assert.deepEqual(runs, [
+    [true, undefined],
+    [false, "3"],
+  ]);
+});

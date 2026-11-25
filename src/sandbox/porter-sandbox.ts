@@ -37,6 +37,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const WORKSPACE_BASENAME = "workspace";
@@ -52,6 +53,7 @@ interface BodyEntry {
 }
 
 export interface PorterSandboxOptions {
+  imageFor?: ImageFor;
   image?: string;
   token?: string;
   baseUrl?: string;
@@ -125,11 +127,12 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     volume?: { mountPath: string; id: string },
     kind: "scope" | "scratch" = "scope",
     memoryGb?: number,
+    chosen?: string,
   ): Promise<BodyEntry> {
     const name = bodyName(slug);
     const sb = await client.sandboxes
       .create({
-        image,
+        image: chosen ?? image,
         name,
         command: ["sleep", "infinity"],
         tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
@@ -185,7 +188,15 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
           await retirePorterBody(existing.sb, true);
         }
         onStatus?.("Starting your computer…");
-        const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id }, "scope", memoryGb);
+        const chosen = await opts.imageFor?.(scope);
+        const ref = await createBody(
+          slug,
+          egressMode,
+          { mountPath: homeDir, id: volume.id },
+          "scope",
+          memoryGb,
+          chosen,
+        );
         scopeByBody.set(ref.name, scope);
         return { name: ref.name, coldStart: volume.created };
       }),
@@ -229,6 +240,7 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     backend: "porter",
     writablePersistence: "resident_disk",
     processSessions: true,
+    takesImage: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     sizesMemory: true,
     spec: {
@@ -389,7 +401,15 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
           bodies.delete(slug);
           for (const b of live) await retirePorterBody(b, true);
           const volume = await ensurePorterVolume(client, `${slug}-home`);
-          const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id }, "scope", memoryGb);
+          const chosen = await opts.imageFor?.(scopeId);
+          const ref = await createBody(
+            slug,
+            egressMode,
+            { mountPath: homeDir, id: volume.id },
+            "scope",
+            memoryGb,
+            chosen,
+          );
           scopeByBody.set(ref.name, scopeId);
         }),
       );

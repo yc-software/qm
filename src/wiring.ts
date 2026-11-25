@@ -925,8 +925,10 @@ export function buildApp(
       },
       error,
     );
+  const sandboxImageFor = (scope: string): Promise<string | undefined> => sandboxResources.imageFor(scope);
   const buildLocal = (): Sandbox =>
     createLocalSandbox({
+      imageFor: sandboxImageFor,
       ...config.localSandbox,
       onError: sandboxOnError,
     });
@@ -954,6 +956,7 @@ export function buildApp(
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
     return createSmolmachinesSandbox({
+      imageFor: sandboxImageFor,
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
@@ -981,16 +984,23 @@ export function buildApp(
     config.renderSandbox.apiKey && config.renderSandbox.workspaceId && config.renderSandbox.image
       ? createSdkRenderClient({ apiKey: config.renderSandbox.apiKey, workspaceId: config.renderSandbox.workspaceId })
       : undefined;
+  const renderBaseStore = processMap<StoredRenderBase>("render_sandbox_bases");
+  const renderBaseFor = (client: NonNullable<typeof renderClient>, image: string, chosenImage?: string) =>
+    createRenderBase({
+      client,
+      store: renderBaseStore,
+      image,
+      ...(chosenImage ? { chosenImage } : {}),
+      hold: (work) => leaderLease.hold(`render:sandbox-base:${image}`, work),
+      onError: sandboxOnError,
+    });
   const renderBase =
-    renderClient && config.renderSandbox.image
-      ? createRenderBase({
-          client: renderClient,
-          store: processMap<StoredRenderBase>("render_sandbox_bases"),
-          image: config.renderSandbox.image,
-          hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
-          onError: sandboxOnError,
-        })
-      : undefined;
+    renderClient && config.renderSandbox.image ? renderBaseFor(renderClient, config.renderSandbox.image) : undefined;
+  const renderChosenBases = new Map(
+    Object.entries(config.sandboxImages).flatMap(([name, refs]) =>
+      renderClient && refs.render ? [[refs.render, renderBaseFor(renderClient, refs.render, name)] as const] : [],
+    ),
+  );
   let renderBasePreparing: AbortController | undefined;
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
@@ -1009,6 +1019,7 @@ export function buildApp(
   const buildE2b = (): Sandbox => {
     const e2b = config.e2bSandbox;
     return createE2bSandbox({
+      imageFor: sandboxImageFor,
       advisoryLock,
       client: e2bClient("computers"),
       ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
@@ -1038,6 +1049,7 @@ export function buildApp(
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox({
+      imageFor: sandboxImageFor,
       client: createSdkManagedAgentsClient({
         apiToken: managedAgents.apiToken,
         ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
@@ -1073,6 +1085,7 @@ export function buildApp(
     if (!tokenId || !tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox({
+      imageFor: sandboxImageFor,
       advisoryLock,
       client: tenantModalClient(
         { appName: modal.appName ?? "qm", ...(modal.environment ? { environment: modal.environment } : {}) },
@@ -1118,6 +1131,7 @@ export function buildApp(
   };
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox({
+      imageFor: sandboxImageFor,
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
@@ -1146,6 +1160,7 @@ export function buildApp(
     };
     return tenantSuperserveSandbox(base, ({ apiKey, namePrefix, template = ss.template }) =>
       createSuperserveSandbox({
+        imageFor: sandboxImageFor,
         configEpoch,
         client: createSdkSuperserveClient({ apiKey, ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}), template }),
         namePrefix,
@@ -1173,6 +1188,7 @@ export function buildApp(
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
     return createAwsSandbox({
+      imageFor: sandboxImageFor,
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
@@ -1188,6 +1204,7 @@ export function buildApp(
   };
   const buildPorter = (): Sandbox =>
     createPorterSandbox({
+      imageFor: sandboxImageFor,
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
@@ -1204,8 +1221,10 @@ export function buildApp(
       throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE");
     }
     return createRenderSandbox({
+      imageFor: sandboxImageFor,
       client: renderClient,
       base: renderBase,
+      chosenBases: renderChosenBases,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
       ...(render.egressProxyUrl ? { egressProxyUrl: render.egressProxyUrl } : {}),
       store: renderBodies,
@@ -1247,6 +1266,7 @@ export function buildApp(
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
+    images: config.sandboxImages,
     loads: artifactMap<LoadSample>("sandbox_loads"),
     defaults: sandboxDefaults,
     upgrade: async () => {
@@ -1579,6 +1599,7 @@ export function buildApp(
       memorySizedBackends: Object.entries(sandboxBackends)
         .filter(([, backend]) => backend?.profile.sizesMemory)
         .map(([name]) => name),
+      sandboxImages: [...new Set(sandboxResources.profiles().flatMap((profile) => profile.images ?? []))],
       routes: modelRoutes,
       signals: runSignals,
     });
@@ -3246,9 +3267,10 @@ export function buildApp(
       stopLayerWatch ??= layerChanges.subscribe(refreshDeploymentLayer, { onResync: refreshDeploymentLayer });
       flyTunnel?.monitor();
       renderBasePreparing = new AbortController();
-      void renderBase
-        ?.prepare(renderBasePreparing.signal)
-        .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
+      for (const base of [renderBase, ...renderChosenBases.values()])
+        void base
+          ?.prepare(renderBasePreparing.signal)
+          .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
       if (!config.backgroundWorkEnabled) return;
       startBackground();
       drain.start(services);

@@ -766,3 +766,21 @@ test("failed scratch preparation retains the live session when rollback fails", 
   await box.teardown(pending, { destroy: true });
   assert.equal(kills, 2);
 });
+
+test("a computer's chosen image is the template its fresh sandbox is created from", async () => {
+  const templates: unknown[] = [];
+  const s = make({
+    imageFor: async (id: string) => (id === scope ? "yc-dev" : undefined),
+    client: {
+      ...fake.client,
+      create: (opts: Parameters<typeof fake.client.create>[0]) => {
+        templates.push(opts.template);
+        return fake.client.create(opts);
+      },
+    },
+  });
+  await s.provision(scope);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(templates, ["yc-dev", undefined]);
+  assert.equal(s.profile.takesImage, true);
+});

@@ -25,6 +25,7 @@ import {
   visibleTools,
   type ComputerStatus,
   type ExecResult,
+  type ImageFor,
   type Sandbox,
   type SandboxHandle,
 } from "./sandbox.ts";
@@ -87,8 +88,10 @@ export interface StoredRenderCleanup {
 }
 
 export interface RenderSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: RenderClient;
   base: RenderBase;
+  chosenBases?: ReadonlyMap<string, RenderBase>;
   store: DurableMap<StoredRenderSandbox>;
   scratchStore: DurableMap<StoredRenderScratch>;
   cleanupStore: DurableMap<StoredRenderCleanup>;
@@ -411,7 +414,12 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         );
       }
     }
-    const source = stored ? { ref: stored.baseImage, snapshotId: snapshotId! } : await readyGolden(onStatus);
+    const chosen = stored ? undefined : await opts.imageFor?.(scope);
+    const chosenBase = chosen ? opts.chosenBases?.get(chosen) : undefined;
+    if (chosen && !chosenBase) throw new Error(`Render sandbox image ${chosen} has no prepared base`);
+    const source = stored
+      ? { ref: stored.baseImage, snapshotId: snapshotId! }
+      : await (chosenBase ? chosenBase.ready(onStatus) : readyGolden(onStatus));
     onStatus?.(stored ? "Restoring your computer…" : "Starting your computer…");
     await start(scope, stored, source).catch(async (error: unknown) => {
       if (stored?.stopping)
@@ -630,6 +638,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       backend: "render",
       writablePersistence: "provider_managed",
       processSessions: true,
+      takesImage: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
         os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; it resumes from its last checkpoint with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,

@@ -71,7 +71,10 @@ export interface AgentComputerProfile {
   egressEnforcement?: EgressEnforcement;
   spec?: AgentComputerSpec;
   sizesMemory?: boolean;
+  takesImage?: boolean;
 }
+
+export type ImageFor = (scopeId: string) => Promise<string | undefined>;
 
 export function effectiveEgressEnforcement(
   profile: AgentComputerProfile,

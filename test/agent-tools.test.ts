@@ -2785,6 +2785,33 @@ test("sandbox memory_gib reaches create and restart only", async () => {
   assert.deepEqual(restarts, [["box-a", 8]]);
 });
 
+test("sandbox offers image only when images are configured and passes it to create", async () => {
+  const operations: unknown[] = [];
+  const tools = (sandboxImages?: string[]) =>
+    createAgentTools(
+      {
+        current: {
+          ...fakeToolContext(),
+          sandboxResources: async (action, input) => {
+            operations.push({ action, input });
+            return { ok: true };
+          },
+        },
+        emit: async () => undefined,
+        scopeLabel: "personal:U1",
+      },
+      { sandboxResources: true, ...(sandboxImages ? { sandboxImages } : {}) },
+    ).find((t) => t.name === "sandbox")!;
+  const imageSchema = (sandbox: ReturnType<typeof tools>) =>
+    (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties.image;
+  assert.equal(imageSchema(tools()), undefined);
+  assert.deepEqual(imageSchema(tools(["yc-dev"]))?.enum, ["yc-dev"]);
+  await call(tools(["yc-dev"]), { action: "create", backend: "e2b", name: "dev", image: "yc-dev", purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "e2b", name: "dev", sandboxId: undefined, image: "yc-dev" } },
+  ]);
+});
+
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const entries: Array<Record<string, unknown>> = [];

@@ -53,6 +53,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
@@ -82,6 +83,7 @@ export interface StoredModalSandbox extends SnapshotBookkeeping {
 }
 
 export interface ModalSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: ModalClient;
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
@@ -222,7 +224,12 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
     let session: ModalSession;
     try {
-      session = await client.create({ name, tags: tags("scope"), memoryGb: sizeByScope.get(scope) });
+      session = await client.create({
+        name,
+        tags: tags("scope"),
+        memoryGb: sizeByScope.get(scope),
+        image: await opts.imageFor?.(scope),
+      });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -478,6 +485,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     writablePersistence: "provider_managed",
     sizesMemory: true,
     processSessions: true,
+    takesImage: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Debian 12 — Modal sandbox (24h max lifetime; home checkpoints have limited retention; publish durable work to git or Files)",
