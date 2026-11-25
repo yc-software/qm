@@ -29,6 +29,14 @@ test("link_slack shows the card once installed, and nothing when already linked"
   assert.deepEqual(linked, { done: "Their Slack account is already linked (ada in Acme). No card needed." });
 });
 
+test("link_slack refuses when nothing can link a personal Slack account", async () => {
+  const check = await checkCard(
+    api({ "/v1/composio/slack": [200, { connected: false, workspaceInstalled: true, linkAvailable: false }] }),
+    "link_slack",
+  );
+  assert.ok("error" in check && check.error.includes("no way to link personal Slack accounts"));
+});
+
 test("add_to_slack is only for admins and only before installation", async () => {
   const member = await checkCard(
     api({ "/v1/admin/slack-installation": [403, { error: "forbidden" }] }),
@@ -40,7 +48,15 @@ test("add_to_slack is only for admins and only before installation", async () =>
     "add_to_slack",
   );
   assert.ok("error" in installed && /link_slack/.test(installed.error));
-  const ready = await checkCard(api({ "/v1/admin/slack-installation": [200, { configured: false }] }), "add_to_slack");
+  const manual = await checkCard(
+    api({ "/v1/admin/slack-installation": [200, { configured: false, managed: true }] }),
+    "add_to_slack",
+  );
+  assert.ok("error" in manual && manual.error.includes("no one-click Slack install"));
+  const ready = await checkCard(
+    api({ "/v1/admin/slack-installation": [200, { configured: false, installAvailable: true }] }),
+    "add_to_slack",
+  );
   assert.deepEqual(ready, { card: { kind: "add_to_slack" }, note: "The Add to Slack card is shown with your reply." });
 });
 

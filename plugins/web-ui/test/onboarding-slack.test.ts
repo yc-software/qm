@@ -138,13 +138,10 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     status = { configured: false };
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    const fallback = { opener: window, location: { href: "" } };
-    window.open = () => fallback as unknown as Window;
     const count = launches.length;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
-    assert.equal(fallback.location.href, "/settings/slack-settings?setup=slack");
-    assert.equal(launches.length, count);
+    assert.equal(launches.length, count + 1, "the card always starts the Slack install, never the settings page");
   } finally {
     releaseStatus();
     element.remove();

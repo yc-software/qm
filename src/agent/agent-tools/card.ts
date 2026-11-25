@@ -50,10 +50,16 @@ export async function checkCard(
           "Only an org admin can add QM to the company's Slack, and this person isn't one. Don't show a card. If they want their own Slack access, try link_slack; otherwise tell them an admin needs to add QM.",
       };
     if (response.status !== 200) return { error: failure(response, "Slack installation") };
-    if (isObj(response.body) && response.body.configured === true)
+    const install = isObj(response.body) ? response.body : {};
+    if (install.configured === true)
       return {
         error:
           "QM is already in the company's Slack workspace. To give this person personal Slack access, use link_slack instead.",
+      };
+    if (install.installAvailable !== true)
+      return {
+        error:
+          "This QM has no one-click Slack install, so the card can't open Slack. Don't show a card. An admin adds QM by connecting the company's own Slack app in Settings → Slack.",
       };
     return { card: { kind }, note: "The Add to Slack card is shown with your reply." };
   }
@@ -63,6 +69,11 @@ export async function checkCard(
   if (status.workspaceInstalled !== true)
     return {
       error: `QM isn't in the company's Slack workspace yet, so there is no account to link. ${ADD_TO_SLACK_HINT}`,
+    };
+  if (status.linkAvailable === false)
+    return {
+      error:
+        "This QM has no way to link personal Slack accounts yet: neither Slack sign-in nor app connections are configured. Don't show a card; tell them an admin needs to set one up.",
     };
   if (status.connected === true) {
     const who = [status.user, status.workspace].filter((part) => typeof part === "string" && part).join(" in ");

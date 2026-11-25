@@ -568,7 +568,6 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
   const installation = await ctx.deps.slackInstallation?.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
-  if (ctx.capability && !workspaceInstalled) return sendJson(ctx.res, 200, { connected: false, workspaceInstalled });
   let nativeOAuth = false;
   const signedIn = ctx.actor && !ctx.actor.imp ? ctx.actor.p : undefined;
   const principal = ctx.capability ? ctx.capability.actorId : signedIn;
@@ -592,10 +591,10 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 502, { error: "slack_unavailable" });
     }
   }
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
-
-  ctx.res.setHeader("Cache-Control", "no-store");
+  if (!access.key)
+    return sendJson(ctx.res, 200, { connected: false, workspaceInstalled, nativeOAuth, linkAvailable: nativeOAuth });
   let failed = false;
   for (const id of personIds(access.principal)) {
     const record = await ctx.deps.slackAccounts?.get(id);

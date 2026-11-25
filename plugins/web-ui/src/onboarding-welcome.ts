@@ -658,9 +658,17 @@ export class OnboardingWelcome extends LitElement {
           : nothing
       }
       ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
-      ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
       <div class="welcome-beat" style="--welcome-delay:1100ms">
-        ${this.workspaceConnected && (this.widget === "slack-account" || (!["apps", "slack"].includes(this.widget) && !this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-linked=${() => void this.refreshWorkspace()}></qm-slack-account>` : nothing}
+        ${
+          this.widget === "slack-account" ||
+          (this.workspaceConnected && !["apps", "slack"].includes(this.widget) && !this.loading && !this.error)
+            ? html`<qm-slack-account
+                .user=${this.previewUser()}
+                .pending=${this.workspaceConnected !== true}
+                @slack-linked=${() => void this.refreshWorkspace()}
+              ></qm-slack-account>`
+            : nothing
+        }
       </div>
       ${
         card || ["slack", "slack-account"].includes(this.widget)

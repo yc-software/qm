@@ -29,9 +29,13 @@ export class SlackAccount extends LitElement {
     error: { state: true },
     connected: { state: true },
     label: { state: true },
+    checked: { state: true },
+    pending: { type: Boolean },
   };
   user = "";
   reply = false;
+  pending = false;
+  private checked = false;
   private busy = false;
   private error = "";
   private connected = false;
@@ -69,6 +73,7 @@ export class SlackAccount extends LitElement {
     } catch {
       this.attempt = null;
     }
+    this.checked = Boolean(state) || url.searchParams.get("connect") === "slack";
     if (state) {
       const cancelled = url.searchParams.has("error");
       for (const key of ["slackReturn", "status", "error", "connectedAccountId"]) url.searchParams.delete(key);
@@ -109,6 +114,8 @@ export class SlackAccount extends LitElement {
       this.label = [result.user, result.workspace].filter(Boolean).join(" · ");
     } catch {
       return;
+    } finally {
+      this.checked = true;
     }
   }
 
@@ -192,13 +199,20 @@ export class SlackAccount extends LitElement {
   }
 
   protected render() {
+    const waiting = this.pending || !this.checked;
     return html`<section class="slack-account" aria-label="Your Slack account">
       ${
         this.connected && !this.reply
           ? html`<div class="slack-connected" role="status">
               ${icon(Check, 14)}<span>Your Slack account is linked${this.label ? ` · ${this.label}` : ""}</span>
             </div>`
-          : html`<button class="welcome-slack" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>
+          : html`<button
+              class=${waiting ? "welcome-slack pending" : "welcome-slack"}
+              type="button"
+              aria-busy=${waiting ? "true" : "false"}
+              ?disabled=${this.busy || waiting}
+              @click=${() => void this.connect()}
+            >
               <div class="slack-link-icon" aria-hidden="true">
                 <span class="slack-link-person">${icon(UserRound, 17)}</span>
                 <span class="slack-link-service">${slackMark(18)}</span>
