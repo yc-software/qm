@@ -83,7 +83,10 @@ struct ChatView: View {
       if focused {
         showingAgents = false
       }
-      clipboardHasImage = focused && UIPasteboard.general.hasImages
+      refreshClipboard()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+      refreshClipboard()
     }
     .task(id: model.transcriptEntries.count) { await position(proxy) }
     .onChange(of: targetSequence) { _, target in
@@ -185,6 +188,7 @@ struct ChatView: View {
       }
     }
     .onChange(of: phase) { _, phase in
+      if phase == .active { refreshClipboard() }
       if phase == .background {
         showingAgents = false
         dictation.cancel()
@@ -784,6 +788,10 @@ struct ChatView: View {
       value: dictation.busy)
   }
 
+  private func refreshClipboard() {
+    clipboardHasImage = composerFocused && UIPasteboard.general.hasImages
+  }
+
   private func send(_ proxy: ScrollViewProxy) {
     showingAgents = false
     composerFocused = false
@@ -830,15 +838,13 @@ struct ChatView: View {
           .disabled(model.sending)
           .transition(.opacity)
           // The text field offers Paste only for text, so a copied image gets its own button.
-          if clipboardHasImage, !model.uploading {
-            PasteButton(supportedContentTypes: [.image]) { providers in
-              MainActor.assumeIsolated {
-                model.addAttachments(providers.map(AttachmentSource.image))
-              }
-            }
-            .labelStyle(.iconOnly)
-            .buttonBorderShape(.circle)
-            .transition(.opacity)
+          if clipboardHasImage {
+            ImagePasteButton(onSelect: model.addAttachments)
+              .labelStyle(.iconOnly)
+              .buttonBorderShape(.circle)
+              .tint(QMTheme.ink)
+              .disabled(model.sending || model.uploading)
+              .transition(.opacity)
           }
           if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
             modelSelector.transition(.opacity)
