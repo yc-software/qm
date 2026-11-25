@@ -68,13 +68,16 @@ export function desktopCallFor(
 }
 
 export async function claimDesktopCall(uiState: UiStateStore, principalId: string, callId: string, clientId: string) {
+  let won = false;
   const row = await uiState.update(idOf(principalId, callId), (current) => {
+    won = false;
     const call = pendingOf(current);
     if (!call || call.claimedBy || (call.clientId && call.clientId !== clientId)) return current;
+    won = true;
     return { ...current, value: { ...call, claimedBy: clientId } };
   });
   const call = pendingOf(row);
-  return call?.claimedBy === clientId ? { runId: call.runId, args: call.args, deadline: call.deadline } : null;
+  return won && call?.claimedBy === clientId ? { runId: call.runId, args: call.args, deadline: call.deadline } : null;
 }
 
 export async function answerDesktopCall(
