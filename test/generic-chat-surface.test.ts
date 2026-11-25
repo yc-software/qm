@@ -115,6 +115,7 @@ function event(
     bot?: boolean;
     appPost?: boolean;
     protocol?: 2;
+    participation?: "always";
   } = {},
 ) {
   return {
@@ -126,6 +127,7 @@ function event(
       id: "88",
       kind: "group",
       name: "Launch crew",
+      ...(overrides.participation ? { participation: overrides.participation } : {}),
       members: [
         { id: "5", email: "ada@example.com", name: "Ada Lovelace" },
         { id: "6", email: "grace@example.com", name: "Grace Hopper" },
@@ -202,11 +204,17 @@ function onBothProtocols(name: string, run: (version: { protocol?: 2 }) => Promi
   test(`${name}, on protocol 2 as well`, () => run({ protocol: 2 }));
 }
 
-const MENTIONED = "an @-mention starts a turn whose reply lands in the chat once, even when the event is redelivered";
+const MENTIONED =
+  "an @-mention, or any message in an always-participating chat, starts a turn whose reply lands in the chat once, even when the event is redelivered";
 onBothProtocols(MENTIONED, async (version) => {
+  for (const addressing of [{ mentions: true }, { participation: "always" as const }])
+    await addressed(addressing, version);
+});
+
+async function addressed(addressing: { mentions?: boolean; participation?: "always" }, version: { protocol?: 2 }) {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
-    const mention = event({ body: "!post on it", mentions: true, eventId: "ev-m", messageId: "1002", ...version });
+    const mention = event({ body: "!post on it", eventId: "ev-m", messageId: "1002", ...addressing, ...version });
     assert.equal((await deliver(mention)).status, 200);
     assert.equal((await deliver(mention)).status, 200);
     await settle(async () => genericChat.shown().some((m) => m.body === "on it"));
@@ -221,7 +229,7 @@ onBothProtocols(MENTIONED, async (version) => {
   } finally {
     await genericChat.close();
   }
-});
+}
 
 test("unmentioned chatter goes to the ambient judge, whose worker posts into the chat", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
