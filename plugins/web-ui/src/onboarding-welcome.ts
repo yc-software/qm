@@ -69,7 +69,6 @@ export class OnboardingWelcome extends LitElement {
     connectionError: { state: true },
     workspaceConnected: { state: true },
     slackLinked: { state: true },
-    workspaceError: { state: true },
     about: { state: true },
   };
   declare me: Me | null;
@@ -91,7 +90,7 @@ export class OnboardingWelcome extends LitElement {
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
   private slackLinked = false;
-  private workspaceError = false;
+  private workspaceRetry: ReturnType<typeof setTimeout> | undefined;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
@@ -151,10 +150,8 @@ export class OnboardingWelcome extends LitElement {
       const status = await response.json();
       this.workspaceConnected = status.workspaceInstalled === true;
       this.slackLinked = status.connected === true;
-      this.workspaceError = false;
     } catch {
-      this.workspaceConnected = null;
-      this.workspaceError = true;
+      if (this.isConnected) this.workspaceRetry = setTimeout(() => void this.refreshWorkspace(), 3000);
     }
   }
   protected firstUpdated(): void {
@@ -264,6 +261,7 @@ export class OnboardingWelcome extends LitElement {
   }
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    clearTimeout(this.workspaceRetry);
     this.controller?.abort();
     this.connectionsController?.abort();
     window.removeEventListener("focus", this.refreshConnections);
@@ -657,7 +655,6 @@ export class OnboardingWelcome extends LitElement {
             ></qm-onboarding-slack>`
           : nothing
       }
-      ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       <div class="welcome-beat" style="--welcome-delay:1100ms">
         ${
           this.widget === "slack-account" ||

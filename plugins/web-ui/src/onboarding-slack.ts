@@ -76,19 +76,15 @@ export class OnboardingSlack extends LitElement {
       if (!this.connected) this.justInstalled = false;
       this.error = "";
     } catch {
-      if (this.isConnected) {
-        this.connected = false;
-        this.error = "Could not check the Slack installation. Try again.";
-      }
+      if (this.isConnected) this.timer = setTimeout(this.refreshVisible, 3000);
+      return;
     } finally {
       clearTimeout(timeout);
       this.request = undefined;
-      this.dispatchEvent(
-        new window.CustomEvent("slack-installation-status", { detail: { connected: this.connected } }),
-      );
-      if (this.isConnected && !this.connected && Date.now() < this.pollUntil)
-        this.timer = setTimeout(this.refreshVisible, 5000);
     }
+    this.dispatchEvent(new window.CustomEvent("slack-installation-status", { detail: { connected: this.connected } }));
+    if (this.isConnected && !this.connected && Date.now() < this.pollUntil)
+      this.timer = setTimeout(this.refreshVisible, 5000);
   }
 
   private watchInstall(): void {
@@ -175,7 +171,7 @@ export class OnboardingSlack extends LitElement {
             >${icon(ArrowUpRight, 16)}
           </button>`
     }
-    ${this.error ? html`<p role="status">${this.error} <button type="button" @click=${() => void this.refresh()}>Check again</button></p>` : nothing}`;
+    ${this.error ? html`<p role="status">${this.error}</p>` : nothing}`;
   }
 }
 

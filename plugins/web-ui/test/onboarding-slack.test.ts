@@ -109,7 +109,8 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     statusCode = 503;
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    assert.match(element.textContent ?? "", /Could not check the Slack installation/);
+    assert.doesNotMatch(element.textContent ?? "", /Could not|Check again/);
+    assert.equal(element.querySelector('[role="status"]'), null, "a failed status check shows no error text");
     window.open = () => null;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();

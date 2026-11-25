@@ -36,6 +36,7 @@ export class SlackAccount extends LitElement {
   reply = false;
   pending = false;
   private checked = false;
+  private retry: ReturnType<typeof setTimeout> | undefined;
   private busy = false;
   private error = "";
   private connected = false;
@@ -55,6 +56,7 @@ export class SlackAccount extends LitElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    clearTimeout(this.retry);
     window.removeEventListener("focus", this.refreshStatus);
     document.removeEventListener("visibilitychange", this.refreshStatus);
   }
@@ -107,15 +109,14 @@ export class SlackAccount extends LitElement {
         cache: "no-store",
         signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error("Slack status unavailable");
       const result = await response.json();
       this.nativeOAuth = result.nativeOAuth === true;
       this.connected = result.connected === true;
       this.label = [result.user, result.workspace].filter(Boolean).join(" · ");
-    } catch {
-      return;
-    } finally {
       this.checked = true;
+    } catch {
+      if (this.isConnected && !this.checked) this.retry = setTimeout(this.refreshStatus, 3000);
     }
   }
 
