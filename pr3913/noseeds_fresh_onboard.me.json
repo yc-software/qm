@@ -1,0 +1,1 @@
+{"user":"fresh@example.com","org":"acme","companyName":null,"workspace":null,"mode":"portal","slackWorkspaceUrl":null,"slackAppIconUrl":null,"chatSurfaces":[{"kind":"slack","label":"Slack"}],"individualModelAuth":false,"modelAuthConnected":false,"impersonatedBy":null,"displayName":"fresh","teammate":"returning","suggestedActivitiesGeneration":true,"permissions":[]}
