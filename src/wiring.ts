@@ -797,6 +797,14 @@ export function buildApp(
          AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(json -> 'approvals', '[]')) AS a(v) WHERE a.v NOT LIKE 'system:%')`,
     ],
   });
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/skills/0003-delete-catalog-copies-restored-during-cutover",
+    statements: [
+      `DELETE FROM skills WHERE json ->> 'createdBy' IN ('system:skills-seed', 'system:plugin-skills', 'system:deployment-layer')
+         AND json ->> 'status' = 'published' AND json ->> 'version' = '1' AND json ->> 'scopeId' LIKE 'org:%'
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(json -> 'approvals', '[]')) AS a(v) WHERE a.v NOT LIKE 'system:%')`,
+    ],
+  });
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
