@@ -154,7 +154,9 @@ struct NativeSettingsView: View {
         NavigationLink(value: HomePage.waiting) {
           SettingsLabel("Waiting on you", note: "Conversations that need your reply.")
         }
-        NavigationLink("Archived conversations", value: HomePage.archived)
+        NavigationLink(value: HomePage.archived) {
+          SettingsLabel("Archived conversations", note: "Conversations you’ve put away.")
+        }
       } header: {
         SettingsHeader("Conversations")
       }
@@ -167,7 +169,9 @@ struct NativeSettingsView: View {
         NavigationLink {
           NativeSlackAccountView(client: client)
         } label: {
-          NativeServiceLabel(title: "Slack account", service: "slack")
+          NativeServiceLabel(service: "slack") {
+            SettingsLabel("Slack account", note: "Link your Slack identity to QM.")
+          }
         }
         NavigationLink {
           NativeKeychainView(client: client)

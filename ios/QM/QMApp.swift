@@ -19,9 +19,7 @@ enum HomePage: Hashable {
 }
 
 struct RootView: View {
-  private typealias Page = HomePage
-
-  @State private var homePath: [Page] = []
+  @State private var homePath: [HomePage] = []
   @Bindable var model: AppModel
   @State private var selectedConversation: Conversation?
   @State private var showingConversations = true
@@ -130,7 +128,7 @@ struct RootView: View {
           }
         }
       }
-      .navigationDestination(for: Page.self) { page in
+      .navigationDestination(for: HomePage.self) { page in
         if let client = model.client, let identity = model.identity {
           switch page {
           case .workspace: BrowseView(identity: identity, client: client)
@@ -299,14 +297,14 @@ struct RootView: View {
         ContentUnavailableView(
           empty.title, systemImage: empty.systemImage, description: Text(empty.description))
         if model.filter == .active, model.client != nil {
-          NavigationLink("Set up QM", value: Page.setup)
+          NavigationLink("Set up QM", value: HomePage.setup)
         }
       }
     }
   }
 
   private var settingsButton: some View {
-    NavigationLink(value: Page.settings) {
+    NavigationLink(value: HomePage.settings) {
       Image(systemName: "person.crop.circle")
         .font(.system(size: 24))
         .frame(width: 48, height: 48)
@@ -330,14 +328,14 @@ struct RootView: View {
     }
     ToolbarItem(placement: .topBarTrailing) {
       if model.client != nil {
-        NavigationLink(value: Page.search) {
+        NavigationLink(value: HomePage.search) {
           Image(systemName: "magnifyingglass")
         }.accessibilityLabel("Search workspace")
       }
     }
     ToolbarItem(placement: .topBarTrailing) {
       if model.client != nil {
-        NavigationLink(value: Page.workspace) {
+        NavigationLink(value: HomePage.workspace) {
           Image(systemName: "square.grid.2x2")
         }.accessibilityLabel("Browse workspace")
       }
