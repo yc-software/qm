@@ -41,7 +41,7 @@ export function createConnectionWake(deps: TriggerDeps & { sessions: WakeSession
   const conversation = async (principal: string, sessionId: string | null): Promise<string> => {
     const home = scopeId("personal", principal);
     const from = sessionId ? await deps.sessions.getForParticipant(sessionId, principal) : null;
-    if (from?.scopeId === home && !from.parentSessionId && from.surface === "web") return from.threadRef;
+    if (from?.scopeId === home && !from.parentSessionId) return from.threadRef;
     const page = await deps.sessions.listParticipantPage(principal, { limit: 1, surface: "web", scopeId: home });
     if (page.sessions[0]) return page.sessions[0].threadRef;
     const created = await deps.sessions.getOrCreateByThread(
