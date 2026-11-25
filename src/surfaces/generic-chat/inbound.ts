@@ -281,7 +281,6 @@ export function createGenericChatInbound(deps: {
           ...(message.body ? { messageText: message.body } : {}),
         }),
         redeliveryKey: `${GENERIC_CHAT}:${event.account}:${chat.id}:reaction:${event.event_id}`,
-        midTurn: "queue",
       },
     });
     return { status: 200, body: { ok: true } };
