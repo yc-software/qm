@@ -25,6 +25,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
@@ -38,6 +39,7 @@ const PREP_TIMEOUT_SEC = 30;
 export type { DockerExec };
 
 export interface LocalSandboxOptions {
+  imageFor?: ImageFor;
   image?: string;
   dockerBin?: string;
   cpus?: number;
@@ -284,6 +286,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     scope: string | undefined,
     withVolume: boolean,
     memoryGb?: number,
+    chosen?: string,
   ): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
@@ -306,7 +309,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       "--add-host=host.docker.internal:host-gateway",
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
       ...(memoryGb ? ["--memory", `${memoryGb}g`] : []),
-      image,
+      chosen ?? image,
     ];
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
@@ -318,7 +321,14 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   async function ensureContainer(scope: string, memoryGb?: number): Promise<{ name: string; coldStart: boolean }> {
     const name = localContainerName(scope);
     return provisionQueue(name, async () => {
-      const imageId = await preflight();
+      let imageId = await preflight();
+      const chosen = await opts.imageFor?.(scope);
+      if (chosen) {
+        const inspected = await dexec(["image", "inspect", "-f", "{{.Id}}", chosen]);
+        if (inspected.code !== 0)
+          throw new Error(`local sandbox image ${chosen} not found: ${inspected.stderr.trim()}`);
+        imageId = inspected.stdout.trim();
+      }
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
       if (state && state.imageId === imageId && state.rawSocketsDisabled) {
@@ -334,7 +344,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         const created = await dexec(["volume", "create", volume]);
         if (created.code !== 0) throw new Error(`docker volume create ${volume} failed: ${created.stderr.trim()}`);
       }
-      await runContainer(name, scope, true, memoryGb);
+      await runContainer(name, scope, true, memoryGb, chosen);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: !hadVolume };
     });

@@ -273,7 +273,9 @@ const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) =>
 test("a computer's memory size is stored and reaches every later provision and restart", async () => {
   const sizes: Array<number | undefined> = [];
   const { resources, router } = fixture(sizedBackend(sizes));
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await router.provision("personal:alice");
   await router.restartComputer!("personal:alice");
@@ -292,17 +294,48 @@ test("a resize the backend refuses keeps the computer's old size", async () => {
       throw new Error("memory must not exceed 1Ti");
     };
   });
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
   await router.provision("personal:alice");
   assert.deepEqual(sizes, [6, 2000, 6]);
 });
 
+test("a named image is stored on the computer, resolved for its provider, and refused where it is not set up", async () => {
+  const { options, backend } = fixture();
+  const sprites = { ...backend, profile: { ...backend.profile, backend: "sprites" } };
+  const resources = createSandboxResources({
+    ...options,
+    images: { toolchain: { local: "registry/toolchain:1", e2b: "toolchain" }, gpu: { e2b: "gpu" } },
+    backends: { local: backend, sprites },
+  });
+  const create = (backendName: string, image: string) =>
+    resources.create("alice", "personal:alice", backendName, "dev", undefined, undefined, { image });
+  const computer = await create("local", "toolchain");
+  assert.equal(computer.image, "toolchain");
+  assert.equal(await resources.imageFor(computer.backingScopeId), "registry/toolchain:1");
+  assert.equal(await resources.imageFor("sandbox-unknown"), undefined);
+  assert.deepEqual(
+    (await resources.list("alice", "personal:alice")).providers.map((p) => [p.name, p.images]),
+    [
+      ["local", ["toolchain"]],
+      ["sprites", undefined],
+    ],
+  );
+  await assert.rejects(
+    create("sprites", "toolchain"),
+    /^Error: image toolchain is not set up for sprites; it is available on local$/,
+  );
+  await assert.rejects(create("local", "gpu"), /^Error: image gpu is not set up for local$/);
+  await assert.rejects(create("local", "nope"), /^Error: unknown image nope; configured images: toolchain, gpu$/);
+});
+
 test("a memory size is refused on a backend that takes none", async () => {
   const { resources, records } = fixture();
   await assert.rejects(
-    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 4),
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, { memoryGb: 4 }),
     /local computers take no memory size/,
   );
   assert.equal(

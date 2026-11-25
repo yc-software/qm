@@ -21,7 +21,7 @@ export interface ModalSession {
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }>;
   restoreHome(imageId: string): Promise<void>;
-  terminate(): Promise<void>;
+  terminate(opts?: { wait?: boolean }): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
   constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
@@ -40,6 +40,7 @@ interface ModalCreateOpts {
   name?: string;
   tags?: Record<string, string>;
   memoryGb?: number;
+  image?: string;
 }
 
 export interface ModalClient {
@@ -223,8 +224,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const { client } = await loadCtx();
       await sbx.mountImage("/root", await client.images.fromId(imageId));
     },
-    async terminate(): Promise<void> {
-      await sbx.terminate().catch((err) => {
+    async terminate(opts): Promise<void> {
+      await (opts?.wait ? sbx.terminate({ wait: true }) : sbx.terminate()).catch((err) => {
         if (!isSandboxGoneError(sdk, err)) throw err;
       });
     },
@@ -233,8 +234,9 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   return {
     lifetimeMs: sandboxTimeoutMs,
     async create(createOpts): Promise<ModalSession> {
-      const { sdk, client, app, image } = await loadCtx();
+      const { sdk, client, app, image: defaultImage } = await loadCtx();
       try {
+        const image = createOpts.image ? await resolveModalImage(client, createOpts.image) : defaultImage;
         const sbx = await client.sandboxes.create(app, image, {
           ...(createOpts.name ? { name: createOpts.name } : {}),
           ...(createOpts.tags ? { tags: createOpts.tags } : {}),
