@@ -82,7 +82,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
         return forkReady.then(() => {
           if (failFork) {
             failFork = false;
-            return Response.json({ error: "Fork temporarily unavailable" }, { status: 503 });
+            return Response.json({ error: "Fork temporarily unavailable" }, { status: 500 });
           }
           return Response.json({ session: fork, items });
         });
@@ -92,7 +92,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
         if (failOpen) {
           failOpen = false;
           openingSide = true;
-          return openReady.then(() => Response.json({ error: "Load temporarily unavailable" }, { status: 503 }));
+          return openReady.then(() => Response.json({ error: "Load temporarily unavailable" }, { status: 500 }));
         }
         return Response.json({ session: fork, items });
       }

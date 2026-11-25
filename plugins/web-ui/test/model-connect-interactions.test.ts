@@ -127,7 +127,7 @@ test("AI account modal interactions", async (t) => {
 
   await t.test("an initial status failure is retryable and never shows a guessed account", async () => {
     let fail = true;
-    fetcher = async (path) => (fail ? Response.json({ error: "offline" }, { status: 503 }) : base(path));
+    fetcher = async (path) => (fail ? Response.json({ error: "offline" }, { status: 500 }) : base(path));
     await open();
     assert.match(doc.querySelector("[role=alert]")!.textContent!, /offline/);
     assert.equal(doc.querySelector(".mc-providers"), null);
