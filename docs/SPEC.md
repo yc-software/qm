@@ -12,7 +12,7 @@
 
 ## Deployment shapes
 
-QM has no single production. This repository is upstream of every deployment, and no code path asks which kind it is running in: a shape is only the sum of ordinary settings (the deployment directory's `qm.config.jsonc`, core's environment, stored credentials, rows in `tenants`). Four shapes exist, and a change to `main` lands on all of them.
+QM has no single production. This repository is upstream of every deployment, and nothing in the code names the kind it is running in: a shape is only the sum of ordinary settings (the deployment directory's `qm.config.jsonc`, core's environment, stored credentials, rows in `tenants`). Code branches on those settings one at a time, for example on one tenant versus many (`bootTenant()` in `src/tenants/boot.ts`). Four shapes exist, and a change to `main` lands on all of them.
 
 | Shape                          | Takes this repository as                                                                                               | Runs on                                                   | Organizations                   |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------- |
@@ -33,7 +33,7 @@ Changes that help one shape and break another:
 - **A value read only from env, or state keyed by org or by process,** works for one organization and is wrong with many tenants. Key it by tenant; see [storage](./spec/storage.md).
 - **An opt-in flag** helps only the deployment whose operator knows to set it ([qm#1208](https://github.com/yc-software/qm/pull/1208)), and a new required setting or secret breaks every deployment whose operator has not set it, at their next upgrade.
 - **A flow that assumes an optional integration** fails where it is off; see [Core and optional](#core-and-optional).
-- **State in process memory, or a migration that needs old and new code never to overlap,** survives one core on one Docker host and fails elsewhere: the `aws` and `fly` targets roll out blue-green in every shape, so two builds serve at once during any rollout.
+- **State in process memory, or a migration that needs old and new code never to overlap,** survives one core on one Docker host and fails elsewhere: two builds serve at once during a rollout, whether it is blue-green (the `aws` and `fly` templates, for core) or rolling (the `aws` target also accepts rolling services on external infrastructure).
 - **A fix proved on one sandbox or deploy provider, or one organization's names and defaults in generic code,** ships wrong to every other deployment (see Provider drift, Prod-like QA, Over-indexing on YC and YC info leaking into public qm below).
 
 A downstream deployment repository pins a release or a commit of this repository and adds a deployment directory: settings, and optionally its own plugins, sandbox tools and skills. This repository never sees those, so the deployment directory contract in [deployments](./spec/deployments.md) is the whole interface between the two. A change core needs for one deployment lands here first, in generic form; the deployment then moves its pin.
