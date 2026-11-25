@@ -1192,8 +1192,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           recordedTurn.answer,
         );
 
-      const contextWindow =
-        storedWindow && storedSession?.id === session.id ? storedWindow : deps.sessions.getContextWindow(session.id);
+      const contextWindow = deps.sessions.getContextWindow(session.id);
       const snapshot = context.memorySnapshot();
       void contextWindow.catch(() => undefined);
       const recallOutcomes: MemoryProviderOutcome[] = [];

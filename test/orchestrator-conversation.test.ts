@@ -624,6 +624,8 @@ test("other people's names are screened once per thread, a flagged one holds eac
   const rescreened = await approve(again);
   assert.equal(rescreened.status, "pending_approval");
   assert.deepEqual(rescreened.names, ["Person 99"]);
+  await turn(25, { requestId: rescreened.pendingApprovals![0]!.requestId, approved: false });
+  assert.equal((await turn(25)).status, "pending_approval");
 });
 
 test("approving a held turn replays it after another person's turn screens the names it read", async () => {
