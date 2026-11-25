@@ -124,6 +124,12 @@ export interface CapabilityClaims {
   exp: number;
 }
 
+export class CapabilityClaimsTooLarge extends Error {
+  constructor() {
+    super("Capability claims exceed size limit");
+  }
+}
+
 const compress = promisify(deflateRaw);
 const decompress = promisify(inflateRaw);
 const MAX_CLAIMS_BYTES = 1024 * 1024;
@@ -136,7 +142,7 @@ export async function mintCapabilityToken(
   const tenant = boundTenant();
   const value = { orgId: configOrgId(), ...claims, ...(tenant ? { tenant } : {}) };
   const bytes = Buffer.from(JSON.stringify(value));
-  if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
+  if (bytes.length > MAX_CLAIMS_BYTES) throw new CapabilityClaimsTooLarge();
   return mintSignedPayload(
     compressionEnabled && bytes.length > 4096
       ? { encoding: "deflate-raw", claims: (await compress(bytes)).toString("base64url") }

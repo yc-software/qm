@@ -81,10 +81,35 @@ test("large channel turns apply the compression rollout setting to every sandbox
       assert.ok(token);
       const payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"));
       assert.equal(payload.encoding, capabilityTokenCompression ? "deflate-raw" : undefined);
-      if (capabilityTokenCompression) assert.ok(token.length < 8 * 1024);
+      assert.ok(token.length < (capabilityTokenCompression ? 8 : 16) * 1024);
       const verified = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-      assert.equal(verified?.members?.length, 120);
+      assert.equal(verified?.members?.length, capabilityTokenCompression ? 120 : undefined);
     }
+  }
+});
+
+test("a channel whose roster passes the claims limit still runs, and its tokens carry no roster", async () => {
+  const { app, sandbox } = buildApp(signedConfig({ capabilityTokenCompression: true }));
+  const captured = captureProvision(sandbox);
+  const members = Array.from({ length: 300 }, (_, i) => ({ externalId: `U${i + 1}-${"x".repeat(1800)}` }));
+  members[0] = { externalId: "U1" };
+  const result = await app.turn(
+    channel("!run echo huge", {
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C1:huge",
+        channelRef: "C1",
+        audience: members,
+        publishMembers: members,
+      },
+    }),
+  );
+  assert.equal(result.status, "ok");
+  const api = captured.opts?.env?.AGENT_API_TOKEN;
+  assert.ok(api && api.length < 8 * 1024);
+  for (const token of [api, captured.opts?.env?.AGENT_OAUTH_CONSENT_TOKEN, captured.opts?.egressToken]) {
+    const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
+    assert.equal(claims?.members ?? claims?.keychainMembers, undefined);
   }
 });
 

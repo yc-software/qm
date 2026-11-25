@@ -1,7 +1,9 @@
-import { SANDBOX_MODEL_PREFIX } from "../../api/contract.ts";
+import { maxHeaderSize } from "node:http";
+import { CAPABILITY_HEADER, SANDBOX_MODEL_PREFIX } from "../../api/contract.ts";
 import {
   BROWSER_MODEL_AUD,
   CAPABILITY_TTL_MS,
+  CapabilityClaimsTooLarge,
   CONTROL_PLANE_AUD,
   EGRESS_PROXY_AUD,
   OAUTH_CONSENT_AUD,
@@ -22,6 +24,16 @@ import { egressClaimAllowingControlPlane, type deliveryCandidatesFor } from "./t
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 type TurnContext = Awaited<ReturnType<typeof resolveTurnContext>>;
+
+const REQUEST_HEAD_ALLOWANCE = 1024;
+
+function withoutRoster<T extends Pick<CapabilityClaims, "members" | "keychainMembers">>({
+  members: _members,
+  keychainMembers: _keychainMembers,
+  ...claims
+}: T) {
+  return claims;
+}
 
 export interface CapabilityTurn {
   deps: OrchestratorDeps;
@@ -71,7 +83,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
   } = turn;
   const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
   const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
-  const scopeAttestation = {
+  const attestation = {
     ...(external ? { externalSlack: true as const } : {}),
     actorId: actor.id,
     scopeId,
@@ -85,12 +97,8 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(actAsActor ? { actAsActor: true } : {}),
   };
   const tenant = ambientTenant();
-  const { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
-    tenant,
-    turn,
-    scopeAttestation,
-    sandboxTokenExpiry,
-  );
+  const { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims, scopeAttestation } =
+    await mintControlPlaneTokens(tenant, turn, attestation, sandboxTokenExpiry);
   const securityPolicy = resolution.securityPolicy;
   const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
   const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
@@ -121,7 +129,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
 async function mintControlPlaneTokens(
   tenant: ReturnType<typeof ambientTenant>,
   turn: CapabilityTurn,
-  scopeAttestation: Omit<CapabilityClaims, "exp">,
+  attestation: Omit<CapabilityClaims, "exp">,
   sandboxTokenExpiry: number,
 ) {
   const {
@@ -157,6 +165,7 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
+  let scopeAttestation = attestation;
   const runBinding = {
     ...(input.runId ? { runId: input.runId } : {}),
     runAttempt: input.attempt,
@@ -200,11 +209,28 @@ async function mintControlPlaneTokens(
       ...(turnSurface ? { surface: turnSurface } : {}),
       ...(input.liveReplies ? { liveReplies: true } : {}),
     };
-    connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
+    const rosterToken = await mintCapabilityToken(
       controlClaims,
       deps.capabilitySecret ?? deps.signingSecret,
       deps.capabilityTokenCompression,
-    );
+    ).catch((e: unknown) => {
+      if (e instanceof CapabilityClaimsTooLarge) return undefined;
+      throw e;
+    });
+    if (
+      rosterToken &&
+      Buffer.byteLength(`${CAPABILITY_HEADER}: ${rosterToken}\r\n`) <= maxHeaderSize - REQUEST_HEAD_ALLOWANCE
+    )
+      connectorEnv.AGENT_API_TOKEN = rosterToken;
+    else {
+      scopeAttestation = withoutRoster(attestation);
+      controlClaims = withoutRoster(controlClaims);
+      connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
+        controlClaims,
+        deps.capabilitySecret ?? deps.signingSecret,
+        deps.capabilityTokenCompression,
+      );
+    }
     if (browserModel) {
       connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
       connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
@@ -218,6 +244,7 @@ async function mintControlPlaneTokens(
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         deps.capabilitySecret ?? deps.signingSecret,
+        deps.capabilityTokenCompression,
       );
     }
     if (allInternal && securityPolicy.posture !== "strict" && (sessionAuth?.account ?? "company") === "company") {
@@ -242,5 +269,5 @@ async function mintControlPlaneTokens(
         deps.capabilityTokenCompression,
       );
   }
-  return { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims };
+  return { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims, scopeAttestation };
 }
