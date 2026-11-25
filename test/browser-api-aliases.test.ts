@@ -24,15 +24,13 @@ const QUERY: Record<string, string> = {
 const HANDLER_REFUSALS: Record<string, unknown> = {
   "/api/sessions/:id/swarm": { error: "session access denied" },
   ...Object.fromEntries(
-    ["/api/composio/callback", "/api/composio/slack", "/api/composio/toolkits", "/api/composio/connections"].map(
-      (path) => [
-        path,
-        {
-          error: "composio_unavailable",
-          message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
-        },
-      ],
-    ),
+    ["/api/composio/callback", "/api/composio/toolkits", "/api/composio/connections"].map((path) => [
+      path,
+      {
+        error: "composio_unavailable",
+        message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+      },
+    ]),
   ),
 };
 
