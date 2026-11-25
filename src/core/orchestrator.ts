@@ -209,8 +209,10 @@ import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import {
   addConversationBlocks,
   appendTurnGuidance,
+  conversationKeychain,
   conversationRoster,
   finishSystemPrompt,
+  keychainOwners,
   replacesReply,
   replyToRewrite,
   wakeTurnEvent,
@@ -689,9 +691,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
+      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
+      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const hasRoster = !external && conversation.kind !== "dm";
       const storedWindow = hasRoster && storedSession ? deps.sessions.getContextWindow(storedSession.id) : undefined;
-      const [rosterMembers, previousNames] = await Promise.all([
+      const [rosterMembers, previousNames, keychainView] = await Promise.all([
         hasRoster
           ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
               swallowAs("orchestrator: conversation roster", undefined),
@@ -700,8 +704,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         storedWindow
           ?.then((window) => previousRoster(window.items))
           .catch(swallowAs("orchestrator: previous roster", undefined)),
+        strictReadOnly ? undefined : conversationKeychain(deps, actor, conversation, scopeId, external),
       ]);
-      const people = peopleToScreen(actor.id, rosterMembers, conversation.audience, previousNames);
+      const nameOf = (id: string): string | undefined =>
+        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
+        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
+      const shownPeople = peopleToScreen(actor.id, rosterMembers, previousNames, keychainOwners(keychainView, nameOf));
+      const people = [...new Set(shownPeople.map((p) => p.name))].sort();
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const heldPeople = new Set(approvalRecord?.people);
@@ -761,7 +770,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audit,
         approvalGrantsFor,
       });
-      const screenedPeople = screenedRoster(actor.id, rosterMembers, previousNames, screenedClean);
+      const screenedPeople = screenedRoster(rosterMembers, previousNames, screenedClean ? shownPeople : []);
       if (flaggedScreenedInput) {
         let type: SessionType = "channel";
         if (conversation.kind === "dm") type = "dm";
@@ -804,8 +813,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           throw err;
         }
       }
-      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
-      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const notebookOnly =
         input.memoryNotebookOnly === true ||
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
@@ -986,9 +993,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (personaNote) turnEvents.push(personaNote);
-      const nameOf = (id: string): string | undefined =>
-        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
-        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
       if (input.privateSessionMessage)
         turnEvents.push(
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
@@ -1508,18 +1512,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgMemoryWritable,
           ephemeral,
         });
-        const scopeAskList = await addConversationBlocks({
+        await addConversationBlocks({
           deps,
           actor,
           conversation,
           scopeId,
           external,
-          strictReadOnly,
           turnContextBlocks,
           credentialDescriptions,
           openOwnerKeychain,
           scopeKeychainGrants,
           rosterMembers,
+          keychain: keychainView,
         });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
@@ -2097,7 +2101,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveNote() : "",
           deps.keychain
             ? await askResolutionEvents(
-                scopeAskList,
+                keychainView?.asks ?? [],
                 lastUserAt ?? session.createdAt,
                 (ownerId) => nameOf(ownerId) ?? ownerId,
                 deps.keychain.getCredential,

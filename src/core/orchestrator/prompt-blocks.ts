@@ -3,7 +3,7 @@ import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
-import type { CandidateDestination, GatewayContext, GrantedHandle, Principal, ScopeId } from "../../types.ts";
+import type { CandidateDestination, GatewayContext, GrantedHandle, ScopeId } from "../../types.ts";
 import type { SandboxResource, SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.ts";
 import type { Item } from "../../sessions/items.ts";
@@ -51,31 +51,31 @@ function screenedNames(previous: RosterSnapshot | undefined): Map<string, string
 export function peopleToScreen(
   actorId: string,
   roster: readonly DirectoryMember[] | undefined,
-  audience: readonly Principal[],
   previous: RosterSnapshot | undefined,
-): string[] {
+  owners: ReadonlyArray<{ id: string; name?: string }>,
+): Array<{ id: string; name: string }> {
   const screened = screenedNames(previous);
   const current = new Set(roster?.map((m) => m.principalId));
-  const left = roster ? (previous?.roster ?? []).filter((o) => !current.has(o.id)) : [];
-  const names = [
-    ...(roster ?? []).map((m) => ({ id: m.principalId, name: m.displayName })),
-    ...audience.map((p) => ({ id: p.id, name: p.displayName })),
+  const before = new Set(previous?.roster.map((o) => o.id));
+  const joined = roster && previous ? roster.filter((m) => !before.has(m.principalId)) : [];
+  const left = roster && previous ? previous.roster.filter((o) => !current.has(o.id)) : [];
+  return [
+    ...[...rosterShown(roster ?? []), ...joined].map((m) => ({ id: m.principalId, name: m.displayName })),
     ...left,
-  ].flatMap(({ id, name }) => (name?.trim() && !samePerson(id, actorId) && screened.get(id) !== name ? [name] : []));
-  return [...new Set(names)].sort();
+    ...owners,
+  ].flatMap(({ id, name }) =>
+    name?.trim() && !samePerson(id, actorId) && screened.get(id) !== name ? [{ id, name }] : [],
+  );
 }
 
 export function screenedRoster(
-  actorId: string,
   roster: readonly DirectoryMember[] | undefined,
   previous: RosterSnapshot | undefined,
-  passed: boolean,
+  screenedNow: ReadonlyArray<{ id: string; name: string }>,
 ): string[] {
-  const screened = screenedNames(previous);
-  return (roster ?? [])
-    .filter((m) => screened.get(m.principalId) === m.displayName || (passed && !samePerson(m.principalId, actorId)))
-    .map((m) => m.principalId)
-    .sort();
+  const current = new Map(roster?.map((m) => [m.principalId, m.displayName]));
+  const screened = [...screenedNames(previous), ...screenedNow.map((p) => [p.id, p.name] as const)];
+  return [...new Set(screened.filter(([id, name]) => current.get(id) === name).map(([id]) => id))].sort();
 }
 
 export function membershipEvent(
@@ -354,10 +354,13 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
 }
 
 const ROSTER_CAP = 20;
+function rosterShown(members: readonly DirectoryMember[]): DirectoryMember[] {
+  return members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
+}
+
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${memberLabel(m)}`);
+  const lines = rosterShown(members).map((m) => `- ${memberLabel(m)}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
     [
