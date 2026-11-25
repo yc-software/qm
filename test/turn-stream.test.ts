@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -143,8 +144,8 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
       reaperIntervalMs: 60_000,
     }),
   );
-  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  const computer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "default");
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
   built.runtime.start();
   try {
     const ack = await built.app.turn({

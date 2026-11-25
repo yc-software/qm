@@ -6,9 +6,10 @@ import { firesAtMostDaily } from "../src/cron/schedule.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { CronSchedule } from "../src/triggers/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const ORG = "org:default-org";
-const SCOPE = "personal:alice";
+const SCOPE = personalScope("alice");
 const fallback: RuntimeChoice = { modelId: "claude-opus-5" };
 const chat: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
 const cronSetting: RuntimeChoice = { modelId: "claude-sonnet-5", effortLevel: "low" };

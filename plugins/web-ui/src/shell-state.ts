@@ -14,6 +14,7 @@ export interface Me {
   modelAuthConnected?: boolean;
   mode?: AuthMode;
   user: string;
+  personalScope: string;
   org: string;
   slackWorkspaceUrl?: string | null;
   slackAppIconUrl?: string | null;

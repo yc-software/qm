@@ -12,7 +12,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { memberBrainId, putMemberBrain } from "../src/memory/registry.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { buildApp } from "./support/build-app.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
@@ -168,7 +168,7 @@ test("spend redacts other people's personal cron details for owner while keeping
   const s = await start();
   try {
     const bobCron = await s.built.app.createCron({
-      ownerScopeId: "personal:bob",
+      ownerScopeId: personalScope("bob"),
       owner: "bob",
       createdBy: "bob",
       schedule: { everyMs: 3_600_000 },
@@ -176,7 +176,7 @@ test("spend redacts other people's personal cron details for owner while keeping
       action: "private bob prompt",
     });
     const patCron = await s.built.app.createCron({
-      ownerScopeId: "personal:owner-pat",
+      ownerScopeId: personalScope("owner-pat"),
       owner: "owner-pat",
       createdBy: "owner-pat",
       schedule: { everyMs: 3_600_000 },
@@ -301,7 +301,7 @@ test("owner manages org memory registry config while member-owned brains stay or
       ["PUT", `/v1/admin/memory-registry/brains/${bobId}`, { label: "Nope" }],
       ["DELETE", `/v1/admin/memory-registry/brains/${bobId}`, undefined],
       ["PUT", `/v1/admin/memory-registry/bindings/${bobId}`, { label: "Nope" }],
-      ["PUT", "/v1/admin/memory-registry/bindings/hijack", { brain: bobId, scope: "personal:bob" }],
+      ["PUT", "/v1/admin/memory-registry/bindings/hijack", { brain: bobId, scope: personalScope("bob") }],
       ["DELETE", `/v1/admin/memory-registry/bindings/${bobId}`, undefined],
     ] as const) {
       assert.equal((await req(s.base, method, path, OWNER_ACTOR, body)).status, 403, `owner refused ${method} ${path}`);
@@ -379,7 +379,7 @@ test("owner offboards and reactivates members access-only while keeping org_admi
       { principalId: "bob@example.com", displayName: "Bob", type: "internal" },
     ]);
     const bobCron = await s.built.app.createCron({
-      ownerScopeId: "personal:bob@example.com",
+      ownerScopeId: personalScope("bob@example.com"),
       owner: "bob@example.com",
       createdBy: "bob@example.com",
       title: "Bob private digest",

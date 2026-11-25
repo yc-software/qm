@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps, type SkillResult } from "../src/tools/primitives.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 
 function ctx(useSkill: (name: string, path: string, sandboxId?: string) => Promise<SkillResult>) {
   const calls: string[] = [];
@@ -125,34 +125,37 @@ test("skill discovery pages the current visible catalog with ids, without provis
     provision: async () => {
       throw new Error("must not provision");
     },
-    listSkills: async (source) => skills.filter(({ skill }) => skill.scopeId === (source ?? "personal:U1")),
+    listSkills: async (source) => skills.filter(({ skill }) => skill.scopeId === (source ?? personalScope("U1"))),
   });
   assert.deepEqual(await tc.listSkills(), { sourceScopeId: null, skills: [] });
-  assert.deepEqual(await tc.listSkills("", 0, 2, "personal:someone"), {
-    sourceScopeId: "personal:someone",
+  assert.deepEqual(await tc.listSkills("", 0, 2, personalScope("someone")), {
+    sourceScopeId: personalScope("someone"),
     skills: [0, 1].map((i) => ({
       id: `id-${i}`,
       name: `skill-${i}`,
       description: "General task",
-      source: "personal:someone",
+      source: personalScope("someone"),
     })),
     nextOffset: 2,
   });
-  assert.deepEqual(await tc.listSkills("", 2, 2, "personal:someone"), {
-    sourceScopeId: "personal:someone",
-    skills: [{ id: "id-2", name: "skill-2", description: "Telescope planning", source: "personal:someone" }],
+  assert.deepEqual(await tc.listSkills("", 2, 2, personalScope("someone")), {
+    sourceScopeId: personalScope("someone"),
+    skills: [{ id: "id-2", name: "skill-2", description: "Telescope planning", source: personalScope("someone") }],
   });
-  assert.deepEqual(await tc.listSkills("telescope", 0, 50, "personal:someone"), {
-    sourceScopeId: "personal:someone",
-    skills: [{ id: "id-2", name: "skill-2", description: "Telescope planning", source: "personal:someone" }],
+  assert.deepEqual(await tc.listSkills("telescope", 0, 50, personalScope("someone")), {
+    sourceScopeId: personalScope("someone"),
+    skills: [{ id: "id-2", name: "skill-2", description: "Telescope planning", source: personalScope("someone") }],
   });
   skills[1]!.skill.scopeId = scopeId("personal", "U1");
   const native = await tc.listSkills();
   assert.deepEqual(native, {
     sourceScopeId: null,
-    skills: [{ id: "id-1", name: "skill-1", description: "General task", source: "personal:U1" }],
+    skills: [{ id: "id-1", name: "skill-1", description: "General task", source: personalScope("U1") }],
   });
-  assert.deepEqual(await tc.listSkills("", 0, 100, "personal:missing"), { sourceScopeId: null, skills: [] });
+  assert.deepEqual(await tc.listSkills("", 0, 100, personalScope("missing")), { sourceScopeId: null, skills: [] });
   skills.pop();
-  assert.deepEqual(await tc.listSkills("telescope", 0, 50, "personal:someone"), { sourceScopeId: null, skills: [] });
+  assert.deepEqual(await tc.listSkills("telescope", 0, 50, personalScope("someone")), {
+    sourceScopeId: null,
+    skills: [],
+  });
 });

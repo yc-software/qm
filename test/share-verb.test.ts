@@ -5,7 +5,7 @@ import { AdminError } from "../src/admin/admin-service.ts";
 import type { App } from "../src/api/app.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Grant, ScopeId } from "../src/types.ts";
-import { parseScopeId, scopeId } from "../src/types.ts";
+import { parseScopeId, scopeId, personalScope } from "../src/types.ts";
 import type { ArtifactHome, ArtifactType } from "../src/api/artifact-share.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
@@ -768,7 +768,7 @@ test("POST /v1/share: no capability → 403; bad type/missing fields → 400; no
 test("splitToScope: tool and route classify identically — a real scope id vs a name (incl. a colon name)", () => {
   assert.deepEqual(splitToScope("org"), { scope: "org" });
   assert.deepEqual(splitToScope("channel:C1"), { scope: "channel:C1" });
-  assert.deepEqual(splitToScope("personal:U7"), { scope: "personal:U7" });
+  assert.deepEqual(splitToScope(personalScope("U7")), { scope: personalScope("U7") });
   assert.deepEqual(
     splitToScope("not:valid"),
     { recipient: "not:valid" },

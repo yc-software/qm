@@ -17,6 +17,7 @@ import { withTenant } from "../tenants/context.ts";
 import { slackConversationRef } from "./sources/slack.ts";
 import { isDirectChannelType } from "../slack/payloads.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
+import { personalScope } from "../types.ts";
 
 export interface LoopIngress {
   id: string;
@@ -292,7 +293,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           input.channels.some((channel) => !/^[CDG][A-Z0-9]+$/.test(channel)))
       )
         throw new Error("Slack requires a signing secret, workspace ID, and selected channel IDs");
-      if (input.kind === "gmail" && loop.ownerScopeId !== `personal:${loop.owner}`)
+      if (input.kind === "gmail" && loop.ownerScopeId !== personalScope(loop.owner))
         throw new Error("Gmail ingestion requires a personal Loop");
       return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
         const existing = (await deps.sources.all()).find(

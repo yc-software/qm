@@ -32,7 +32,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult, personalScope } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -77,12 +77,17 @@ test("createAsk: owner derived from the credential, purpose frozen, dedup per (c
   const self = await k.createAsk({
     credentialId: cred.id,
     requesterId: "U_ALICE",
-    requesterScopeId: "personal:U_ALICE",
+    requesterScopeId: personalScope("U_ALICE"),
     purpose: "scheduled check",
   });
   assert.equal(self.ask.status, "pending");
   await assert.rejects(
-    k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "personal:U_BOB", purpose: "x" }),
+    k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: personalScope("U_BOB"),
+      purpose: "x",
+    }),
     (e: KeychainError) => e.status === 403,
   );
 
@@ -169,7 +174,7 @@ test("personal cron asks deduplicate recurring fires without combining jobs or r
   const base = {
     credentialId: cred.id,
     requesterId: "U_ALICE",
-    requesterScopeId: "personal:U_ALICE" as const,
+    requesterScopeId: personalScope("U_ALICE"),
     purpose: "first task",
   };
   const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
@@ -200,7 +205,7 @@ for (const outcome of ["declined", "expired"] as const) {
     const input = {
       credentialId: credential.id,
       requesterId: "U_ALICE",
-      requesterScopeId: "personal:U_ALICE" as const,
+      requesterScopeId: personalScope("U_ALICE"),
       requesterThreadRef: "cron:retained:fire:first",
       purpose: "scheduled check",
     };
@@ -1166,7 +1171,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ["U_BOB", "group:G_UNKNOWN", credential.id],
       ["U_BOB", "channel:C_PUBLIC", external.id],
       ["U_EXTERNAL", "group:G_GUEST_QA", credential.id],
-      ["U_BOB", "personal:U_BOB", credential.id],
+      ["U_BOB", personalScope("U_BOB"), credential.id],
     ] as const) {
       assert.equal(
         (
@@ -1265,8 +1270,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   }
 
   it("a scheduled personal request can be declined without granting access", async () => {
-    const ownerCap = await capFor("U_ALICE", "personal:U_ALICE", { internalAudience: true, personAuthority: true });
-    const token = await capFor("U_ALICE", "personal:U_ALICE");
+    const ownerCap = await capFor("U_ALICE", personalScope("U_ALICE"), {
+      internalAudience: true,
+      personAuthority: true,
+    });
+    const token = await capFor("U_ALICE", personalScope("U_ALICE"));
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1285,7 +1293,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         await post(
           "/v1/keychain/asks",
           { credential: credential.id, purpose: "wrong scope" },
-          await capFor("U_ALICE", "personal:U_BOB"),
+          await capFor("U_ALICE", personalScope("U_BOB")),
         )
       ).status,
       403,

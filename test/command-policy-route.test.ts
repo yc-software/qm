@@ -12,6 +12,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
+import { personalScope } from "../src/types.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -38,7 +39,7 @@ test("a pending approval survives a surface restart: GET /v1/approvals/:id retur
   const srv = start();
   try {
     await configureCommandRules(srv.built.config);
-    await selectDefaultSandbox(srv.built, "U1", "personal:U1");
+    await selectDefaultSandbox(srv.built, "U1", personalScope("U1"));
     const command = "git push --force origin main";
     const turn = {
       surface: "slack",
@@ -191,7 +192,7 @@ test("admin command-policy write validates the body and rejects invalid regexes"
 test("no command rules ship by default; an admin-configured rule gates the same command", async () => {
   const srv = start();
   try {
-    await selectDefaultSandbox(srv.built, "U3", "personal:U3");
+    await selectDefaultSandbox(srv.built, "U3", personalScope("U3"));
     const turn = (threadRef: string) =>
       fetch(`${srv.base}/v1/turns`, {
         method: "POST",

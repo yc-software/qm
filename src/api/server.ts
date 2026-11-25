@@ -29,7 +29,7 @@ import type { Tenant } from "../tenants/context.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { canonicalScopeId, parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import {
@@ -241,7 +241,7 @@ async function gate(
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, raw),
+      canonicalPayload(method, pathname + new URL(req.url ?? "/", "http://localhost").search, raw),
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -252,7 +252,7 @@ async function gate(
   let body: unknown = {};
   if (raw) {
     try {
-      body = JSON.parse(raw);
+      body = canonicalScopes(JSON.parse(raw));
     } catch {
       sendJson(res, 400, {
         error: "bad_request",
@@ -359,8 +359,33 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
 
 const requestTenants = new WeakMap<IncomingMessage, Tenant>();
 
-function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
-  const url = new URL(req.url ?? "/", "http://localhost");
+const SCOPE_KEYS = new Set(["scope", "scopeId", "scopeIds", "toScope", "grantees", "granteeScopeId", "ownerScopeId"]);
+
+function canonicalScopes(value: unknown, scoped = false): unknown {
+  if (typeof value === "string") return scoped ? canonicalScopeId(value as ScopeId) : value;
+  if (Array.isArray(value)) return value.map((item) => canonicalScopes(item, scoped));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, canonicalScopes(item, SCOPE_KEYS.has(key))]),
+  );
+}
+
+function rawUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? "/", "http://localhost");
+}
+
+function requestUrl(req: IncomingMessage): URL {
+  const url = rawUrl(req);
+  for (const key of ["scope", "scopeId"]) {
+    if (!url.searchParams.has(key)) continue;
+    const values = url.searchParams.getAll(key);
+    url.searchParams.delete(key);
+    for (const value of values) url.searchParams.append(key, canonicalScopeId(value as ScopeId));
+  }
+  return url;
+}
+
+function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring, url = requestUrl(req)): BaseCtx {
   const tenant = requestTenants.get(req);
   return {
     req,
@@ -482,7 +507,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   });
 
   const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const url = new URL(request.raw.url ?? "/", "http://localhost");
+    const url = requestUrl(request.raw);
     const raw = rawBodies.get(request.raw) ?? "";
     const result = await gate(
       request.raw,
@@ -580,7 +605,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
     if (!res) return void socket.destroy();
-    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    const base: BaseCtx = { ...baseCtx(req, res, wiring, rawUrl(req)), upgrade: { socket, head } };
     await withRequestContext("core", req, res, () =>
       inRequestTenant(req, res, base, null, async () => {
         if (await proxyAppSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
@@ -590,11 +615,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring, rawUrl(req));
     const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
     if (alias && canonicalPath(req, base.pathname)) {
       req.url = `${alias}${base.url.search}`;
-      base = baseCtx(req, res, wiring);
+      base = baseCtx(req, res, wiring, rawUrl(req));
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
@@ -614,6 +639,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         requestTenants.set(req, tenant);
         base.tenant = tenant;
       }
+      base.url = requestUrl(req);
       return then();
     };
     const inbound = inboundKey(req, deps, found, base.url);

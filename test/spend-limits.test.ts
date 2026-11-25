@@ -18,6 +18,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 10, 15, 12);
@@ -52,18 +53,22 @@ function limits(configured: Record<string, SpendLimit>, rows: SpendRow[], now = 
 }
 
 test("the org value is each person's default; a scope's own value overrides it, and {} lifts it", async () => {
-  const rows = [row("personal:a@x", TODAY, 6), row("personal:a@x", TODAY - 3, 20), row("channel:C1", TODAY, 100)];
+  const rows = [
+    row(personalScope("a@x"), TODAY, 6),
+    row(personalScope("a@x"), TODAY - 3, 20),
+    row("channel:C1", TODAY, 100),
+  ];
   const { tracker, reads } = limits(
-    { "org:acme": { dailyUsd: 5 }, "personal:b@x": { dailyUsd: 50 }, "personal:c@x": {} },
+    { "org:acme": { dailyUsd: 5 }, [personalScope("b@x")]: { dailyUsd: 50 }, [personalScope("c@x")]: {} },
     rows,
   );
-  const a = await tracker.status("personal:a@x");
+  const a = await tracker.status(personalScope("a@x"));
   assert.deepEqual(
     { over: a?.over, today: a?.todayUsd, month: a?.monthUsd, orgDefault: a?.orgDefault },
     { over: "daily", today: 6, month: 26, orgDefault: true },
   );
-  assert.equal((await tracker.status("personal:b@x"))?.over, null, "a person's own limit wins");
-  assert.equal(await tracker.status("personal:c@x"), null, "{} means no limit for that person");
+  assert.equal((await tracker.status(personalScope("b@x")))?.over, null, "a person's own limit wins");
+  assert.equal(await tracker.status(personalScope("c@x")), null, "{} means no limit for that person");
   assert.equal(await tracker.status("channel:C1"), null, "the per-person default doesn't cap shared scopes");
   assert.deepEqual(reads, [{ from: Date.UTC(2026, 10, 1), to: (TODAY + 1) * DAY }], "one month-to-date read, cached");
 });
@@ -80,15 +85,15 @@ test("monthly caps count the whole UTC month, and shared scopes cap only when se
 test("totals are re-read after the cache window and when the day turns", async () => {
   let t = NOW;
   const { tracker, reads } = limits({ "org:acme": { monthlyUsd: 10 } }, [], () => t);
-  await tracker.status("personal:a@x");
+  await tracker.status(personalScope("a@x"));
   t += 30_000;
-  await tracker.status("personal:a@x");
+  await tracker.status(personalScope("a@x"));
   assert.equal(reads.length, 1);
   t += 60_000;
-  await tracker.status("personal:a@x");
+  await tracker.status(personalScope("a@x"));
   assert.equal(reads.length, 2);
   t = (TODAY + 1) * DAY + 1;
-  await tracker.status("personal:a@x");
+  await tracker.status(personalScope("a@x"));
   assert.equal(reads.length, 3);
 });
 

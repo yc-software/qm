@@ -298,7 +298,7 @@ async function busy(persona: PersonaView, work: () => Promise<void>, fallback: s
 
 async function startPersonaChat(personaId: string): Promise<CoreSession> {
   await ensureContexts();
-  const scopeId = personalScopeId() ?? `personal:${appState.me?.user ?? ""}`;
+  const scopeId = personalScopeId() ?? appState.me?.personalScope ?? "";
   const { session } = await api<{ session: CoreSession }>("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ scopeId }),
@@ -389,7 +389,7 @@ function granteeLabel(scopeId: string): string {
   return scopeId;
 }
 
-const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
+const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === appState.me?.personalScope;
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
@@ -889,7 +889,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
   const current = picker;
   if (current?.personaId !== persona.id || current.kind !== kind || !canSharePersona(persona.role)) return nothing;
   const granted = new Set(persona.access.map((grant) => grant.scopeId));
-  const people = current.people.filter((person) => !granted.has(`personal:${person.principalId}`));
+  const people = current.people.filter((person) => !granted.has(person.scopeId));
   const channels = current.channels.filter((channel) => !granted.has(channel.scopeId));
   const orgScope = `org:${appState.me?.org ?? ""}`;
   const saving = busyId !== null;
@@ -937,11 +937,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
     </div>
     ${
       kind === "people"
-        ? peopleResults(
-            people,
-            saving,
-            (person) => void addGrantee(persona, `personal:${person.principalId}`, person.displayName),
-          )
+        ? peopleResults(people, saving, (person) => void addGrantee(persona, person.scopeId, person.displayName))
         : html`<div class="project-member-results">
             ${channels.map(
               (channel) =>

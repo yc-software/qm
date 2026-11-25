@@ -21,6 +21,7 @@ import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -247,7 +248,7 @@ test("reapExpired fences the dead attempt before it requeues, so a zombie can ne
   const url = testDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const sessions = createPostgresSessionStore(url);
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread("t1", "dm", personalScope("U1"));
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const claimed = (await runs.claim("dead-worker", 10))[0] ?? null;
   await sleep(30);
@@ -295,7 +296,7 @@ test("a heartbeat landing between SELECT and retire leaves the run untouched", a
 test("shutdown cancels before handback and holds the run until the turn unwinds", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread("t1", "dm", personalScope("U1"));
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
   let started!: () => void;
   const ready = new Promise<void>((resolve) => {
@@ -353,7 +354,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   const url = testDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const sessions = createPostgresSessionStore(url);
-  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread("t1", "dm", personalScope("U1"));
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const started = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();

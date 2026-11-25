@@ -91,6 +91,7 @@ async function withBrowser(run: (sent: Record<string, any>[][]) => Promise<void>
 
 const me = (tracesSampleRate?: number) => ({
   user: "private-user",
+  personalScope: "personal:private-user",
   org: "private-org",
   browserErrors: { dsn: "https://public@sentry.example.com/1", release: "release-1", tracesSampleRate },
 });

@@ -55,6 +55,7 @@ import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { type SlackConversationKind, conversationPlaceLabel } from "./messaging.ts";
+import { personalScope } from "../types.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -225,7 +226,7 @@ export function createTurnHandler(deps: {
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
       replyThreadTs = inc.threadTs;
       if (!actor.isBot && !actor.isExternalGuest)
-        deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
+        deps.ensureHeader?.(client, inc.channel, personalScope(actor.externalId), "dm");
     } else {
       channelRef = inc.channel;
       channelObservedAt = Date.now();

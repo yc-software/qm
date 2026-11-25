@@ -34,7 +34,14 @@ import { createKeychain, type ConnectorTokenStore, type Keychain } from "../src/
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { AdminService } from "../src/admin/admin-service.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
-import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
+import {
+  scopeId,
+  type Conversation,
+  type Principal,
+  type ScopeId,
+  type TurnRequest,
+  personalScope,
+} from "../src/types.ts";
 import { senderNote } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
@@ -991,7 +998,7 @@ test("a steer delivered by notification is screened in the context of the turn i
         conversationHeader: "UPDATED_INBOX_SNAPSHOT",
       },
     });
-  const sender = { sessionId: "session-sender", actorId: "U2", scopeId: "personal:U2", origin: "cron" as const };
+  const sender = { sessionId: "session-sender", actorId: "U2", scopeId: personalScope("U2"), origin: "cron" as const };
   await withModelRequestContext(sender, () => steer("1"));
   await settle(async () => screens.length === 1);
   await steer("2");

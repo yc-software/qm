@@ -12,6 +12,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
+import { personalScope } from "../src/types.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -230,7 +231,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         principalId: "alice",
-        scopeId: "personal:alice",
+        scopeId: personalScope("alice"),
         modelId: "gpt-5.5",
         effortLevel: "low",
         fastMode: true,
@@ -252,25 +253,25 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     const keep = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
+      body: JSON.stringify({ principalId: "alice", scopeId: personalScope("alice"), keep: true }),
     });
     assert.equal(((await keep.json()) as { upgradeAvailable: boolean }).upgradeAvailable, false);
 
     const inherit = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", inherit: true }),
+      body: JSON.stringify({ principalId: "alice", scopeId: personalScope("alice"), inherit: true }),
     });
     const inherited = (await inherit.json()) as { effective: { modelId: string }; scopeOverride: unknown };
     assert.equal(inherited.effective.modelId, "claude-sonnet-4-6");
     assert.equal(inherited.scopeOverride, null);
 
-    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
+    await srv.built.config.setBaseModel(personalScope("alice"), "claude-sonnet-4-6");
     assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
     const keepLegacy = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
+      body: JSON.stringify({ principalId: "alice", scopeId: personalScope("alice"), keep: true }),
     });
     const keptLegacy = (await keepLegacy.json()) as {
       upgradeAvailable: boolean;
@@ -279,19 +280,19 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     assert.equal(keptLegacy.upgradeAvailable, false);
     assert.deepEqual(keptLegacy.scopeOverride, { modelId: "claude-sonnet-4-6", orgRevision: 2 });
 
-    await srv.built.config.setRuntimeSelection("personal:alice", null);
-    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
+    await srv.built.config.setRuntimeSelection(personalScope("alice"), null);
+    await srv.built.config.setBaseModel(personalScope("alice"), "claude-sonnet-4-6");
     const config = srv.built.config;
     const picker = config.getWebuiModelsDurable;
     config.getWebuiModelsDurable = async (id) => {
       config.getWebuiModelsDurable = picker;
-      await config.setRuntimeSelection("personal:alice", { modelId: "gpt-5.5" });
+      await config.setRuntimeSelection(personalScope("alice"), { modelId: "gpt-5.5" });
       return picker(id);
     };
     const racedKeep = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "alice", scopeId: "personal:alice", keep: true }),
+      body: JSON.stringify({ principalId: "alice", scopeId: personalScope("alice"), keep: true }),
     });
     assert.equal(((await racedKeep.json()) as { scopeOverride: { modelId: string } }).scopeOverride.modelId, "gpt-5.5");
   } finally {
@@ -405,7 +406,7 @@ test("sharing posture round-trips through scoped governance with organization an
   const srv = start();
   try {
     const org = "org:default-org";
-    const personal = "personal:U1";
+    const personal = personalScope("U1");
     const room = "channel:C1";
     const read = async (scope: string) => {
       const response = await fetch(`${srv.base}/v1/admin/scopes/${scope}`, { headers: ADMIN });
@@ -747,7 +748,7 @@ test("org purpose runtimes round-trip, validate, and clear independently", async
         (await put(resource, choice, "org:default-org", { ...ADMIN, "x-admin-actor": "nobody@default-org" })).status,
         403,
       );
-      assert.equal((await put(resource, choice, "personal:alice")).status, 400);
+      assert.equal((await put(resource, choice, personalScope("alice"))).status, 400);
       for (const bad of [
         { ...choice, modelId: "invalid" },
         { ...choice, effortLevel: "invalid" },

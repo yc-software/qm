@@ -101,7 +101,11 @@ const { vite, dom, close } = await browserEnv({
     }
     if (path.startsWith("/api/directory/resolve")) {
       const found = () =>
-        json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+        json({
+          matches: [
+            { principalId: "bo@acme.com", scopeId: "personal:bo@acme.com", displayName: "Bo Person", type: "internal" },
+          ],
+        });
       if (!holdDirectory) return found();
       return new Promise<Response>((resolve) => {
         releaseDirectory = () => void found().then(resolve);
@@ -153,7 +157,7 @@ async function mountPage(openId?: string) {
   const personasModule = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "acme", companyName: "Acme" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "acme", companyName: "Acme" };
   if (openId) personasModule.openPersonaById(openId);
   await personasModule.renderPersonasPage();
   return { main, personasModule };
@@ -721,7 +725,7 @@ test("opening a persona from the list pushes browser history", async () => {
   const { renderPersonasPage } = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = document.querySelector("main")!;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   const pushed: string[] = [];
   const origPush = window.history.pushState.bind(window.history);
   window.history.pushState = (s, t, url) => (pushed.push(String(url)), origPush(s, t, url));

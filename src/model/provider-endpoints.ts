@@ -4,6 +4,7 @@ import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
 import { loadedTenantSettings } from "../tenants/settings.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { parseScopeId } from "../types.ts";
 
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
@@ -118,8 +119,9 @@ export function gatewayActorId(actorId: string, key: string): string {
 }
 
 function gatewayScopeId(scopeId: string | undefined, key: string | undefined): string | undefined {
-  if (!scopeId?.startsWith("personal:")) return scopeId;
-  return key ? `personal:${gatewayActorId(scopeId.slice("personal:".length), key)}` : undefined;
+  const { kind, ref } = parseScopeId(scopeId ?? "");
+  if (kind !== "personal") return scopeId;
+  return key ? `personal:${gatewayActorId(ref, key)}` : undefined;
 }
 
 export function gatewayKey(config: Pick<ModelGatewayTransportConfig, "apiKey">): string {
