@@ -890,7 +890,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
-        botActor: input.botActor === true,
         ownScopeBotWork,
         notebookOnly,
         ...(persona && (actsAsScope(actor.id, persona.scope) || (persona.pinned && allInternal && !notebookOnly))

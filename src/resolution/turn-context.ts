@@ -41,7 +41,6 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
-  botActor: boolean;
   ownScopeBotWork: boolean;
   notebookOnly?: boolean;
   sharedNotebook?: ScopeId;
@@ -123,7 +122,7 @@ export async function resolveTurnContext(input: ContextInput) {
     targetScope: input.targetScope,
     nativeScopes: baseRecallScopes,
     audience: input.audience,
-    open: resolution.sharingPosture === "open" && !input.botActor,
+    open: resolution.sharingPosture === "open" && input.personAuthority,
     ...(input.notebookOnly ? { notebookOnly: true } : {}),
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,

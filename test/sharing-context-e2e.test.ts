@@ -192,6 +192,10 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   });
   assert.match(await b.turn("!memorysearch ROOM_FROM_U1", true), /ROOM_FROM_U1/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_FROM_U1", true, "U1", { botActor: true }), /ROOM_FROM_U1/);
+  assert.doesNotMatch(
+    await b.turn("!memorysearch ROOM_FROM_U1", true, "U1", { origin: { kind: "ambient" } }),
+    /ROOM_FROM_U1/,
+  );
   const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
   assert.equal(await b.turn(own, true), "(exit 0)");
   await b.turn(own, true, "U1", { botActor: true });
