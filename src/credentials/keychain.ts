@@ -1763,7 +1763,7 @@ function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine 
   const git = personalGitRemote(c);
   return {
     label: `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}`,
-    use: git ? `${use}; git proxy ${git.host}` : use,
+    use: git ? `${use}; git proxy ${git.host} (github-gitlab skill), never a token in a remote URL` : use,
     expired: c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now,
   };
 }
@@ -1853,7 +1853,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill. For git, use a handle's git proxy (github-gitlab skill), never a token in a remote URL.",
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
   ];
   const owners = [...groups.keys()].sort(
     (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),
