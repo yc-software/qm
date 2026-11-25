@@ -108,9 +108,11 @@ test("a link refuses an app user unless its directory row says it is a person, t
   const auto = { ownerScopeId: "channel:C1", shipActions: [{ gate: "auto" }] };
   for (const who of [kit, lee]) {
     await db.q("INSERT INTO loops (id, json) VALUES ($1, $2)", [who, { ...auto, createdBy: who }]);
+    await db.q("INSERT INTO loop_ship_grants (id, json) VALUES ($1, $2)", [who, { loopId: who, actorId: who }]);
     await roster.link({ ...link, principalId: who, canonicalId: sam });
   }
-  const held = `SELECT id FROM loops WHERE json @> '{"botActor": true, "shipActions": [{"gate": "hold"}]}'`;
+  const held = `SELECT id FROM loops l WHERE json @> '{"botActor": true, "shipActions": [{"gate": "hold"}]}'
+    AND EXISTS (SELECT 1 FROM loop_ship_grants g WHERE g.id = l.id AND g.json ->> 'revokedBy' = 'system')`;
   assert.equal((await db.q(`${held} AND id = ANY($1)`, [[kit, lee]])).length, 2);
 });
 
