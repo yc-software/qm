@@ -317,7 +317,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
   let what = d.command.split("\n")[0]!.slice(0, 240);
   if (a.purpose?.trim()) what = a.purpose.trim();
-  else if (call) what = [toolWords(call), previewOf(argView(call.args))].filter(Boolean).join(" · ");
+  else if (call) what = toolWords(call);
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;
