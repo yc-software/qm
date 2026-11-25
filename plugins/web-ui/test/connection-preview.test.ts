@@ -25,7 +25,7 @@ Object.defineProperty(globalThis, "location", {
 const preview = await import("../src/connection-preview.ts");
 
 test("preview keeps the app, search, scroll and return state through a page redirect", () => {
-  preview.startPreviewAttempt("acme:alex", { id: "gmail", name: "Gmail" }, { query: "gmail", expanded: false }, 80);
+  preview.startPreviewAttempt("acme:alex", { id: "gmail", name: "Gmail" }, { query: "gmail" }, 80);
   const attempt = preview.readPreviewAttempt("acme:alex")!;
   assert.equal(new URL(destination).searchParams.get("connectionConsent"), attempt.state);
   assert.equal(new URL(attempt.callbackUrl).searchParams.get("connectionReturn"), attempt.state);
@@ -45,7 +45,7 @@ test("preview keeps the app, search, scroll and return state through a page redi
 });
 
 test("cancellation never becomes a verified connection", () => {
-  preview.startPreviewAttempt("acme:alex", { id: "github", name: "GitHub" }, { query: "", expanded: true }, 0);
+  preview.startPreviewAttempt("acme:alex", { id: "github", name: "GitHub" }, { query: "" }, 0);
   const attempt = preview.readPreviewAttempt("acme:alex")!;
   preview.finishPreviewAttempt(attempt, "cancelled");
   assert.equal(new URL(destination).searchParams.get("error"), "access_denied");

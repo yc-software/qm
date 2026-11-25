@@ -324,7 +324,7 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
     for (const tok of [roomTok, crossTok]) {
       const sk = (await j("/v1/skills", tok)).skills;
       assert.deepEqual(
-        sk.map((s: any) => [s.scopeId, s.name]),
+        sk.filter((s: any) => !s.scopeId.startsWith("org:")).map((s: any) => [s.scopeId, s.name]),
         [["channel:C1", "room-skill"]],
       );
       assert.equal((await get(`/v1/skills/${created.get("personal:U1:my-personal-skill")}`, tok)).status, 404);

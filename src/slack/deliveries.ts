@@ -192,9 +192,6 @@ export function createSlackDeliverer(deps: {
           }
           if (d.destination.react) {
             const { messageTs, emoji } = d.destination.react;
-            if (await core.thinkingStream?.queueIfStreaming(channel, messageTs, { kind: "react", emoji })) {
-              return { messageTs };
-            }
             const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
             if (failed.length)
               console.error(
@@ -219,9 +216,6 @@ export function createSlackDeliverer(deps: {
           }
           if (d.destination.delete) {
             const { messageTs } = d.destination.delete;
-            if (await core.thinkingStream?.queueIfStreaming(channel, messageTs, { kind: "delete" })) {
-              return { messageTs };
-            }
             try {
               await client.chat.delete({ channel, ts: messageTs });
             } catch (err) {
@@ -245,25 +239,15 @@ export function createSlackDeliverer(deps: {
               ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
             ];
             const unfurlLinks = d.destination.unfurlLinks;
-            const editBlocks = [
-              ...slackSectionBlocks(text),
-              ...(footer.length ? [{ type: "context", elements: footer }] : []),
-            ];
-            if (
-              await core.thinkingStream?.queueIfStreaming(channel, d.destination.edit.messageTs, {
-                kind: "edit",
-                text,
-                blocks: editBlocks,
-              })
-            ) {
-              return { messageTs: d.destination.edit.messageTs };
-            }
             await client.chat
               .update({
                 channel,
                 ts: d.destination.edit.messageTs,
                 text,
-                blocks: editBlocks,
+                blocks: [
+                  ...slackSectionBlocks(text),
+                  ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                ],
                 ...botIdentityArgs(d.destination.persona),
                 ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
               })
@@ -288,8 +272,7 @@ export function createSlackDeliverer(deps: {
               editRef = placeholder.ts;
             }
           }
-          const rawCleaned = runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text);
-          let text = toSlackMrkdwn(rawCleaned);
+          let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
           const replayAttachments = async (root?: string): Promise<void> => {
             if (!d.attachments?.length) return;
             try {
@@ -332,35 +315,7 @@ export function createSlackDeliverer(deps: {
               d.idempotencyKey ?? d.id,
               verifyOldest ?? String(Date.now() / 1000 - 60),
             ).catch(swallowUnlessRateLimited("slack: delivered-marker probe"));
-          let skipEditRefUpdate = false;
-          if (core.thinkingStream && (runId || editRef)) {
-            const streamed = await core.thinkingStream.deliver(client, {
-              ...(runId ? { runId } : {}),
-              ...(editRef ? { editRef } : {}),
-              channel,
-              ...(threadTs ? { threadTs } : {}),
-              rawMarkdown: rawCleaned,
-              mrkdwnFallback: text,
-              ...(footer.length ? { footerBlocks: [{ type: "context", elements: footer }] } : {}),
-              idempotencyKey: d.idempotencyKey ?? d.id,
-              ...(() => {
-                if (runId) return { unfurlLinks: false };
-                if (d.destination.unfurlLinks !== undefined) return { unfurlLinks: d.destination.unfurlLinks };
-                return {};
-              })(),
-              finalize: Boolean(runId),
-            });
-            if (streamed.handled) {
-              if (threadTs) threads.mark(channel, threadTs, true);
-              const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
-              if (!alreadyDelivered) await replayAttachments(threadTs);
-              return { messageTs: streamed.messageTs };
-            }
-            if (streamed.closedStreamTs && streamed.closedStreamTs === editRef) {
-              skipEditRefUpdate = true;
-            }
-          }
-          if (editRef && !skipEditRefUpdate) {
+          if (editRef) {
             const unfurlLinks = runId ? false : d.destination.unfurlLinks;
             try {
               const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;

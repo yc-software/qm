@@ -21,6 +21,8 @@ test("Slack account linking selects native OAuth and preserves the conversation 
     h.releaseSessions();
     await h.boot();
     const card = document.querySelector("qm-slack-account")!;
+    for (let i = 0; i < 200 && card.querySelector("button")?.disabled; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
     history.replaceState(null, "", "/s/sess-deep?layout=single");
     (card.querySelector("button") as HTMLButtonElement).click();
     for (let i = 0; i < 100 && !card.textContent?.includes("Could not verify"); i++)

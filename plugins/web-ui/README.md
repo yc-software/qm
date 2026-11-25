@@ -281,11 +281,9 @@ Gmail, Google Calendar, Google Drive, and Google Sheets artwork comes from
 [Simple Icons v16.0.0](https://github.com/simple-icons/simple-icons/tree/16.0.0)
 (CC0) and is bundled locally with the existing connector SVG artwork.
 
-## Cohort welcome and app picker
+## Welcome and app picker
 
 A company with activity seeds gets a welcome built from them in a new user's empty chat: a greeting, the company's starters under "Where to start" (all of them, with any from apps the person has connected first), and the app picker under "Connect your accounts". Selecting a starter fills the composer without sending. `/onboard` opens that welcome in a new chat for anyone, including people who already have conversations.
-
-Set `WEB_UI_WELCOME_COHORT=F26` on the web surface to show the cohort welcome in a new user's empty chat. It replaces the automatic first agent turn for that deployment; ordinary chat starts when the user sends a message. The greeting uses the signed-in display name. The welcome remains above the messages in the earliest personal web conversation, including when reopened. It is selected from persisted session creation times. The champagne and soft flutter sequence replays on refresh only before the first message and respects reduced motion.
 
 The picker reads Composio's live catalog in usage order, omits apps that need no authorization, and searches the complete paginated catalog. Known services use local logos; remaining catalog logos use Composio's logo host. Selecting an app submits to the authenticated web surface and opens the provider's authorization link directly. Consent remains on the provider page. Slack is excluded from this picker. A dedicated Connect Slack card in onboarding and Settings authorizes the signed-in person’s Slack tools through Composio and links their verified Slack workspace identity to their existing web account. Installing the company bot remains a separate administrator action.
 
@@ -303,7 +301,7 @@ The welcome uses the organization's configured branding `orgName`, falling back 
 
 ### Setup widgets in agent replies
 
-In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
+In web chat, the agent's `card` tool attaches a setup card to its reply: kind `apps` renders the reusable app picker (or, with `toolkit`, a single-app card), `add_to_slack` the Slack setup action for administrators, and `link_slack` personal Slack account linking. The server checks the real state when the tool is called (Slack installed, caller an admin, account already linked, app in the catalog) and returns a tool error instead of a card that could only show an error. The chat renders cards from successful `card` tool results in the turn's activity, after the reply text. When an install started from that card is verified, the card animates to its added state and emits a bubbling `slack-installed` event. The chat answers that event by sending “I connected QM to our Slack workspace. Please continue.”, so the agent explains personal account linking and offers the `link_slack` card without waiting for a reply. A single-app card for an app a connector serves (one with a `connectUrl`) opens that site. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. The tool result persists in the transcript, so the card renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
 
 ## Optional product analytics
 
@@ -371,4 +369,4 @@ account queue separately instead of steering an existing run; an explicit steer
 across accounts is refused. Organizations that already require individual accounts
 continue to require them.
 
-The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.
+The `link_slack` card offers personal Slack account linking in a web reply. It shows the account card, requires the company bot to be installed first, and does not include the app picker. `add_to_slack` remains the company installation card.

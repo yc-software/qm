@@ -28,6 +28,8 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     return previousFetch(input, init);
   };
   const element = document.createElement("qm-onboarding-slack");
+  let installed = 0;
+  element.addEventListener("slack-installed", () => installed++);
   const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
   try {
     h.releaseSessions();
@@ -40,6 +42,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     releaseStatus();
     await settle();
     assert.match(element.textContent ?? "", /Add to Slack/);
+    assert.match(element.textContent ?? "", /Choose your company’s own workspace, not a shared community one\./);
     assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
     const browserUrls: string[] = [];
     Object.assign(window, {
@@ -89,8 +92,11 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     await settle();
     assert.match(element.textContent ?? "", /QM added to Slack/);
     assert.equal(element.querySelector("button"), null);
-    assert.ok(element.querySelector(".slack-connected"));
-    assert.equal(element.querySelector(".welcome-slack"), null);
+    assert.ok(element.querySelector(".welcome-slack.slack-installed"));
+    assert.equal(installed, 1);
+    window.dispatchEvent(new window.Event("focus"));
+    await settle();
+    assert.equal(installed, 1);
     for (const next of [
       { configured: true, setup: { connected: false } },
       { configured: true, setupUnavailable: true },
@@ -103,7 +109,8 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     statusCode = 503;
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    assert.match(element.textContent ?? "", /Could not check the Slack installation/);
+    assert.doesNotMatch(element.textContent ?? "", /Could not|Check again/);
+    assert.equal(element.querySelector('[role="status"]'), null, "a failed status check shows no error text");
     window.open = () => null;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
@@ -132,13 +139,10 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     status = { configured: false };
     window.dispatchEvent(new window.Event("focus"));
     await settle();
-    const fallback = { opener: window, location: { href: "" } };
-    window.open = () => fallback as unknown as Window;
     const count = launches.length;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
-    assert.equal(fallback.location.href, "/settings/slack-settings?setup=slack");
-    assert.equal(launches.length, count);
+    assert.equal(launches.length, count + 1, "the card always starts the Slack install, never the settings page");
   } finally {
     releaseStatus();
     element.remove();

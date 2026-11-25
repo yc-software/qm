@@ -19,6 +19,9 @@ test("Slack authorization returns to the page where the account card was clicked
     const card = document.querySelector("qm-slack-account")!;
     for (const path of ["/settings", "/s/sess-deep?layout=single"]) {
       history.replaceState(null, "", path);
+      for (let i = 0; i < 200 && card.querySelector("button")?.disabled; i++)
+        await new Promise((resolve) => setTimeout(resolve, 5));
+
       (card.querySelector("button") as HTMLButtonElement).click();
       await (card as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
       for (let i = 0; i < 100 && card.querySelector("button")?.disabled; i++)
