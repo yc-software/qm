@@ -31,6 +31,7 @@ export interface ConvHost {
   onDensityChange(handler: () => void): void;
   ensureDeliveryStream(): void;
   inbox?: { context(): AssistantSidebarContext };
+  composerOnly?: boolean;
   onState?(state: PaneState): void;
   onExpand?(): void;
 }
