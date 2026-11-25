@@ -594,10 +594,12 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   const installation = await ctx.deps.slackInstallation?.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   let nativeOAuth = false;
-  if (ctx.actor && !ctx.actor.imp && !ctx.capability) {
+  const signedIn = ctx.actor && !ctx.actor.imp ? ctx.actor.p : undefined;
+  const principal = ctx.capability ? ctx.capability.actorId : signedIn;
+  if (principal) {
     try {
-      if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
-      const native = await nativeSlackConnection(ctx);
+      if (!(await activePrincipal(ctx.deps, principal))) return sendJson(ctx.res, 403, { error: "forbidden" });
+      const native = await nativeSlackConnection(ctx, principal);
       if (native)
         return sendJson(ctx.res, 200, {
           connected: true,
@@ -607,17 +609,17 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
           workspaceInstalled,
         });
       nativeOAuth = await nativeSlackConfigured(ctx);
-      if (nativeOAuth && !(await hasSlackAccount(ctx)))
+      if (nativeOAuth && !(await hasSlackAccount(ctx, principal)))
         return sendJson(ctx.res, 200, { connected: false, nativeOAuth, workspaceInstalled });
     } catch (error) {
       reportFailure("Slack connection status", error);
       return sendJson(ctx.res, 502, { error: "slack_unavailable" });
     }
   }
-  const access = await credential(ctx);
+  const access = await credential(ctx, true);
   if (!access) return;
-
-  ctx.res.setHeader("Cache-Control", "no-store");
+  if (!access.key)
+    return sendJson(ctx.res, 200, { connected: false, workspaceInstalled, nativeOAuth, linkAvailable: nativeOAuth });
   let failed = false;
   for (const id of personIds(access.principal)) {
     const record = await ctx.deps.slackAccounts?.get(id);
@@ -837,7 +839,7 @@ export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: (ctx) => slackReply(ctx, true),
   },
-  { method: "GET", path: "/v1/composio/slack", browser: true, actor: "person", auth: "source", handle: slackStatus },
+  { method: "GET", path: "/v1/composio/slack", browser: true, actor: "person", auth: "either", handle: slackStatus },
   {
     method: "POST",
     path: "/v1/composio/slack/complete",

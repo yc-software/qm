@@ -21,13 +21,14 @@ export interface ConnectionStanding {
 }
 
 type Status = { text: string; tone: string; mark?: IconNode };
-const WAITING: Status = { text: "Checking…", tone: "muted" };
+
+function waiting(at: ConnectionStanding | undefined): boolean {
+  return !at || at.outcome === "checking" || (!at.checked && !at.working && !at.problem);
+}
 
 function status(at: ConnectionStanding): Status {
-  if (at.outcome === "checking") return { text: at.notice, tone: "muted" };
   if (at.working) return { text: at.working, tone: "muted" };
   if (at.problem) return { text: at.problem, tone: "error", mark: CircleAlert };
-  if (!at.checked) return WAITING;
   if (at.outcome === "failed") return { text: at.notice, tone: "error", mark: CircleAlert };
   if (at.connected && !at.stale) return { text: "Connected", tone: "success", mark: Check };
   if (at.outcome === "cancelled" || at.outcome === "expired") return { text: at.notice, tone: "muted", mark: Circle };
@@ -54,12 +55,24 @@ export function connectionCard(
   service: Pick<ConnectionService, "id" | "logoUrl"> & { name?: string },
   at?: ConnectionStanding,
 ): TemplateResult {
-  const { text, tone, mark } = at ? status(at) : WAITING;
+  const name = service.name ?? nothing;
+  if (waiting(at))
+    return html`<div
+      class="connector-widget connection-card compact pending"
+      aria-busy="true"
+      role="group"
+      aria-label=${name}
+    >
+      ${connectorLogo(service.id, service.logoUrl)}
+      <span class="connector-widget-text">${service.name ? html`<strong>${service.name}</strong>` : nothing}</span>
+      <span class="connection-card-actions"><button type="button" class="btn primary" disabled>Connect</button></span>
+    </div>`;
+  const { text, tone, mark } = status(at!);
   const button = (label: string, name: string, run: () => void, style = "btn") =>
     html`<button type="button" class=${style} aria-label=${name} ?disabled=${Boolean(at?.working)} @click=${run}>
       ${label}
     </button>`;
-  const settled = at?.checked && at.outcome !== "checking";
+  const settled = at?.checked;
   let next: TemplateResult | typeof nothing = nothing;
   if (settled && at.stale && at.reconnect)
     next = button("Reconnect", `Reconnect ${service.name}`, at.reconnect, "btn primary");
@@ -69,13 +82,11 @@ export function connectionCard(
   const looks = ["connector-widget", "connection-card"];
   if (next === nothing && !at?.recheck && tone !== "error") looks.push("compact");
   if (tone === "success") looks.push("connected");
-  return html`<div class=${looks.join(" ")} data-tone=${tone} role="group" aria-label=${service.name ?? nothing}>
+  return html`<div class=${looks.join(" ")} data-tone=${tone} role="group" aria-label=${name}>
     ${connectorLogo(service.id, service.logoUrl)}
     <span class="connector-widget-text">
       ${service.name ? html`<strong>${service.name}</strong>` : nothing}
-      <small class="connection-card-status" role="status"
-        >${mark ? icon(mark, 12) : html`<span class="mc-spinner"></span>`}${text}</small
-      >
+      <small class="connection-card-status" role="status">${mark ? icon(mark, 12) : nothing}${text}</small>
     </span>
     <span class="connection-card-actions"
       >${settled ? connectionActions(service.name, Boolean(at.working), at.stale ? undefined : at.reconnect, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span

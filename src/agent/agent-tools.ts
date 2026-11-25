@@ -12,6 +12,7 @@ import { type ToolResultScreen, type ToolResultScreenInput } from "../security/s
 import { createToolKit } from "./agent-tools/kit.ts";
 import { computerTools, validateSandboxTool } from "./agent-tools/computer.ts";
 import { turnTools } from "./agent-tools/turn.ts";
+import { cardTool } from "./agent-tools/card.ts";
 import { workspaceTools } from "./agent-tools/workspace.ts";
 import { appFileTools } from "./agent-tools/app-files.ts";
 import { recallTools } from "./agent-tools/recall.ts";
@@ -222,6 +223,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...(surfaceTools
       ? [opts?.surfacePrompt?.transcript ? { ...surface, executionMode: "sequential" as const } : surface]
       : [attach]),
+    ...(opts?.surfaceName === "web" ? [cardTool(kit)] : []),
     finishSilently,
     withdrawApproval,
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },

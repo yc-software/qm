@@ -32,7 +32,9 @@ test("a card for one app asks for that app alone and never shows the person's ot
     await settle(() => Boolean(widget.querySelector(".connection-card")));
     const waiting = widget.querySelector(".connection-card")!;
     assert.ok(waiting.querySelector('.connector-logo[data-service="gmail"]'), "the logo is there from the first frame");
-    assert.equal(widget.textContent?.trim(), "Checking…");
+    assert.ok(waiting.classList.contains("pending"), "the card is dimmed until the check resolves");
+    assert.equal(waiting.querySelector(".connection-card-status"), null, "no checking status or spinner");
+    assert.equal(waiting.querySelector<HTMLButtonElement>(".btn.primary")?.disabled, true);
     release();
     const status = () => widget.querySelector(".connection-card-status")?.textContent?.trim();
     await settle(() => status() === "Not connected");

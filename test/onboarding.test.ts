@@ -64,7 +64,8 @@ test("a new personal DM offers onboarding through the skills index", async () =>
 
 test("the opener defers Slack setup and the skill shows the web setup cards without requiring provider configuration", () => {
   const skill = readFileSync(join(onboardingSkillDir, "onboarding/SKILL.md"), "utf8");
-  for (const card of ["add-to-slack", "connect-apps"]) assert.match(skill, new RegExp(`show the \`::${card}\\{\\}\``));
+  for (const kind of ["add_to_slack", "apps"])
+    assert.ok(skill.includes(`call the \`card\` tool with kind \`${kind}\``));
   assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
   assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
   assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);

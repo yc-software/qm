@@ -5,10 +5,10 @@ import { personIds, samePerson } from "../../directory/person.ts";
 import { composioUserIds, credential, request as composioRequest } from "./composio.ts";
 import type { ApiCtx } from "./route.ts";
 
-export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {
-  for (const id of personIds(ctx.actor!.p)) {
+export async function hasSlackAccount(ctx: ApiCtx, principal = ctx.actor!.p): Promise<boolean> {
+  for (const id of personIds(principal)) {
     const record = await ctx.deps.slackAccounts?.get(id);
-    if (record && samePerson(record.memberId, ctx.actor!.p)) return true;
+    if (record && samePerson(record.memberId, principal)) return true;
   }
   return false;
 }
