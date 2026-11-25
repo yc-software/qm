@@ -47,7 +47,7 @@ import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
   seal,
-  openSession,
+  openSessionCookie,
   openImpersonation,
   openTmp,
   setCookie,
@@ -469,7 +469,7 @@ function currentSession(req: IncomingMessage): SessionClaims | null {
 }
 
 function storedSession(req: IncomingMessage): SessionClaims | null {
-  return openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
+  return openSessionCookie(req.headers.cookie, "portal_session", sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S);
 }
 
 async function handleConsentRedeem(

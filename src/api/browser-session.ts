@@ -1,9 +1,9 @@
 import type { IncomingMessage } from "node:http";
-import { deriveKey, impersonationFor, openSession, readCookie } from "../../plugins/portal/src/session.ts";
+import { deriveKey, impersonationFor } from "../../plugins/portal/src/session.ts";
+import { portalSession } from "../auth/portal-session.ts";
 import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
-import { orgId } from "../config.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { reportFailure } from "../util/errors.ts";
 import { bootTenant } from "../tenants/boot.ts";
@@ -228,13 +228,7 @@ export function appHostRequest(
 }
 
 export function sessionCookieTenant(req: IncomingMessage, secret: string, maxAgeSeconds: number): string | undefined {
-  return openSession(
-    readCookie(req.headers.cookie, "portal_session"),
-    deriveKey(secret, "portal.session.v1"),
-    Date.now(),
-    orgId(),
-    maxAgeSeconds,
-  )?.t;
+  return portalSession(req.headers.cookie, "portal_session", secret, maxAgeSeconds)?.t;
 }
 
 export function browserSessionTenant(req: IncomingMessage, deps: BrowserLaneDeps): string | undefined {
@@ -287,13 +281,7 @@ export async function browserIdentity(
   }
   const { secret, maxAgeSeconds, apiOrigins } = deps.portalSession!;
   const cookies = req.headers.cookie;
-  const session = openSession(
-    readCookie(cookies, "portal_session"),
-    deriveKey(secret, "portal.session.v1"),
-    now,
-    orgId(),
-    maxAgeSeconds,
-  );
+  const session = portalSession(cookies, "portal_session", secret, maxAgeSeconds);
   if (!session)
     return { status: 401, error: "unauthorized", message: "a sign-in session for this organization is required" };
   if ((session.t ?? bootTenant()) !== tenant?.id)

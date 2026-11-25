@@ -29,11 +29,18 @@ const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
-function portalSession(claims: { t?: string }): string {
+function portalSession(claims: { t?: string; org?: string }): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub: "alice@example.com", org: "acme", iat: now, exp: now + 3600, ...claims }),
+    JSON.stringify({
+      k: "session",
+      sub: "alice@example.com",
+      org: "default-org",
+      iat: now,
+      exp: now + 3600,
+      ...claims,
+    }),
   ).toString("base64url");
   return `portal_session=${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
@@ -130,6 +137,7 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
     assert.equal(own.status, 200);
     assert.equal(own.body, "UPSTREAM OK");
     assert.equal((await get(port, host, "/reports", portalSession({ t: randomUUID() }))).status, 404);
+    assert.equal((await get(port, host, "/reports", portalSession({ t: TEST_TENANT, org: "other-org" }))).status, 302);
     assert.equal((await get(port, "sales-board.apps.example.com", "/", portalSession({ t: TEST_TENANT }))).status, 200);
   } finally {
     server.close();

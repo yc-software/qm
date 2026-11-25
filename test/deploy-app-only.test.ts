@@ -11,7 +11,7 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { portalSession } from "../src/deploy/viewer-session.ts";
+import { portalSession } from "../src/auth/portal-session.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
@@ -36,12 +36,12 @@ const guest = "guest@partner.test";
 const key = deriveKey(secret, "portal.session.v1");
 function token(appOnly: unknown = true) {
   const now = Math.floor(Date.now() / 1000);
-  return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
+  return seal({ k: "session", sub: guest, org: "default-org", iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
-  assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
+  assert.equal(portalSession(`portal_session=${token()}`, "portal_session", secret)?.appOnly, true);
   for (const marker of ["false", null, 0, {}])
-    assert.equal(portalSession(`portal_session=${token(marker)}`, secret), null);
+    assert.equal(portalSession(`portal_session=${token(marker)}`, "portal_session", secret), null);
 });
 
 test("app-only gateway checks exact current personal read grants without inherited or management authority", async () => {
