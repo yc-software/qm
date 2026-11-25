@@ -5,7 +5,7 @@ import { welcomeActivities } from "../src/welcome-ideas.ts";
 
 const idea = (id: string, icon: string, title: string) => ({ id, icon, title, prompt: title });
 
-test("a new person sees their company's seeded activities, only apps they connected themselves add theirs, and a click fills the composer unsent", async () => {
+test("a new person sees their company's seeded activities, only apps they connected themselves add theirs, and a click opens a new chat with it unsent", async () => {
   const welcome = {
     activities: [
       { ...idea("crm", "📇", "Build a tracker for the harbor pilots we are courting"), source: "from your goals" },
@@ -52,13 +52,6 @@ test("a new person sees their company's seeded activities, only apps they connec
         "Build a tracker for the harbor pilots we are courting from your goals",
       ],
     );
-    document.querySelector<HTMLButtonElement>("qm-onboarding-welcome .suggested-activity")!.click();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".composer-input")!.value,
-      "Find the pilot replies I still owe",
-    );
-    assert.ok(!h.requests.includes("/api/turn"));
     assert.match(h.mainText(), /Connect your accounts/);
     assert.doesNotMatch(h.mainText(), /Connect your apps/);
     const link = (label: string) =>
@@ -79,6 +72,14 @@ test("a new person sees their company's seeded activities, only apps they connec
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(document.querySelector("qm-welcome-about"), null);
     assert.equal(rows().length, 2);
+    document.querySelector<HTMLButtonElement>("qm-onboarding-welcome .suggested-activity")!.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(document.querySelector("qm-onboarding-welcome"), null);
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".composer-input")!.value,
+      "Find the pilot replies I still owe",
+    );
+    assert.ok(!h.requests.includes("/api/turn"));
   } finally {
     await h.close();
     restoreMotion();

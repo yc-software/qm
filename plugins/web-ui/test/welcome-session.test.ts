@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isWelcomeConversation } from "../src/welcome-session.ts";
+import { ideaThreadRef, isWelcomeConversation, welcomeLayout } from "../src/welcome-session.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
 
 const first: CoreSession = {
@@ -36,4 +36,20 @@ test("ideas chats never show the welcome or take the first welcome slot", () => 
   assert.equal(isWelcomeConversation([], "alex", ideas.threadRef, null), false);
   assert.equal(isWelcomeConversation([ideas], "alex", first.threadRef, null), true);
   assert.equal(isWelcomeConversation([ideas, first], "alex", first.threadRef, null), true);
+});
+
+test("a chat opened from a welcome idea is an ordinary chat without the welcome", () => {
+  const idea = { ...first, threadRef: ideaThreadRef("alex"), createdAt: 0 };
+  assert.match(idea.threadRef, /^web:alex:idea:[0-9a-f-]{36}$/);
+  assert.equal(isWelcomeConversation([], "alex", idea.threadRef, null), false);
+  assert.equal(isWelcomeConversation([idea, first], "alex", first.threadRef, null), true);
+  const me = { user: "alex", welcome: { company: "StyleUp" } } as unknown as Parameters<typeof welcomeLayout>[0]["me"];
+  const view = { me, sessions: [], scopeId: null, isNewUser: true, empty: true, draft: true };
+  assert.equal(welcomeLayout({ ...view, threadRef: "web:alex:first" }).show, true);
+  const layout = welcomeLayout({ ...view, threadRef: idea.threadRef });
+  assert.equal(layout.show, false);
+  assert.equal(layout.hideComposer, false);
+  const plain = { ...view, me: { user: "alex" } as typeof me };
+  assert.equal(welcomeLayout({ ...plain, threadRef: "web:alex:new" }).show, true);
+  assert.equal(welcomeLayout({ ...plain, threadRef: idea.threadRef }).show, false);
 });
