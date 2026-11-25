@@ -1,5 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { repeat } from "lit/directives/repeat.js";
 import {
   Bot,
   Building2,
@@ -17,13 +18,14 @@ import {
   Trash2,
   X,
 } from "lucide";
+import "./bots.css";
 import { api, ApiError, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";
 import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./contexts";
-import { openSession, renderList, replacePendingSession, startNewChat } from "./sessions";
+import { openSession, renderList, replacePendingSession, sessionsState, sessionTitle, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 import { renderSidebarTop, switchView } from "./shell";
@@ -36,9 +38,24 @@ import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
 import { tip } from "./tooltip";
 import { openSkillById, startSkillCreateIn } from "./skills";
-import { cronTitle, openCronById, type CronView } from "./crons";
+import { cronTitle, openCronById } from "./crons";
 import { cronScheduleSummary } from "./cron-format";
 import { historySectionTpl } from "./persona-history";
+import {
+  BOT_STATE_LABELS,
+  botAvatarTpl,
+  botTintStyle,
+  botStatus,
+  botStatusText,
+  botStatusTpl,
+  compareBotStatus,
+  elapsedLabel,
+  nextRunLabel,
+  type BotCron,
+  type BotState,
+  type BotStatus,
+} from "./bot-presence";
+import { relTime } from "./ui";
 
 type PersonaRole = "owner" | "write" | "read";
 
@@ -53,6 +70,7 @@ interface PersonaView {
   updatedAt: number | string;
   version: number;
   role: PersonaRole;
+  crons?: BotCron[];
 }
 
 interface OwnCredential {
@@ -75,7 +93,6 @@ interface PersonaDetail extends PersonaView {
   access: PersonaGrant[];
   credentials: Array<{ grantId: string; service: string; ownerId: string }>;
   skills?: Array<{ id: string; name: string; description: string }>;
-  crons?: Array<Pick<CronView, "id" | "title" | "action" | "message" | "schedule" | "enabled">>;
 }
 
 const ROLE_LABELS: Record<PersonaRole, string> = { owner: "Owner", write: "Can edit", read: "Can chat" };
@@ -93,16 +110,6 @@ let viewSeq = 0;
 
 const canEditPersona = (role: PersonaRole): boolean => role !== "read";
 const canSharePersona = (role: PersonaRole): boolean => role === "owner";
-
-function groupPersonasByRole(
-  personas: readonly PersonaView[],
-): Array<{ role: PersonaRole; label: string; personas: PersonaView[] }> {
-  return ROLE_ORDER.map((role) => ({
-    role,
-    label: ROLE_LABELS[role],
-    personas: personas.filter((persona) => persona.role === role),
-  })).filter((group) => group.personas.length);
-}
 
 function setPersonaList(list: PersonaView[]): void {
   personasState.list = list;
@@ -130,12 +137,15 @@ function openPersonaCron(cronId: string): void {
 
 export function viewPersona(personaId: string, focusEditor = false): void {
   switchView("personas");
-  void openPersona(personaId).then(() => {
-    if (!focusEditor) return;
-    requestAnimationFrame(() =>
-      document.querySelector<HTMLTextAreaElement>(".persona-form textarea[name=instructions]")?.focus(),
-    );
+  void openPersona(personaId, "", { edit: focusEditor }).then(() => {
+    if (focusEditor) focusInstructions();
   });
+}
+
+function focusInstructions(): void {
+  requestAnimationFrame(() =>
+    document.querySelector<HTMLTextAreaElement>(".persona-form textarea[name=instructions]")?.focus(),
+  );
 }
 
 export function personaEditable(personaId: string): boolean {
@@ -188,15 +198,78 @@ export async function renderPersonasPage(): Promise<void> {
   await loadPersonas();
   loading = false;
   if (seq !== viewSeq) return;
+  rosterOrder = null;
   if (pending) await openPersona(pending);
   else drawPersonasPage();
 }
 
 function backToList(): void {
+  rosterOrder = null;
   drawPersonasPage();
   void loadPersonas().then(() => {
+    rosterOrder = null;
     if (pageHost?.isConnected) drawPersonasPage();
   });
+}
+
+function statusOf(persona: Pick<PersonaView, "id" | "crons">): BotStatus {
+  return botStatus(persona.id, sessionsState.list, persona.crons);
+}
+
+const statusTextOf = (status: BotStatus) => botStatusText(status, sessionTitle, cronTitle);
+
+const PRESENCE_REFRESH_TICKS = 8;
+let presenceTimer: ReturnType<typeof setInterval> | undefined;
+let presence: { key: () => string; last: string; redraw: () => void; refresh: () => Promise<void> } | null = null;
+let presenceTicks = 0;
+let presenceRefreshing = false;
+
+function watchPresence(key: () => string, redraw: () => void, refresh: () => Promise<void>): void {
+  presence = { key, last: key(), redraw, refresh };
+  presenceTimer ??= setInterval(() => {
+    const watched = presence;
+    if (appState.currentView !== "personas" || !watched) {
+      clearInterval(presenceTimer);
+      presenceTimer = undefined;
+      presence = null;
+      return;
+    }
+    if (
+      ++presenceTicks % PRESENCE_REFRESH_TICKS === 0 &&
+      !presenceRefreshing &&
+      document.visibilityState === "visible"
+    ) {
+      presenceRefreshing = true;
+      void watched
+        .refresh()
+        .catch((e: unknown) => swallow("web-ui: refresh bot presence", e))
+        .finally(() => {
+          presenceRefreshing = false;
+        });
+    }
+    const next = watched.key();
+    if (next === watched.last) return;
+    watched.last = next;
+    watched.redraw();
+  }, 1000);
+}
+
+function presenceKeyOf(personas: readonly Pick<PersonaView, "id" | "crons">[]): string {
+  return personas
+    .map((persona) => {
+      const status = statusOf(persona);
+      const text = statusTextOf(status);
+      return [
+        persona.id,
+        status.state,
+        text.lead,
+        text.subject,
+        text.time,
+        status.recent.map((s) => s.id).join(","),
+        status.note?.at ?? "",
+      ].join("|");
+    })
+    .join("\n");
 }
 
 function drawPersonasPage(): void {
@@ -211,13 +284,26 @@ function drawPersonasPage(): void {
     appState.mainEl.replaceChildren(pageHost);
   }
   const term = query.trim().toLowerCase();
-  const visible = personasState.list.filter(
-    (persona) => !term || `${persona.name} ${persona.description}`.toLowerCase().includes(term),
-  );
+  const rank = rosterRank();
+  const visible = personasState.list
+    .filter((persona) => !term || `${persona.name} ${persona.description}`.toLowerCase().includes(term))
+    .map((persona) => ({ persona, status: statusOf(persona) }))
+    .sort((a, b) => (rank.get(a.persona.id) ?? Infinity) - (rank.get(b.persona.id) ?? Infinity));
   let empty = "No bots yet. Create one to give QM a reusable role you can chat with anywhere.";
   if (loading && !personasState.list.length) empty = "Loading bots…";
   else if (!personasState.enabled) empty = "Bots aren't turned on for you.";
   else if (term && personasState.list.length) empty = "No bots match your search.";
+  const rows = notice ? [html`<div class="action-notice" role="alert">${notice}</div>`] : [];
+  if (visible.length)
+    rows.push(
+      html`<div class="bot-grid">
+        ${repeat(
+          visible,
+          ({ persona }) => persona.id,
+          ({ persona, status }) => botCard(persona, status),
+        )}
+      </div>`,
+    );
   render(
     listPageTpl({
       title: "Bots",
@@ -234,15 +320,45 @@ function drawPersonasPage(): void {
             },
           }
         : {}),
-      rows: notice ? [html`<div class="action-notice" role="alert">${notice}</div>`] : [],
-      groups: groupPersonasByRole(visible).map((group) => ({
-        label: group.label,
-        rows: group.personas.map(personaRow),
-      })),
+      filters: rosterSummary(personasState.list.map(statusOf)),
+      rows,
       empty,
     }),
     pageHost,
   );
+  watchPresence(() => presenceKeyOf(personasState.list), drawPersonasPage, loadPersonas);
+}
+
+let rosterOrder: string[] | null = null;
+let rosterSettled = false;
+
+function rosterRank(): Map<string, number> {
+  const known = new Set(rosterOrder ?? []);
+  if (!rosterOrder || !rosterSettled || personasState.list.some((persona) => !known.has(persona.id))) {
+    rosterOrder = personasState.list
+      .map((persona) => ({ persona, status: statusOf(persona) }))
+      .sort((a, b) => compareBotStatus(a.status, b.status) || a.persona.name.localeCompare(b.persona.name))
+      .map(({ persona }) => persona.id);
+    rosterSettled = sessionsState.loaded;
+  }
+  return new Map(rosterOrder.map((id, index) => [id, index]));
+}
+
+function rosterSummary(statuses: readonly BotStatus[]): TemplateResult {
+  const states: BotState[] = ["working", "waiting", "scheduled", "resting"];
+  const counts = states
+    .map((state) => ({ state, count: statuses.filter((status) => status.state === state).length }))
+    .filter((entry) => entry.count);
+  if (!counts.length) return html``;
+  return html`<div class="bot-roster" aria-label="Bots by status">
+    ${counts.map(
+      ({ state, count }) =>
+        html`<span class="bot-roster-item" data-state=${state}
+          ><span class="bot-roster-dot" aria-hidden="true"></span
+          ><b>${count}</b> ${BOT_STATE_LABELS[state].toLowerCase()}</span
+        >`,
+    )}
+  </div>`;
 }
 
 function rowAction(label: string, glyph: Parameters<typeof icon>[0], run: () => void): TemplateResult {
@@ -251,34 +367,50 @@ function rowAction(label: string, glyph: Parameters<typeof icon>[0], run: () => 
   </button>`;
 }
 
-function personaActions(persona: PersonaView, opts: { edit: boolean }): TemplateResult {
+function personaActions(persona: PersonaView): TemplateResult {
   return html`
-    ${rowAction("Chat", MessageSquare, () => void chatWithPersona(persona))}
     ${rowAction("Fork", GitFork, () => forkPersona(persona))}
-    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id, "", { push: true })) : nothing}
     ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void openGranteePicker(persona.id, "people")) : nothing}
   `;
 }
 
-function personaRow(persona: PersonaView): TemplateResult {
+function noteTpl(note: NonNullable<BotStatus["note"]>): TemplateResult {
+  return html`<blockquote class="bot-note" dir="auto">
+    <span class="bot-note-text">${note.text}</span>
+    <span class="bot-note-when">Last run ${relTime(note.at)}</span>
+  </blockquote>`;
+}
+
+function botCard(persona: PersonaView, status: BotStatus): TemplateResult {
   return html`
-    <div class="list-row persona-row">
+    <article class="bot-card" data-state=${status.state} style=${botTintStyle(persona)}>
       <button
-        class="persona-row-main"
+        class="bot-card-open"
         type="button"
         aria-label=${`Open ${persona.name}`}
         @click=${() => void openPersona(persona.id, "", { push: true })}
-      >
-        <span class="persona-icon">${personaIconTpl(persona.icon, 18)}</span>
-        <span class="persona-row-text">
-          <span class="list-row-title" dir="auto">${persona.name}</span>
-          ${persona.description ? html`<span class="persona-row-description" dir="auto">${persona.description}</span>` : nothing}
-        </span>
-      </button>
-      <div class="app-row-actions persona-row-actions" aria-label=${`${persona.name} actions`}>
-        ${personaActions(persona, { edit: true })}
+      ></button>
+      <div class="bot-card-head">
+        ${botAvatarTpl(persona, 48, status.state)}
+        <div class="bot-card-identity">
+          <span class="bot-card-name" dir="auto">${persona.name}</span>
+          ${persona.role === "owner" ? nothing : html`<span class="bot-card-role">${ROLE_LABELS[persona.role]}</span>`}
+        </div>
+        <button
+          class="btn bot-card-chat"
+          type="button"
+          ?disabled=${busyId !== null}
+          @click=${() => void chatWithPersona(persona)}
+        >
+          ${icon(MessageSquare, 14)}<span>Chat</span>
+        </button>
       </div>
-    </div>
+      <p class="bot-card-description" dir="auto">${persona.description}</p>
+      <div class="bot-card-foot">
+        ${botStatusTpl(statusTextOf(status), status.state, { stacked: true })}
+        ${status.note ? noteTpl(status.note) : nothing}
+      </div>
+    </article>
   `;
 }
 
@@ -365,12 +497,12 @@ async function fetchPersona(id: string): Promise<PersonaDetail> {
   return (await api<{ persona: PersonaDetail }>(`/api/personas/${encodeURIComponent(id)}`)).persona;
 }
 
-async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
+async function openPersona(id: string, flash = "", opts: { push?: boolean; edit?: boolean } = {}): Promise<void> {
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
     if (seq !== viewSeq || appState.currentView !== "personas") return;
-    showPersonaDetail(persona, flash, opts.push);
+    showPersonaDetail(persona, flash, opts.push, opts.edit);
   } catch (e) {
     if (seq !== viewSeq) return;
     notice = errMessage(e, "Couldn't open that bot.");
@@ -1064,6 +1196,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
 function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
+  presence = null;
   resetContextModel();
   resetPersonaSlack();
   const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
@@ -1080,7 +1213,86 @@ function showNewPersonaForm(): void {
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
-function showPersonaDetail(persona: PersonaDetail, flash: string, push = false): void {
+function activityRow(
+  state: BotState | "chat",
+  verb: string,
+  title: string,
+  when: string,
+  open: () => void,
+): TemplateResult {
+  return html`<button class="bot-activity-row" type="button" data-state=${state} @click=${open}>
+    <span class="bot-activity-mark" aria-hidden="true"></span>
+    <span class="bot-activity-main" dir="auto"
+      ><span class="bot-activity-verb">${verb}</span><span class="bot-activity-title">${title}</span></span
+    >
+    <span class="bot-activity-when">${when}</span>
+  </button>`;
+}
+
+function statusTarget(status: BotStatus): (() => void) | null {
+  const session = status.working[0] ?? status.waiting[0];
+  if (session) return () => void openSession(session);
+  const next = status.running[0] ?? status.upcoming[0];
+  if (next) return () => openPersonaCron(next.cron.id);
+  const last = status.recent[0];
+  return last ? () => void openSession(last) : null;
+}
+
+function activitySection(persona: PersonaDetail, status: BotStatus): TemplateResult | typeof nothing {
+  const now = Date.now();
+  const open = (session: (typeof status.working)[number]) => () => void openSession(session);
+  const headline = (state: BotState): number => (status.state === state ? 1 : 0);
+  const rows = [
+    ...status.upcoming
+      .slice(headline("scheduled"), 4)
+      .reverse()
+      .map(({ cron, at }) =>
+        activityRow("scheduled", "Up next", cronTitle(cron), nextRunLabel(at, cron, now), () =>
+          openPersonaCron(cron.id),
+        ),
+      ),
+    ...[
+      ...status.working.map((session) => ({
+        title: sessionTitle(session),
+        since: session.workingSince ?? session.lastActivityAt ?? session.createdAt,
+        open: open(session),
+      })),
+      ...status.running.map(({ cron, since }) => ({
+        title: cronTitle(cron),
+        since,
+        open: () => openPersonaCron(cron.id),
+      })),
+    ]
+      .slice(headline("working"))
+      .map((job) => activityRow("working", "Now", job.title, elapsedLabel(job.since, now), job.open)),
+    ...status.waiting
+      .slice(headline("waiting"))
+      .map((session) => activityRow("waiting", "Needs you", sessionTitle(session), "", open(session))),
+    ...status.recent
+      .filter((session) => !status.waiting.includes(session))
+      .slice(0, 5)
+      .map((session) =>
+        activityRow(
+          "chat",
+          "Chat",
+          sessionTitle(session),
+          relTime(session.lastActivityAt ?? session.createdAt),
+          open(session),
+        ),
+      ),
+  ];
+  if (!rows.length && (status.lastActiveAt || status.upcoming.length)) return nothing;
+  return html`<section class="persona-section bot-activity" aria-label="Activity">
+    <div class="persona-section-head"><h3>Activity</h3></div>
+    ${
+      rows.length
+        ? html`<div class="bot-activity-list">${rows}</div>`
+        : emptyTpl(`Nothing yet. Start a chat or set up a cron to put ${persona.name} to work.`)
+    }
+  </section>`;
+}
+
+function showPersonaDetail(persona: PersonaDetail, flash: string, push = false, edit = false): void {
   const host = paneHost(persona.id);
   if (!host) return;
   syncPersonaUrl(persona.id, push);
@@ -1088,46 +1300,95 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
   const canManageSlack = persona.role === "owner" || can("admin") || can("owner");
-  const draw = () =>
-    render(
-      html`<div class="resource-detail persona-detail">
-        ${listBackLink("Bots", backToList)}
-        <div class="resource-heading">
-          <h2 class="persona-heading">
-            <span class="persona-icon">${personaIconTpl(persona.icon, 22)}</span><span dir="auto">${persona.name}</span>
-          </h2>
-          <div class="persona-detail-actions">
-            ${personaActions(persona, { edit: false })}
-            ${canSharePersona(persona.role) ? rowAction("Delete", Trash2, () => void deletePersona(persona)) : nothing}
+  let editing = editable && (edit || !persona.instructions.trim());
+  const profile = () =>
+    editing
+      ? html`<section class="persona-section bot-profile">
+          <div class="persona-section-head">
+            <h3>Edit bot</h3>
+            <div class="persona-section-actions">
+              ${rowAction("Cancel", X, () => {
+                editing = false;
+                Object.assign(state, { icon: persona.icon ?? null, iconChanged: false, error: "" });
+                draw();
+              })}
+            </div>
           </div>
-        </div>
-        <div class="persona-role hint">
-          Your role: ${ROLE_LABELS[persona.role]}${persona.version ? ` · version ${persona.version}` : ""}
-        </div>
+          ${personaFormTpl(persona, state, draw)}
+        </section>`
+      : html`<section class="persona-section bot-profile">
+          <div class="persona-section-head">
+            <h3>Instructions</h3>
+            <div class="persona-section-actions">
+              ${
+                editable
+                  ? rowAction("Edit", Pencil, () => {
+                      editing = true;
+                      draw();
+                      focusInstructions();
+                    })
+                  : nothing
+              }
+            </div>
+          </div>
+          <div class="bot-instructions" dir="auto">${persona.instructions || "—"}</div>
+        </section>`;
+  const draw = (): void => {
+    const status = statusOf(persona);
+    render(
+      html`<div class="resource-detail persona-detail bot-detail">
+        ${listBackLink("Bots", backToList)}
+        <header class="bot-hero" data-state=${status.state} style=${botTintStyle(persona)}>
+          ${botAvatarTpl(persona, 84, status.state)}
+          <div class="bot-hero-text">
+            <div class="bot-hero-top">
+              <h2 class="bot-hero-name" dir="auto">${persona.name}</h2>
+              <span class="bot-hero-meta"
+                >${ROLE_LABELS[persona.role]}${persona.version ? ` · v${persona.version}` : ""}</span
+              >
+            </div>
+            ${persona.description ? html`<p class="bot-hero-description" dir="auto">${persona.description}</p>` : nothing}
+            <div class="bot-hero-status">
+              ${botStatusTpl(statusTextOf(status), status.state, { open: statusTarget(status) })}
+            </div>
+            ${status.note ? noteTpl(status.note) : nothing}
+            <div class="bot-hero-actions">
+              <button
+                class="btn primary bot-hero-chat"
+                type="button"
+                ?disabled=${busyId !== null}
+                @click=${() => void chatWithPersona(persona)}
+              >
+                ${icon(MessageSquare, 15)}<span>Chat</span>
+              </button>
+              ${personaActions(persona)}
+            </div>
+          </div>
+        </header>
         ${flash ? html`<div class="action-notice" role="status">${flash}</div>` : nothing}
         ${actionError ? html`<div class="form-error persona-action-error" role="alert">${actionError}</div>` : nothing}
-        ${
-          editable
-            ? personaFormTpl(persona, state, draw)
-            : html`
-                <div class="field">
-                  <label>Description</label>
-                  <div class="value" dir="auto">${persona.description || "—"}</div>
-                </div>
-                <div class="field">
-                  <label>Instructions</label>
-                  <div class="value pre" dir="auto">${persona.instructions || "—"}</div>
-                </div>
-              `
-        }
+        ${activitySection(persona, status)} ${profile()}
         ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
         ${canManageSlack ? personaSlackSection(persona.id, draw) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
+        ${
+          canSharePersona(persona.role)
+            ? html`<div class="bot-danger">${rowAction("Delete bot", Trash2, () => void deletePersona(persona))}</div>`
+            : nothing
+        }
       </div>`,
       host,
     );
+  };
   redrawDetail = draw;
   draw();
+  watchPresence(
+    () => presenceKeyOf([persona]),
+    draw,
+    async () => {
+      persona.crons = (await fetchPersona(persona.id)).crons;
+    },
+  );
   if (editable) void loadContextModel(`persona:${persona.id}`, draw);
   else resetContextModel();
   if (canManageSlack) void loadPersonaSlack(persona.id, draw);
