@@ -66,11 +66,9 @@ describeTwoTenants("mail wakes, memory indexing and job computers bind each row'
     assert.deepEqual(resolved.sort(), [...db.tenants].sort());
   });
 
-  it("sweeps each tenant's job computers after initializing that tenant", async () => {
+  it("sweeps each tenant's job computers", async () => {
     const records = db.maps.map<SandboxResource>("sandbox_resources");
-    const upgraded: string[] = [];
     const resources = createSandboxResources({
-      upgrade: async () => void upgraded.push(currentTenant()),
       records,
       loads: db.maps.map("sandbox_loads"),
       defaults: db.maps.map<SandboxDefault>("sandbox_defaults"),
@@ -97,6 +95,5 @@ describeTwoTenants("mail wakes, memory indexing and job computers bind each row'
     const swept: string[] = [];
     await resources.eachJobComputer(async (computer) => void swept.push(`${currentTenant()} ${computer.id}`));
     assert.deepEqual(swept.sort(), db.tenants.map((tenant) => `${tenant} job`).sort());
-    assert.deepEqual(upgraded.sort(), [...db.tenants].sort());
   });
 });

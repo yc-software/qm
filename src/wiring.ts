@@ -267,14 +267,9 @@ import { s3Client } from "./persistence/s3.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { tenantModalClient, tenantSandboxChoice, tenantSuperserveSandbox } from "./sandbox/tenant-sandbox-shape.ts";
+import { tenantModalClient, tenantSuperserveSandbox } from "./sandbox/tenant-sandbox-shape.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
@@ -603,8 +598,6 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
 const CONFIGURED_MAPS = [
   "sprites_initialization",
-  "sandbox_resource_rollout",
-  "sandbox_routing",
   "render_deploy_credentials",
   "render_app_storage",
   "aws_deploy_bodies",
@@ -1234,46 +1227,21 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
-  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
+  pgArtifactMap.pool.registerMigration({
+    id: "sandbox/retired-routing/0001-drop",
+    statements: [
+      ...["sandbox_routing", "sandbox_resource_rollout"].flatMap((table) => [
+        `DROP TABLE IF EXISTS ${table}`,
+        `DROP FUNCTION IF EXISTS claim_${table}(), claim_${table}_tenants()`,
+        `DELETE FROM durable_map_versions WHERE tbl = '${table}'`,
+      ]),
+      `DO $$ BEGIN IF to_regclass('tenants') IS NOT NULL THEN UPDATE tenants SET settings = settings - 'sandboxScopeBackends' WHERE settings ? 'sandboxScopeBackends'; END IF; END $$`,
+    ],
+  });
   const sandboxResources = createSandboxResources({
-    records: sandboxRecords,
+    records: artifactMap<SandboxResource>("sandbox_resources"),
     loads: artifactMap<LoadSample>("sandbox_loads"),
-    defaults: sandboxDefaults,
-    upgrade: async () => {
-      const choice = await tenantSandboxChoice({
-        backend: config.sandboxBackend,
-        scopeBackends: config.legacySandboxScopeDefaults ?? {},
-      });
-      await upgradeLegacySandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
-        lock: advisoryLock,
-        legacyBackend: (scope) => legacySandboxBackendForScope(scope, choice.backend, choice.scopeBackends),
-        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        legacyScopes: async () => [
-          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
-          ...(await environments.list()).map((environment) => environment.id),
-        ],
-        legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve] = await Promise.all([
-            e2bBodies.entries(),
-            modalBodies.entries(),
-            awsBodies.entries(),
-            superserveBodies.entries(),
-          ]);
-          return [
-            ...e2b.map(([scopeId]) => ({ scopeId, backend: "e2b" as const })),
-            ...modal.map(([scopeId]) => ({ scopeId, backend: "modal" as const })),
-            ...aws.map(([scopeId]) => ({ scopeId, backend: "aws" as const })),
-            ...superserve.map(([scopeId]) => ({ scopeId, backend: "superserve" as const })),
-          ];
-        },
-      });
-    },
+    defaults: artifactMap<SandboxDefault>("sandbox_defaults"),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,

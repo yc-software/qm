@@ -365,12 +365,11 @@ test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure
   assert.equal(visibleBoom.length, 1, "the failed message renders once above its error, never per attempt");
 });
 
-test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
+test("a selected default serves turns and unsetting it stops eager provisioning", async () => {
   const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
-  await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok", warm.reason);

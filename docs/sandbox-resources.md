@@ -70,13 +70,9 @@ authorize commands. Transcript entries identify the called tool. Removed sandbox
 and process actions and `background start` are not aliases. No database migration or
 backfill is needed; existing jobs remain controllable by process ID. Interrupted old tool calls may return an unsupported-action error and require agent recovery with the new tools.
 
-## Upgrade and rollback
+## Routing
 
-Resources and explicit defaults are always enabled. At startup, a one-time, locked import adopts old routing entries, known session scopes, and provider records. It preserves existing defaults (including an explicit null), resource IDs, and original backing identities. It makes no provider calls or disk copies. Inferred resources start unverified; the completion marker is written last, so an interrupted import can be retried. Before writing adoption state, the import refuses any newly selected default whose provider is not configured, naming the affected scope and provider. Installations with the existing `explicit-defaults` marker have already completed this import.
-
-The old routing table is retained only as upgrade input. It is never read when selecting a computer, and there are no routing-table write or migration endpoints. `SANDBOX_SCOPE_BACKENDS` is accepted only to interpret old bindings during the import; remove it afterwards. `SANDBOX_RESOURCES_ENABLED` no longer changes behavior.
-
-Before upgrading from a release without resource-aware readers, drain its cores and workers. Rollback must use a resource-aware release that honors the permanent completion marker. A missing default after import means no default, not permission to recreate an old scoped computer.
+The retired `sandbox_routing` table and its import marker are dropped by migration. A tenant that never ran the import, because it used no sandbox since the import shipped, adopts nothing: its routing rows, session and environment scopes, and E2B, Modal, AWS and Superserve machine bodies get no sandbox record. Those scopes have no default until one is selected, and the provider machines behind those bodies stay unreferenced until an operator deletes them.
 
 Scoped commands require an explicit target or selected default. Disposable scratch computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
 

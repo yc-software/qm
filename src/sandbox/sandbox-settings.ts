@@ -1,14 +1,11 @@
 import { createHash } from "node:crypto";
 import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
-import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
-  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
@@ -461,7 +458,7 @@ export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendN
   return [...enabled];
 }
 
-function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACKEND"): SandboxBackendName {
+function sandboxBackendEnvStrict(value: string | undefined): SandboxBackendName {
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
   if (
@@ -479,7 +476,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
+    `SANDBOX_BACKEND=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
   );
 }
 
@@ -548,18 +545,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
         `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second lifetime of disposable Render sandboxes`,
       );
   }
-  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
-  if (env.SANDBOX_SCOPE_BACKENDS) {
-    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
-    if (!values || typeof values !== "object" || Array.isArray(values))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
-    for (const [kind, value] of Object.entries(values)) {
-      const parsed = parseScopeId(kind + ":scope").kind;
-      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
-        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
-    }
-  }
   if (sandboxBackend === "superserve" && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
       "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
@@ -567,7 +552,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   }
   return {
     sandboxBackend,
-    legacySandboxScopeDefaults,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),

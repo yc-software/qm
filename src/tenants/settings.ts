@@ -3,7 +3,6 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
 import { appHandleSchema, appLabelLimitError } from "./app-handle.ts";
-import { SCOPE_KINDS } from "../types.ts";
 import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
 
 const text = z.string().min(1);
@@ -38,7 +37,6 @@ export const tenantSettingsSchema = z
     superserveTemplate: text,
     superserveNamePrefix: namePrefix,
     sandboxBackend,
-    sandboxScopeBackends: z.partialRecord(z.enum(SCOPE_KINDS), sandboxBackend),
     serving: z.boolean(),
     deploymentModelKey: z.boolean(),
   })

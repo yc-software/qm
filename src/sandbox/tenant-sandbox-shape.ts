@@ -5,7 +5,6 @@ import { boundTenant } from "../tenants/context.ts";
 import { loadedTenantSettings, type TenantSettings } from "../tenants/settings.ts";
 import type { ModalClient } from "./modal-client.ts";
 import type { Sandbox } from "./sandbox.ts";
-import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 
 interface TenantSandboxSettings {
@@ -89,17 +88,9 @@ export function tenantModalClient(base: ModalShape, make: (shape: ModalShape) =>
   };
 }
 
-export interface SandboxChoice {
-  backend: SandboxBackendName;
-  scopeBackends: LegacySandboxScopeDefaults;
-}
-
-export async function tenantSandboxChoice(base: SandboxChoice): Promise<SandboxChoice> {
+export async function tenantSandboxBackend(base: SandboxBackendName): Promise<SandboxBackendName> {
   const bound = await tenantSandboxSettings();
-  if (!bound) return base;
-  const { sandboxBackend, sandboxScopeBackends } = bound.settings;
-  if (!sandboxBackend && !sandboxScopeBackends) return base;
-  return { backend: sandboxBackend ?? base.backend, scopeBackends: sandboxScopeBackends ?? {} };
+  return bound?.settings.sandboxBackend ?? base;
 }
 
 export interface SuperserveShape {

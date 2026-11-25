@@ -1,13 +1,12 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { legacySandboxBackendForScope } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import { createSandboxResources, type SandboxDefault, type SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter, type SandboxBackendName } from "../src/sandbox/sandbox-routing.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import {
   tenantNamePrefix,
-  tenantSandboxChoice,
+  tenantSandboxBackend,
   tenantSuperserveSandbox,
   type SuperserveShape,
 } from "../src/sandbox/tenant-sandbox-shape.ts";
@@ -23,7 +22,7 @@ import { testAdvisoryLock } from "./support/test-database.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
 
 const scope = scopeId("personal", "shared@example.com");
-const deployment = { backend: "sprites" as const, scopeBackends: { personal: "modal" as const } };
+const deployment = "sprites" as const;
 
 before(() => bindBootTenant(async () => undefined));
 
@@ -43,12 +42,10 @@ function fakeBackend(name: string, provisioned: string[]): Sandbox {
   };
 }
 
-test("tenant sandbox settings accept backend names and scope kinds only", () => {
-  const ok = { sandboxBackend: "superserve", sandboxScopeBackends: { personal: "sprites", channel: "modal" } };
+test("tenant sandbox settings accept backend names only", () => {
+  const ok = { sandboxBackend: "superserve" };
   assert.deepEqual(tenantSettingsSchema.parse(ok), ok);
   assert.throws(() => tenantSettingsSchema.parse({ sandboxBackend: "vm" }));
-  assert.throws(() => tenantSettingsSchema.parse({ sandboxScopeBackends: { personal: "vm" } }));
-  assert.throws(() => tenantSettingsSchema.parse({ sandboxScopeBackends: { desk: "sprites" } }));
 });
 
 describeTwoTenants("per-tenant sandbox backend", (db) => {
@@ -65,30 +62,14 @@ describeTwoTenants("per-tenant sandbox backend", (db) => {
 
   test("a tenant's backend replaces the deployment's for every scope; others keep the deployment's", async () => {
     const [a, b] = db.tenants;
-    const choiceA = await withTenant(a, () => tenantSandboxChoice(deployment));
-    assert.deepEqual(choiceA, { backend: "superserve", scopeBackends: {} });
-    assert.equal(legacySandboxBackendForScope(scope, choiceA.backend, choiceA.scopeBackends), "superserve");
-    assert.deepEqual(await withTenant(b, () => tenantSandboxChoice(deployment)), deployment);
-  });
-
-  test("a tenant's scope backends replace the deployment's scope map", async () => {
-    const [, b] = db.tenants;
-    await set(b, { sandboxScopeBackends: { personal: "sprites", channel: "superserve" } });
-    try {
-      const choice = await withTenant(b, () => tenantSandboxChoice(deployment));
-      assert.deepEqual(choice, { backend: "sprites", scopeBackends: { personal: "sprites", channel: "superserve" } });
-      const channel = scopeId("channel", "C1");
-      assert.equal(legacySandboxBackendForScope(channel, choice.backend, choice.scopeBackends), "superserve");
-      assert.equal(legacySandboxBackendForScope(scopeId("org", "o"), choice.backend, choice.scopeBackends), "sprites");
-    } finally {
-      await set(b, {});
-    }
+    assert.equal(await withTenant(a, () => tenantSandboxBackend(deployment)), "superserve");
+    assert.equal(await withTenant(b, () => tenantSandboxBackend(deployment)), deployment);
   });
 
   test("backend choice fails closed without a bound tenant or with unloaded settings", async () => {
-    await assert.rejects(tenantSandboxChoice(deployment), /needs a bound tenant/);
+    await assert.rejects(tenantSandboxBackend(deployment), /needs a bound tenant/);
     await assert.rejects(
-      withTenant(randomUUID(), () => tenantSandboxChoice(deployment)),
+      withTenant(randomUUID(), () => tenantSandboxBackend(deployment)),
       /settings are not loaded/,
     );
   });
