@@ -834,7 +834,7 @@ export interface AppDeps {
   surfaces: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
-  ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
+  ambientCursors?: DurableMap<{ lastJudgedAt: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   errors?: ErrorLog;
   ackEmojiPicks?: AckEmojiPickStore;
