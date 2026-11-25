@@ -2505,7 +2505,7 @@ export function createChatSurface(
     return [...(shown.trim() ? [body(shown)] : []), ...links.map(connectorWidget)];
   }
 
-  function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
+  function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
     const answered = message.content.some((chunk) => chunk.type === "text" && chunk.text.trim());
@@ -2544,11 +2544,13 @@ export function createChatSurface(
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
-    for (const card of setupCardsIn((message as AssistantWork).work?.activity)) parts.push(setupCard(card));
+    const cards = setupCardsIn((message as AssistantWork).work?.activity);
     const continuing = isStreaming ? undefined : (message as AssistantWork).continuing;
-    if (continuing)
-      parts.push(html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`);
-    return parts;
+    return html`${parts}${repeat(cards, (card) => card.callId, setupCard)}${
+      continuing
+        ? html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`
+        : nothing
+    }`;
   }
 
   function assistantFileList(files: DeliveredFile[] | undefined): TemplateResult | typeof nothing {
