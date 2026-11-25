@@ -57,9 +57,9 @@ const JSON_TABLES = `
    WHERE c.table_schema = current_schema() AND c.column_name = 'json' AND c.data_type = 'jsonb'
      AND c.table_name::text <> ALL (ARRAY['${MACHINE_TABLES.join("', '")}'])`;
 
-const FOUNDING_ID = (alias: string): string => `(SELECT (substr(h, 1, 12) || '3' || substr(h, 14, 3)
-     || to_hex((('x' || substr(h, 17, 1))::bit(4)::int & 3) | 8) || substr(h, 18))::uuid
-   FROM (SELECT md5(decode('${USER_ID_NAMESPACE.replaceAll("-", "")}', 'hex') || convert_to(${alias}, 'UTF8')) AS h) f)`;
+const FOUNDING_ID = (alias: string): string => `(SELECT (substr(h, 1, 12) || '8' || substr(h, 14, 3)
+     || to_hex((('x' || substr(h, 17, 1))::bit(4)::int & 3) | 8) || substr(h, 18, 15))::uuid
+   FROM (SELECT encode(sha256(decode('${USER_ID_NAMESPACE.replaceAll("-", "")}', 'hex') || convert_to(${alias}, 'UTF8')), 'hex') AS h) f)`;
 
 const PERSONAL_STRINGS = `'strict $.** ? (@.type() == "string" && @ starts with "personal:")'`;
 

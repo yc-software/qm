@@ -115,7 +115,7 @@ test("company browser inference runs on the session route through the gateway", 
     context: {
       "x-qm-session-id": "session-browser",
       "x-qm-actor": gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!),
-      "x-qm-scope": personalScope(gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!)),
+      "x-qm-scope": `personal:${gatewayActorId("U1", built.modelRoutes.gateway!.actorKey!)}`,
       "x-qm-purpose": "browser",
       "x-qm-origin": "conversation",
     },

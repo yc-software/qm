@@ -96,7 +96,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(calls[0]!.headers["api-key"], key);
   assert.equal(calls[0]!.headers.authorization, undefined);
   assert.equal(calls[0]!.headers["x-qm-actor"], endUser);
-  assert.equal(calls[0]!.headers["x-qm-scope"], personalScope(endUser));
+  assert.equal(calls[0]!.headers["x-qm-scope"], `personal:${endUser}`);
   assert.equal(calls[0]!.headers["x-qm-purpose"], "sandbox");
   assert.deepEqual(calls[0]!.body, { ...chat, model: "openai/gpt-6-luna", user: endUser });
   assert.ok(!JSON.stringify(calls[0]!.body).includes("U1"));
