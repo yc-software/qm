@@ -1742,7 +1742,9 @@ export function buildApp(
             await identity.refresh();
             return (
               identity.isInternal(identity.classify(claims.actorId)) &&
-              (claims.members ?? []).every((member) => identity.isInternal(identity.classify(member.id))) &&
+              (claims.members ?? []).every((member) =>
+                identity.isInternal(identity.classify(member.id, member.type === "guest")),
+              ) &&
               app.authorizesCapabilityScope(claims)
             );
           },
