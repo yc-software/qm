@@ -12,6 +12,7 @@ import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { personalScope } from "../src/types.ts";
 
 const asU1 = { actorId: "U1" };
 
@@ -31,7 +32,7 @@ function runRequest(): OrchestratorInput {
 
 async function sessionWithGoal(built: ReturnType<typeof freshApp>, ref: string, status: "active" | "paused") {
   const { sessions } = built;
-  const session = await sessions.getOrCreateByThread(ref, "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread(ref, "dm", personalScope("U1"));
   await sessions.addParticipant(session.id, "U1");
   const goal = createGoalRecord({ objective: "old outreach goal", floor: { minTurns: 40 } });
   goal.status = status;
@@ -134,7 +135,7 @@ for (const status of ["active", "paused"] as const) {
 test("cancelling with no open goal touches nothing", async () => {
   const built = freshApp();
   const ref = "web:U1:none";
-  const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
+  const session = await built.sessions.getOrCreateByThread(ref, "dm", personalScope("U1"));
   await built.sessions.addParticipant(session.id, "U1");
   await built.runs.enqueue({ sessionId: ref, request: runRequest() });
   const run = (await built.runs.claim("w1", 60_000))[0] ?? null;

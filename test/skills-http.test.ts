@@ -16,7 +16,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
-import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
+import { SHARED_SKILL_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 import { sleep } from "../src/util/async.ts";
@@ -535,13 +535,18 @@ async function startSecure() {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true, botActor = false) =>
+  const cap = (
+    actorId: string,
+    scope: ScopeId = scopeId("personal", actorId),
+    personAuthority = true,
+    botActor = false,
+  ) =>
     mintCapabilityToken(
       {
         actorId,
         scopeId: scope,
         aud: CONTROL_PLANE_AUD,
-        ...(liveActor ? liveRunClaims(actorId) : {}),
+        ...(personAuthority ? liveRunClaims(actorId) : {}),
         ...(botActor ? { botActor: true } : {}),
         exp: Date.now() + CAPABILITY_TTL_MS,
       },
@@ -844,20 +849,20 @@ test("management tracks CURRENT directory membership, not a stale session — a 
   }
 });
 
-test("a shared-scope skill cannot be created/edited/deleted by an automated trigger (no liveActor)", async () => {
+test("a shared-scope skill cannot be created/edited/deleted by a token without the person's authority", async () => {
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );
-    const triggerTok = await srv.cap("avery", scopeId("channel", "C9"), false);
+    const withoutAuthority = await srv.cap("avery", scopeId("channel", "C9"), false);
     const create = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": triggerTok },
+      headers: { "content-type": "application/json", "x-agent-capability": withoutAuthority },
       body: JSON.stringify({ name: "auto-thing", description: "d", body: "# b" }),
     });
-    assert.equal(create.status, 403, "an automated trigger cannot create a shared skill");
+    assert.equal(create.status, 403, "a token without the person's authority cannot create a shared skill");
     assert.equal(
       (await srv.skills.list()).find((s) => s.manifest.name === "auto-thing"),
       undefined,
@@ -866,68 +871,72 @@ test("a shared-scope skill cannot be created/edited/deleted by an automated trig
     const id = await seedChannelSkill(srv);
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": triggerTok },
+      headers: { "content-type": "application/json", "x-agent-capability": withoutAuthority },
       body: JSON.stringify({ description: "auto edit" }),
     });
     assert.equal(edit.status, 403);
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": triggerTok },
+      headers: { "x-agent-capability": withoutAuthority },
     });
     assert.equal(del.status, 403);
-    assert.ok(await srv.skills.get(id), "the shared skill survives an automated trigger");
+    assert.ok(await srv.skills.get(id), "the shared skill survives a token without the person's authority");
 
-    const personalTrigger = await srv.cap("solo", scopeId("personal", "solo"), false);
+    const personalWithoutAuthority = await srv.cap("solo", scopeId("personal", "solo"), false);
     const own = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
+      headers: { "content-type": "application/json", "x-agent-capability": personalWithoutAuthority },
       body: JSON.stringify({ name: "solo-skill", description: "d", body: "# b" }),
     });
-    assert.equal(own.status, 201, "a trigger in its owner's own DM may still save a personal skill");
+    assert.equal(own.status, 201, "without the person's authority, its owner's own DM may still save a personal skill");
   } finally {
     await srv.close();
   }
 });
 
-test("a PERSONAL-scope trigger (no liveActor) cannot edit or delete a skill homed in a private channel it is a member of", async () => {
+test("a PERSONAL-scope token without the person's authority cannot edit or delete a skill homed in a private channel they belong to", async () => {
   const srv = await startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const personalTrigger = await srv.cap("avery", scopeId("personal", "avery"), false);
+    const personalWithoutAuthority = await srv.cap("avery", scopeId("personal", "avery"), false);
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
-      body: JSON.stringify({ body: "# rewritten by a personal-scope trigger" }),
+      headers: { "content-type": "application/json", "x-agent-capability": personalWithoutAuthority },
+      body: JSON.stringify({ body: "# rewritten without the person's authority" }),
     });
-    assert.equal(edit.status, 403, "a personal-scope trigger cannot rewrite a shared skill");
+    assert.equal(
+      edit.status,
+      403,
+      "a personal-scope token without the person's authority cannot rewrite a shared skill",
+    );
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": personalTrigger },
+      headers: { "x-agent-capability": personalWithoutAuthority },
     });
-    assert.equal(del.status, 403, "a personal-scope trigger cannot delete a shared skill");
+    assert.equal(del.status, 403, "a personal-scope token without the person's authority cannot delete a shared skill");
     const survivor = await srv.skills.get(id);
-    assert.ok(survivor, "the shared skill survives the personal-scope trigger");
+    assert.ok(survivor, "the shared skill survives the personal-scope token");
     assert.equal(survivor!.manifest.body, "# v1", "and its body is untouched");
   } finally {
     await srv.close();
   }
 });
 
-test("a LIVE member of a private channel may edit + delete its skill from their own DM (personal token, liveActor)", async () => {
+test("a member of a private channel may edit + delete its skill from their own DM with their own authority", async () => {
   const srv = await startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const liveJordan = await srv.cap("jordan");
+    const jordan = await srv.cap("jordan");
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": liveJordan },
-      body: JSON.stringify({ description: "edited live by a member" }),
+      headers: { "content-type": "application/json", "x-agent-capability": jordan },
+      body: JSON.stringify({ description: "edited by a member" }),
     });
-    assert.equal(edit.status, 200, "a live member may edit the shared skill");
-    assert.equal((await srv.skills.get(id))!.manifest.description, "edited live by a member");
+    assert.equal(edit.status, 200, "a member may edit the shared skill");
+    assert.equal((await srv.skills.get(id))!.manifest.description, "edited by a member");
     const del = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": liveJordan },
+      headers: { "x-agent-capability": jordan },
     });
     assert.equal(del.status, 200, "and delete it");
     assert.equal((await srv.skills.get(id))?.status, "archived");
@@ -936,7 +945,7 @@ test("a LIVE member of a private channel may edit + delete its skill from their 
   }
 });
 
-test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'S OWN personal skill", async () => {
+test("a PERSONAL-scope token without the person's authority may still edit + delete its OWNER'S OWN personal skill", async () => {
   const srv = await startSecure();
   try {
     const sk = await srv.skills.create({
@@ -946,17 +955,17 @@ test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'
     });
     await srv.skills.review(sk.id, "reviewer-1", []);
     await srv.skills.publish(sk.id);
-    const personalTrigger = await srv.cap("solo", scopeId("personal", "solo"), false);
+    const personalWithoutAuthority = await srv.cap("solo", scopeId("personal", "solo"), false);
     const edit = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-agent-capability": personalTrigger },
-      body: JSON.stringify({ body: "# v2 by the owner's trigger" }),
+      headers: { "content-type": "application/json", "x-agent-capability": personalWithoutAuthority },
+      body: JSON.stringify({ body: "# v2 without the owner's authority" }),
     });
-    assert.equal(edit.status, 200, "an owner's trigger may edit its own personal skill");
-    assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# v2 by the owner's trigger");
+    assert.equal(edit.status, 200, "a token without the owner's authority may edit their own personal skill");
+    assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# v2 without the owner's authority");
     const del = await fetch(`${srv.base}/v1/skills/${sk.id}`, {
       method: "DELETE",
-      headers: { "x-agent-capability": personalTrigger },
+      headers: { "x-agent-capability": personalWithoutAuthority },
     });
     assert.equal(del.status, 200, "and delete it");
     assert.equal((await srv.skills.get(sk.id))?.status, "archived");
@@ -1232,7 +1241,7 @@ test("skill detail and restore capability calls hide other principals' skills an
   }
 });
 
-test("only a live person can restore an archived channel skill, not a Slack bot's turn or a trigger", async () => {
+test("only a token with the person's authority can restore an archived channel skill, not a Slack bot's turn", async () => {
   const srv = await startSecure();
   try {
     await srv.directory.replaceChannels(
@@ -1318,10 +1327,12 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
       [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
       [{ channelId: "C9", principalId: "avery" }],
     );
-    const trigger = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"), false)));
+    const withoutAuthorityTool = skillsTool(
+      createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"), false)),
+    );
     assert.ok(
-      (await trigger({ action: "save", name: "auto-thing", description: "d", body: "# b" })).startsWith(
-        `[error] ${SHARED_SKILL_TRIGGER_REFUSAL} (HTTP 403`,
+      (await withoutAuthorityTool({ action: "save", name: "auto-thing", description: "d", body: "# b" })).startsWith(
+        `[error] ${SHARED_SKILL_REFUSAL} (HTTP 403`,
       ),
     );
 
@@ -1412,7 +1423,7 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
       [{ channelId: "C9", principalId: "avery" }],
     );
     const avery = { externalId: "avery" };
-    const turn = (readOnly: boolean, label = readOnly ? "read" : "live") =>
+    const turn = (readOnly: boolean, label = readOnly ? "read" : "write") =>
       built.app.turn({
         surface: "test",
         actor: avery,

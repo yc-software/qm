@@ -50,7 +50,19 @@ function providerBodyMessage(body: unknown): string | undefined {
   return typeof nested.message === "string" && nested.message.trim() ? nested.message.trim() : undefined;
 }
 
-export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage): ProviderTurnError {
+function streamErrorBody(errorMessage: string | undefined): ProviderFailure["providerError"] {
+  try {
+    const body = JSON.parse(errorMessage ?? "") as { error?: { type?: unknown } } | null;
+    const type = body?.error?.type;
+    return typeof type === "string" ? { type, body } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function providerTurnError(reported: ProviderFailure, usage?: ContextUsage): ProviderTurnError {
+  const providerError = reported.providerError ?? streamErrorBody(reported.errorMessage);
+  const failed = providerError ? { ...reported, providerError } : reported;
   const raw = failed.errorMessage?.trim() ?? "";
   const code = providerErrorCode(failed, usage);
   const status = failed.providerError?.status;

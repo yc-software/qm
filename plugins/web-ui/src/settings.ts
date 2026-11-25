@@ -32,8 +32,6 @@ const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
-const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
-
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },
   { value: "dark", label: "Dark", glyph: Moon },
@@ -529,7 +527,12 @@ function desktopRow(): TemplateResult {
         <div class="settings-row-title">Desktop app</div>
         <div class="settings-row-note">QM for Mac. Requires Apple Silicon and macOS 13 or later.</div>
       </div>
-      <a class="btn settings-row-action" href=${QM_MAC_DOWNLOAD_URL} target="_blank" rel="noreferrer noopener">
+      <a
+        class="btn settings-row-action"
+        href=${withBase("/api/desktop/download")}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
         ${icon(Download, 15)}<span>Download for Mac</span>
       </a>
     </div>

@@ -56,7 +56,7 @@ export async function detail(page: AdminPage) {
   const d = r.data || {};
   const principal = d.principalId || requested;
   const aliases: string[] = d.user?.aliases || [];
-  const personalScope = d.scopeId || "personal:" + principal;
+  const personalScope = d.scopeId;
   let [onboarding, busy, hint, resetHint] = [d.onboarding || "not_started", false, "", ""];
   const creds = kc.data?.credentials || [];
   const credName = (id: string) => {

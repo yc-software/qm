@@ -8,8 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
-import { scopeId } from "../src/types.ts";
+import {
+  createToolContext,
+  type ToolContextDeps,
+  CONTROL_UNAVAILABLE,
+  NeedsApproval,
+} from "../src/tools/primitives.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -70,17 +75,15 @@ test("createToolContext.cronCreate creates a real cron through the shared servic
   assert.equal(stored.title, "digest");
 });
 
-test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {
+test("webhook registration through the tool needs the owner's authority and a sign-off, and refused calls leave no effects", async () => {
   const { built, control } = build();
   const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
   const auditBefore = await built.auditLog.events(testTenant);
-  for (const scope of ["personal:U1", "channel:C1"] as const) {
+  for (const scope of [personalScope("U1"), "channel:C1"] as const) {
     for (const extra of [
       {},
-      { liveActor: false, liveAuthor: false },
-      { triggered: true },
-      { triggered: true, liveActor: true },
-      { triggered: true, liveAuthor: true },
+      { personAuthority: false },
+      { internalAudience: true, personAuthority: true, botActor: true },
     ]) {
       const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), scopeId: scope, ...extra } });
       const result = await ctx.webhookCreate(request);
@@ -90,20 +93,30 @@ test("webhook registration through the tool requires a live person and leaves re
       assert.deepEqual(await built.auditLog.events(testTenant), auditBefore);
     }
   }
-  for (const extra of [{ liveActor: true }, { liveAuthor: true }]) {
-    const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), ...extra } });
-    const result = await ctx.webhookCreate(request);
-    assert.ok(result.ok, JSON.stringify(result));
-    assert.equal(result.webhook.owner, "U1");
-    assert.equal(result.secret, "secret");
-  }
+  const authority = { internalAudience: true, personAuthority: true };
+  const unsigned = ctxFor({ control, controlClaims: { ...claims("U1"), ...authority } });
+  const card = await unsigned.webhookCreate(request).then(
+    () => assert.fail("registration ran without a sign-off"),
+    (e: unknown) => e,
+  );
+  assert.ok(card instanceof NeedsApproval);
+  assert.match(card.command, /handle the event/);
+  assert.match(card.command, /hmac-sha256/);
+  assert.doesNotMatch(card.command, /"secret":"secret"/);
+  assert.deepEqual(await built.app.listWebhooks(), []);
+  const signed = ctxFor({ control, controlClaims: { ...claims("U1"), ...authority }, authorizeCommand: () => true });
+  const result = await signed.webhookCreate(request);
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.equal(result.webhook.owner, "U1");
+  assert.equal(result.secret, "secret");
   const [webhook] = await built.app.listWebhooks();
   await built.app.setWebhookEnabled(webhook!.id, false);
   const disabled = await built.app.listWebhooks();
   const auditAfter = await built.auditLog.events(testTenant);
-  const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), triggered: true } });
-  const result = await ctx.webhookCreate(request);
-  assert.equal(result.ok ? undefined : result.code, "forbidden");
+  const refused = await ctxFor({ control, controlClaims: claims("U1"), authorizeCommand: () => true }).webhookCreate(
+    request,
+  );
+  assert.equal(refused.ok ? undefined : refused.code, "forbidden");
   assert.deepEqual(await built.app.listWebhooks(), disabled);
   assert.deepEqual(await built.auditLog.events(testTenant), auditAfter);
 });

@@ -14,6 +14,7 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
+import { personalGitRemote } from "../../credentials/personal-git.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
@@ -32,11 +33,10 @@ export interface CredentialCatalogTurn {
   conversation: OrchestratorInput["conversation"];
   external: boolean;
   strictReadOnly: boolean;
-  allInternal: boolean;
-  liveAuthorTurn: boolean;
+  internalAudience: boolean;
+  ownerAuthorityTurn: boolean;
   scopeId: ScopeId;
   environmentId: string;
-  sharingSources: readonly ScopeId[];
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   isCurrentSharedScopeMember: IsCurrentSharedScopeMember;
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void;
@@ -59,10 +59,10 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     actor,
     conversation,
     external,
-    liveAuthorTurn,
+    internalAudience,
+    ownerAuthorityTurn,
     scopeId,
     environmentId,
-    sharingSources,
     resolution,
     isCurrentSharedScopeMember,
     audit,
@@ -72,23 +72,14 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   } = turn;
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const actorKeychain = input.botActor !== true;
-  const openSpeakerKeychain =
-    liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
-  const openAutomationKeychain =
+  const openOwnerKeychain =
     actorKeychain &&
+    ownerAuthorityTurn &&
+    internalAudience &&
     !external &&
-    input.origin.kind === "automation" &&
-    input.origin.useOwnerKeychain === true &&
     conversation.kind !== "dm" &&
-    !!deps.isCurrentSharedScopeMember &&
-    (await isOpenScopeMember({
-      actorId: actor.id,
-      scope: scopeId,
-      config: deps.config,
-      isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-    }));
-  const ownCredentialsAllowed =
-    (actorKeychain && scopeId === personalScope(actor.id)) || openSpeakerKeychain || openAutomationKeychain;
+    (await isOpenScopeMember({ actorId: actor.id, scope: scopeId, config: deps.config, isCurrentSharedScopeMember }));
+  const ownCredentialsAllowed = (actorKeychain && scopeId === personalScope(actor.id)) || openOwnerKeychain;
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||
@@ -102,7 +93,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   const credentialIdentities = new Map<string, string>();
 
   const authorizeOwnerCredentials = async (): Promise<void> => {
-    if (!openSpeakerKeychain && !openAutomationKeychain) return;
+    if (!openOwnerKeychain) return;
     if (
       !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
       (await deps.config.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
@@ -166,8 +157,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   return {
     ...turn,
     brokeredTools,
-    openSpeakerKeychain,
-    openAutomationKeychain,
+    openOwnerKeychain,
     ownCredentialsAllowed,
     connectorEnv,
     commandCredentials,
@@ -183,6 +173,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
 export async function registerKeychainCredentials(
   catalog: CredentialCatalog,
   addCredential: AddCredential,
+  brokerToken?: () => Promise<string>,
 ): Promise<void> {
   const {
     deps,
@@ -220,16 +211,19 @@ export async function registerKeychainCredentials(
   if (ownCredentialsAllowed) {
     for (const credential of await keychain.listByOwner(actor.id)) {
       if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+      const gitBroker = personalGitRemote(credential) ? brokerToken : undefined;
       addCredential(
         {
           handle: credentialHandle(credential),
           ...(credential.kind === "file" ? { scratchOnly: true } : {}),
           resolve: async () => {
             await authorizeOwnerCredentials();
-            return resolvedCredential(
+            const resolved = resolvedCredential(
               await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
               true,
             );
+            if (!gitBroker) return resolved;
+            return { ...resolved, env: [...resolved.env, { key: "AGENT_CREDENTIAL_TOKEN", value: await gitBroker() }] };
           },
         },
         credential.service,
@@ -292,21 +286,24 @@ export async function registerServiceCredentials(
   addCredential: AddCredential,
   requestedHandles: readonly string[],
   current?: { records: PublicServiceCredential[]; granted: Set<string> },
-): Promise<void> {
+): Promise<(() => Promise<string>) | undefined> {
   const {
     deps,
     input,
+    actor,
     conversation,
     external,
     strictReadOnly,
-    allInternal,
+    internalAudience,
     resolution,
     serviceAllowed,
     grantedServiceCredSlugs,
     authorizeServiceCredential,
+    ownCredentialsAllowed,
+    authorizeOwnerCredentials,
   } = catalog;
   const { scopeAttestation, sandboxTokenExpiry } = capability;
-  if (strictReadOnly || !deps.serviceCreds) return;
+  if (strictReadOnly || !deps.serviceCreds) return undefined;
   const records =
     current?.records ??
     (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
@@ -320,6 +317,13 @@ export async function registerServiceCredentials(
     .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
     .map((record) => record.slug)
     .sort();
+  const personalGitHandles = async (): Promise<string[]> => {
+    if (external || !ownCredentialsAllowed || !deps.keychain || !requestedHandles.some((h) => h.includes(":")))
+      return [];
+    return (await deps.keychain.listByOwner(actor.id))
+      .filter((credential) => personalGitRemote(credential) && requestedHandles.includes(credentialHandle(credential)))
+      .map(credentialHandle);
+  };
   let brokerToken: Promise<string> | undefined;
   const resolveBrokerToken = (): Promise<string> =>
     (brokerToken ??= (async () => {
@@ -331,6 +335,8 @@ export async function registerServiceCredentials(
           throw new Error(`Service credential is no longer available: ${slug}`);
         }
       }
+      const personalGit = await personalGitHandles();
+      if (personalGit.length) await authorizeOwnerCredentials();
       return mintCapabilityToken(
         {
           ...scopeAttestation,
@@ -343,7 +349,7 @@ export async function registerServiceCredentials(
                 threadRef: conversation.threadRef,
               }
             : {}),
-          credentials: brokerSlugs,
+          credentials: [...brokerSlugs, ...personalGit].sort(),
           exp: sandboxTokenExpiry,
         },
         (deps.capabilitySecret ?? deps.signingSecret)!,
@@ -352,7 +358,7 @@ export async function registerServiceCredentials(
     })());
   for (const credential of available) {
     if (credential.delivery === "env") {
-      if ((!allInternal && !external) || !credential.envKey) continue;
+      if ((!internalAudience && !external) || !credential.envKey) continue;
       addCredential(
         {
           handle: credential.slug,
@@ -388,6 +394,7 @@ export async function registerServiceCredentials(
       );
     }
   }
+  return deps.signingSecret && deps.apiBaseUrl ? resolveBrokerToken : undefined;
 }
 
 export function registerBrokeredTools(catalog: CredentialCatalog): void {

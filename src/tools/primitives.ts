@@ -1,5 +1,4 @@
 import type { Tenant } from "../tenants/context.ts";
-import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS, type ToolOutputStore } from "../sessions/tool-output.ts";
@@ -11,6 +10,7 @@ import {
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
+import { lookupText } from "../memory/mcp-memory-provider.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
 import type { RuntimeRequest, RuntimeResult } from "../agent/runtime-types.ts";
@@ -66,6 +66,7 @@ import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts"
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import { brainRefused, providerRef } from "../memory/provider-router.ts";
 import {
   forgetFacts,
   withProviders,
@@ -88,12 +89,14 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
+import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
+import { inTurnSignOff, signOffForget } from "./sign-off.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
 import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import { DESKTOP_UNAVAILABLE_TEXT, type DesktopCall } from "../surfaces/desktop-calls.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -258,12 +261,14 @@ export interface ToolContext extends SurfaceToolDeps {
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string>;
   mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
     timeoutMs: number,
     signal?: AbortSignal,
     toolName?: string,
+    args?: unknown,
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
   backgroundStart(
     command: string,
@@ -472,7 +477,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   tenant: Tenant;
-  desktopClientId?: string;
+  desktopCall?: DesktopCall | undefined;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   sandbox: Sandbox;
@@ -545,7 +550,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
-  personTurn?: boolean;
+  personAuthority?: boolean;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -654,11 +659,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   const runId = deps.runId;
 
-  const trialOn =
-    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
-    (script) =>
-      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
-
+  const signOff = inTurnSignOff(deps.authorizeCommand);
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
   ): Promise<R | ControlUnavailable> {
@@ -1141,11 +1142,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setAppPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setAppPublic(id, isPublic, {
-        createdBy: deps.createdBy,
-        botActor: deps.botActor,
-        personAtKeyboard: personAtKeyboard(deps.controlClaims),
-      });
+      const actor = { createdBy: deps.createdBy, botActor: deps.botActor, signOff };
+      const d = await deps.deploy.setAppPublic(id, isPublic, actor);
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
@@ -1208,12 +1206,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryDelete(ids: string[], callId: string) {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
+      const approve = (refs: string[]) => signOffForget(refs, signOff);
       return forgetFacts(
         memory,
         write,
         ids,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
-        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personAuthority),
+        { ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}), approve },
         deps.sessionId && `${deps.sessionId}:${callId}`,
       );
     },
@@ -1239,6 +1238,20 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
+    async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
+      if (!memory?.lookup || !deps.memoryScopeId || !deps.memoryAccess?.read.includes(deps.memoryScopeId))
+        throw brainRefused("No brain is connected to this conversation.");
+      return lookupText(
+        await memory.lookup(
+          deps.memoryScopeId,
+          providerRef(brain, tool),
+          args,
+          turnAuthority(deps.createdBy, deps.memoryAccess, deps.personAuthority),
+          deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        ),
+      );
+    },
+
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
@@ -1247,9 +1260,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async awaitClientResult(callId, timeoutMs, signal, toolName) {
-      if (toolName === "desktop" && !deps.desktopClientId)
-        return { content: "Computer access unavailable; continue from QM desktop.", isError: true };
+    async awaitClientResult(callId, timeoutMs, signal, toolName, args) {
+      if (toolName === "desktop")
+        return deps.desktopCall
+          ? deps.desktopCall(callId, args, timeoutMs, signal)
+          : { content: DESKTOP_UNAVAILABLE_TEXT, isError: true };
       if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
       return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });
     },
@@ -1352,21 +1367,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate(req) {
-      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
-    },
+    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
     cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch(id, req) {
-      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
-    },
+    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
     cronRun: (id) => controlOp((c, cl) => c.runCron(id, cl)),
     cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(id, destinationKey, cl)),
-    webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
+    webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl, signOff)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
     webhookUpdate: (id, patch) => controlOp((c, cl) => c.updateWebhook(id, patch, cl)),
@@ -1375,7 +1386,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.control.readSoul(deps.controlClaims);
     },
     soulWrite: (content, expectedVersion) => controlOp(async (c, cl) => c.writeSoul(content, cl, expectedVersion)),
-    shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl)),
+    shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl, signOff)),
 
     post: (text, opts, files, sandboxId) => surfaceOp((s) => s.post(text, opts, files, sandboxId)),
     reach: (text, target, files, sandboxId) => surfaceOp((s) => s.reach(text, target, files, sandboxId)),

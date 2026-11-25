@@ -7,6 +7,7 @@ import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { recallText } from "./support/recall-text.ts";
+import { personalScope } from "../src/types.ts";
 
 const defaultMemory: MemoryService = {
   async recall() {
@@ -50,7 +51,10 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
     overlay: parseMemoryProviderConfig(raw, { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" }),
   });
 
-  assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");
+  assert.equal(
+    recallText(await memory.recall(personalScope("u1"), { query: "launch", actorId: "u1" })),
+    "personal notebook",
+  );
   assert.equal(recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1" })), "org knowledge");
   assert.equal(
     await memory.capture(
@@ -102,7 +106,7 @@ test("a registry brain is called only through the guarded fetch, which refuses p
   const record = putBinding(
     storedEarlier,
     "alice",
-    { brain: "acme-personal", scope: "personal:U1", capture: "explicit" },
+    { brain: "acme-personal", scope: personalScope("U1"), capture: "explicit" },
     change,
   );
   const errors: unknown[] = [];
@@ -114,19 +118,19 @@ test("a registry brain is called only through the guarded fetch, which refuses p
       onError: (error) => void errors.push(error),
     });
 
-  const refused = await serving().recall("personal:U1", {
+  const refused = await serving().recall(personalScope("U1"), {
     query: "bees",
     actorId: "U1",
-    audienceScopeId: "personal:U1",
+    audienceScopeId: personalScope("U1"),
   });
   assert.equal(recallText(refused), "personal notebook");
   assert.match(String((errors[0] as Error | undefined)?.cause ?? errors[0]), /private network address/);
   assert.deepEqual([brain.requests, brain.tokenRequests], [[], []]);
 
-  const allowed = await serving(loopbackFetch).recall("personal:U1", {
+  const allowed = await serving(loopbackFetch).recall(personalScope("U1"), {
     query: "bees",
     actorId: "U1",
-    audienceScopeId: "personal:U1",
+    audienceScopeId: personalScope("U1"),
   });
   assert.match(recallText(allowed), /Alice keeps bees\./);
 });

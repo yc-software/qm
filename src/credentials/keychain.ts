@@ -17,6 +17,7 @@ import { envKey } from "./connector-token.ts";
 import { connectorHostLabel } from "../connectors/oauth.ts";
 import { credentialInjectionError, type CredentialInjection } from "./credential-injection.ts";
 import { claimThenBind } from "../tenants/claim.ts";
+import { personalGitRemote } from "./personal-git.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
@@ -1795,7 +1796,7 @@ export function renderAskNotice(
 export interface KeychainManifestInput {
   scopeId: ScopeId;
   conversationKind: "dm" | "channel" | "group";
-  openSpeakerKeychain?: boolean;
+  openOwnerKeychain?: boolean;
   actorId: string;
   members: Array<{ id: string; displayName?: string }>;
   entriesByOwner: Map<string, KeychainCredentialMeta[]>;
@@ -1855,9 +1856,10 @@ function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine 
           .map((key) => `\`${key}\``)
           .join(" + ")}`
       : "files in $HOME";
+  const git = personalGitRemote(c);
   return {
     label: `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}`,
-    use,
+    use: git ? `${use}; git proxy ${git.host} (github-gitlab skill), never a token in a remote URL` : use,
     expired: c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now,
   };
 }

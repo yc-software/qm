@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
@@ -12,12 +13,15 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { signOffs } from "./support/signed-off-action.ts";
+import { liveRun } from "./support/live-run.ts";
+import type { PendingApprovalRecord } from "../src/types.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -32,7 +36,10 @@ function fixture() {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
   const audits: Array<{ action: string; resource?: string }> = [];
+  const signOff = signOffs({ getItems: async () => [] });
   const deps: Partial<ServerDeps> = {
+    approvals: testMap<PendingApprovalRecord>(),
+    sessions: signOff.sessions as unknown as ServerDeps["sessions"],
     keychain,
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
@@ -49,7 +56,7 @@ function fixture() {
         attempts: 1,
         leaseToken: "test-lease",
         leaseExpiresAt: Date.now() + 60_000,
-        request: { actor: { id: "alice" } },
+        request: liveRun("alice", "cron:test-cron:fire:test-fire").request,
       }),
     } as unknown as ServerDeps["runs"],
     composioFetch: (async (input, init) => {
@@ -66,6 +73,7 @@ function fixture() {
     actor: string | null = "alice",
     capability?: CapabilityClaims,
     impersonating = false,
+    requestHeaders: Record<string, string> = {},
   ) {
     let status = 0;
     let text = "";
@@ -86,6 +94,8 @@ function fixture() {
       },
     } as unknown as ServerResponse;
     const ctx = {
+      req: { headers: requestHeaders },
+      method: "POST",
       deps,
       app,
       res,
@@ -126,7 +136,7 @@ function fixture() {
   }
   const link = (account = "ca_test", url = "https://connect.composio.dev/link/lk_test") =>
     replies.push({ session_id: "trs_test" }, { redirect_url: url, connected_account_id: account });
-  return { invoke, own, shared, link, calls, replies, deps, app, audits };
+  return { invoke, own, shared, link, calls, replies, deps, app, audits, signOff };
 }
 
 const SETTINGS = "https://qm.example/?view=settings";
@@ -243,10 +253,12 @@ test("the catalog can be asked for one app, which costs one small request", asyn
     (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
     ["granola"],
   );
+  f.replies.push({ items: [] }, app("linear_mcp", "Linear MCP", "OAUTH2"));
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items[0]?.id, "linear_mcp");
   f.replies.push(new Response("down", { status: 500 }));
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);
-  assert.equal(f.calls.length, 4);
+  assert.equal(f.calls.length, 6);
 });
 
 test("ambiguous personal keys fail closed rather than switching to the company key", async () => {
@@ -413,7 +425,7 @@ test("connections report the scopes an app's configuration asks for that the con
   assert.equal(reads("ac_gone"), failed + 1);
 });
 
-test("people can disconnect only their own connections, on a turn they started", async () => {
+test("people can disconnect only their own connections, and an agent's disconnect waits on a sign-off card", async () => {
   const f = fixture();
   await f.own();
   const mine = {
@@ -437,8 +449,19 @@ test("people can disconnect only their own connections, on a turn they started",
     ["twitter/ca_mine"],
   );
 
+  f.replies.push(mine);
+  const card = await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" }, null, privateCap);
+  assert.deepEqual([card.status, card.data.error], [202, "approval_required"]);
+  assert.equal(f.calls.at(-1)?.init?.method, "GET");
   f.replies.push(mine, {});
-  assert.equal((await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" }, null, privateCap)).status, 200);
+  const approved = f.signOff.approve(
+    { actorId: "alice", sessionId: privateCap.sessionId!, runId: privateCap.runId! },
+    { method: "POST", path: "/v1/composio/disconnect", body: { accountId: "ca_mine" } },
+  );
+  assert.equal(
+    (await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" }, null, privateCap, false, approved)).status,
+    200,
+  );
 
   for (const account of [
     { ...mine, user_id: composioUserId(orgId(), "bob") },
@@ -458,9 +481,9 @@ test("people can disconnect only their own connections, on a turn they started",
   assert.equal((await g.invoke("/v1/composio/disconnect", { accountId: "ca_mine" })).status, 404);
 });
 
-test("disconnecting refuses automations, impersonation and malformed accounts before provider calls", async () => {
+test("disconnecting refuses tokens without a person's authority, impersonation and malformed accounts before provider calls", async () => {
   for (const [body, actor, capability, impersonating, status] of [
-    [{ accountId: "ca_mine" }, null, { ...privateCap, liveActor: false, triggered: true }, false, 403],
+    [{ accountId: "ca_mine" }, null, { ...privateCap, personAuthority: false }, false, 403],
     [{ accountId: "ca_mine" }, "alice", undefined, true, 403],
     [{ accountId: "../ca_mine" }, "alice", undefined, false, 400],
     [{ accountId: "ca_mine" }, null, undefined, false, 401],
@@ -601,9 +624,10 @@ const privateCap: CapabilityClaims = {
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
-  liveActor: true,
+  internalAudience: true,
+  personAuthority: true,
   exp: Date.now() + 60_000,
 };
 const execution = {
@@ -685,10 +709,10 @@ test("capabilities without owner authorization, deployments and closed shared sc
   }
 });
 
-test("authorized personal automation may execute but cannot initiate consent", async () => {
+test("a personal token without a person's authority may execute but cannot initiate consent", async () => {
   const f = fixture();
   await f.own();
-  const cap = { ...privateCap, liveActor: false, triggered: true };
+  const cap = { ...privateCap, personAuthority: false };
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, null, cap)).status, 403);
   f.replies.push(aliceAccount, gmailTool, { successful: true, data: {} });
   assert.equal((await f.invoke("/v1/composio/execute", execution, null, cap)).status, 200);
@@ -698,7 +722,7 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   const f = fixture();
   await f.own();
   f.replies.push({ items: [{ slug: "googlecalendar", name: "Google Calendar" }] });
-  const cap = { ...privateCap, liveActor: false, triggered: true };
+  const cap = { ...privateCap, personAuthority: false };
   const result = await f.invoke("/v1/composio/toolkits", undefined, null, cap);
   assert.equal(result.status, 200);
   assert.equal(result.data.items[0].id, "googlecalendar");
@@ -779,56 +803,12 @@ test("connects without a return page are still audited on completion, and failed
   );
 });
 
-test("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
-  for (const patch of [
-    { runId: undefined },
-    { runLeaseToken: "stale" },
-    { runAttempt: 2 },
-    { threadRef: undefined },
-    { threadRef: "another" },
-  ]) {
-    const f = fixture();
-    await f.own();
-    assert.equal((await f.invoke("/v1/composio/execute", execution, null, { ...privateCap, ...patch })).status, 403);
-    assert.equal(f.calls.length, 0);
-  }
+test("a token whose run has ended keeps its connection access", async () => {
   const f = fixture();
   await f.own();
   f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-  assert.equal((await f.invoke("/v1/composio/connections", undefined, null, privateCap)).status, 403);
-  assert.equal(f.calls.length, 0);
-});
-
-test("ending the run during account lookup prevents execution", async () => {
-  const f = fixture();
-  await f.own();
-  const original = f.deps.composioFetch!;
-  f.deps.composioFetch = async (...args) => {
-    const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-    return response;
-  };
-  f.replies.push(aliceAccount, gmailTool);
-  assert.equal((await f.invoke("/v1/composio/execute", execution, null, privateCap)).status, 403);
-  assert.equal(f.calls.length, 2);
-  assert.ok(f.calls.every((call) => call.init?.method === "GET"));
-});
-
-test("ending the run during account lookup prevents disconnecting", async () => {
-  const f = fixture();
-  await f.own();
-  const original = f.deps.composioFetch!;
-  f.deps.composioFetch = async (...args) => {
-    const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-    return response;
-  };
-  f.replies.push(aliceAccount);
-  assert.equal((await f.invoke("/v1/composio/disconnect", { accountId: "ca_alice" }, null, privateCap)).status, 403);
-  assert.deepEqual(
-    f.calls.map((call) => call.init?.method),
-    ["GET"],
-  );
+  f.replies.push({ items: [] });
+  assert.equal((await f.invoke("/v1/composio/connections", undefined, null, privateCap)).status, 200);
 });
 
 test("shared org connections recheck grants for every audience member", async () => {
@@ -838,15 +818,14 @@ test("shared org connections recheck grants for every audience member", async ()
   await f.deps.acl!.grant(tenant, {
     ownerScopeId: org,
     ref: "service-cred:composio",
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "read",
     grantedBy: "admin",
   });
   const cap = {
     ...privateCap,
     scopeId: "channel:C1",
-    liveActor: false,
-    triggered: true,
+    personAuthority: false,
     keychainMembers: [
       { id: "alice", type: "internal" as const },
       { id: "bob", type: "internal" as const },
@@ -1462,4 +1441,60 @@ test("apps a connector serves elsewhere link to their own connect page and repor
   assert.equal((await bare.invoke("/v1/composio/toolkits")).data.items.length, 2);
   assert.equal((await bare.invoke("/v1/composio/authorize", { toolkit: "gmail" })).status, 409);
   assert.equal(bare.calls.length, 0);
+});
+
+test("native Slack replies upload attachments into the thread as the user", async () => {
+  const f = await nativeSlackFixture();
+  const blobId = "a".repeat(32);
+  f.deps.blobTransfer = {
+    open: async (id: string) =>
+      id === blobId ? { blobId, sizeBytes: 3, stream: Readable.from([Buffer.from("png")]) } : null,
+  } as never;
+  const uploaded: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    uploaded.push(String(url));
+    return new Response("OK");
+  }) as typeof fetch;
+  try {
+    f.nativeReplies.push(
+      f.nativeIdentity,
+      { ok: true },
+      { ok: true, upload_url: "https://files.slack.com/upload/1", file_id: "F1" },
+      { ok: true },
+      { ok: true, file: { shares: { public: { C123: [{ ts: "123.999" }] } } } },
+    );
+    const result = await f.invoke("/v1/composio/slack/reply", {
+      ...f.message,
+      attachments: [{ name: "shot.png", blobId }],
+    });
+    assert.equal(result.data.ts, "123.999");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(uploaded, ["https://files.slack.com/upload/1"]);
+  const complete = f.nativeCalls.find((c) => c.method === "files.completeUploadExternal")!;
+  assert.equal(complete.token, "alice-user");
+  assert.deepEqual(complete.payload, {
+    files: JSON.stringify([{ id: "F1", title: "shot.png" }]),
+    channel_id: "C123",
+    thread_ts: "123.456",
+    initial_comment: "Hello",
+  });
+});
+
+test("native Slack links without files:write are asked to reconnect", async () => {
+  const f = await nativeSlackFixture();
+  const blobId = "b".repeat(32);
+  f.deps.blobTransfer = {
+    open: async () => ({ blobId, sizeBytes: 1, stream: Readable.from([Buffer.from("x")]) }),
+  } as never;
+  f.nativeReplies.push(f.nativeIdentity, { ok: true }, { ok: false, error: "missing_scope" });
+  const result = await f.invoke("/v1/composio/slack/reply", { ...f.message, attachments: [{ name: "a.txt", blobId }] });
+  assert.equal(result.status, 409);
+  assert.equal(result.data.error, "slack_files_scope");
+  assert.equal(
+    f.nativeCalls.some((c) => c.method === "chat.postMessage" || c.method === "files.completeUploadExternal"),
+    false,
+  );
 });

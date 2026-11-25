@@ -11,7 +11,7 @@ import {
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import { computerVerdict, supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
@@ -69,7 +69,7 @@ function setup(
       checkpointIntervalMs,
       onError: (error) => errors.push({ code: error.code, message: error.message }),
     });
-  const scope = scopeId("personal", "tester");
+  const scope = "personal:tester" as ScopeId;
   t.after(() => {
     fake.cleanup();
     rmSync(dir, { recursive: true, force: true });
@@ -124,8 +124,7 @@ test("Render keeps turn and background process secrets out of run token requests
     for (const value of [turnSecret, processSecret, payload.slice(0, 64), "export "])
       assert.equal(request.body.includes(value), false, `${request.operation} token request carried ${value}`);
   }
-  for (const request of runs) {
-    const { command } = JSON.parse(request.body) as { command: string };
+  for (const command of http!.proxyCommands) {
     assert.match(
       command,
       /^(sh -c 's=\$\(date \+%s\); \$\(command -v setsid\) timeout -k \d+ (\d+) sh '\\''\/dev\/\.qm-run\/[0-9a-f-]{36}\.sh'\\'' & p=\$!; wait \$p; rc=\$\?; if \[ \$rc -eq 124 \] \|\| \[ \$rc -eq 137 \]; then \[ \$\(\(\$\(date \+%s\) - s\)\) -lt \2 \] \|\| kill -s KILL -- -\$p 2>\/dev\/null; fi; exit \$rc'|test -f '[^']+')$/,
@@ -163,15 +162,12 @@ test("Render resumes from its native checkpoint through transient API errors and
     `429 GET /v1/sandbox-groups/sbg-test/snapshots/${checkpoint}`,
   ]);
   assert.equal(fake.createdFrom.at(-1), checkpoint);
-  const runs = () => http!.tokenRequests.filter((request) => request.operation === "stream");
-  const before = runs().length;
+  const before = http!.proxyCommands.length;
   failures.push({ method: "POST", path: /\/runs\/stream\/token$/, status: 503 });
   await assert.rejects(sandbox.run(resumed, "touch /root/workspace/never-created"), /transient/);
   assert.equal(injected.filter((entry) => entry.startsWith("503 POST")).length, 1);
   assert.deepEqual(
-    runs()
-      .slice(before)
-      .map((request) => (JSON.parse(request.body) as { command: string }).command.split(" ").slice(0, 2).join(" ")),
+    http!.proxyCommands.slice(before).map((command) => command.split(" ").slice(0, 2).join(" ")),
     ["rm -f"],
   );
   assert.equal(

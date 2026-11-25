@@ -54,7 +54,7 @@ let releaseDirectory = () => {};
 const json = (body: unknown, status = 200) => Promise.resolve(Response.json(body, { status }));
 
 const { vite, dom, close } = await browserEnv({
-  dom: { url: "http://localhost/personas" },
+  dom: { url: "http://localhost/bots" },
   fetch: (input, init) => {
     const path = String(input);
     const method = init?.method ?? "GET";
@@ -101,7 +101,11 @@ const { vite, dom, close } = await browserEnv({
     }
     if (path.startsWith("/api/directory/resolve")) {
       const found = () =>
-        json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+        json({
+          matches: [
+            { principalId: "bo@acme.com", scopeId: "personal:bo@acme.com", displayName: "Bo Person", type: "internal" },
+          ],
+        });
       if (!holdDirectory) return found();
       return new Promise<Response>((resolve) => {
         releaseDirectory = () => void found().then(resolve);
@@ -153,7 +157,7 @@ async function mountPage(openId?: string) {
   const personasModule = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "acme", companyName: "Acme" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "acme", companyName: "Acme" };
   if (openId) personasModule.openPersonaById(openId);
   await personasModule.renderPersonasPage();
   return { main, personasModule };
@@ -198,22 +202,22 @@ test("personas are grouped by the person's role, with edit and share only where 
   ]);
 });
 
-test("when personas are off for the person, Browse has no Personas entry and the page offers nothing", async () => {
+test("when personas are off for the person, Browse has no Bots entry and the page offers nothing", async () => {
   disabled = true;
   const { main } = await mountPage();
   const { destinations } = await vite.ssrLoadModule("/src/browse.ts");
   assert.equal(
-    destinations().some((d: { label: string }) => d.label === "Personas"),
+    destinations().some((d: { label: string }) => d.label === "Bots"),
     false,
   );
   assert.equal(main.querySelector(".list-page-action"), null);
   assert.equal(main.querySelectorAll(".persona-row").length, 0);
-  assert.match(main.textContent ?? "", /Personas aren't turned on for you/);
+  assert.match(main.textContent ?? "", /Bots aren't turned on for you/);
 
   disabled = false;
   await mountPage();
   assert.equal(
-    destinations().some((d: { label: string }) => d.label === "Personas"),
+    destinations().some((d: { label: string }) => d.label === "Bots"),
     true,
   );
 });
@@ -245,7 +249,7 @@ test("Fork hands off to QM in a new chat instead of copying on the page", async 
   calls = [];
   button(main, "Fork", "Ada").click();
   await settle();
-  assert.equal(storedDraft(newChatDraftKey("tester")), "Fork the Ada persona for me.");
+  assert.equal(storedDraft(newChatDraftKey("tester")), "Fork the Ada bot for me.");
   assert.equal(
     calls.some((c) => c.method === "POST" && c.path === "/api/personas"),
     false,
@@ -664,7 +668,7 @@ test("a reader sees their role, the owners to ask, and no controls", async () =>
   assert.equal(section.querySelector("#persona-grantee-search"), null);
 });
 
-test("people and groups the Personas flag doesn't reach are marked with where an admin turns it on", async () => {
+test("people and groups the Bots flag doesn't reach are marked with where an admin turns it on", async () => {
   access = [
     { scopeId: "personal:tester", role: "owner", personasEnabled: true },
     { scopeId: "personal:bo@acme.com", role: "read", label: "Bo Person", personasEnabled: false },
@@ -675,10 +679,10 @@ test("people and groups the Personas flag doesn't reach are marked with where an
   const notes = (scope: string) =>
     [...accessRow(main, scope).querySelectorAll(".permission-person-label small")].map((n) => n.textContent?.trim());
   const orgNote =
-    "Personas is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
+    "Bots is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
   assert.deepEqual(notes("personal:tester"), ["The only owner. Make someone else an owner before changing this."]);
   assert.deepEqual(notes("personal:bo@acme.com"), [
-    "Can't use personas until an admin turns on the Personas feature flag for them in Admin → Customize → Feature flags.",
+    "Can't use bots until an admin turns on the Bots feature flag for them in Admin → Customize → Feature flags.",
   ]);
   assert.match(
     accessRow(main, "org:acme").querySelector(".permission-person-label")?.textContent?.trim() ?? "",
@@ -721,7 +725,7 @@ test("opening a persona from the list pushes browser history", async () => {
   const { renderPersonasPage } = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = document.querySelector("main")!;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   const pushed: string[] = [];
   const origPush = window.history.pushState.bind(window.history);
   window.history.pushState = (s, t, url) => (pushed.push(String(url)), origPush(s, t, url));
@@ -729,20 +733,20 @@ test("opening a persona from the list pushes browser history", async () => {
     await renderPersonasPage();
     document.querySelector<HTMLButtonElement>('.persona-row-main[aria-label="Open Ada"]')!.click();
     await new Promise((r) => setTimeout(r, 30));
-    assert.deepEqual(pushed, ["/personas/p-ada"]);
+    assert.deepEqual(pushed, ["/bots/p-ada"]);
   } finally {
     window.history.pushState = origPush;
   }
 });
 
-test("a persona has its own link, so /personas/<id> opens it and its page keeps the address", async () => {
+test("a persona has its own link, so /bots/<id> opens it and its page keeps the address", async () => {
   const { main } = await mountPage("p-bo");
   await settle();
   assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "Bo");
-  assert.equal(window.location.pathname, "/personas/p-bo");
-  button(main, "Personas").click();
+  assert.equal(window.location.pathname, "/bots/p-bo");
+  button(main, "Bots").click();
   await settle();
-  assert.equal(window.location.pathname, "/personas");
+  assert.equal(window.location.pathname, "/bots");
 });
 
 test("the persona model dropdown stays working after saving and after reopening", async () => {
@@ -753,7 +757,7 @@ test("the persona model dropdown stays working after saving and after reopening"
   open();
   assert.ok(main.querySelector(".context-model .loadout-popover"));
   assert.equal(flash(main), "Saved.");
-  button(main, "Personas").click();
+  button(main, "Bots").click();
   await settle();
   button(main, "Edit", "Ada").click();
   await settle();

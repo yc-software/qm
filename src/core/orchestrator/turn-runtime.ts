@@ -37,7 +37,7 @@ export async function resolveTurnRuntimeAuth(turn: TurnRuntimeAuthTurn) {
     connectorEnv,
   } = turn;
   const runtimePurpose = turnRuntimePurpose(
-    { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+    { surface: input.surface, automated: automatedTurn, infrequentCron: input.infrequentCron },
     !!session.parentSessionId || !!swarmBinding?.member.parentId,
   );
   const purposeDefault = runtimePurpose ? await deps.config.getPurposeRuntimeDurable(runtimePurpose) : undefined;

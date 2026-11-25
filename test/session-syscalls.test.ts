@@ -13,6 +13,7 @@ import {
   requiresDelegation,
   sessionTreeRuns,
   delegatedAuthorization,
+  isPersonFire,
   stopSessionTree,
   sessionContextOf,
   stopSessionRuns,
@@ -30,7 +31,7 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "../src/sessions/subagent-mail.ts";
-import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type ScopeId, type Session, personalScope } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -130,17 +131,9 @@ async function recordContext(
   session: Session,
   request: Pick<OrchestratorInput, "actor" | "conversation"> & Partial<OrchestratorInput>,
 ): Promise<Session> {
-  return sessions.getOrCreateByThread(
-    session.threadRef,
-    session.type,
-    session.scopeId,
-    undefined,
-    undefined,
-    undefined,
-    {
-      context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
-    },
-  );
+  return sessions.getOrCreateByThread(session.threadRef, session.type, session.scopeId, undefined, undefined, {
+    context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
+  });
 }
 
 async function freshSession(sessions: SessionStore, id: string): Promise<Session> {
@@ -2617,58 +2610,6 @@ test("completion wakes preserve a spine trigger's delivery destination", async (
   assert.deepEqual(wake.request.origin.destination, destination);
 });
 
-test("delegated automation retains owner-keychain authority", async () => {
-  const r = await rig();
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const api = factory.forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: {
-      actor,
-      conversation,
-      surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
-    },
-  });
-  const opened = await api.open({ task: "prepare the scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(queued.request.origin.kind === "automation");
-  assert.equal(queued.request.origin.useOwnerKeychain, true);
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok((await api.write({ target: child.id, text: "finish the report", wake: true })).ok);
-  const followup = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(followup.request.origin.kind === "automation");
-  assert.equal(followup.request.origin.useOwnerKeychain, true);
-});
-
-test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
-  const r = await rig();
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const privileged = factory.forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: {
-      actor,
-      conversation,
-      surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
-    },
-  });
-  const opened = await privileged.open({ task: "scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok((await r.syscallsFor(r.room).write({ target: child.id, text: "unprivileged follow-up", wake: true })).ok);
-  const next = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(next.request.origin.kind === "automation");
-  assert.equal(next.request.origin.useOwnerKeychain, undefined);
-});
-
 test("coordinator delegation follows the surface and excludes external actors", () => {
   const request = { surface: "slack", conversation };
   assert.equal(requiresDelegation(request), true);
@@ -2808,14 +2749,13 @@ test("completion wakes run Slack parents as coordinators unless the author is ex
   }
 });
 
-test("delegated human origin retains live authority boundaries", async () => {
+test("delegated human origin keeps its identity boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   const parentClaim = await r.runs.claimById(r.parent.id, "parent", 60_000);
   await r.runs.complete(r.parent.id, parentClaim!.leaseToken!, { status: "ok", reply: "done" });
-  assert.equal((await delegatedAuthorization({ ...r.run.request, runStartedAt: 0 }, r))?.attended, true);
-  assert.equal((await delegatedAuthorization(r.run.request, r))?.attended, false);
+  assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   for (const patch of [
     { actor: { ...actor, id: "other" } },
     { delegatingRunId: "missing" },
@@ -2832,7 +2772,7 @@ test("delegated human origin retains live authority boundaries", async () => {
   assert.equal(await delegatedAuthorization(r.run.request, r), undefined);
 });
 
-test("unrelated automated follow-ups cannot borrow earlier human authority", async () => {
+test("a follow-up carries its own sender's authority, not an earlier delegation's", async () => {
   const r = await delegatedHumanRig();
   const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
   await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
@@ -2848,17 +2788,13 @@ test("unrelated automated follow-ups cannot borrow earlier human authority", asy
   assert.ok((await api.write({ target: r.child.id, text: "new scheduled task", wake: true })).ok);
   const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
   assert.equal(next.request.delegatingRunId, parent.run.id);
-  assert.equal(await delegatedAuthorization(next.request, r), undefined);
+  assert.equal((await delegatedAuthorization(next.request, r))?.origin.kind, "automation");
 });
 
 test("a subagent spawned by an owner's fire inherits the fire's automation authority", async () => {
-  const r = await delegatedHumanRig({ origin: { kind: "automation", useOwnerKeychain: true, ownerFire: true } });
+  const r = await delegatedHumanRig({ origin: { kind: "automation" } });
   assert.equal(r.run.request.origin.kind, "automation");
-  assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.origin, {
-    kind: "automation",
-    useOwnerKeychain: true,
-    ownerFire: true,
-  });
+  assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.origin, { kind: "automation" });
   await r.sessions.removeParticipant(r.run.request.sessionSenderId!, actor.id);
   assert.equal(
     (await delegatedAuthorization(r.run.request, r))?.origin.kind,
@@ -2869,12 +2805,19 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
   assert.equal(await delegatedAuthorization(r.run.request, r), undefined);
 });
 
-test("a bot actor's automation turn, or one no trigger produced, delegates no authority to its subagents", async () => {
-  const bot = await delegatedHumanRig({ origin: { kind: "automation", ownerFire: true }, botActor: true });
+test("a bot actor's automation turn delegates no authority to its subagents", async () => {
+  const bot = await delegatedHumanRig({ origin: { kind: "automation" }, botActor: true });
   assert.equal(bot.run.request.origin.kind, "automation");
   assert.equal(await delegatedAuthorization(bot.run.request, bot), undefined);
-  const unmarked = await delegatedHumanRig({ origin: { kind: "automation" } });
-  assert.equal(await delegatedAuthorization(unmarked.run.request, unmarked), undefined);
+});
+
+test("a fire carries a person's authority unless a bot, a swarm or a conversation's own scope runs it", () => {
+  const fire = { origin: { kind: "automation" as const }, actor };
+  assert.equal(isPersonFire(fire), true);
+  assert.equal(isPersonFire({ ...fire, botActor: true }), false);
+  assert.equal(isPersonFire({ ...fire, swarm: { swarmId: "s", recipientId: "r" } as never }), false);
+  assert.equal(isPersonFire({ ...fire, actor: { id: "system:channel:C1", type: "internal" } }), false);
+  assert.equal(isPersonFire({ ...fire, origin: { kind: "human" } }), false);
 });
 
 test("a later participant cannot change a completion's actor or destination", async () => {
@@ -2918,7 +2861,7 @@ test("a later participant cannot change a completion's actor or destination", as
       conversation: sharedConversation,
       surface: "slack",
       surfaceTools: true,
-      origin: { kind: "automation", useOwnerKeychain: true, destination: { type: "slack", target: "unrelated" } },
+      origin: { kind: "automation", destination: { type: "slack", target: "unrelated" } },
       text: "unrelated",
     },
   });
@@ -3398,7 +3341,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   }
 });
 
-test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
+test("sessions list shows only sidebar sessions the whole audience can see, and read-only or bot turns cannot create", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
@@ -3439,13 +3382,11 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     },
   });
   const forTurn = (
-    liveTurn: boolean,
     opts: { readOnly?: boolean; botActor?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
   ) =>
     factory.forTurn({
       session: room,
       scopeId: scope,
-      liveTurn,
       ...(opts.memory ? { memoryContext: { audience: opts.memory } } : {}),
       request: {
         surface: opts.surface ?? "web",
@@ -3456,25 +3397,25 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
         ...(opts.botActor ? { botActor: true } : {}),
       } as Parameters<typeof factory.forTurn>[0]["request"],
     });
-  const live = forTurn(true);
-  const listed = await live.list!();
+  const web = forTurn();
+  const listed = await web.list!();
   assert.ok(listed.ok);
   assert.deepEqual(listed.sessions.map((s) => [s.title, s.current]).sort(), [
     ["peer", false],
     ["room", true],
   ]);
-  const shared = await forTurn(false, { audience: [actor, guest] }).list!();
+  const shared = await forTurn({ audience: [actor, guest] }).list!();
   assert.ok(shared.ok);
   assert.deepEqual(
     shared.sessions.map((s) => s.title),
     ["room"],
   );
-  assert.deepEqual(await live.start!({ fork: false }), {
+  assert.deepEqual(await web.start!({ fork: false }), {
     ok: false,
     message: "new requires `text`: the new session's first message.",
   });
-  assert.equal((await live.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
-  assert.equal((await live.start!({ fork: true })).ok, true);
+  assert.equal((await web.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
+  assert.equal((await web.start!({ fork: true })).ok, true);
   assert.deepEqual(started, [
     { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, text: "hello", title: "fresh" },
     { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, forkOf: room.id },
@@ -3484,8 +3425,8 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   await sessions.addParticipant(child.id, actor.id);
   await sessions.setParentSession(child.id, room.id);
   for (const out of [
-    await live.read({ peer: true, target: child.id }),
-    await live.write({ peer: true, target: child.id, text: "hi" }),
+    await web.read({ peer: true, target: child.id }),
+    await web.write({ peer: true, target: child.id, text: "hi" }),
   ])
     assert.deepEqual(out, {
       ok: false,
@@ -3494,7 +3435,6 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const fromChild = factory.forTurn({
     session: child,
     scopeId: scope,
-    liveTurn: true,
     request: {
       surface: "web",
       conversation: { kind: "dm", threadRef: child.threadRef, audience: [actor] },
@@ -3504,28 +3444,32 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
     assert.equal(out.ok, true, JSON.stringify(out));
-  const cron = forTurn(false, { surface: "cron" });
+  const cron = forTurn({ surface: "cron" });
   assert.equal((await cron.list!()).ok, true);
   assert.equal((await cron.read({ peer: true, target: peer.id })).ok, true);
-  assert.equal((await cron.start!({ fork: true })).ok, false);
-  const slack = forTurn(true, { surface: "slack" });
+  assert.equal((await cron.start!({ fork: true })).ok, true);
+  const slack = forTurn({ surface: "slack" });
   for (const out of [
     await slack.list!(),
     await slack.start!({ fork: true }),
     await slack.read({ peer: true, target: peer.id }),
   ])
     assert.equal(out.ok, true, JSON.stringify(out));
-  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
+  for (const blocked of [forTurn({ readOnly: true }), forTurn({ botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 4);
+  assert.equal(started.length, 5);
 });
 
 test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
   const sent: Array<{ runId: string; signal: unknown }> = [];
-  const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
-  const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
+  const root = { id: "root", scopeId: personalScope("a"), threadRef: "web:root" } as unknown as Session;
+  const child = {
+    id: "child",
+    scopeId: personalScope("a"),
+    threadRef: "agent:main:subagent:child",
+  } as unknown as Session;
   const stopped = await stopSessionTree(
     {
       sessions: { childrenOf: async (id: string) => (id === "root" ? [child] : []) },

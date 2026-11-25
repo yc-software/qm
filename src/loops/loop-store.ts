@@ -15,8 +15,11 @@ import {
   buildTriggerBase,
   contentPart,
   type CreateTriggerInput,
+  unlessSlackListsAPerson,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { msOf } from "../sessions/items.ts";
+import { fold } from "../identity/user-tenancy.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
@@ -49,7 +52,6 @@ export interface LoopPatch {
   cronId?: string;
   state?: LoopState;
   playbookEdit?: PlaybookEdit;
-  taskAuthor?: "automation" | null;
   restore?: Loop;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -165,7 +167,6 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         contentPart(input.caps),
         contentPart(input.governor),
         contentPart(input.destination),
-        contentPart(input.ownerConsentedAt),
         contentPart(input.cronId),
         contentPart(input.schedule),
       ]);
@@ -218,7 +219,6 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         if (patch.governor !== undefined) fields.governor = patch.governor;
         if (patch.triage !== undefined) fields.triage = mergeTriage(loop.triage, patch.triage);
         if (patch.cronId !== undefined) fields.cronId = patch.cronId;
-        if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
         if (patch.state !== undefined) Object.assign(fields, stateFields(patch.state));
         if (patch.quarantineClearedBy !== undefined) fields.quarantineClearedBy = patch.quarantineClearedBy;
         if (patch.quarantineClearedAt !== undefined) fields.quarantineClearedAt = patch.quarantineClearedAt;
@@ -263,3 +263,63 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     delete: (id) => backing.delete(id),
   };
 }
+
+export const holdBotLoopShips = (by: string, users?: string): string => `DO $$
+    BEGIN
+      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('loops') IS NULL
+         OR to_regclass('loop_ship_grants') IS NULL OR to_regclass('audit_log') IS NULL THEN
+        RETURN;
+      END IF;
+      WITH granted AS (
+        SELECT g.tenant_id, g.id, l.json ->> 'ownerScopeId' AS scope, l.id AS loop_id
+          FROM loop_ship_grants g
+          JOIN loops l ON l.tenant_id = g.tenant_id AND l.id = g.json ->> 'loopId'
+         WHERE NOT g.json ? 'revokedAt'
+           AND EXISTS (SELECT 1 FROM user_links k JOIN users u ON u.tenant_id = k.tenant_id AND u.id = k.user_id
+                        WHERE u.kind = 'app' AND k.tenant_id = g.tenant_id AND k.alias_id = ${fold("g.json ->> 'actorId'")}${
+                          users ? ` AND u.id = ANY(${users})` : ""
+                        }${unlessSlackListsAPerson("k")})
+      ), locked AS (
+        SELECT l.tenant_id, l.id, l.json FROM loops l
+         WHERE l.json @> '{"botActor": true}' AND l.json -> 'shipActions' @> '[{"gate": "auto"}]'${
+           users
+             ? `
+           AND EXISTS (SELECT 1 FROM user_links k WHERE k.tenant_id = l.tenant_id AND k.user_id = ANY(${users})
+                          AND k.alias_id = ${fold("l.json ->> 'createdBy'")}${unlessSlackListsAPerson("k")})`
+             : ""
+         }
+           FOR UPDATE
+      ), gated AS (
+        SELECT l.tenant_id, l.id, any_value(l.json ->> 'ownerScopeId') AS scope,
+               jsonb_agg(p ->> 'action' ORDER BY n) FILTER (WHERE p ->> 'gate' = 'auto') AS actions,
+               jsonb_agg(CASE WHEN p ->> 'gate' = 'auto' THEN p || '{"gate": "hold"}'::jsonb ELSE p END ORDER BY n)
+                 AS ship_actions
+          FROM locked l
+          CROSS JOIN LATERAL jsonb_array_elements(l.json -> 'shipActions') WITH ORDINALITY AS a(p, n)
+         GROUP BY l.tenant_id, l.id
+      ), held AS (
+        UPDATE loops l SET json = l.json || jsonb_build_object('shipActions', g.ship_actions)
+          FROM gated g WHERE l.tenant_id = g.tenant_id AND l.id = g.id
+        RETURNING l.tenant_id
+      ), revoked AS (
+        UPDATE loop_ship_grants g
+           SET json = g.json || jsonb_build_object('revokedAt', ${msOf("now()")}, 'revokedBy', '${by}')
+          FROM granted x WHERE g.tenant_id = x.tenant_id AND g.id = x.id
+        RETURNING g.tenant_id
+      ), versions AS (
+        UPDATE durable_map_versions SET v = v + 1
+         WHERE tbl = 'loops' AND tenant_id IN (SELECT tenant_id FROM held)
+            OR tbl = 'loop_ship_grants' AND tenant_id IN (SELECT tenant_id FROM revoked)
+      )
+      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
+      SELECT tenant_id, ${msOf("now()")}, '${by}', action, id, scope, detail::text
+        FROM (SELECT tenant_id, 'loop_update' AS action, id, scope, jsonb_build_object('heldShipActions', actions) AS detail
+                FROM gated
+              UNION ALL
+              SELECT tenant_id, 'ship_grant_revoke', id, scope, jsonb_build_object('loopId', loop_id) FROM granted) entries;
+    END $$`;
+
+export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
+  id: "users/v2/0011-hold-bot-loop-ships",
+  statements: [holdBotLoopShips("system:migration")],
+};

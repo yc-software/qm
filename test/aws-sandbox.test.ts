@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -205,18 +205,18 @@ test("scope retirement terminates its body and removes only its snapshot, includ
   const fake = installFakeMicrovm();
   const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
   const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
-  const first = await sb.provision("personal:retire-one");
-  const other = await sb.provision("personal:retire-other");
+  const first = await sb.provision(personalScope("retire-one"));
+  const other = await sb.provision(personalScope("retire-other"));
   await sb.teardown(first);
   await sb.teardown(other);
   assert.equal(fake.s3store.size, 2);
-  await makeSandbox(fake, { store }).destroyScope!("personal:retire-one");
+  await makeSandbox(fake, { store }).destroyScope!(personalScope("retire-one"));
   assert.equal(fake.bodies.get(first.id)!.state, "TERMINATED");
   assert.equal(fake.bodies.get(other.id)!.state, "SUSPENDED");
   assert.equal(fake.s3store.size, 1);
-  assert.equal(await store.get("personal:retire-one"), null);
-  assert.ok(await store.get("personal:retire-other"));
-  await sb.destroyScope!("personal:retire-one");
+  assert.equal(await store.get(personalScope("retire-one")), null);
+  assert.ok(await store.get(personalScope("retire-other")));
+  await sb.destroyScope!(personalScope("retire-one"));
   assert.equal(fake.s3store.size, 1);
 });
 
@@ -225,7 +225,7 @@ for (const stage of ["terminate", "snapshot"] as const) {
     const fake = installFakeMicrovm();
     const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
     const sb = makeSandbox(fake, { store });
-    const handle = await sb.provision("personal:retire-failure");
+    const handle = await sb.provision(personalScope("retire-failure"));
     await sb.teardown(handle);
     const terminate = fake.api.terminate;
     const send = fake.s3.send;
@@ -237,12 +237,12 @@ for (const stage of ["terminate", "snapshot"] as const) {
       fake.s3.send = async () => {
         throw new Error("snapshot deletion failed");
       };
-    await assert.rejects(sb.destroyScope!("personal:retire-failure"), /failed/);
-    assert.ok(await store.get("personal:retire-failure"));
+    await assert.rejects(sb.destroyScope!(personalScope("retire-failure")), /failed/);
+    assert.ok(await store.get(personalScope("retire-failure")));
     fake.api.terminate = terminate;
     fake.s3.send = send;
-    await sb.destroyScope!("personal:retire-failure");
-    assert.equal(await store.get("personal:retire-failure"), null);
+    await sb.destroyScope!(personalScope("retire-failure"));
+    assert.equal(await store.get(personalScope("retire-failure")), null);
   });
 }
 
@@ -258,21 +258,21 @@ test("failed AWS readiness remains discoverable for retirement when immediate te
   fake.api.terminate = async () => {
     throw new Error("unavailable");
   };
-  await assert.rejects(sb.provision("personal:failed-launch"), /launch .* failed/);
-  const pending = await store.get("personal:failed-launch");
+  await assert.rejects(sb.provision(personalScope("failed-launch")), /launch .* failed/);
+  const pending = await store.get(personalScope("failed-launch"));
   assert.ok(pending?.provisioning);
   fake.api.waitForState = wait;
-  await assert.rejects(sb.provision("personal:failed-launch"), /incomplete provisioning/);
+  await assert.rejects(sb.provision(personalScope("failed-launch")), /incomplete provisioning/);
   fake.api.terminate = terminate;
-  await makeSandbox(fake, { store }).destroyScope!("personal:failed-launch");
+  await makeSandbox(fake, { store }).destroyScope!(personalScope("failed-launch"));
   assert.equal(fake.bodies.get(pending.microvmId)!.state, "TERMINATED");
-  assert.equal(await store.get("personal:failed-launch"), null);
+  assert.equal(await store.get(personalScope("failed-launch")), null);
 });
 
 test("destructive teardown of a stale AWS handle preserves a replacement scope", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
-  const scope = "personal:stale-destroy";
+  const scope = personalScope("stale-destroy");
   const old = await sb.provision(scope);
   await sb.teardown(old);
   fake.killBody(old.id);

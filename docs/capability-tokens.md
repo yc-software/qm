@@ -42,14 +42,13 @@ once at startup; an invalid value fails startup. Tokens already issued keep the
 lifetime they were minted with. Revocation and scope checks still apply to
 non-expiring tokens. This does not remove run/lease, background-job, provider, or
 credential lifetime limits. Non-expiring bearer tokens increase exposure if leaked;
-keep the default unless unattended work requires longer access.
+keep the default unless background work requires longer access.
 
-A turn token says a person is at the keyboard only while its turn is running. Each time
-core verifies such a token it reads the turn's run, and once that run has ended, or the
-token belongs to an earlier attempt, core treats the token like an owner's scheduled fire:
-it keeps the owner's authority, but person-only steps refuse it. What a turn hands on on
-purpose doesn't rely on that claim and keeps working, such as a background job's credential
-save when it exits.
+A turn token carries `personAuthority` when the turn acts for a person: their own turn, a
+fire of a cron, loop, webhook or monitor they own, or a subagent of either, when everyone who
+will see its output is inside the organization. A background job
+keeps its turn's authority until the token expires. Steps that need the person's sign-off
+raise an approval card instead of reading the token.
 
 Deploy the updated verifier to every core and worker, and any separately deployed
 egress proxy, before enabling no expiry. Older verifiers reject `exp: 0`.

@@ -19,23 +19,36 @@ export function midTurnSessionMessage(message: string, fromParent: boolean): str
 }
 
 export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
-  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
+  if (!origin) return { kind: "automation", screenData: text };
+  if (origin.kind === "automation") {
+    const { fire: _fire, ...relayed } = origin;
+    return { ...relayed, screenData: text };
+  }
   if (origin.kind === "human") return { kind: "human" };
   if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
   return origin;
 }
 
+export function mayDriveDesktop(
+  input: Pick<TurnRequest, "origin" | "botActor" | "proactiveOpener" | "surfaceOrigin">,
+): boolean {
+  return (
+    input.origin?.kind === "human" &&
+    !input.botActor &&
+    !input.proactiveOpener &&
+    input.surfaceOrigin?.audience !== "external"
+  );
+}
+
 export function desktopClientForTurn(
   input: Partial<
-    Pick<TurnRequest, "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor">
+    Pick<
+      TurnRequest,
+      "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor" | "surfaceOrigin"
+    >
   > & { attempt?: number },
 ): string | undefined {
-  return input.origin?.kind === "human" &&
-    input.surface === "web" &&
-    !input.proactiveOpener &&
-    !input.spawned &&
-    !input.botActor &&
-    (input.attempt ?? 1) <= 1
+  return mayDriveDesktop(input) && input.surface === "web" && !input.spawned && (input.attempt ?? 1) <= 1
     ? input.desktopClientId
     : undefined;
 }

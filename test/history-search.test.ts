@@ -4,6 +4,7 @@ import { openSessionItem, searchSessionItems } from "../src/sessions/history-sea
 import { forModelContext, forSearchView } from "../src/agent/context-compaction.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
+import { personalScope } from "../src/types.ts";
 
 const item = (seq: number, fields: NewItem): Item =>
   storedItem(fields, { sessionId: "s1", seq, createdAt: 1_700_000_000_000 + seq * 1000 });
@@ -110,7 +111,7 @@ test("history tool returns formatted hits and a clear no-match message", async (
         q.includes("budget") ? ["UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved"] : [],
     } as any,
     emit: async () => undefined,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   });
   const history = tools.find((t) => t.name === "history");
   assert.ok(history);
@@ -158,7 +159,7 @@ test("history tool seq mode reopens an entry, reports a missing seq, and rejects
         seq === 5 ? "UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved — full text" : null,
     } as any,
     emit: async () => undefined,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   });
   const history = tools.find((t) => t.name === "history");
   assert.ok(history);

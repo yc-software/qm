@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { generateRequestDetails, generateVAPIDKeys } from "web-push";
-import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
+import type { SecretKey } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import { canonicalPerson } from "../directory/person.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
@@ -58,19 +63,24 @@ export function createWebPush(deps: {
   subscriptions: DurableMap<WebPushSubscriptionRecord>;
   vapid: DurableMap<VapidKeyRecord>;
   key: SecretKey;
+  secrets?: SecretStoreFactory;
   subject: string;
   fetch?: AddressFetch;
 }): WebPush {
   const send = deps.fetch ?? publicFetch;
+  const secrets = (deps.secrets ?? createEncryptedSecretStore)(deps.key);
   const vapidRecord = async (): Promise<VapidKeyRecord> => {
     const stored = await deps.vapid.get(VAPID_ID);
     if (stored) return stored;
     const fresh = generateVAPIDKeys();
-    return deps.vapid.putIfAbsent(VAPID_ID, {
+    const privateKeyEnc = await secrets.put("web-push/vapid", fresh.privateKey);
+    const saved = await deps.vapid.putIfAbsent(VAPID_ID, {
       publicKey: fresh.publicKey,
-      privateKeyEnc: encryptSecret(fresh.privateKey, deps.key),
+      privateKeyEnc,
       createdAt: Date.now(),
     });
+    await deleteReplacedSecrets(secrets, [privateKeyEnc], [saved.privateKeyEnc]);
+    return saved;
   };
   const deliver = async (
     sub: WebPushSubscriptionRecord,
@@ -117,7 +127,7 @@ export function createWebPush(deps: {
       });
       if (!subs.length) return;
       const stored = await vapidRecord();
-      const vapid = { publicKey: stored.publicKey, privateKey: decryptSecret(stored.privateKeyEnc, deps.key) };
+      const vapid = { publicKey: stored.publicKey, privateKey: await secrets.get(stored.privateKeyEnc) };
       const sends = subs.flatMap((sub) =>
         (payloads.get(canonicalPerson(sub.principalId)) ?? []).map((payload) => deliver(sub, payload, vapid)),
       );

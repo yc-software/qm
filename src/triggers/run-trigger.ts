@@ -46,7 +46,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "approval"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -61,8 +61,8 @@ export interface TriggerSpec extends Pick<
   message?: string;
   threadRef?: string;
   personaId?: string;
-  ownerFire?: boolean;
   cronScript?: CronScript;
+  cronScriptTrial?: boolean;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -315,18 +315,18 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
-        ...(spec.ownerFire && !runsAsScope ? { ownerFire: true as const } : {}),
+        fire: true,
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
-        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
       },
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.cronScriptTrial ? { cronScriptTrial: true } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
-        triggered: true,
+        automated: true,
         surface: spec.surface,
         infrequentCron: spec.infrequentCron,
         thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
@@ -335,6 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
+      ...(spec.approval ? { approval: spec.approval } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
@@ -353,7 +354,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `waiting for approval${reasons ? `: ${reasons}` : ""}`;
+      note = `is waiting on an approval card sent to its owner${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

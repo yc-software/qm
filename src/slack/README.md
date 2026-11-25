@@ -27,7 +27,7 @@ The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/develo
 feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
 Conversations in the resulting split pane are ordinary DM thread messages and flow through
 the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
-are not implemented. Activity cards are experimental and off by default.
+are not implemented.
 
 Two caveats:
 
@@ -39,12 +39,11 @@ Two caveats:
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
 
-### Optional activity cards
+### Activity cards
 
-In Admin → Customize → Feature flags, enable **Slack loading indicator (experimental)**
-for selected people or conversation scopes. It is off by default. The Slack app must
-support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
-blocks and have `chat:write`.
+Slack threads show a live activity card while QM works. The Slack app must support
+[`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) blocks and
+have `chat:write`.
 
 After QM has been working for thirty seconds, one flat task card is posted in the existing
 reply thread and updated in place. Its title is **Still working:**
@@ -70,8 +69,8 @@ if Slack does not deduplicate `client_msg_id`. An outage can leave a stale card 
 recovery. Status calls have a separate five-second timeout and never delay reply delivery.
 
 Once no activity remains and the thread has no reply waiting in the delivery outbox, the
-card is deleted and no longer tracked. Later work creates a fresh card. Disabling the flag
-removes open cards without stopping work. Native session status and Stop events are not used.
+card is deleted and no longer tracked. Later work creates a fresh card. Native session status
+and Stop events are not used.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

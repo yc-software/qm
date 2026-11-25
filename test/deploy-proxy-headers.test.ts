@@ -10,6 +10,7 @@ import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { personalScope } from "../src/types.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return {
@@ -410,7 +411,7 @@ test("admin app proxy bypasses app ACL after admin auth and audits the visit", a
   let bypassAcl: boolean | undefined;
   const app = {
     tenantFor: async () => TEST_TENANT,
-    getApp: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: "personal:U1" } : null),
+    getApp: async (id: string) => (id === "d1" ? { id: "d1", ownerScopeId: personalScope("U1") } : null),
     reachApp: async (_id: string, _principal: string, opts?: { bypassAcl?: boolean }) => {
       bypassAcl = opts?.bypassAcl;
       return opts?.bypassAcl
@@ -452,7 +453,7 @@ test("admin app proxy bypasses app ACL after admin auth and audits the visit", a
           e.principalId === "admin-alice" &&
           e.action === "app.visit" &&
           e.resource === "d1" &&
-          e.scopeLabel === "personal:U1",
+          e.scopeLabel === personalScope("U1"),
       ),
     );
   } finally {

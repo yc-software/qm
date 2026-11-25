@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
@@ -23,7 +23,6 @@ async function freshApp(overrides: Partial<Config> = {}) {
     ...overrides,
   });
   const built = buildApp(config);
-  await built.ownSharedState();
   return built;
 }
 
@@ -63,8 +62,9 @@ test("a new personal DM offers onboarding through the skills index", async () =>
   assert.match(sys.reply ?? "", /^- onboarding — /m);
 });
 
-test("the opener defers Slack setup until status can be checked without requiring provider configuration", () => {
-  assert.match(PROACTIVE_OPENER_PROMPT, /Do not mention Slack bot setup in this automatic greeting/);
+test("the opener defers Slack setup and the skill shows the web setup cards without requiring provider configuration", () => {
+  const skill = readFileSync(join(onboardingSkillDir, "onboarding/SKILL.md"), "utf8");
+  for (const card of ["add-to-slack", "connect-apps"]) assert.match(skill, new RegExp(`show the \`::${card}\\{\\}\``));
   assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
   assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
   assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);

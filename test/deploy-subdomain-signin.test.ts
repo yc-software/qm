@@ -19,7 +19,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -253,7 +253,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.equal(xhr.status, 401, "a non-HTML request never gets a login redirect");
     assert.match(xhr.body, /loginUrl/, "…but is told where sign-in lives");
 
-    await app.setAppPublic("mysite", true, { createdBy: "alice@example.com", personAtKeyboard: true });
+    await app.setAppPublic("mysite", true, { createdBy: "alice@example.com", signOff: async () => true });
     const publicVisitor = await httpGet(port, "/consultants?x=1", { Host: host, Accept: "text/html,*/*" });
     assert.equal(publicVisitor.status, 200, "a public app is reachable without a portal session");
     assert.equal(publicVisitor.body, "UPSTREAM OK");
@@ -277,7 +277,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     const lockedXhr = await httpGet(port, "/api/data", { Host: host, Accept: "application/json" });
     assert.equal(lockedXhr.status, 401);
     externalSharing = true;
-    await app.setAppPublic("mysite", false, { createdBy: "alice@example.com", personAtKeyboard: true });
+    await app.setAppPublic("mysite", false, { createdBy: "alice@example.com", signOff: async () => true });
 
     const backFromLogin = await httpGet(port, "/consultants?x=1&dpl_signin=1", {
       Host: host,
@@ -368,7 +368,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.deepEqual(deliveries[0]!.destination, {
       type: "principal",
       target: "alice@example.com",
-      audienceScopeId: "personal:alice@example.com",
+      audienceScopeId: personalScope("alice@example.com"),
       onBehalfOf: "mallory@example.com",
       deploymentAccess: { deploymentId: (await app.getApp("mysite"))!.id, requesterId: "mallory@example.com" },
     });

@@ -12,7 +12,7 @@ import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-t
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -103,7 +103,7 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
     const response = await s.mine();
     assert.equal(response.status, 200);
     const body = (await response.json()) as any;
-    assert.equal(body.scopeId, "personal:alice");
+    assert.equal(body.scopeId, personalScope("alice"));
     assert.deepEqual(
       body.people.map((p: any) => [p.principalId, p.costUsd]),
       [["alice", 2]],
@@ -149,13 +149,13 @@ test("self spend: your crons are split from the crons others made that you can s
   const s = await start();
   try {
     const sessions = s.built.sessions;
-    const yours = await s.cron("alice", "personal:alice");
+    const yours = await s.cron("alice", personalScope("alice"));
     const yoursInChannel = await s.cron("alice", "channel:C1");
     const shared = await s.cron("bob", "channel:C1");
-    const toYou = await s.cron("bob", "personal:bob", {
-      destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" },
+    const toYou = await s.cron("bob", personalScope("bob"), {
+      destination: { type: "principal", target: "alice", audienceScopeId: personalScope("alice") },
     });
-    const bobsOwn = await s.cron("bob", "personal:bob");
+    const bobsOwn = await s.cron("bob", personalScope("bob"));
     const bobsPrivate = await s.cron("bob", "channel:P1");
     const bobsGroup = await s.cron("bob", "group:G1");
     t.after(async () => {
@@ -168,13 +168,13 @@ test("self spend: your crons are split from the crons others made that you can s
     ]);
     const fire = (cron: Cron, scope: string, type: "dm" | "channel" | "group", costUsd: number) =>
       bill(sessions, `cron:${cron.id}:fire:abc123`, type, scope, { costUsd });
-    await fire(yours, "personal:alice", "dm", 0.5);
+    await fire(yours, personalScope("alice"), "dm", 0.5);
     await fire(yoursInChannel, "channel:C1", "channel", 0.75);
     await fire(shared, "channel:C1", "channel", 1);
-    await fire(toYou, "personal:bob", "dm", 2);
-    await fire(bobsOwn, "personal:bob", "dm", 4);
+    await fire(toYou, personalScope("bob"), "dm", 2);
+    await fire(bobsOwn, personalScope("bob"), "dm", 4);
     await fire(bobsPrivate, "channel:P1", "channel", 8);
-    await bill(sessions, "cron:gone:fire:abc123", "dm", "personal:alice", { costUsd: 0.25 });
+    await bill(sessions, "cron:gone:fire:abc123", "dm", personalScope("alice"), { costUsd: 0.25 });
     await fire(bobsGroup, "group:G1", "group", 0.125);
     const groupFire = await sessions.getOrCreateByThread(`cron:${bobsGroup.id}:fire:abc123`, "group", "group:G1");
     await sessions.addParticipant(groupFire.id, "alice");
@@ -185,7 +185,7 @@ test("self spend: your crons are split from the crons others made that you can s
       [
         [shared.id, false, 1, "bob channel:C1"],
         [yoursInChannel.id, true, 0.75, "alice channel:C1"],
-        [yours.id, true, 0.5, "alice personal:alice"],
+        [yours.id, true, 0.5, `alice ${personalScope("alice")}`],
         ["gone", false, 0.25, null],
         [bobsGroup.id, false, 0.125, null],
       ],
@@ -252,8 +252,8 @@ test("self spend: capability token binds actor, defaults window, scopes shared r
   const secret = "self-spend-cap-secret".repeat(2);
   const s = await start({ secret });
   try {
-    const [aliceCron, roomCron] = [await s.cron("alice", "personal:alice"), await s.cron("alice", "channel:C1")];
-    await bill(s.built.sessions, `cron:${aliceCron.id}:fire:1`, "dm", "personal:alice", { costUsd: 4 });
+    const [aliceCron, roomCron] = [await s.cron("alice", personalScope("alice")), await s.cron("alice", "channel:C1")];
+    await bill(s.built.sessions, `cron:${aliceCron.id}:fire:1`, "dm", personalScope("alice"), { costUsd: 4 });
     await bill(s.built.sessions, `cron:${roomCron.id}:fire:1`, "channel", "channel:C1", { costUsd: 6 });
     await bill(s.built.sessions, "ch:P2:t1", "channel", "channel:P2", { costUsd: 8 });
     const get = async (
@@ -263,7 +263,13 @@ test("self spend: capability token binds actor, defaults window, scopes shared r
       fetch(`${s.base}${path}`, {
         headers: {
           "x-agent-capability": await mintCapabilityToken(
-            { actorId: "alice", exp: Date.now() + CAPABILITY_TTL_MS, liveActor: true, triggered: true, ...claims },
+            {
+              actorId: "alice",
+              exp: Date.now() + CAPABILITY_TTL_MS,
+              personAuthority: true,
+              origin: "cron" as const,
+              ...claims,
+            },
             secret,
           ),
         },
@@ -274,7 +280,7 @@ test("self spend: capability token binds actor, defaults window, scopes shared r
         audienceScopeId: scopeId("personal", "alice"),
       })
     ).json()) as any;
-    assert.deepEqual([p.scopeId, p.org.costUsd, p.crons.length], ["personal:alice", 18, 2]);
+    assert.deepEqual([p.scopeId, p.org.costUsd, p.crons.length], [personalScope("alice"), 18, 2]);
     const r = (await (
       await get(`/v1/spend?${WINDOW}`, { scopeId: scopeId("channel", "C1"), audienceScopeId: scopeId("channel", "C1") })
     ).json()) as any;

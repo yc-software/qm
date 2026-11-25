@@ -120,7 +120,12 @@ test("an inbox event emitted outside any tenant binding is forwarded inside the 
       },
     } as never,
   });
-  installPrincipalLinks({ canonical: () => (currentTenant(), undefined), aliases: () => [] });
+  installPrincipalLinks({
+    canonical: () => (currentTenant(), undefined),
+    aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
+  });
   withoutTenant(() => events.start());
   try {
     const inB = browser();

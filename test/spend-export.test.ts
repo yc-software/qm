@@ -9,7 +9,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
@@ -189,15 +189,13 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
       [
         [iso(today), "channel:C1", "channel", null, "live", null, "claude-opus-5", 1, 3],
         [iso(today), "channel:C1", "channel", null, "webhook", null, "claude-opus-5", 1, 4],
-        [iso(today), "personal:U1", "person", "U1", "live", null, "claude-opus-5", 1, 1],
-        [iso(today), "personal:alice", "person", "alice", "live", null, "claude-opus-5", 2, 3],
-        [iso(today), "personal:alice", "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
-      ],
+        [iso(today), personalScope("alice"), "person", "alice", "live", null, "claude-opus-5", 2, 3],
+        [iso(today), personalScope("alice"), "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
+        [iso(today), personalScope("U1"), "person", "U1", "live", null, "claude-opus-5", 1, 1],
+      ].sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
     );
-    assert.deepEqual(
-      [body.rows[3].input, body.rows[3].output, body.rows[3].cacheRead, body.rows[3].cacheWrite],
-      [200, 40, 800, 80],
-    );
+    const alice = body.rows.find((r: any) => r.principalId === "alice" && r.source === "live");
+    assert.deepEqual([alice.input, alice.output, alice.cacheRead, alice.cacheWrite], [200, 40, 800, 80]);
     const audited = (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");
@@ -211,7 +209,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
   const s = fixture();
   try {
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
+      ownerScopeId: personalScope("alice"),
       owner: "alice",
       createdBy: "alice",
       title: "Morning digest",
@@ -219,7 +217,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
       action: "summarize my unread mail",
     });
     await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
+      ownerScopeId: personalScope("alice"),
       owner: "alice",
       createdBy: "alice",
       title: "Never billed",
@@ -241,7 +239,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
         id: cron.id,
         title: "Morning digest",
         owner: "alice",
-        ownerScopeId: "personal:alice",
+        ownerScopeId: personalScope("alice"),
         schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
         enabled: true,
       },

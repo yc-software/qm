@@ -1,8 +1,7 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { inboxPlaybook, inboxSource, loadInboxVoiceProfile } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import { cronTriggerAuthority, ownerAuthored } from "../cron/authority.ts";
-import { samePerson } from "../directory/person.ts";
+import { cronTriggerAuthority } from "../cron/authority.ts";
 import { fittingEntryCount, MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -80,9 +79,7 @@ interface ItemTurnResult {
 
 type LoopFollowUpOptions = Pick<TurnRequest, "model" | "thinkingLevel" | "fastMode" | "attachments">;
 
-type ItemTurnOptions = LoopFollowUpOptions & { unattended?: true };
-
-type StageOptions = ItemTurnOptions & Pick<TurnRequest, "readOnly">;
+type StageOptions = LoopFollowUpOptions & Pick<TurnRequest, "readOnly">;
 
 export interface LoopFireService {
   fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
@@ -91,15 +88,14 @@ export interface LoopFireService {
     item: LoopItem,
     message: string,
     actorId: string,
-    options?: ItemTurnOptions,
+    options?: LoopFollowUpOptions,
   ): Promise<LoopItem | null>;
   itemAction(
     loop: Loop,
     item: LoopItem,
     kind: string,
     args: Record<string, unknown>,
-    actorId: string,
-    options?: ItemTurnOptions,
+    options?: LoopFollowUpOptions,
   ): Promise<ItemTurnResult>;
   shipOutput(loopId: string, outputId: string, actorId: string, note?: string): Promise<LoopOutput | null>;
   previewTriage(loop: Loop, triage: Loop["triage"]): Promise<TriagePreview[]>;
@@ -572,7 +568,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     fireKey: string,
     threadRef: string,
     input: StageInput,
-    actorId?: string,
     options?: StageOptions,
   ): Promise<TriggerOutcome> {
     let cron;
@@ -588,8 +583,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       fireKey,
       threadRef,
       surface: "loop",
-      ownerFire:
-        ownerAuthored(loop) && !options?.unattended && (actorId === undefined || samePerson(actorId, loop.owner)),
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(typeof options?.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
@@ -605,7 +598,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     threadRef: string,
   ): Promise<Map<string, TriagePatch>> {
     const prompt = triagePrompt(loop, work.context, work.pending);
-    const outcome = await stageTurn(loop, fireKey, threadRef, prompt.stage, undefined, { readOnly: true });
+    const outcome = await stageTurn(loop, fireKey, threadRef, prompt.stage, { readOnly: true });
     const failure = stageFailure("triage", outcome);
     if (failure) throw failure.error;
     const parsed = fencedJson(outcome.reply ?? "");
@@ -926,7 +919,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         fireKey,
         loopFireThreadRef(loopId, fireKey),
         shipPrompt(loop, claimed, note),
-        actorId,
       );
       if (!outcome.ran && !outcome.authzFailed && (await deps.outputs.get(outputId))?.shipFireKey === fireKey) {
         return deps.outputs.markUnconfirmed(outputId, claimToken);
@@ -1000,13 +992,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     item: LoopItem,
     message: string,
     actorId: string,
-    options?: ItemTurnOptions,
+    options?: LoopFollowUpOptions,
   ): Promise<LoopItem | null> {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
     const prompt = followUpPrompt(loop, asked, message, await loadInboxVoiceProfile(deps.files, loop));
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, actorId, options);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, options);
     const failure = stageFailure("item turn", outcome);
     if (failure) {
       await deps.items.appendThread(item.id, [
@@ -1037,12 +1029,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     item: LoopItem,
     kind: string,
     args: Record<string, unknown>,
-    actorId: string,
-    options?: ItemTurnOptions,
+    options?: LoopFollowUpOptions,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
     const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, actorId, options);
+    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), prompt, options);
     const failure = stageFailure("item action", outcome) ?? notDone("item action", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     const { text } = liftBlock(outcome.reply ?? "", "done");

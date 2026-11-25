@@ -7,7 +7,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    appState.me = { user: "taylor@example.com", permissions: ["inbox"] };
+    appState.me = { user: "taylor@example.com", personalScope: "personal:taylor@example.com", permissions: ["inbox"] };
     appState.currentView = "inbox";
     const { inboxChat } = await vite.ssrLoadModule("/src/inbox-chat.ts");
     const { allConversations } = await vite.ssrLoadModule("/src/conversations.ts");
@@ -158,7 +158,7 @@ test("inbox assistant panel hides, reopens, and remembers the choice", async () 
       Response.json(String(url).includes("runtime-config") ? inboxRuntime : { items: [], selected: [], available: [] });
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    appState.me = { user: "taylor@example.com", permissions: ["inbox"] };
+    appState.me = { user: "taylor@example.com", personalScope: "personal:taylor@example.com", permissions: ["inbox"] };
     appState.currentView = "inbox";
     appState.mainEl = host;
     const { drawAll } = await vite.ssrLoadModule("/src/inbox.ts");

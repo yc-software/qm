@@ -2,7 +2,7 @@ import type { RuntimeChoice } from "./agent.ts";
 import type { RuntimeService } from "./runtime-types.ts";
 import type { App } from "../api/app.ts";
 import { runtimeConfigBody, validateRuntimeChoice, type RuntimeDeps } from "../api/runtime-config.ts";
-import { personAtKeyboard } from "../api/artifact-share.ts";
+import { carriesPersonAuthority } from "../api/artifact-share.ts";
 import { parseScopeId } from "../types.ts";
 
 export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authorizesCapabilityScope">): RuntimeService {
@@ -43,8 +43,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
           "The current request or cron fire, including retries and runtime handoffs. Future requests and fires use their configured defaults.",
       };
     const lifetime = request.lifetime ?? "task";
-    const cronTask = cronFire && claims.triggered === true && !claims.botActor && lifetime === "task";
-    if (!cronTask && !personAtKeyboard(claims)) return { ok: false, error: "live_actor_required" };
+    if (!carriesPersonAuthority(claims)) return { ok: false, error: "authority_required" };
     const candidates = snapshot.models;
     let modelId = request.model ?? active.modelId;
     if (!candidates.includes(modelId)) {

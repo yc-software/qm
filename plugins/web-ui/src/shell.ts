@@ -736,7 +736,7 @@ export function renderSidebarTop(): void {
             personas.length
               ? html`
                   <div class="new-chat-menu-sep" role="separator"></div>
-                  <div class="new-chat-menu-head" role="presentation">Personas</div>
+                  <div class="new-chat-menu-head" role="presentation">Bots</div>
                   ${personas.map(
                     (persona) => html`
                       <button
@@ -1272,7 +1272,7 @@ export async function boot(): Promise<void> {
     return;
   }
   const sessions = refreshSessions({ showLoading: true });
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = appState.me.personalScope;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);

@@ -25,7 +25,7 @@ import { type DurableMap, type DurableMapSelect } from "../src/persistence/durab
 import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -253,7 +253,7 @@ test("legacy retry grants remain consumed and invalidate prepared uses", async (
 test("materializeOwnById: the owner's own credential needs no grant — scope, ownership, expiry, and connectors enforced", async () => {
   const k = kc();
   const cred = await k.save(GH);
-  const own = await k.materializeOwnById("U1", cred.id, "personal:U1");
+  const own = await k.materializeOwnById("U1", cred.id, personalScope("U1"));
   assert.ok(own.kind === "env" && own.env[0]!.value === "ghp_secret");
   assert.equal(own.grantId, undefined, "own use carries no grant");
 
@@ -263,7 +263,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
     "own use never crosses into a shared scope",
   );
   await assert.rejects(
-    k.materializeOwnById("U2", cred.id, "personal:U2"),
+    k.materializeOwnById("U2", cred.id, personalScope("U2")),
     (e: KeychainError) => e.status === 404,
     "someone else's credential id reads as unknown",
   );
@@ -276,7 +276,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
     expiresAt: Date.now() - 1,
   });
   await assert.rejects(
-    k.materializeOwnById("U1", stale.id, "personal:U1"),
+    k.materializeOwnById("U1", stale.id, personalScope("U1")),
     (e: KeychainError) => e.status === 410,
     "an expired credential does not materialize",
   );
@@ -286,7 +286,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
     expiresAt: Date.now() + 3_600_000,
   });
   const cid = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!.credentialId;
-  const conn = await k.materializeOwnById("U1", cid, "personal:U1");
+  const conn = await k.materializeOwnById("U1", cid, personalScope("U1"));
   assert.ok(
     conn.kind === "env" && conn.env[0]!.key === envKey("gmail.googleapis.com") && conn.env[0]!.value === "ya29.own",
   );
@@ -314,7 +314,7 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
     (e: KeychainError) => e.status === 403,
   );
   await assert.rejects(
-    k.materializeOwnById(ORG, broker.id, `personal:${ORG}`),
+    k.materializeOwnById(ORG, broker.id, personalScope(ORG)),
     (e: KeychainError) => e.status === 403,
     "own-use refuses broker records too",
   );
@@ -989,7 +989,7 @@ test("manifest: own credentials need no grant but require explicit execution req
   });
   const entries = await k.listByOwner("U1");
   const own = renderKeychainManifest({
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     conversationKind: "dm",
     actorId: "U1",
     members: [{ id: "U1", displayName: "Alice" }],
@@ -1008,7 +1008,7 @@ test("manifest: own credentials need no grant but require explicit execution req
   assert.doesNotMatch(own, /request-access|grant/);
   assert.equal(
     renderKeychainManifest({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       conversationKind: "dm",
       actorId: "U1",
       scopeGrants: [],
@@ -1016,7 +1016,7 @@ test("manifest: own credentials need no grant but require explicit execution req
       entriesByOwner: new Map([["U1", entries]]),
     }),
     renderKeychainManifest({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       conversationKind: "dm",
       actorId: "U1",
       scopeGrants: [],
@@ -1027,7 +1027,7 @@ test("manifest: own credentials need no grant but require explicit execution req
   );
 
   const other = renderKeychainManifest({
-    scopeId: "personal:U2",
+    scopeId: personalScope("U2"),
     conversationKind: "dm",
     actorId: "U2",
     members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
@@ -1141,7 +1141,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
     const owner = "HANDLE_OWNER";
-    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const cap = await capFor(owner, scopeId("personal", owner), { internalAudience: true, personAuthority: true });
     const saved = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1319,9 +1319,13 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
   });
-  it("a scheduled run replaces its owner's saved login, but work a bot started cannot", async () => {
+  it("an owner's fire replaces their saved login, but work a bot started cannot", async () => {
     const owner = "RELOGIN_OWNER";
-    const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
+    const later = await capFor(owner, undefined, {
+      internalAudience: true,
+      personAuthority: true,
+      threadRef: "cron:relogin:fire:1",
+    });
     const save = (secret: string, cap: string) => post("/v1/keychain/credentials", { service: "gh", secret }, cap);
     const { credential } = (await (await save("first", later)).json()) as any;
     const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
@@ -1337,7 +1341,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("a credential's writer lease admits one holder until it is released or ends", async () => {
     const owner = "LEASE_OWNER";
-    const cap = await capFor(owner, undefined, { triggered: true });
+    const cap = await capFor(owner);
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "kernel-profile", envKey: "KERNEL_PROFILE", secret: "p" }, cap)
     ).json()) as any;
@@ -1439,7 +1443,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
   assert.equal(system(unchanged.reply), system(sys2.reply));
 
-  await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
+  await selectDefaultSandbox(built, "U_OWNER", personalScope("U_OWNER"));
   mark = fakeSprites.execScripts().length;
   const dm: TurnRequest = {
     surface: "test",
@@ -1541,7 +1545,7 @@ test("Composio keys remain backend-only across all materialization paths includi
     });
     assert.deepEqual(await k.materializeOwn("U1"), []);
     assert.deepEqual(await k.materializeStanding("channel:C1"), []);
-    await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
+    await assert.rejects(k.materializeOwnById("U1", c.id, personalScope("U1")), /keys stay in the backend/);
     await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U1"), /keys stay in the backend/);
     assert.equal(await k.composioKey("U1", c.id), "project-key");
     assert.equal(await k.composioKey("U2", c.id), null);
@@ -1569,7 +1573,7 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
   const manifest = async () =>
     renderKeychainManifest(
       {
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         conversationKind: "dm",
         actorId: "U1",
         members: [{ id: "U1" }],
@@ -1601,11 +1605,11 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
   );
   now = expiresAt;
   assert.doesNotMatch(await manifest(), /; expired/);
-  await k.materializeOwnById("U1", credential.id, "personal:U1");
+  await k.materializeOwnById("U1", credential.id, personalScope("U1"));
   now++;
   assert.match(await manifest(), /; expired/);
   await assert.rejects(
-    k.materializeOwnById("U1", credential.id, "personal:U1"),
+    k.materializeOwnById("U1", credential.id, personalScope("U1")),
     (e: KeychainError) => e.status === 410,
   );
 });
@@ -1642,7 +1646,7 @@ test("manifest inventories are canonical across discovery order without mutating
     });
   }
   const input: Parameters<typeof renderKeychainManifest>[0] = {
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     conversationKind: "dm",
     actorId: "U1",
     members: [{ id: "U2" }, { id: "U1" }],
@@ -1713,7 +1717,7 @@ test("manifest merges credential representations without conflating login identi
   const input: Parameters<typeof renderKeychainManifest>[0] = {
     scopeId: "channel:C1",
     conversationKind: "channel",
-    openSpeakerKeychain: true,
+    openOwnerKeychain: true,
     actorId: "alice@example.com",
     members: [{ id: "alice@example.com", displayName: "Alice" }],
     entriesByOwner: new Map([["alice@example.com", [first, second]]]),
@@ -1790,7 +1794,7 @@ test("granted connector keeps account and refresh semantics when owner is absent
 
 test("a connector whose refresh was rejected shows the provider's error, not just expired", () => {
   const rendered = renderKeychainManifest({
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     conversationKind: "dm",
     actorId: "U1",
     members: [{ id: "U1" }],

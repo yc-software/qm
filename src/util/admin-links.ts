@@ -14,3 +14,11 @@ export function adminCronHistoryUrl(publicWebUrl: string, ownerScopeId: string, 
   }
   return `${trimBase(publicWebUrl)}/settings/history/scopes/${scopeSegment}?${cronQuery}`;
 }
+
+export function adminProvidersUrl(publicWebUrl: string): string {
+  return `${trimBase(publicWebUrl)}/settings/onboarding`;
+}
+
+export function personalSettingsUrl(publicWebUrl: string): string {
+  return `${trimBase(publicWebUrl)}/settings`;
+}

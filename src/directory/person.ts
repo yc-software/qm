@@ -1,26 +1,14 @@
 import { swallowAs } from "../util/errors.ts";
 import { isSystemActor, parseScopeId } from "../types.ts";
 
-export interface PrincipalLinkResolver {
-  canonical(key: string): string | undefined;
-  aliases(key: string): readonly string[];
-}
+import { foldPrincipalId, principalLinks } from "./person-refs.ts";
 
-let links: PrincipalLinkResolver | null = null;
-
-export function installPrincipalLinks(resolver: PrincipalLinkResolver | null): void {
-  links = resolver;
-}
-
-export function foldPrincipalId(id: string | null | undefined): string {
-  const s = (id ?? "").trim();
-  return s.includes("@") ? s.toLowerCase() : s;
-}
+export { foldPrincipalId, installPrincipalLinks, type PrincipalLinkResolver } from "./person-refs.ts";
 
 export function canonicalPerson(id: string): string {
   const key = foldPrincipalId(id);
   if (!key) return id;
-  return links?.canonical(key) ?? id;
+  return principalLinks()?.canonical(key) ?? id;
 }
 
 export class UnattestableActor extends Error {
@@ -82,8 +70,8 @@ export function attestedPerson(id: string | undefined, callee: string): string {
 export function personIds(id: string): string[] {
   const key = foldPrincipalId(id);
   if (!key) return [];
-  const canonical = links?.canonical(key) ?? id.trim();
-  return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+  const canonical = principalLinks()?.canonical(key) ?? id.trim();
+  return [canonical, ...(principalLinks()?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
 export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases"];
@@ -105,7 +93,7 @@ export function rosterIds(id: string): string[] {
 export function personKey(id: string | null | undefined): string {
   const key = foldPrincipalId(id);
   if (!key) return "";
-  return foldPrincipalId(links?.canonical(key) ?? key);
+  return foldPrincipalId(principalLinks()?.canonical(key) ?? key);
 }
 
 export function samePerson(a: string | null | undefined, b: string | null | undefined): boolean {

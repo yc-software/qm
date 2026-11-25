@@ -18,8 +18,9 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import type { ScopeId } from "../src/types.ts";
 import { testRuns } from "./support/live-run.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
-const SCOPE = "personal:alice@example.com" as ScopeId;
+const SCOPE = personalScope("alice@example.com") as ScopeId;
 
 async function cronReplyInto(viewers: { alice?: number; bob?: number }, thread = randomUUID()) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());

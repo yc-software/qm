@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -49,7 +50,7 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
   assert.equal(empty.status, 200);
   assert.deepEqual(((await empty.json()) as Facts).facts, []);
 
-  await built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
+  await built.memory.capture(personalScope("alice"), ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
   const [al, oakland] = ((await (await fetch(`${coreBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
 
   const edit = await fetch(
@@ -74,7 +75,7 @@ test("a signed-in user lists, edits and forgets their own facts; identity is the
     }),
   );
   assert.equal(spoofed.status, 403, "a browser naming another person is refused");
-  assert.equal(await built.memory.read("personal:alice"), "- (2026-01-02) Calls me Ally");
+  assert.equal(await built.memory.read(personalScope("alice")), "- (2026-01-02) Calls me Ally");
 });
 
 test("memory routes require a signed-in principal", async () => {

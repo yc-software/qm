@@ -332,7 +332,7 @@ test("saved empty welcome stays an empty chat and doesn't show another starter h
   const h = await harness({ path: "/s/sess-deep", welcome: true });
   try {
     await h.boot();
-    await waitForText(h, /Connect your apps/);
+    await waitForText(h, /Connect your accounts/);
     assert.ok(document.querySelector(".empty-chat qm-onboarding-welcome"));
     assert.equal(document.querySelector(".chat-cta"), null);
   } finally {

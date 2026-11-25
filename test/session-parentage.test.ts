@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
@@ -29,17 +30,17 @@ test("detaching a subagent session requires current channel membership", async (
 
 test("a replayed steer on a scheduled turn's subagent keeps where its answer goes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-destination-")) }));
-  const root = await built.sessions.getOrCreateByThread("web:U1:cron-root", "dm", "personal:U1");
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:cron-child", "dm", "personal:U1");
+  const root = await built.sessions.getOrCreateByThread("web:U1:cron-root", "dm", personalScope("U1"));
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:cron-child", "dm", personalScope("U1"));
   await built.sessions.setParentSession(child.id, root.id);
-  const destination = { type: "principal", target: "U2", audienceScopeId: "personal:U2", onBehalfOf: "U1" };
+  const destination = { type: "principal", target: "U2", audienceScopeId: personalScope("U2"), onBehalfOf: "U1" };
   const { run } = await built.runs.enqueue({
     sessionId: child.threadRef,
     request: {
       actor: { id: "U1", type: "internal" },
       conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ id: "U1", type: "internal" }] },
       text: "work",
-      origin: { kind: "automation", screenData: "work", destination, useOwnerKeychain: true },
+      origin: { kind: "automation", screenData: "work", destination },
     },
   });
   const claimed = await built.runs.claimById(run.id, "worker", 60_000);
@@ -51,7 +52,7 @@ test("a replayed steer on a scheduled turn's subagent keeps where its answer goe
   );
   assert.deepEqual(
     replays.map((replay) => replay.request.origin),
-    [{ kind: "automation", screenData: "also check the launch", destination, useOwnerKeychain: true }],
+    [{ kind: "automation", screenData: "also check the launch", destination }],
   );
 });
 
@@ -109,7 +110,7 @@ test("late human child messages retain their sender and revalidate access", asyn
 test("ordinary sessions are not subject to the subagent tree queue limit", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ordinary-queue-")) }));
   const actor = { id: "U1", type: "internal" as const };
-  const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", "personal:U1");
+  const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", personalScope("U1"));
   for (let i = 0; i < 11; i++) {
     await built.runs.enqueue({
       sessionId: session.threadRef,
@@ -127,8 +128,8 @@ test("ordinary sessions are not subject to the subagent tree queue limit", async
 test("a subagent message that missed its running turn replays as a turn from its sender", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-message-replay-")) }));
   await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
-  const parent = await built.sessions.getOrCreateByThread("web:U1:parent", "dm", "personal:U1");
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-message", "dm", "personal:U1");
+  const parent = await built.sessions.getOrCreateByThread("web:U1:parent", "dm", personalScope("U1"));
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-message", "dm", personalScope("U1"));
   for (const session of [parent, child]) await built.sessions.addParticipant(session.id, "U1");
   await built.sessions.setParentSession(child.id, parent.id);
   const actor = { id: "U1", type: "internal" as const };

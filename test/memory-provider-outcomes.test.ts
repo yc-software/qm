@@ -13,6 +13,7 @@ import { createMcpClient, McpCallError } from "../src/mcp/mcp-client.ts";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { recallText } from "./support/recall-text.ts";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { personalScope } from "../src/types.ts";
 
 const notebook: MemoryService = {
   async recall() {
@@ -101,6 +102,8 @@ test("an attested provider sends the canonical person on every request and the s
   installPrincipalLinks({
     canonical: (key) => (key === "u1@acme.test" || key === "U1" ? "U1" : undefined),
     aliases: () => ["u1@acme.test"],
+    userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   const seen: Array<Record<string, unknown>> = [];
@@ -113,11 +116,11 @@ test("an attested provider sends the canonical person on every request and the s
     },
   });
   const memory = configured(attested.url, { attestActor: true });
-  const audienceScopeId = "personal:U1";
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId });
-  await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test", audienceScopeId });
+  const audienceScopeId = personalScope("U1");
+  await memory.recall(personalScope("U1"), { query: "launch", actorId: "U1", audienceScopeId });
+  await memory.recall(personalScope("U1"), { query: "launch", actorId: "u1@acme.test", audienceScopeId });
   await memory.capture(
-    "personal:U1",
+    personalScope("U1"),
     ["fact"],
     1,
     { actorId: "u1@acme.test", context: "conversation" },
@@ -133,7 +136,7 @@ test("an attested provider sends the canonical person on every request and the s
   );
 
   const plain = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
-  await configured(plain.url).recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
+  await configured(plain.url).recall(personalScope("U1"), { query: "launch", actorId: "u1@acme.test" });
   assert.deepEqual(
     plain.requests.filter((request) => request.actor !== undefined || request.aliases !== undefined),
     [],
@@ -145,9 +148,9 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
   const memory = configured(mcp.url, { attestActor: true });
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const actorId of ["jörg@acme.test", "x".repeat(257), "U 1"]) {
-      assert.equal(recallText(await memory.recall(`personal:${actorId}`, { actorId, report })), "notebook fact");
+      assert.equal(recallText(await memory.recall(personalScope(actorId), { actorId, report })), "notebook fact");
     }
-    assert.equal(recallText(await memory.recall("personal:U1", { report })), "notebook fact");
+    assert.equal(recallText(await memory.recall(personalScope("U1"), { report })), "notebook fact");
   });
   assert.deepEqual(mcp.requests, []);
   assert.deepEqual(external(outcomes), Array(4).fill({ outcome: "denied", code: "invalid_actor" }));
@@ -160,25 +163,27 @@ test("an attested provider is called only for the person whose private conversat
   installPrincipalLinks({
     canonical: (key) => (key === "system:digest" ? "U1" : undefined),
     aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
   const refused: Array<[string, string | undefined]> = [
-    ["U2", "personal:U1"],
-    ["U1", "personal:U2"],
+    ["U2", personalScope("U1")],
+    ["U1", personalScope("U2")],
     ["U1", "channel:C1"],
     ["U1", undefined],
   ];
   for (const [actorId, audienceScopeId] of refused) {
     const audience = audienceScopeId ? { audienceScopeId } : {};
     assert.equal(
-      recallText(await memory.recall("personal:U1", { query: "launch", actorId, ...audience })),
+      recallText(await memory.recall(personalScope("U1"), { query: "launch", actorId, ...audience })),
       "notebook fact",
     );
     const write = await writeFacts(
       memory,
-      "personal:U1",
+      personalScope("U1"),
       ["fact"],
       { actorId, context: "conversation" },
       { mode: "explicit", ...audience },
@@ -189,11 +194,11 @@ test("an attested provider is called only for the person whose private conversat
     assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
   }
   for (const actorId of ["system:personal:U1", "system:digest"]) {
-    const reader = { actorId, audienceScopeId: "personal:U1" };
-    assert.equal(recallText(await memory.recall("personal:U1", { query: "launch", ...reader })), "notebook fact");
+    const reader = { actorId, audienceScopeId: personalScope("U1") };
+    assert.equal(recallText(await memory.recall(personalScope("U1"), { query: "launch", ...reader })), "notebook fact");
     const skipped = await writeFacts(
       memory,
-      "personal:U1",
+      personalScope("U1"),
       ["fact"],
       { actorId, context: "conversation" },
       { mode: "explicit", audienceScopeId: reader.audienceScopeId },
@@ -204,15 +209,15 @@ test("an attested provider is called only for the person whose private conversat
   }
   const intoAnother = await writeFacts(
     memory,
-    "personal:U2",
+    personalScope("U2"),
     ["fact"],
     { actorId: "U1", context: "conversation" },
-    { mode: "explicit", audienceScopeId: "personal:U1" },
+    { mode: "explicit", audienceScopeId: personalScope("U1") },
     undefined,
   );
   assert.deepEqual(external(intoAnother.outcomes), [{ outcome: "denied", code: "private_only" }]);
   assert.equal(mcp.requests.length, 0);
-  await memory.recall("personal:U1", { query: "launch", actorId: "U1", audienceScopeId: "personal:U1" });
+  await memory.recall(personalScope("U1"), { query: "launch", actorId: "U1", audienceScopeId: personalScope("U1") });
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
 });
 
@@ -236,7 +241,7 @@ test("a write refused for its audience is recorded and logged without failing th
     const { outcomes, report } = sink();
     assert.equal(
       await memory.capture(
-        "personal:U1",
+        personalScope("U1"),
         ["fact"],
         1,
         { actorId: "admin", context: "conversation" },
@@ -288,16 +293,16 @@ test("provider refusals, codes and failures are told apart", async (t) => {
   const queries = ["unattested", "mismatch", "unlinked", "refused", "quoted", "broken", "partial", "forged", "nothing"];
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const query of queries)
-      texts.push(recallText(await memory.recall("personal:U1", { query, actorId: "U1", report })));
+      texts.push(recallText(await memory.recall(personalScope("U1"), { query, actorId: "U1", report })));
     const forbidden = await startMcpTestServer(t, { tools: TOOLS, status: 403 });
-    await configured(forbidden.url).recall("personal:U1", { query: "q", actorId: "U1", report });
-    await configured(mcp.url, {}, { ...ENV, RO_SECRET: "wrong" }).recall("personal:U1", {
+    await configured(forbidden.url).recall(personalScope("U1"), { query: "q", actorId: "U1", report });
+    await configured(mcp.url, {}, { ...ENV, RO_SECRET: "wrong" }).recall(personalScope("U1"), {
       query: "q",
       actorId: "U1",
       report,
     });
     const outage = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x" }, tokenStatus: 503 });
-    await configured(outage.url).recall("personal:U1", { query: "q", actorId: "U1", report });
+    await configured(outage.url).recall(personalScope("U1"), { query: "q", actorId: "U1", report });
   });
 
   assert.deepEqual(external(outcomes), [
@@ -336,7 +341,7 @@ test("provider refusals, codes and failures are told apart", async (t) => {
 test("an unrelated error after a fail-open provider problem still throws", async () => {
   await assert.rejects(
     withProviders("search", async (report) => {
-      report({ provider: "knowledge", scope: "personal:U1", outcome: "failed", ms: 1 });
+      report({ provider: "knowledge", scope: personalScope("U1"), outcome: "failed", ms: 1 });
       throw new Error("session store offline");
     }),
     /session store offline/,
@@ -369,7 +374,7 @@ test("recall timeouts are recorded and the notebook still answers", async (t) =>
     outcomes,
     problems,
   } = await withProviders("search", (report) =>
-    configured(mcp.url, { timeoutMs: 50 }).recall("personal:U1", { actorId: "U1", report }),
+    configured(mcp.url, { timeoutMs: 50 }).recall(personalScope("U1"), { actorId: "U1", report }),
   );
   release();
   await settled(mcp, 1);
@@ -397,7 +402,14 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   });
   const memory = routedWithTimeout(mcp.url, 200);
   const write = (facts: string[], turn?: string) =>
-    writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
+    writeFacts(
+      memory,
+      personalScope("U1"),
+      facts,
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit" },
+      turn,
+    );
 
   const committed = await write(["fact"], "run-1");
   const repeated = await write(["fact"], "run-1");
@@ -406,7 +418,7 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   await write(["fact"]);
   await writeFacts(
     memory,
-    "personal:U2",
+    personalScope("U2"),
     ["fact"],
     { actorId: "U1", context: "conversation" },
     { mode: "explicit" },
@@ -458,10 +470,10 @@ test("timeoutMs bounds reads, and a write slower than it still commits", async (
     },
   });
   const memory = configured(mcp.url, { timeoutMs: 100 });
-  const read = await withProviders("search", (report) => memory.recall("personal:U1", { actorId: "U1", report }));
+  const read = await withProviders("search", (report) => memory.recall(personalScope("U1"), { actorId: "U1", report }));
   const written = await writeFacts(
     memory,
-    "personal:U1",
+    personalScope("U1"),
     ["fact"],
     { actorId: "U1", context: "conversation" },
     { mode: "explicit" },
@@ -486,7 +498,7 @@ test("a failing built-in notebook write stays QM's own error, not a provider pro
   await assert.rejects(
     writeFacts(
       memory,
-      "personal:U1",
+      personalScope("U1"),
       ["fact"],
       { actorId: "U1", context: "conversation" },
       { mode: "explicit" },
@@ -505,7 +517,7 @@ test("ending a session never turns a good call into a failure", async (t) => {
       ...options,
     });
     const { outcomes, report } = sink();
-    const rows = await configured(mcp.url, {}).recall("personal:U1", { actorId: "U1", report });
+    const rows = await configured(mcp.url, {}).recall(personalScope("U1"), { actorId: "U1", report });
     assert.match(recallText(rows), /remembered/);
     assert.deepEqual(external(outcomes), [{ outcome: "ok", code: undefined }]);
     assert.equal(
@@ -540,7 +552,7 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const { outcomes, report } = sink();
   await assert.rejects(
     withProviders("search", (r) =>
-      searchNotebooks(memory, ["personal:U1", "org:acme"], "deploys", 20, undefined, {
+      searchNotebooks(memory, [personalScope("U1"), "org:acme"], "deploys", 20, undefined, {
         actorId: "U1",
         report: (outcome) => {
           report(outcome);
@@ -551,7 +563,7 @@ test("a notebook failure in another scope still fails a search that a strict pro
   );
   assert.deepEqual(outcomes.map(({ provider, scope, outcome }) => [provider, scope, outcome]).sort(), [
     ["default", "org:acme", "failed"],
-    ["default", "personal:U1", "ok"],
-    ["knowledge", "personal:U1", "denied"],
+    ["default", personalScope("U1"), "ok"],
+    ["knowledge", personalScope("U1"), "denied"],
   ]);
 });

@@ -21,7 +21,7 @@ test("return context is bound to the user, nonce, path and expiry", () => {
     accountId: "ca_test",
     widget: "welcome",
     expiresAt: Date.now() + 60000,
-    picker: { query: "gmail", expanded: true },
+    picker: { query: "gmail" },
     scrollTop: 180,
   };
   saveConnectionAttempt(attempt);

@@ -1,6 +1,6 @@
 {
-  "mintSites": 29,
-  "implicitQueries": 320,
-  "ambientReads": 71,
-  "ambientCaches": 37
+  "mintSites": 28,
+  "implicitQueries": 319,
+  "ambientReads": 68,
+  "ambientCaches": 35
 }

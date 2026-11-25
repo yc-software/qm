@@ -68,7 +68,12 @@ test("a chat surface's configured mark is drawn as its glyph, and the neutral ic
   const { chatSurfaceMark } = await import("../src/surface-mark.ts");
   const host = document.createElement("div");
   const path = () => host.querySelector("svg path:only-child")?.getAttribute("d");
-  appState.me = { user: "tester", org: "test", chatSurfaces: [{ kind: "partner-chat", label: "Chat" }] };
+  appState.me = {
+    user: "tester",
+    personalScope: "personal:tester",
+    org: "test",
+    chatSurfaces: [{ kind: "partner-chat", label: "Chat" }],
+  };
   render(chatSurfaceMark({ surface: "partner-chat" }, 14, "mark"), host);
   assert.notEqual(path(), "M2 2h20v20H2z");
   appState.me.chatSurfaces = [{ kind: "partner-chat", label: "Chat", mark: "M2 2h20v20H2z" }];

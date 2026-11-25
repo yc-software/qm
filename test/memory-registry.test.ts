@@ -21,6 +21,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import type { ScopeId } from "../src/types.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
+import { personalScope } from "../src/types.ts";
 
 const change = {
   actor: "admin-alice",
@@ -59,7 +60,7 @@ test("a brain binds the kind personal or one member's personal scope, and always
   for (const scope of ["group:web-project-1", "channel", "personal:", "U1"])
     refused(() => putBinding(record, "p", { brain: "acme-personal", scope }, change), 400, /personal memory/);
   refused(
-    () => putBinding(record, "p", { brain: "acme-personal", scope: "personal:U1", capture: "automatic" }, change),
+    () => putBinding(record, "p", { brain: "acme-personal", scope: personalScope("U1"), capture: "automatic" }, change),
     400,
     /automatic/,
   );
@@ -69,11 +70,11 @@ test("a brain binds the kind personal or one member's personal scope, and always
       putBinding(
         record,
         "alice",
-        { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
+        { brain: "acme-personal", scope: personalScope("U1"), recall: false, capture: "explicit" },
         change,
       ),
       "bob",
-      { brain: "acme-personal", scope: "personal:U2", capture: "explicit" },
+      { brain: "acme-personal", scope: personalScope("U2"), capture: "explicit" },
       change,
     ),
   ];
@@ -107,7 +108,7 @@ test("a brain binds the kind personal or one member's personal scope, and always
       },
       {
         provider: "acme-personal",
-        scopes: ["personal:U1"],
+        scopes: [personalScope("U1")],
         capture: "explicit",
         recall: false,
         manage: false,
@@ -116,7 +117,7 @@ test("a brain binds the kind personal or one member's personal scope, and always
       },
       {
         provider: "acme-personal",
-        scopes: ["personal:U2"],
+        scopes: [personalScope("U2")],
         capture: "explicit",
         recall: true,
         manage: false,
@@ -128,9 +129,9 @@ test("a brain binds the kind personal or one member's personal scope, and always
 });
 
 test("a scope binds to one brain once, and a binding can move to another brain or scope", () => {
-  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
+  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: personalScope("U1") }, change);
   refused(
-    () => putBinding(record, "alice-again", { brain: "acme-personal", scope: "personal:U1" }, change),
+    () => putBinding(record, "alice-again", { brain: "acme-personal", scope: personalScope("U1") }, change),
     409,
     /already bound to brain acme-personal by binding alice/,
   );
@@ -141,14 +142,14 @@ test("a scope binds to one brain once, and a binding can move to another brain o
   );
   const everyone = putBinding(personalBrain(), "everyone", { brain: "acme-personal", scope: "personal" }, change);
   refused(
-    () => putBinding(everyone, "alice", { brain: "acme-personal", scope: "personal:U1", recall: false }, change),
+    () => putBinding(everyone, "alice", { brain: "acme-personal", scope: personalScope("U1"), recall: false }, change),
     409,
     /personal is already bound to brain acme-personal by binding everyone/,
   );
-  record = putBinding(record, "alice", { scope: "personal:U2" }, change);
+  record = putBinding(record, "alice", { scope: personalScope("U2") }, change);
   assert.deepEqual(
     record.bindings.map(({ id, scope }) => [id, scope]),
-    [["alice", "personal:U2"]],
+    [["alice", personalScope("U2")]],
   );
 });
 
@@ -159,7 +160,7 @@ test("env provider ids are read-only and a stored collision disables the route",
     409,
     /MEMORY_PROVIDER_CONFIG/,
   );
-  const record = putBinding(personalBrain(), "p1", { brain: "acme-personal", scope: "personal:U1" }, change);
+  const record = putBinding(personalBrain(), "p1", { brain: "acme-personal", scope: personalScope("U1") }, change);
   const { config, disabled } = resolveMemoryRegistry(record, { ...change, overlayIds: new Set(["acme-personal"]) });
   assert.deepEqual(config.routes, []);
   assert.deepEqual(
@@ -219,7 +220,7 @@ test("the env validator's rules apply to registry brains", () => {
 
 test("each binding QM can't serve names its reason", () => {
   let record = personalBrain();
-  record = putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
+  record = putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1") }, change);
   record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change);
   const alice = record.bindings[0]!;
   const rekeyed = putBrain(
@@ -234,10 +235,10 @@ test("each binding QM can't serve names its reason", () => {
       brains: [...record.brains, { ...record.brains[0]!, id: "future", preset: "gbrain-v9" }, rekeyed],
       bindings: [
         alice,
-        { ...alice, id: "bob", brain: "future", scope: "personal:U2" },
+        { ...alice, id: "bob", brain: "future", scope: personalScope("U2") },
         { ...alice, id: "gone", brain: "deleted-brain" },
         { ...alice, id: "room", scope: "group:web-project-1" },
-        { ...alice, id: "carol", brain: "rekeyed", scope: "personal:U3" },
+        { ...alice, id: "carol", brain: "rekeyed", scope: personalScope("U3") },
       ],
     },
     change,
@@ -277,7 +278,7 @@ test("a brain keeps its client credentials exactly as sent", () => {
 });
 
 test("moving a brain drops its secret, and a brain with bindings can't be deleted", () => {
-  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
+  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: personalScope("U1") }, change);
   const sealed = record.brains[0]!.auth.clientSecretEnc;
   record = putBrain(record, "acme-personal", { label: "Renamed" }, change);
   assert.ok(sealed);
@@ -301,9 +302,9 @@ test("a member's own brain serves only their personal scope, as them, and names 
   );
   assert.deepEqual(
     record.bindings.map(({ id, brain, scope, capture }) => ({ id, brain, scope, capture })),
-    [{ id: ALICE_BRAIN, brain: ALICE_BRAIN, scope: "personal:U1", capture: "explicit" }],
+    [{ id: ALICE_BRAIN, brain: ALICE_BRAIN, scope: personalScope("U1"), capture: "explicit" }],
   );
-  for (const scope of ["personal", "personal:U2"])
+  for (const scope of ["personal", personalScope("U2")])
     refused(() => putBinding(record, "other", { brain: ALICE_BRAIN, scope }, change), 400, /only their own/);
   refused(() => aliceBrain(record, { owner: "U2" }), 400, /takes only url, clientId, label, not owner/);
   refused(() => aliceBrain(record, { clientSecret: "s" }), 400, /never goes through the agent/);
@@ -423,8 +424,8 @@ test("registry memory narrows chained disclosures in order", async () => {
     open: false,
   });
   const memory = createRegistryMemoryService({ defaultMemory: recording([]), registry: emptyMemoryRegistry });
-  await memory.withDisclosure!(disclosure("personal:alice")).withDisclosure!(disclosure("channel:room")).recall(
-    "personal:alice",
+  await memory.withDisclosure!(disclosure(personalScope("alice"))).withDisclosure!(disclosure("channel:room")).recall(
+    personalScope("alice"),
   );
-  assert.deepEqual(applied, ["personal:alice > channel:room"]);
+  assert.deepEqual(applied, [`${personalScope("alice")} > channel:room`]);
 });

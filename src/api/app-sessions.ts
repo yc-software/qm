@@ -720,7 +720,7 @@ export function createSessionMethods(
       if (!id) return null;
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
-      const { clientTools: _clientTools, ...row } = withoutStoredFacts(session);
+      const row = withoutStoredFacts(session);
       const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },
@@ -1373,11 +1373,11 @@ export function createSessionMethods(
         scopeLabel: granteeScopeId,
       });
     },
-    async promoteSkill(id, targetScopeId, actorId, liveActor) {
+    async promoteSkill(id, targetScopeId, actorId, personAuthority) {
       if (parseScopeId(targetScopeId).kind !== "org")
         throw new Error("promote targets the org scope — use share or move for anything narrower");
-      if (liveActor !== true)
-        throw new AdminError(403, "promoting a skill org-wide takes a live person, never an autonomous trigger");
+      if (personAuthority !== true)
+        throw new AdminError(403, "promoting a skill org-wide takes a person's own authority");
       if (!deps.admin) throw new Error("org promotion requires an admin service");
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");

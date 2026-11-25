@@ -4,6 +4,7 @@ import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
 import type { ProjectIcon } from "./projects/project-store.ts";
+import { personUserId, userPerson } from "./directory/person-refs.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -30,7 +31,7 @@ function isScopeKind(s: string): s is ScopeKind {
 }
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
-  return `${kind}:${ref}`;
+  return `${kind}:${kind === "personal" ? personUserId(ref) : ref}`;
 }
 
 export interface WornPersona {
@@ -59,7 +60,19 @@ export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
   const raw = id.slice(0, sep);
-  return { kind: isScopeKind(raw) ? raw : null, ref: id.slice(sep + 1) };
+  const ref = id.slice(sep + 1);
+  if (raw === "personal") return { kind: raw, ref: userPerson(ref) };
+  return { kind: isScopeKind(raw) ? raw : null, ref };
+}
+
+export function canonicalScopeId(id: ScopeId): ScopeId {
+  const { kind, ref } = parseScopeId(id);
+  return kind === "personal" ? scopeId(kind, ref) : id;
+}
+
+export function scopeLabel(id: ScopeId): string {
+  const { kind, ref } = parseScopeId(id);
+  return kind === "personal" ? `${kind}:${ref}` : id;
 }
 
 export function isManageableCreationScope(id: ScopeId | undefined): boolean {
@@ -139,7 +152,6 @@ export interface SpawnMeta {
 }
 
 export interface Session {
-  clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;
   scopeId: ScopeId;
@@ -216,6 +228,7 @@ export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
+  webHome?: true;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -358,8 +371,7 @@ export type TurnOrigin =
       kind: "automation";
       screenData?: string;
       destination?: Destination;
-      useOwnerKeychain?: boolean;
-      ownerFire?: true;
+      fire?: true;
     }
   | { kind: "direct" };
 
@@ -405,6 +417,7 @@ export interface TurnRequest {
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
   cronScript?: import("./triggers/types.ts").CronScript;
+  cronScriptTrial?: boolean;
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;
@@ -430,6 +443,7 @@ export interface TurnRequest {
   turnWallClockMs?: number;
   timezone?: string;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
+  declinePendingApprovals?: boolean;
   proactiveOpener?: boolean;
   spawned?: boolean;
   idempotencyKey?: string;
@@ -460,6 +474,7 @@ export interface PendingApproval {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   executesOnApprove?: boolean;
+  call?: ApprovedToolCallSpec;
 }
 
 export interface ApprovedToolCallSpec {
@@ -486,6 +501,7 @@ export interface PendingApprovalRecord {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
+  cardTo?: string;
 }
 
 type ApprovalScope = "once" | "session" | "always";

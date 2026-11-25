@@ -8,6 +8,7 @@ struct Identity: Decodable {
   var suggestedActivitiesGeneration: Bool? = nil
   var permissions: [String]? = nil
   var slackWorkspaceUrl: String? = nil
+  var slackAppIconUrl: String? = nil
 }
 
 struct Conversation: Codable, Identifiable, Hashable {
@@ -433,6 +434,7 @@ struct ChatMessage: Identifiable {
   var referencedFiles: [DeliveredFile] = []
   var playgrounds: [NativePlayground] = []
   var speaker: String?
+  var speakerID: String?
   var runID: String?
   var sequence: Int?
   var createdAt: Double?
@@ -528,8 +530,8 @@ private struct ChatMessageBuilder {
       messages.append(
         ChatMessage(
           id: entry.id, role: "user", text: text, files: entry.body?.attachments ?? [],
-          speaker: entry.body?.name, steered: entry.steered == true,
-          slackTimestamp: entry.messageTs))
+          speaker: entry.body?.name, speakerID: entry.details?["speakerId"]?.string,
+          steered: entry.steered == true, slackTimestamp: entry.messageTs))
     }
   }
 
