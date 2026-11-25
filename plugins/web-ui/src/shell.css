@@ -1614,10 +1614,6 @@ a.chat-row-open {
 .session-fork-badge:disabled {
   cursor: default;
 }
-.session-tools {
-  gap: 2px;
-  flex: none;
-}
 .session-tool {
   display: inline-flex;
   align-items: center;
@@ -1633,27 +1629,91 @@ a.chat-row-open {
   cursor: pointer;
   white-space: nowrap;
 }
-.session-tool:hover {
+.members-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  margin-left: auto;
+  padding: 0 8px 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: var(--font-12-5);
+  font-weight: 600;
+  cursor: pointer;
+}
+.members-button:hover {
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   color: var(--foreground);
 }
-.session-tool.active {
-  background: color-mix(in srgb, var(--secondary) 85%, transparent);
-  color: var(--foreground);
+.members-button .group-avatar-stack > .inbox-avatar {
+  width: 22px;
+  height: 22px;
+  border-color: var(--background);
+  border-radius: 6px;
+  font-size: 9px;
 }
-.session-tool-count {
-  min-width: 15px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--secondary) 90%, transparent);
+.members-sub {
+  margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 15px;
-  text-align: center;
+  font-size: var(--font-13);
 }
-.session-tool.active .session-tool-count,
-.session-tool:hover .session-tool-count {
+.members-dialog .members-add {
+  margin-top: 16px;
+}
+.members-list {
+  margin-top: 12px;
+}
+.members-add-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.members-add-row:hover {
+  background: var(--secondary);
+}
+.members-add-glyph {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--cta);
+  color: var(--cta-foreground);
+}
+.members-add-row .project-member-name {
+  font-weight: 600;
+}
+.members-you {
+  color: var(--muted-foreground);
+}
+.members-picked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.members-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--font-13);
+}
+.members-chip > .inbox-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9px;
+}
+.session-tool:hover {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
   color: var(--foreground);
 }
 .session-heading.as-link {
@@ -1673,18 +1733,6 @@ a.chat-row-open {
   position: sticky;
   top: -28px;
   z-index: 5;
-}
-.scoped-view .pane-title {
-  font-size: var(--font-14);
-  font-weight: 550;
-  color: var(--muted-foreground);
-}
-.scoped-view .pane-subtitle {
-  display: none;
-}
-.scoped-view .list-page-head,
-.scoped-view .pane-head {
-  margin-bottom: 8px;
 }
 .session-crumb.as-link {
   border: 0;
@@ -8465,18 +8513,6 @@ h3.ambient-field-label {
   font-weight: 400;
 }
 
-.split-single-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-@container pane-canvas (max-width: 700px) {
-  .split-single-tools {
-    display: none;
-  }
-}
-
 .split-dock > .dv-dockview {
   width: 100%;
   height: 100%;
@@ -8773,12 +8809,6 @@ h3.ambient-field-label {
 
 .split-tools-menu {
   z-index: 60;
-}
-
-.split-tools-menu-sep {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--border);
 }
 
 /* In the strip the shared hover wash needs to differ from the strip's own background. */
@@ -11272,9 +11302,6 @@ h3.ambient-field-label {
 .mobile-menu-btn {
   display: none;
 }
-.session-tools-more {
-  display: none;
-}
 @keyframes sheet-in {
   from {
     transform: translateY(24px);
@@ -11364,21 +11391,6 @@ h3.ambient-field-label {
     font-size: 15px;
     font-weight: 550;
   }
-  :where(html:not(.desktop-embed)) .session-tools {
-    display: none;
-  }
-  :where(html:not(.desktop-embed)) .session-tools-more {
-    display: flex;
-    flex: none;
-  }
-  :where(html:not(.desktop-embed)) .session-tools-more-btn {
-    width: 44px;
-    height: 44px;
-    max-width: none;
-    padding: 0;
-    justify-content: center;
-    color: var(--foreground);
-  }
   :where(html:not(.desktop-embed)) .chat-topbar .topbar-actions .icon-btn {
     width: 44px;
     height: 44px;
@@ -11396,16 +11408,12 @@ h3.ambient-field-label {
   }
   :where(html:not(.desktop-embed)) .pane > .list-page-head:first-child,
   :where(html:not(.desktop-embed)) .project-grid-content > .list-page-head:first-child,
-  :where(html:not(.desktop-embed)) .pane:not(.scoped-view) > .kc-page-content > .list-page-head:first-child {
+  :where(html:not(.desktop-embed)) .pane > .kc-page-content > .list-page-head:first-child {
     margin-top: -44px;
   }
   :where(html:not(.desktop-embed)) .pane > .list-page-head:first-child > :first-child,
   :where(html:not(.desktop-embed)) .project-grid-content > .list-page-head:first-child > :first-child,
-  :where(html:not(.desktop-embed))
-    .pane:not(.scoped-view)
-    > .kc-page-content
-    > .list-page-head:first-child
-    > :first-child {
+  :where(html:not(.desktop-embed)) .pane > .kc-page-content > .list-page-head:first-child > :first-child {
     padding-left: 48px;
   }
   :where(html:not(.desktop-embed)) .pane-title {
@@ -11569,12 +11577,6 @@ h3.ambient-field-label {
   }
   :where(html:not(.desktop-embed)) .chat-topbar:has(.menu-popover:not([hidden])) {
     z-index: 60;
-  }
-  :where(html:not(.desktop-embed)) .session-tools-more .menu-option {
-    align-items: center;
-  }
-  :where(html:not(.desktop-embed)) .session-tools-more .menu-option-copy {
-    flex: 1;
   }
   :where(html:not(.desktop-embed)) .menu-title {
     padding: 10px 12px 6px;

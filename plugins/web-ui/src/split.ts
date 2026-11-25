@@ -3,24 +3,7 @@ import { preserveTranscriptScroll } from "./transcript-viewport";
 import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import {
-  Archive,
-  ArrowUpLeft,
-  Box,
-  Brain,
-  Clock3,
-  ChevronDown,
-  Columns2,
-  Files,
-  KeyRound,
-  Link,
-  Maximize2,
-  Rocket,
-  Rows2,
-  Shrink,
-  X,
-  type IconNode,
-} from "lucide";
+import { Archive, ArrowUpLeft, ChevronDown, Columns2, Link, Maximize2, Rows2, Shrink, X } from "lucide";
 import {
   createDockview,
   type DockviewApi,
@@ -81,7 +64,7 @@ import {
   backgroundIcons,
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
-import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
+import { membersButtonTpl } from "./members";
 import {
   fetchTranscript,
   fetchUiState,
@@ -893,30 +876,6 @@ function paneCrumb(panel: IDockviewPanel): string | null {
   return scopeTitle(scope, context?.name ?? null);
 }
 
-const PANE_TOOLS: { tool: SessionTool; glyph: IconNode; label: string }[] = [
-  { tool: "crons", glyph: Clock3, label: "Crons" },
-  { tool: "apps", glyph: Rocket, label: "Apps" },
-  { tool: "files", glyph: Files, label: "Files" },
-  { tool: "skills", glyph: Box, label: "Skills" },
-  { tool: "memory", glyph: Brain, label: "Memory" },
-  { tool: "keychain", glyph: KeyRound, label: "Your keychain" },
-];
-
-function openPaneTool(panel: IDockviewPanel, tool: SessionTool): void {
-  const params = panelParams(panel);
-  const session = paneSession(panel);
-  const scope = paneScopeId(panel) ?? "";
-  setScopedSession({
-    scopeId: scope,
-    sessionId: params.sessionId ?? session?.id ?? null,
-    threadRef: params.threadRef ?? null,
-    title: session?.title?.trim() || "New chat",
-    crumb: paneCrumb(panel),
-  });
-  if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-  switchView(tool);
-}
-
 function paneIsWorking(panel: IDockviewPanel): boolean {
   const conv = paneContents.get(panel.id)?.conversation;
   const agent = conv?.state.agent;
@@ -1416,12 +1375,6 @@ class GroupActions implements IHeaderActionsRenderer {
       panel && !paneKindEntry(panelParams(panel)) ? (panelParams(panel).sessionId ?? paneSession(panel)?.id) : null;
     const maximized = props.api.isMaximized();
     if (single) this.menuOpen = false;
-    const runTool = (tool: SessionTool): void => {
-      this.menuOpen = false;
-      const p = activePanel();
-      this.draw();
-      if (p) openPaneTool(p, tool);
-    };
     const closeMenu = (): void => {
       this.menuOpen = false;
       this.draw();
@@ -1465,25 +1418,6 @@ class GroupActions implements IHeaderActionsRenderer {
                 >${maximized ? "Restore split view (Esc)" : "Expand pane"}</span
               >
             </button>
-            ${
-              single
-                ? nothing
-                : html`
-                    <div class="split-tools-menu-sep" role="separator"></div>
-                    ${PANE_TOOLS.map(
-                      (t) => html`
-                        <button
-                          class="session-menu-option"
-                          type="button"
-                          role="menuitem"
-                          @click=${() => runTool(t.tool)}
-                        >
-                          ${icon(t.glyph, 15)}<span>${t.label}</span>
-                        </button>
-                      `,
-                    )}
-                  `
-            }
           </div>
         `
       : nothing;
@@ -1550,20 +1484,7 @@ class GroupActions implements IHeaderActionsRenderer {
     render(
       html`${
         single
-          ? html`<span class="split-single-tools">
-              ${PANE_TOOLS.map((t) => {
-                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
-                return html`<button
-                  class="session-tool"
-                  type="button"
-                  aria-label=${t.label}
-                  ${tip(t.label)}
-                  @click=${() => runTool(t.tool)}
-                >
-                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-                </button>`;
-              })}
-            </span>`
+          ? nothing
           : html`<span class="split-tools">
               <button
                 class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
@@ -1583,6 +1504,7 @@ class GroupActions implements IHeaderActionsRenderer {
               ${menu}
             </span>`
       }
+      ${panel && !paneKindEntry(panelParams(panel)) ? membersButtonTpl(scope, { sessionId: sessionId ?? null, title: paneSession(panel)?.title?.trim() ?? "" }, () => this.draw()) : nothing}
       ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
       ${single ? nothing : buttons.map(headerButton)}${tabMenuTpl}`,
       this.element,

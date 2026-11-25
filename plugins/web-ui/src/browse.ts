@@ -15,7 +15,6 @@ import {
 } from "lucide";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { nextGridIndex } from "./grid-nav";
-import { setScopedSession } from "./session-scope";
 import { ADMIN_HOME_URL, appState, can, switchView } from "./shell";
 import { icon } from "./icons";
 import { personasState } from "./personas";
@@ -117,7 +116,6 @@ function go(d: Destination): void {
     location.href = d.href;
     return;
   }
-  setScopedSession(null);
   switchView(d.view);
 }
 

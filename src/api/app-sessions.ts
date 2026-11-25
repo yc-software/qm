@@ -11,7 +11,7 @@ import type { ParticipantPageQuery, ToolStep } from "../sessions/session-store.t
 import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { canonicalScopeId, parseScopeId, personalScope, scopeId } from "../types.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -33,7 +33,7 @@ import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
-import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
+import { projectGroupRef, projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import {
@@ -1158,7 +1158,7 @@ export function createSessionMethods(
       const source = await deps.sessions.get(sessionId);
       if (!source || source.ephemeral) return null;
       const parsed = parseScopeId(source.scopeId);
-      const fork = async (projectMembers?: readonly string[]) => {
+      const fork = async (project?: { members: readonly string[]; scopeId: ScopeId; name: string }) => {
         const visible = (await transcripts.forViewer(sessionId, principalId)).items;
         const upToSeq = opts?.upToSeq;
         const copied = upToSeq === undefined ? visible : visible.filter((item) => item.seq <= upToSeq);
@@ -1170,9 +1170,9 @@ export function createSessionMethods(
         const threadRef = `web:${principalId}:${randomUUID()}`;
         const forked = await deps.sessions.getOrCreateByThread(
           threadRef,
-          source.type,
-          source.scopeId,
-          source.channelName,
+          project ? "group" : source.type,
+          project?.scopeId ?? source.scopeId,
+          project?.name ?? source.channelName,
           "web",
         );
         const copiedItems = await deps.sessions.appendMany(
@@ -1188,11 +1188,11 @@ export function createSessionMethods(
           });
         }
         await Promise.all(
-          (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
+          (project?.members ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
         );
         const sourceTitle = source.title?.trim();
-        if (sourceTitle && projectMembers === undefined)
-          await deps.sessions.updateTitle(forked.id, `${sourceTitle} (fork)`);
+        const title = project ? opts?.projectId && sourceTitle : sourceTitle && `${sourceTitle} (fork)`;
+        if (title) await deps.sessions.updateTitle(forked.id, title);
         h.recordAudit({
           at: Date.now(),
           principalId,
@@ -1204,15 +1204,17 @@ export function createSessionMethods(
         const session = { ...stored, canContinue: await canContinueOnWeb(principalId, stored) };
         return { session, items: (await transcripts.forRender(forked.id)).items };
       };
-      const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
+      if (opts?.projectId && canonicalScopeId(source.scopeId) !== canonicalScopeId(personalScope(principalId)))
+        return null;
+      const projectId = opts?.projectId ?? (parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null);
       if (!projectId) return fork();
       const projects = deps.projects;
       if (!projects) return null;
       return projects.withRosterLock(projectId, async (project) => {
         if (project.orgId !== orgIdOf()) return null;
-        const members = await projects.members(parsed.ref);
+        const members = await projects.members(projectGroupRef(project.id));
         if (!members?.includes(principalId)) return null;
-        return fork(members);
+        return fork({ members, scopeId: projectScopeId(project.id), name: project.name });
       });
     },
 
@@ -1248,7 +1250,7 @@ export function createSessionMethods(
         if (!projects) return null;
         return projects.withRosterLock(projectId, async (project) => {
           if (project.orgId !== orgIdOf()) return null;
-          const members = await projects.members(parsed.ref);
+          const members = await projects.members(projectGroupRef(project.id));
           if (!members?.includes(principalId)) return null;
           return create(members, project.name);
         });

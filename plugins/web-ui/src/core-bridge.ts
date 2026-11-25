@@ -378,11 +378,12 @@ export async function forkSession(
   id: string,
   upToSeq?: number,
   sideChat?: { entrySeq: number; quote: string; occurrence: number },
+  projectId?: string,
 ): Promise<{ session: CoreSession; items: Item[] }> {
   return withItems(
     await api<{ session: CoreSession; items: Item[] }>(`/api/sessions/${encodeURIComponent(id)}/fork`, {
       method: "POST",
-      body: JSON.stringify({ upToSeq, sideChat }),
+      body: JSON.stringify({ upToSeq, sideChat, projectId }),
     }),
   );
 }

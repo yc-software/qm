@@ -108,7 +108,6 @@ import {
 } from "./personas";
 import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
 import { renderFiles } from "./files";
-import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
 import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
@@ -810,7 +809,6 @@ function onNavClick(e: Event): void {
   if (!isView(view)) return;
   if (e instanceof MouseEvent && !isPlainLeftClick(e)) return;
   e.preventDefault();
-  setScopedSession(null);
   switchView(view);
   closeSidebarOnNarrowView();
 }

@@ -225,14 +225,18 @@ function contextMeta(c: CoreContext): { title: string; sub: string; glyph: IconN
   };
 }
 
-export async function ensureContexts(force = false): Promise<CoreContext[]> {
-  if (contextsState.loaded && !force) return contextsState.list;
-  try {
-    await fetchContexts();
-  } catch {
-    void 0;
-  }
-  return contextsState.list;
+let contextsInFlight: Promise<CoreContext[]> | null = null;
+
+export function ensureContexts(force = false): Promise<CoreContext[]> {
+  if (contextsState.loaded && !force) return Promise.resolve(contextsState.list);
+  if (contextsInFlight && !force) return contextsInFlight;
+  const pending = fetchContexts()
+    .catch(() => contextsState.list)
+    .finally(() => {
+      if (contextsInFlight === pending) contextsInFlight = null;
+    });
+  contextsInFlight = pending;
+  return pending;
 }
 
 export function personalScopeId(): string | null {
@@ -1166,7 +1170,7 @@ export async function setProjectIcon(project: CoreProject, value: ProjectIcon | 
   }
 }
 
-function projectFromResponse(response: unknown): CoreProject | null {
+export function projectFromResponse(response: unknown): CoreProject | null {
   const project = (response as { project?: CoreProject } | null)?.project;
   if (
     !project ||
@@ -1182,7 +1186,7 @@ function projectFromResponse(response: unknown): CoreProject | null {
   return project;
 }
 
-function upsertProject(project: CoreProject): CoreContext {
+export function upsertProject(project: CoreProject): CoreContext {
   const loaded = contextsState.loaded;
   contextsFetchSeq++;
   const scopeId = project.scopeId;

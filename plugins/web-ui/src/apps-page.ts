@@ -8,7 +8,6 @@ import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { withAppDetailNotice, withAppListNotice, withoutAppDetailNotice, type AppNotices } from "./app-notices";
@@ -273,11 +272,8 @@ function drawAppsPage(): void {
         ...(rows.length ? appRows(rows) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
-  const scoped = Boolean(scopedSession.active);
-  appsPageHost.classList.toggle("scoped-view", scoped);
   render(
     html`
-      ${scopedViewTopbar("apps", drawAppsPage)}
       ${listPageTpl({
         title: "Apps",
         controls: appList.length ? listLayoutSelect(appsLayout, setAppsLayout) : undefined,
@@ -897,10 +893,7 @@ export async function renderApps(): Promise<void> {
   archiveCandidate = null;
   restoreArchiveFocus = false;
   setAppBackgroundInert(false);
-  if (scopedSession.active) {
-    appScope = scopedSession.active.scopeId;
-    contextsState.selected = null;
-  } else if (contextsState.selected) {
+  if (contextsState.selected) {
     appScope = contextsState.selected;
     contextsState.selected = null;
   } else {

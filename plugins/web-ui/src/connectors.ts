@@ -6,7 +6,6 @@ import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
 import { CONNECTOR_LABELS } from "./connector-link";
 import { appState, replacePanePreservingFocus } from "./shell";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
 import { listPageTpl } from "./list-page";
@@ -492,10 +491,9 @@ function drawConnectors(): void {
     ),
   );
   const host = document.createElement("div");
-  host.className = scopedSession.active ? "pane keychain-page scoped-view" : "pane keychain-page";
+  host.className = "pane keychain-page";
   render(
     html`
-      ${scopedViewTopbar("keychain", () => drawConnectors())}
       <div class="kc-page-content" ?inert=${Boolean(confirmation)}>
         ${listPageTpl({
           title: "Keychain",

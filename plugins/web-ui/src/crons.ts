@@ -10,7 +10,6 @@ import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -203,8 +202,7 @@ function cronStatusLabel(c: CronView): "enabled" | "disabled" | "archived" {
 
 export async function renderCronsPage(): Promise<void> {
   if (appState.currentView !== "crons") return;
-  if (scopedSession.active) cronsScope = scopedSession.active.scopeId;
-  else if (contextsState.selected) {
+  if (contextsState.selected) {
     cronsScope = contextsState.selected;
     contextsState.selected = null;
   } else cronsScope = null;
@@ -280,11 +278,8 @@ function drawCronsPage(): void {
   if (cronsNotice) empty = cronsNotice;
   else if (cronsLoading && cronList.length === 0 && visibleCronList.length === 0) empty = "Loading crons…";
   else if (cronsScope) empty = "No crons in this context.";
-  const scoped = Boolean(scopedSession.active);
-  cronsPageHost.classList.toggle("scoped-view", scoped);
   render(
-    html`${scopedViewTopbar("crons", drawCronsPage)}
-    ${listPageTpl({
+    html`${listPageTpl({
       title: "Crons",
       search: {
         value: cronsSearch,

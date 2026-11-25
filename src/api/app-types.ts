@@ -458,7 +458,11 @@ export interface App {
   forkSession(
     sessionId: string,
     principalId: string,
-    opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
+    opts?: {
+      upToSeq?: number;
+      sideChat?: { entrySeq: number; quote: string; occurrence: number };
+      projectId?: string;
+    },
   ): Promise<{ session: Session; items: Item[] } | null>;
   listFilesForViewer(
     tenant: Tenant,

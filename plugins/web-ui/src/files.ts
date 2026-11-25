@@ -24,7 +24,6 @@ import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { listGroupsTpl, listRowsTpl, listSelect } from "./list-page";
 import { isTouch } from "./viewport";
 
@@ -140,11 +139,8 @@ function drawFiles(loading = false): void {
   if (filesDragActive) dropLabel = "Drop files";
   else if (filesUploading) dropLabel = "Uploading…";
   const status = filesNotice || (loading && !fileRows.length ? "Loading files…" : "");
-  const scoped = Boolean(scopedSession.active);
-  filesHost.classList.toggle("scoped-view", scoped);
   render(
     html`
-      ${scopedViewTopbar("files", drawFiles)}
       <div class="list-page-head">
         <h1 class="pane-title">Files</h1>
         <label class="list-search"
@@ -465,14 +461,7 @@ async function loadFiles(seq: number): Promise<void> {
 
 export async function renderFiles(): Promise<void> {
   if (appState.currentView !== "files") return;
-  if (scopedSession.active) {
-    if (filesScope !== scopedSession.active.scopeId) {
-      filesScope = scopedSession.active.scopeId;
-      fileRows = [];
-      filesNextCursor = null;
-    }
-    contextsState.selected = null;
-  } else if (contextsState.selected) {
+  if (contextsState.selected) {
     filesScope = contextsState.selected;
     fileRows = [];
     filesNextCursor = null;

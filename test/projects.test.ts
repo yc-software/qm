@@ -1010,6 +1010,32 @@ test("a member added to a Project inherits the chats that predate them", async (
   assert.match(JSON.stringify(request.messages), /BEFORE_JOIN_TOPIC/, "the agent keeps the project's full history");
 });
 
+test("a personal chat forks into the owner's Project for its members", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-fork-in-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "owner", displayName: "Owner", type: "internal" },
+    { principalId: "member", displayName: "Member", type: "internal" },
+  ]);
+  const conversation = { kind: "dm" as const, threadRef: "web:owner:solo", audience: [] };
+  await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "SOLO_TOPIC" });
+  const solo = await built.sessions.getByThread("web:owner:solo");
+  assert.ok(solo);
+  await built.sessions.updateTitle(solo.id, "Solo plan");
+  const project = await built.app.createProject("owner", "Solo plan");
+  assert.ok(project);
+  assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
+
+  assert.equal(await built.app.forkSession(solo.id, "member", { projectId: project.id }), null);
+  const forked = await built.app.forkSession(solo.id, "owner", { projectId: project.id });
+  assert.ok(forked);
+  assert.equal(forked.session.scopeId, projectScopeId(project.id));
+  assert.equal((await built.sessions.get(forked.session.id))?.title, "Solo plan");
+  const view = await built.app.getSessionForViewer(forked.session.id, asMember);
+  assert.match(JSON.stringify(view?.items), /SOLO_TOPIC/);
+  assert.equal(await built.app.getSessionForViewer(solo.id, asMember), null);
+  assert.equal(await built.app.forkSession(forked.session.id, "owner", { projectId: project.id }), null);
+});
+
 test("leaving a Project still cuts off everything after the member left", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-departure-")) }));
   await built.app.upsertDirectory([

@@ -185,12 +185,16 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
     principalId?: unknown;
     upToSeq?: unknown;
     sideChat?: { entrySeq?: unknown; quote?: unknown; occurrence?: unknown };
+    projectId?: unknown;
   };
   if (typeof b.principalId !== "string" || !b.principalId) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   }
   if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
     return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
+  }
+  if (b.projectId !== undefined && (typeof b.projectId !== "string" || !b.projectId)) {
+    return sendJson(res, 400, { error: "bad_request", message: "projectId must be a nonempty string" });
   }
   let sideChat: { entrySeq: number; quote: string; occurrence: number } | undefined;
   if (b.sideChat !== undefined) {
@@ -211,6 +215,7 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
     out = await app.forkSession(id, b.principalId, {
       ...(b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : {}),
       ...(sideChat ? { sideChat } : {}),
+      ...(typeof b.projectId === "string" ? { projectId: b.projectId } : {}),
     });
   } catch (e) {
     if (e instanceof SideChatAnchorError) return sendJson(res, 400, { error: "bad_request", message: e.message });

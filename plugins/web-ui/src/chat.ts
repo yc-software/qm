@@ -186,10 +186,11 @@ import { animateDetailsToggle } from "./details-motion";
 import { htmlPreviewCard } from "./html-preview";
 import { audioPlayer, dataUrl, mediaFeed, mediaKind, openMediaViewer, videoThumb, type MediaItem } from "./media";
 import { checkedReplyStep, createLiveStepLine, currentStep, preStepWork } from "./live-step";
-import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shell";
+import { appState, renderSidebarTop, syncUrlFromState } from "./shell";
 import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
-import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
+import { openProjectPage, sessionTopbarTpl } from "./session-scope";
+import { membersButtonTpl } from "./members";
 import {
   addPendingSession,
   onSessionDragStart,
@@ -1910,7 +1911,6 @@ export function createChatSurface(
         ? chatState.forkSession.forkedFrom
         : undefined;
     return sessionTopbarTpl({
-      sessionId: chatState.sessionId ?? session?.id,
       crumb,
       title,
       parent: parentId
@@ -1924,18 +1924,9 @@ export function createChatSurface(
         : null,
       persona: sessionPersonaChip(currentSession),
       onCrumb: crumb && scope ? () => openProjectPage(scope) : null,
-      toolCount: scope ? (t) => scopeToolCount(t, scope, () => drawActiveChat()) : null,
-      onTool: (tool) => {
-        setScopedSession({
-          scopeId: scope ?? "",
-          sessionId: chatState.sessionId,
-          threadRef: chatState.threadRef,
-          title: title || "New chat",
-          crumb,
-        });
-        if (scope && (tool === "crons" || tool === "files" || tool === "apps")) contextsState.selected = scope;
-        switchView(tool);
-      },
+      members: membersButtonTpl(scope, { sessionId: chatState.sessionId ?? session?.id ?? null, title }, () =>
+        drawActiveChat(),
+      ),
     });
   }
 

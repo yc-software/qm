@@ -4,7 +4,6 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus } from "./shell";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { tip } from "./tooltip";
 
 interface Fact {
@@ -109,10 +108,9 @@ function drawMemory(loading = false): void {
   if (appState.currentView !== "memory" || !appState.mainEl) return;
   const visible = facts.filter((fact) => !search || fact.text.toLowerCase().includes(search.toLowerCase()));
   const host = document.createElement("div");
-  host.className = scopedSession.active ? "pane scoped-view" : "pane";
+  host.className = "pane";
   render(
     html`
-      ${scopedViewTopbar("memory", () => drawMemory())}
       <div class="list-page-head">
         <div>
           <h1 class="pane-title">Memory</h1>
