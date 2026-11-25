@@ -708,7 +708,8 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.internalAudience, undefined, "a guest in the room means no internal audience");
-  assert.equal(claims!.liveActor, true, "presence is attested apart from the audience");
+  assert.equal(claims!.liveActor, undefined, "a guest room mints no presence claims");
+  assert.equal(claims!.liveAuthor, undefined);
   assert.equal(claims!.memory?.orgWrite, undefined);
 
   for (const publishMembers of [undefined, [] as { externalId: string; orgId: string }[]]) {

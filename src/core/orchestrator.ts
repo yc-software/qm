@@ -549,9 +549,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
       const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
       const internalAudience = allInternal && !external;
-      const liveTurn = authorizationOrigin.kind === "human" || ownerFireTurn;
+      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && internalAudience;
       const liveAuthorTurn =
-        (!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn);
+        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
+        internalAudience;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
