@@ -52,12 +52,12 @@ The running example: Ada at Acme, in a web DM, asks the agent to run a test suit
 | **Load sample**                       | One reading of IO pressure, load average, memory and workspace disk, taken after a command. Only the latest is kept.                                                                                          | `LoadSample`; table `sandbox_loads`                                                                                                                                                                                          |
 | **Background job**                    | A detached process on a sandbox with a purpose, a time limit and a status (`running`, `exited`, `reaped`).                                                                                                    | `ProcessRecord`; table `process_sessions`; in the guest, `~/.agent-proc/<process id>/`                                                                                                                                       |
 | **Environment**                       | A named handle that lets other scopes attach to one scope's writable context, and so to its default sandbox. Only its owner can attach others.                                                                | tables `environments`, `environment_attachments`                                                                                                                                                                             |
-| **Egress proxy**                      | A forward proxy that sandbox traffic can be forced through. It verifies the turn's egress token and applies the policy inside it.                                                                             | `deploy/egress-proxy`, `src/egress-authz-main.ts`                                                                                                                                                                            |
+| **Egress proxy**                      | A forward proxy that sandbox traffic can be forced through; see [security](./security.md).                                                                                                                    | `deploy/egress-proxy`, `src/egress-authz-main.ts`                                                                                                                                                                            |
 | **Tenant shape**                      | In a multi-tenant deployment, one organization's provider account, name prefix and default backend.                                                                                                           | `settings` column of `tenants`                                                                                                                                                                                               |
 
 ## The parts
 
-`src/sandbox` is about 14,400 lines. About 10,600 of them are the eleven backends and their provider clients.
+Most of `src/sandbox` is the eleven backends and their provider clients.
 
 ### `src/sandbox/sandbox.ts` — the contract
 
@@ -69,7 +69,7 @@ The running example: Ada at Acme, in a web DM, asks the agent to run a test suit
 
 ### `src/sandbox/sandbox-resources.ts` — records, defaults and access
 
-**Job.** Create, list, select, restart and retire sandbox resources; keep holders and load samples; decide who may use what. **Key idea.** Every operation re-checks that the actor may use the owning scope, and `forTurn` re-verifies live membership for the turn. Selecting a default changes routing only. **Surprising.** The file also carries the bot-versus-person rules and two data migrations. `create` takes nine positional parameters. On first use per organization it runs a one-time import, `upgradeLegacySandboxes` (`src/sandbox/sandbox-resource-upgrade.ts`), which adopts computers from before resources existed as `legacy` records in state `unverified`.
+**Job.** Create, list, select, restart and retire sandbox resources; keep holders and load samples; decide who may use what. **Key idea.** Every operation re-checks that the actor may use the owning scope, and `forTurn` re-verifies live membership for the turn. Selecting a default changes routing only. **Surprising.** The file also carries the bot-versus-person rules and two data migrations. `create` takes a long list of positional parameters. On first use per organization it runs a one-time import, `upgradeLegacySandboxes` (`src/sandbox/sandbox-resource-upgrade.ts`), which adopts computers from before resources existed as `legacy` records in state `unverified`.
 
 ### The backends — `src/sandbox/e2b-sandbox.ts` and ten siblings
 
@@ -129,9 +129,9 @@ The running example: Ada at Acme, in a web DM, asks the agent to run a test suit
 
 **Job.** Let an organization admin list, create, set the default of and retire sandboxes for any scope. **Surprising.** Sandboxes created here are marked `personUsed`, so a bot's turn cannot use them.
 
-### Egress proxy — `deploy/egress-proxy`, `src/egress-authz-main.ts`
+### Egress proxy
 
-**Job.** Enforce the turn's egress policy on real connections. Which hosts a policy allows is decided in [security](./security.md); this is the mechanism. **Key idea.** The proxy verifies the capability token a sandbox presents as the proxy password, applies the policy inside it and dials the destination itself; how it decides, and its wire format, are in [security](./security.md#contracts). **Surprising.** The proxy only makes policy unavoidable where the provider's network rules also block direct traffic (the "Locked egress" column). Elsewhere a command can ignore the proxy variables. A DigitalOcean session already has a provider proxy in its environment, so core runs a small forwarder inside each session (`src/sandbox/managed-agents-egress-forward.mjs`) that chains through it, and points commands at the forwarder.
+The proxy itself belongs to [security](./security.md). What matters here is what a backend does with it. The proxy only makes policy unavoidable where the provider's network rules also block direct traffic (the "Locked egress" column). Elsewhere a command can ignore the proxy variables. A DigitalOcean session already has a provider proxy in its environment, so core runs a small forwarder inside each session (`src/sandbox/managed-agents-egress-forward.mjs`) that chains through it, and points commands at the forwarder.
 
 ### Images — `fly/`, `local/`, `deploy/e2b`, `deploy/do-managed-agents`, `superserve/`, `porter/`
 

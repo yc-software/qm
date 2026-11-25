@@ -10,10 +10,6 @@
 4. **Agent UX = human UX.** Tools, errors, hints and prompts are the agent's interface, so they get the same care as the web UI. Spend every context token on purpose.
 5. **Delete before you add.** Via negativa. This codebase is already way too flabby. Always try the solution that simplifies or removes code before adding anything.
 
-## The whole thing in one paragraph
-
-QM turns a message into an agent turn and writes down everything that happened. A message arrives from a surface (the web app, Slack, another chat host) or from the clock (a cron, a webhook, a watched job). Core works out who it is from and which scope it belongs to, and puts a run on a queue in Postgres. A worker claims the run, rebuilds the model's view of the conversation from the session's item log, assembles the system prompt from standing instructions, memory and skills, and drives the Pi agent loop, recording every model step, tool call and result in the log as it happens. Tool calls run on sandbox computers with short-lived capability tokens; a call that needs a person's sign-off pauses the turn behind an approval card. When the loop ends the reply is already in the log, and the surface that asked reads it from there. If the worker dies midway, another claims the run and carries on from the log. Everything else elaborates that paragraph; the [area specs](#area-specs) walk through it one area at a time.
-
 ## Deployment shapes
 
 QM has no single production. This repository is upstream of every deployment, and no code path asks which kind it is running in: a shape is only the sum of ordinary settings (the deployment directory's `qm.config.jsonc`, core's environment, stored credentials, rows in `tenants`). Four shapes exist, and a change to `main` lands on all of them.
@@ -28,9 +24,9 @@ QM has no single production. This repository is upstream of every deployment, an
 What each needs from a change:
 
 - **Package deployments** get `main` only when a release is cut by hand (the `Release` workflow) and the operator upgrades, so they cross many commits at once. They are often the smallest configuration that boots: web UI only, email sign-in from the built-in `auth` broker, one model provider key, one sandbox backend, local disk in place of S3.
-- **Platform-hosted deployments** get what the platform's template builds, which need not be a release: the `render` target builds the head of the branch named in `render.source` on every `qm up` and refuses `imageOverrides`. A platform also fixes choices the operator cannot change: `render` allows only the `render` sandbox backend (`SANDBOX_BACKEND_POLICY` in `cli/src/providers.ts`).
+- **Platform-hosted deployments** get what the platform's template builds, which need not be a release: the `render` target builds the head of a Git branch on every `qm up`. A platform also fixes choices the operator cannot change, such as the one sandbox backend it allows.
 - **Source-built deployments** can ship any green commit of `main` within hours of its merge, so `main` is always someone's release candidate. Several core instances serve at once.
-- **Multi-tenant deployments** hold many organizations in one database. A deployment is multi-tenant when `tenants` does not hold exactly one row (`bootTenant()` in `src/tenants/boot.ts` returns `undefined`; each process reads this once, at start). There, each organization's values come from `tenants.settings`, not from env; Slack accounts configured in env are ignored (`src/start.ts`); only the sandbox backends in `TENANT_SEPARATED` (`src/sandbox/sandbox-routing.ts`) may run; and `ORG_ID` is one value for the whole deployment, so it never identifies an organization.
+- **Multi-tenant deployments** hold many organizations in one database: a deployment is multi-tenant when `tenants` does not hold exactly one row. There, each organization's values come from `tenants.settings`, not from env; Slack accounts configured in env are ignored; only the sandbox backends that separate tenants may run; and `ORG_ID` is one value for the whole deployment, so it never identifies an organization. See [storage](./spec/storage.md).
 
 Changes that help one shape and break another:
 
@@ -61,7 +57,7 @@ Everything below is off, or absent, until a deployment configures it. Code must 
 - [deployments](./spec/deployments.md): the deployment layer (a deployment's own plugins, sandbox tools and skills); feature flags, which all start off.
 - [web-clients](./spec/web-clients.md): the desktop and iOS apps.
 
-App connections are the example to remember. No setting switches them: they are on when a Composio project key is stored as a credential and granted to the caller. Without one the app-connection routes answer `composio_unavailable`, yet the routes, the API catalog entries and the seeded `composio` skill are in every build.
+App connections are the example to remember: no setting switches them, they are on only where a Composio key is stored, and their routes and seeded skill ship in every build regardless.
 
 Swarms and suggested activities are the reverse: on by default, and a deployment can turn them off (`SWARMS_ENABLED`, `SUGGESTED_ACTIVITIES_ENABLED`).
 
@@ -89,24 +85,24 @@ Swarms and suggested activities are the reverse: on by default, and a deployment
 
 ## Area specs
 
-Each area has its own spec under `docs/spec/`, written as a tour: the area in one paragraph, one example traced through the real files, the nouns, the parts, what is optional, and where the complexity lives. Read the one your change touches before writing code.
+Each area has its own spec under `docs/spec/`, written as a tour: the area in one paragraph, one example traced through the real files, the nouns, the parts, what is optional, and where the complexity lives. Read the one your change touches before writing code; [turns](./spec/turns.md) traces one message end to end and is the place to start.
 
-| Area                                         | Code                                                                           | Covers                                                                |
-| -------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| [turns](./spec/turns.md)                     | `src/api/app-turn.ts`, `src/runs`, `src/core`, `src/agent`, `src/sessions`     | intake, the run queue, the orchestrator, the Pi loop, the item log    |
-| [delegation](./spec/delegation.md)           | `src/agent/agent-tools`, `src/sessions`, `src/wake`, `src/swarms`              | subagents, messages between conversations, swarms                     |
-| [models](./spec/models.md)                   | `src/model`, `src/agent/runtime-*.ts`                                          | the model catalog, runtimes, model routes, spend                      |
-| [scopes](./spec/scopes.md)                   | `src/identity`, `src/directory`, `src/acl`, `src/resolution`, `plugins/portal` | sign-in, principals, scopes, grants, admin roles                      |
-| [sandboxes](./spec/sandboxes.md)             | `src/sandbox`, `src/processes`                                                 | the sandbox contract, providers, background jobs, the egress proxy    |
-| [credentials](./spec/credentials.md)         | `src/credentials`, `src/connectors`, `src/mcp`                                 | keychain, brokers, capability tokens, OAuth connectors, MCP, Composio |
-| [context](./spec/context.md)                 | `src/memory`, `src/skills`, `src/personas`, `skills-seed`                      | system prompt, guidance, memory, skills, personas                     |
-| [background-work](./spec/background-work.md) | `src/cron`, `src/triggers`, `src/webhooks`, `src/monitors`, `src/loops`        | crons, webhooks, job watches, loops, whose authority a fire carries   |
-| [surfaces](./spec/surfaces.md)               | `src/surfaces`, `src/slack`, `src/delivery`, `src/surface-cache`               | the surface contract, Slack, generic chat, delivery                   |
-| [web-clients](./spec/web-clients.md)         | `src/web`, `plugins/web-ui`, `desktop`, `ios`                                  | the front door, web UI releases, the browser app, desktop and iOS     |
-| [artifacts](./spec/artifacts.md)             | `src/deploy`, `src/files`, `src/search`                                        | published apps, files, sharing                                        |
-| [storage](./spec/storage.md)                 | `src/persistence`, `src/tenants`                                               | Postgres, tenancy, migrations, object storage                         |
-| [security](./spec/security.md)               | `src/security`, `src/policy`, `src/decisions`, `src/audit`                     | postures, approvals, command policy, screening, egress, audit         |
-| [deployments](./spec/deployments.md)         | `cli`, `src/deployment`, `deploy`, `src/config.ts`, `.github/workflows`        | the deployment directory, the CLI, releases, CI                       |
+| Area                                         | Code                                                                                   | Covers                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [turns](./spec/turns.md)                     | `src/api/app-turn.ts`, `src/runs`, `src/core`, `src/agent`, `src/sessions`, `src/wake` | intake, the run queue, the orchestrator, the Pi loop, tools, the item log |
+| [delegation](./spec/delegation.md)           | `src/sessions/session-syscalls.ts`, `src/sessions/subagent-mail.ts`, `src/swarms`      | subagents, messages between conversations, swarms                         |
+| [models](./spec/models.md)                   | `src/model`, `src/agent/runtime-*.ts`                                                  | the model catalog, runtimes, model routes, spend                          |
+| [scopes](./spec/scopes.md)                   | `src/identity`, `src/directory`, `src/acl`, `src/resolution`, `plugins/portal`         | sign-in, principals, scopes, grants, admin roles                          |
+| [sandboxes](./spec/sandboxes.md)             | `src/sandbox`, `src/processes`                                                         | the sandbox contract, providers, background jobs                          |
+| [credentials](./spec/credentials.md)         | `src/credentials`, `src/connectors`, `src/mcp`                                         | keychain, brokers, capability tokens, OAuth connectors, MCP, Composio     |
+| [context](./spec/context.md)                 | `src/memory`, `src/skills`, `src/personas`, `skills-seed`                              | system prompt, guidance, memory, skills, personas                         |
+| [background-work](./spec/background-work.md) | `src/cron`, `src/triggers`, `src/webhooks`, `src/monitors`, `src/loops`                | crons, webhooks, job watches, loops, whose authority a fire carries       |
+| [surfaces](./spec/surfaces.md)               | `src/surfaces`, `src/slack`, `src/delivery`, `src/surface-cache`                       | the surface contract, Slack, generic chat, delivery                       |
+| [web-clients](./spec/web-clients.md)         | `src/web`, `plugins/web-ui`, `desktop`, `ios`                                          | the front door, web UI releases, the browser app, desktop and iOS         |
+| [artifacts](./spec/artifacts.md)             | `src/deploy`, `src/files`, `src/search`                                                | published apps, files, sharing                                            |
+| [storage](./spec/storage.md)                 | `src/persistence`, `src/tenants`                                                       | Postgres, tenancy, migrations, object storage                             |
+| [security](./spec/security.md)               | `src/security`, `src/policy`, `src/decisions`, `src/audit`, `deploy/egress-proxy`      | postures, approvals, command policy, screening, the egress proxy, audit   |
+| [deployments](./spec/deployments.md)         | `cli`, `src/deployment`, `deploy`, `src/config.ts`, `.github/workflows`                | the deployment directory, the CLI, releases, CI                           |
 
 `src/api` is the HTTP face of every area, and `src/wiring.ts` is the composition root that builds them all; neither is an area of its own.
 

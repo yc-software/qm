@@ -142,7 +142,7 @@ Ada at Acme opens the web app, types "summarize this PDF" and attaches `q3.pdf`.
 
 **Key idea.** `items` is append-only. Triggers refuse updates and truncation, and a row can be deleted only by deleting its session. Corrections are new items: `Retraction`, `Stop`, `ContextCompaction`.
 
-**Surprising.** Code reads and writes `Item` directly; there is no second transcript shape. Compaction deletes nothing: it appends a summary with `through_seq`, and readers start after it. A session holds at most one `ToolCall` and one `ToolResult` per call id, enforced by an index and raised as `DuplicateCallError`. About a third of the directory is delegation (`session-syscalls.ts`, `subagent-mail.ts` and neighbours) and about a fifth is migrations. There is no session lock table: `session_leases` is created by the base schema and dropped by a later migration.
+**Surprising.** Code reads and writes `Item` directly; there is no second transcript shape. Compaction deletes nothing: it appends a summary with `through_seq`, and readers start after it. A session holds at most one `ToolCall` and one `ToolResult` per call id, enforced by an index and raised as `DuplicateCallError`. Much of the directory is delegation (`session-syscalls.ts`, `subagent-mail.ts` and neighbours); see [delegation](./delegation.md). There is no session lock table: `session_leases` is created by the base schema and dropped by a later migration.
 
 ### Failure reporting — `src/util/errors.ts`, `src/admin/error-log.ts`, `plugins/chassis/src/error-reporting.ts`
 

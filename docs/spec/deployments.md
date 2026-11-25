@@ -68,7 +68,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Key idea.** The file is JSON with comments. Its top-level keys are a closed set (`VALID_TOP_LEVEL_KEYS`), so a misspelled one fails. `publicUrl` is the one public address, and the CLI derives every other URL from it.
 
-**Surprising.** (1) Strictness stops one level down. `env.<service>` is an open map of strings that every backend forwards unchanged. A misspelled or retired name under `env.core` passes `qm check` and does nothing. (2) Some names under `env.core` are read by the CLI and never by core, for example `AWS_PUBLIC_ORIGIN_URL`. (3) About 400 of the lines validate the `aws` block alone.
+**Surprising.** (1) Strictness stops one level down. `env.<service>` is an open map of strings that every backend forwards unchanged. A misspelled or retired name under `env.core` passes `qm check` and does nothing. (2) Some names under `env.core` are read by the CLI and never by core, for example `AWS_PUBLIC_ORIGIN_URL`. (3) A large share of the file validates the `aws` block alone.
 
 ### `cli/src/providers.ts`, `cli/src/services.ts`, `cli/src/secrets.ts`
 
@@ -242,7 +242,7 @@ slack-app-manifest.yml, slack-sso-manifest.yml (Slack OIDC only), deployment.md,
 
 **Images and releases.** Images are `ghcr.io/yc-software/qm/<core|egress-proxy|sandbox-base>:<40-character commit sha>`, built for `linux/amd64` and signed with cosign under the identity of `release-package.yml` on `main`. `cli/manifest.json` is `{"sandboxBase": "<ref>", "services": {"core": "<ref>", "egress-proxy": "<ref>"}}`, every reference pinned by `@sha256:`. A release's version is one patch above the higher of the latest `v*` tag and the published npm version, or the version in `cli/package.json` when that is higher. It is published under the npm tag `next`. An existing tag is never moved.
 
-**CI names.** Downstream release pipelines match these as text, so renaming one silently stops a deployment's releases. Workflow files: `cicd.yml` (named `CI/CD`), `full-suite.yml` (`Full suite`), `release.yml`, `release-package.yml`, `publish-cli.yml`, `wall-of-shame.yml`. Job names in `cicd.yml`, also listed as `CI_JOBS` and `PR_JOBS` in `scripts/reuse-ci.ts`: `Select tests`, `Core typecheck`, `Core`, `CLI`, `Lint`, `Production dependency audit`, `Core Postgres tests`, `Web UI plugin`, `Auth plugin`, `Portal plugin`, `Co-author trailers`, `Certify tested tree`. The receipt line is `QM_CI_TREE={"sha","tree","runId","attempt","pr"}`.
+**CI names.** Downstream release pipelines match these as text, so renaming one silently stops a deployment's releases. Workflow files: `cicd.yml` (named `CI/CD`), `full-suite.yml` (`Full suite`), `release.yml`, `release-package.yml`, `publish-cli.yml`, `wall-of-shame.yml`. The job names they match are `CI_JOBS` and `PR_JOBS` in `scripts/reuse-ci.ts`. The receipt line is `QM_CI_TREE={"sha","tree","runId","attempt","pr"}`.
 
 **Green-`main` webhook.** When configured, the `notify-deployments` job sends `POST <url>` with `content-type: application/json`, `x-github-event: push`, `x-hub-signature-256: sha256=<hex HMAC-SHA256 of the body>` and the body `{"event":"main_green","repository":"yc-software/qm","sha":"<sha>","run_id":<n>,"attempt":<n>}`. A failed delivery is a warning, not a failed run.
 

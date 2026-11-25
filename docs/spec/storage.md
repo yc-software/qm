@@ -70,8 +70,6 @@ Where other paths diverge:
 
 ## The parts
 
-`src/persistence` is about 2,300 lines and `src/tenants` about 2,000.
-
 ### `src/persistence/pg-pool.ts` — connections, the tenant setting, the migration runner
 
 **Job.** Give every store a `PgPool`: `q` and `query` for single statements, `forTenant(tenant)` for the token path, `pool()` and `sessionPool()` for raw connections, `registerMigration` and `migrate` for schema.
@@ -82,7 +80,7 @@ Where other paths diverge:
 
 ### `src/persistence/durable-map.ts` — one table per noun, one JSON document per row
 
-**Job.** `createPostgresMap` gives a store `get`, `put`, `merge`, `update`, `all`, `select` and similar over a table of `(tenant_id, id, json)`. Roughly 100 of the 165 or so tables in a migrated database have this shape (observed on an empty database after migrating).
+**Job.** `createPostgresMap` gives a store `get`, `put`, `merge`, `update`, `all`, `select` and similar over a table of `(tenant_id, id, json)`. Most tables in a migrated database have this shape (observed on an empty database after migrating).
 
 **Key idea.** Every write bumps a per-tenant counter in `durable_map_versions` in the same transaction. `all()` and `entries()` keep a per-tenant snapshot in memory, read the counter on every call, and refetch when it has moved or the snapshot is older than 15 seconds. This is "core memory is a cache" in its smallest form: the cached copy is trusted only while a row in Postgres says it is current.
 
