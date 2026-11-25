@@ -178,6 +178,9 @@ qm-onboarding-welcome.inline-setup + .streaming-text {
   opacity: 0.55;
   pointer-events: none;
 }
+.connection-card.pending .connection-card-status {
+  visibility: hidden;
+}
 .connection-card[data-tone="success"] .connection-card-status svg {
   color: var(--success);
 }

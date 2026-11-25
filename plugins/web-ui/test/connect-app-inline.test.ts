@@ -47,6 +47,10 @@ test("a card for one app shows only that app and continues the chat after a veri
       [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
       ["Disconnect Gmail"],
     );
+    const again = Object.assign(document.createElement("qm-onboarding-welcome"), { widget: "apps", toolkit: "gmail" });
+    document.querySelector(".message-stack")!.append(again);
+    await Promise.resolve();
+    assert.ok(again.querySelector(".connection-card.pending.compact"), "a recheck keeps the connected card's layout");
     assert.equal(scoped.querySelector('input[type="search"]'), null);
     assert.equal(scoped.querySelector(".connection-picker"), null);
     assert.equal(g.querySelector(".connection-card strong")?.textContent, "Granola MCP");
