@@ -5,7 +5,7 @@ import { desk } from "./desk.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const page = path.join(directory, "runtime.html");
-const commands = new Set(["apps", "observe", "act"]);
+const commands = new Set(["apps", "windows", "observe", "act"]);
 const cancelled = new Set();
 let window;
 let ready;
