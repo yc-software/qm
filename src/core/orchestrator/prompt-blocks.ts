@@ -43,6 +43,15 @@ export function previousRoster(history: readonly Item[]): RosterSnapshot | undef
   return retainedSnapshot(history, rosterOf).previous;
 }
 
+function rosterChanges<M extends { principalId: string }>(roster: readonly M[], previous: RosterSnapshot) {
+  const before = new Set(previous.roster.map((o) => o.id));
+  const current = new Set(roster.map((m) => m.principalId));
+  return {
+    joined: roster.filter((m) => !before.has(m.principalId)),
+    left: previous.roster.filter((o) => !current.has(o.id)),
+  };
+}
+
 function screenedNames(previous: RosterSnapshot | undefined): Map<string, string> {
   const screened = new Set(previous?.screened);
   return new Map((previous?.roster ?? []).filter((o) => screened.has(o.id)).map((o) => [o.id, o.name]));
@@ -55,10 +64,7 @@ export function peopleToScreen(
   owners: ReadonlyArray<{ id: string; name?: string }>,
 ): Array<{ id: string; name: string }> {
   const screened = screenedNames(previous);
-  const current = new Set(roster?.map((m) => m.principalId));
-  const before = new Set(previous?.roster.map((o) => o.id));
-  const joined = roster && previous ? roster.filter((m) => !before.has(m.principalId)) : [];
-  const left = roster && previous ? previous.roster.filter((o) => !current.has(o.id)) : [];
+  const { joined, left } = roster && previous ? rosterChanges(roster, previous) : { joined: [], left: [] };
   return [
     ...[...rosterShown(roster ?? []), ...joined].map((m) => ({ id: m.principalId, name: m.displayName })),
     ...left,
@@ -91,13 +97,9 @@ export function membershipEvent(
   const record = { roster, sessionId, ...(screened.length ? { screened: [...screened] } : {}) };
   const previous = previousRoster(history);
   if (!previous) return { text: "", record };
-  const previousIds = new Set(previous.roster.map((o) => o.id));
-  const currentIds = new Set(roster.map((o) => o.id));
-  const joined = current
-    .filter((m) => !previousIds.has(m.principalId))
-    .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map(memberLabel);
-  const left = previous.roster.filter((m) => !currentIds.has(m.id)).map((m) => m.name);
+  const changes = rosterChanges(current, previous);
+  const joined = changes.joined.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).map(memberLabel);
+  const left = changes.left.map((m) => m.name);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",

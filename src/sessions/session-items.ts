@@ -3,7 +3,17 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import type { GetItemsOptions, SessionStore, SessionWriter } from "./session-store.ts";
 import { DuplicateCallError, userMessagePreview } from "./session-store.ts";
-import { ITEM_COLUMNS, type Item, isUserItem, msOf, type NewItem, storedItem, TENANT, userTurn } from "./items.ts";
+import {
+  ITEM_COLUMNS,
+  type Item,
+  isUserItem,
+  msOf,
+  type NewItem,
+  storedItem,
+  TENANT,
+  USER_KINDS,
+  userTurn,
+} from "./items.ts";
 
 function rowToGoal(r: Record<string, unknown>): GoalRecord {
   return {
@@ -39,6 +49,9 @@ function rowToItem(r: Record<string, unknown>): Item {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i";
+const RETAINED_FROM = `coalesce((SELECT c.through_seq + 1 FROM items c
+  WHERE c.tenant_id = ${TENANT} AND c.session_id = $1 AND c.kind = 'ContextCompaction'
+    AND c.through_seq IS NOT NULL AND c.text IS NOT NULL ORDER BY c.seq DESC LIMIT 1), 0)`;
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
 const LAST_ACTIVITY_DEBOUNCE_MS = 60_000;
@@ -79,6 +92,7 @@ export function createSessionItems(deps: {
   | "getItems"
   | "userItemSeqs"
   | "getContextWindow"
+  | "latestRosterItem"
   | "getItem"
   | "visibleItems"
   | "latestVisiblePromptAt"
@@ -334,23 +348,26 @@ export function createSessionItems(deps: {
     getItems: (sessionId, opts) => readItems(sessionId, opts),
 
     async getContextWindow(sessionId) {
-      const [meta, summary] = await Promise.all([
+      const [meta, rows] = await Promise.all([
         q(`SELECT count(*)::int AS total FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = $1`, [
           sessionId,
         ]),
         q(
-          `SELECT through_seq AS through FROM items
-            WHERE tenant_id = ${TENANT} AND session_id = $1 AND kind = 'ContextCompaction'
-              AND through_seq IS NOT NULL AND text IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+          `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= ${RETAINED_FROM} ORDER BY i.seq`,
           [sessionId],
         ),
       ]);
-      const sinceSeq = summary[0]?.through == null ? 0 : Number(summary[0].through) + 1;
-      const rows = await q(
-        `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2 ORDER BY i.seq`,
-        [sessionId, sinceSeq],
-      );
       return { items: rows.map(rowToItem), totalItems: Number(meta[0]?.total ?? 0) };
+    },
+
+    async latestRosterItem(sessionId) {
+      const [row] = await q(
+        `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1
+          AND i.kind IN ${USER_KINDS} AND i.body -> 'rosterSnapshot' IS NOT NULL AND i.seq >= ${RETAINED_FROM}
+          ORDER BY i.seq DESC LIMIT 1`,
+        [sessionId],
+      );
+      return row ? rowToItem(row) : undefined;
     },
 
     async getItem(sessionId, seq): Promise<Item | undefined> {

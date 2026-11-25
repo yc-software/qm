@@ -215,13 +215,19 @@ type ConversationKeychain = Awaited<ReturnType<typeof conversationKeychain>>;
 
 export function keychainOwners(
   keychain: ConversationKeychain | undefined,
+  grants: ReadonlyArray<{ credential: { ownerId: string } }>,
   nameOf: (id: string) => string | undefined,
 ): Array<{ id: string; name?: string }> {
   if (!keychain) return [];
-  const { members, entriesByOwner, connectorsByOwner, asks } = keychain;
+  const { members, connectorsByOwner, asks } = keychain;
+  const granted = new Set(grants.map(({ credential }) => personKey(credential.ownerId)));
   return [
     ...members
-      .filter((m) => entriesByOwner.get(m.id)?.length || connectorsByOwner.get(m.id)?.length)
+      .filter(
+        (m) =>
+          granted.has(personKey(m.id)) ||
+          connectorsByOwner.get(m.id)?.some((c: { needsReconnect?: boolean }) => c.needsReconnect),
+      )
       .map((m) => ({ id: m.id, name: m.displayName })),
     ...asks.filter((ask) => ask.status !== "pending").map((ask) => ({ id: ask.ownerId, name: nameOf(ask.ownerId) })),
   ];
@@ -239,6 +245,7 @@ export async function addConversationBlocks(turn: {
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
   rosterMembers: DirectoryMember[] | undefined;
   keychain: ConversationKeychain | undefined;
+  keychainNames: ReadonlyArray<{ id: string }>;
 }): Promise<void> {
   const {
     deps,
@@ -252,16 +259,18 @@ export async function addConversationBlocks(turn: {
     scopeKeychainGrants,
     rosterMembers,
     keychain,
+    keychainNames,
   } = turn;
   const rosterBlock = rosterMembers && renderConversationRoster(rosterMembers);
   if (rosterBlock) turnContextBlocks["Who's in this conversation"] = rosterBlock;
   if (!keychain || !(deps.keychain || credentialDescriptions.length)) return;
+  const named = new Set([actor, ...keychainNames].map(({ id }) => personKey(id)));
   const keychainBlock = renderKeychainManifest({
     scopeId,
     conversationKind: conversation.kind,
     openOwnerKeychain,
     actorId: actor.id,
-    members: keychain.members,
+    members: keychain.members.map((m) => (named.has(personKey(m.id)) ? m : { id: m.id })),
     entriesByOwner: keychain.entriesByOwner,
     connectorsByOwner: keychain.connectorsByOwner,
     scopeGrants: external ? [] : await scopeKeychainGrants(),

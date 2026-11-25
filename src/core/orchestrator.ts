@@ -233,6 +233,7 @@ import {
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import {
   createCredentialCatalog,
+  type CredentialCatalogTurn,
   loadServiceCredentialGrants,
   registerBrokeredTools,
   registerConnectorCredentials,
@@ -694,22 +695,55 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const hasRoster = !external && conversation.kind !== "dm";
-      const storedWindow = hasRoster && storedSession ? deps.sessions.getContextWindow(storedSession.id) : undefined;
-      const [rosterMembers, previousNames, keychainView] = await Promise.all([
+      const grantReads = new Map<ScopeId | undefined, ReturnType<CredentialCatalogTurn["scopeKeychainGrants"]>>();
+      const credentialGrants = (personaScope: ScopeId | undefined) => {
+        const read =
+          grantReads.get(personaScope) ??
+          Promise.all(
+            [scopeId, ...(personaScope ? [personaScope] : [])].map(async (grantScope) =>
+              (
+                (await deps.keychain?.grantsForScope(grantScope, {
+                  includePersonGrants: input.botActor !== true || grantScope === personaScope,
+                })) ?? []
+              ).map((row) => ({ ...row, grantScope })),
+            ),
+          ).then((scopes) => {
+            const rows = scopes.flat();
+            return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+          });
+        grantReads.set(personaScope, read);
+        return read;
+      };
+      const personaRead =
+        external || !deps.personas
+          ? Promise.resolve(null)
+          : deps.personas.forTurn(storedSession?.personaId ?? input.personaId, actor.id, scopeId);
+      const [rosterMembers, rosterItem, keychainView, boundPersona, boundGrants] = await Promise.all([
         hasRoster
           ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
               swallowAs("orchestrator: conversation roster", undefined),
             )
           : undefined,
-        storedWindow
-          ?.then((window) => previousRoster(window.items))
-          .catch(swallowAs("orchestrator: previous roster", undefined)),
+        hasRoster && storedSession ? deps.sessions.latestRosterItem(storedSession.id) : undefined,
         strictReadOnly ? undefined : conversationKeychain(deps, actor, conversation, scopeId, external),
+        personaRead,
+        strictReadOnly || external
+          ? []
+          : personaRead.then((bound) => credentialGrants(bound && typeof bound === "object" ? bound.scope : undefined)),
       ]);
-      const nameOf = (id: string): string | undefined =>
-        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
-        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
-      const shownPeople = peopleToScreen(actor.id, rosterMembers, previousNames, keychainOwners(keychainView, nameOf));
+      const rosterHistory = rosterItem ? [rosterItem] : [];
+      const previousNames = previousRoster(rosterHistory);
+      const knownNames = new Map<string, string>();
+      for (const { id, displayName } of [
+        ...conversation.audience,
+        ...(rosterMembers ?? []).map((m) => ({ id: m.principalId, displayName: m.displayName })),
+      ]) {
+        const key = personKey(id);
+        if (key && displayName !== undefined && !knownNames.has(key)) knownNames.set(key, displayName);
+      }
+      const nameOf = (id: string): string | undefined => knownNames.get(personKey(id));
+      const keychainNames = keychainOwners(keychainView, boundGrants, nameOf);
+      const shownPeople = peopleToScreen(actor.id, rosterMembers, previousNames, keychainNames);
       const people = [...new Set(shownPeople.map((p) => p.name))].sort();
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
@@ -880,26 +914,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               deps.personas,
               routed,
               storedSession?.personaId ?? input.personaId,
+              boundPersona,
               actor.id,
               scopeId,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
-      const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
-      const scopeKeychainGrants = async () => {
-        const rows = (
-          await Promise.all(
-            credentialScopes.map(async (grantScope) =>
-              (
-                (await deps.keychain?.grantsForScope(grantScope, {
-                  includePersonGrants: input.botActor !== true || grantScope === persona?.scope,
-                })) ?? []
-              ).map((row) => ({ ...row, grantScope })),
-            ),
-          )
-        ).flat();
-        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
-      };
+      const scopeKeychainGrants = () => credentialGrants(persona?.scope);
 
       const context = await resolveTurnContext({
         tenant,
@@ -1524,6 +1545,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeKeychainGrants,
           rosterMembers,
           keychain: keychainView,
+          keychainNames,
         });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
@@ -2280,6 +2302,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
             rosterMembers,
             screenedPeople,
+            rosterHistory,
             rawEntries,
             session,
             deps,

@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { freshApp, internalActor, dm, channel } from "./support/orchestrator-app.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -590,9 +590,12 @@ test("other people's names are screened when the turn shows them, a flagged one 
     type: "internal" as const,
   }));
   await directory.replace(people);
-  const turn = async (count: number, approval?: TurnRequest["approval"]) => {
+  const turn = async (count: number, approval?: TurnRequest["approval"], gone = "") => {
     screened.length = 0;
-    const audience = people.slice(0, count).map((p) => ({ externalId: p.principalId }));
+    const audience = people
+      .slice(0, count)
+      .filter((p) => p.principalId !== gone)
+      .map((p) => ({ externalId: p.principalId }));
     const conversation = { kind: "channel" as const, threadRef: "ch:names:t1", channelRef: "C-names", audience };
     const res = await app.turn({
       surface: "slack",
@@ -628,6 +631,9 @@ test("other people's names are screened when the turn shows them, a flagged one 
   assert.deepEqual(rescreened.names, ["Person 35"]);
   assert.ok((await approve(rescreened, 26)).reply?.includes(`Joined: ${flagged} (UB34)`));
   assert.notEqual((await turn(26)).status, "pending_approval");
+  const left = await turn(26, undefined, "UB31");
+  assert.deepEqual(left.names, ["Person 31"]);
+  assert.match(left.reply ?? "", /Left: Person 31\./);
 });
 
 test("a large channel's first turn screens only the names it shows, in as many calls as a small one", async () => {
@@ -657,6 +663,37 @@ test("a large channel's first turn screens only the names it shows, in as many c
   };
   const small = await turn(3);
   assert.deepEqual(await turn(4000), { ...small, more: true });
+});
+
+test("a credential owner's name is screened and shown only when the turn lists their credential", async () => {
+  const screened: string[] = [];
+  const securityScreener: SecurityScreener = {
+    provider: "spy",
+    async classify({ payload }) {
+      screened.push(payload);
+      return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { app, keychain } = freshApp({ securityPosture: "auto" }, securityScreener);
+  const audience = Array.from({ length: 22 }, (_, i) => ({ externalId: `UF${i + 10}`, displayName: `Fan ${i + 10}` }));
+  const [granted] = await Promise.all(
+    ["UF30", "UF31"].map((ownerId) => keychain!.save({ ownerId, service: ownerId, secret: "s" })),
+  );
+  await keychain!.createGrant({
+    credentialId: granted!.id,
+    ownerId: "UF30",
+    audienceScopeId: scopeId("channel", "C-owners"),
+    mode: "standing",
+    purpose: "test",
+  });
+  const conversation = { kind: "channel" as const, threadRef: "ch:owners:t1", channelRef: "C-owners", audience };
+  const turn = () => app.turn({ surface: "slack", actor: { externalId: "UF10" }, conversation, text: "!sysprompt" });
+  assert.match((await turn()).reply ?? "", /### Fan 30\n/);
+  assert.deepEqual(screened.join().match(/Fan 3\d/g), ["Fan 30"]);
+  screened.length = 0;
+  audience[2]!.displayName = "Fan 99";
+  await turn();
+  assert.deepEqual(screened.join().match(/Fan \d+/g), ["Fan 99"]);
 });
 
 test("approving a held turn replays it after another person's turn screens the names it read", async () => {
