@@ -6,7 +6,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, scopeId, scopeLabel, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -1039,7 +1039,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${badGrantee})` };
+        return {
+          error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${scopeLabel(badGrantee as ScopeId)})`,
+        };
       if (b.deployments !== undefined && typeof b.deployments !== "boolean")
         return { error: "deployments must be true or false" };
       const injectionError = credentialInjectionError(b.injection);

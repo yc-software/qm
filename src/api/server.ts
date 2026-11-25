@@ -241,7 +241,7 @@ async function gate(
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, raw),
+      canonicalPayload(method, pathname + new URL(req.url ?? "/", "http://localhost").search, raw),
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -373,6 +373,7 @@ function canonicalScopes(value: unknown, scoped = false): unknown {
 function requestUrl(req: IncomingMessage): URL {
   const url = new URL(req.url ?? "/", "http://localhost");
   for (const key of ["scope", "scopeId"]) {
+    if (!url.searchParams.has(key)) continue;
     const values = url.searchParams.getAll(key);
     url.searchParams.delete(key);
     for (const value of values) url.searchParams.append(key, canonicalScopeId(value as ScopeId));
