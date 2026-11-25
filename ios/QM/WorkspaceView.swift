@@ -42,6 +42,7 @@ struct WorkspaceDestination: Identifiable {
 struct BrowseView: View {
   let identity: Identity
   let client: APIClient
+  @Environment(\.qmHomeSettingsActions) private var home
 
   var body: some View {
     List {
@@ -49,42 +50,46 @@ struct BrowseView: View {
         Section {
           ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
             destination in
-            NavigationLink {
-              if destination.id == "contexts" {
-                ProjectsView(client: client, identity: identity)
-              } else if destination.id == "files" {
-                NativeFileLibrary(client: client)
-              } else if destination.id == "crons" {
-                NativeCronsView(client: client, user: identity.user)
-              } else if destination.id == "webhooks" {
-                NativeWebhooksView(client: client, user: identity.user)
-              } else if destination.id == "skills" {
-                NativeSkillsView(client: client, user: identity.user)
-              } else if destination.id == "apps" {
-                NativeAppsView(client: client, user: identity.user)
-              } else if destination.id == "calendar" {
-                ContentUnavailableView(
-                  "Calendar is coming soon", systemImage: "calendar",
-                  description: Text("Your calendar will appear here when it is available in QM."))
-              } else if destination.id == "keychain" {
-                NativeKeychainView(client: client)
-              } else if destination.id == "settings" {
-                NativeSettingsView(client: client, identity: identity)
-              } else if destination.id == "loops" {
-                NativeLoopsView(client: client)
-              } else if destination.id == "inbox" {
-                NativeInboxView(client: client, user: identity.user)
-              } else if destination.id == "memory" {
-                NativeMemoryView(client: client)
-              } else if destination.id == "voice.html" {
-                VoiceView(client: client)
+            Group {
+              if destination.id == "settings", home != nil {
+                // Same page as the home screen's settings button, so its links can push home pages.
+                NavigationLink(value: HomePage.settings) { label(destination) }
+              } else {
+                NavigationLink {
+                  if destination.id == "contexts" {
+                    ProjectsView(client: client, identity: identity)
+                  } else if destination.id == "files" {
+                    NativeFileLibrary(client: client)
+                  } else if destination.id == "crons" {
+                    NativeCronsView(client: client, user: identity.user)
+                  } else if destination.id == "webhooks" {
+                    NativeWebhooksView(client: client, user: identity.user)
+                  } else if destination.id == "skills" {
+                    NativeSkillsView(client: client, user: identity.user)
+                  } else if destination.id == "apps" {
+                    NativeAppsView(client: client, user: identity.user)
+                  } else if destination.id == "calendar" {
+                    ContentUnavailableView(
+                      "Calendar is coming soon", systemImage: "calendar",
+                      description: Text(
+                        "Your calendar will appear here when it is available in QM."))
+                  } else if destination.id == "keychain" {
+                    NativeKeychainView(client: client)
+                  } else if destination.id == "settings" {
+                    NativeSettingsView(client: client, identity: identity)
+                  } else if destination.id == "loops" {
+                    NativeLoopsView(client: client)
+                  } else if destination.id == "inbox" {
+                    NativeInboxView(client: client, user: identity.user)
+                  } else if destination.id == "memory" {
+                    NativeMemoryView(client: client)
+                  } else if destination.id == "voice.html" {
+                    VoiceView(client: client)
+                  }
+                } label: {
+                  label(destination)
+                }
               }
-            } label: {
-              HStack(spacing: 12) {
-                Image(systemName: destination.icon).frame(width: 24)
-                Text(destination.title)
-              }
-              .font(.body)
             }
             .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
             .listRowBackground(QMTheme.paper)
@@ -103,6 +108,14 @@ struct BrowseView: View {
     .toolbarBackground(background, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .navigationTitle("Your Workspace").navigationBarTitleDisplayMode(.inline)
+  }
+
+  private func label(_ destination: WorkspaceDestination) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: destination.icon).frame(width: 24)
+      Text(destination.title)
+    }
+    .font(.body)
   }
 
   private var background: Color {

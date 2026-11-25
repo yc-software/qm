@@ -138,28 +138,41 @@ struct NativeThemeImport: View {
   @State private var importing = false
   @State private var error: String?
   var body: some View {
-    Group {
-      if let palette = NativeThemeStore.shared.palette {
-        HStack {
-          Text(palette.name)
-          Spacer()
+    let palette = NativeThemeStore.shared.palette
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(palette?.name ?? "Imported theme").font(.body)
+        Text(
+          error
+            ?? "Import an iTerm2 or VS Code palette. Standard iOS controls follow its light or dark appearance."
+        )
+        .font(.footnote)
+        .foregroundStyle(error == nil ? Color.secondary : Color.red)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      if let palette {
+        HStack(spacing: -6) {
           Circle().fill(palette.background.color).frame(width: 20)
           Circle().fill(palette.foreground.color).frame(width: 20)
         }
-        Button("Use imported theme") { appearance = "custom" }
-        Button("Remove imported theme", role: .destructive) {
-          do {
-            try NativeThemeStore.shared.install(nil)
-            if appearance == "custom" { appearance = "system" }
-          } catch { self.error = error.localizedDescription }
+        .accessibilityHidden(true)
+        Menu("Edit") {
+          Button("Import another theme", systemImage: "square.and.arrow.down") { importing = true }
+          Button("Remove imported theme", systemImage: "trash", role: .destructive) {
+            do {
+              try NativeThemeStore.shared.install(nil)
+              if appearance == "custom" { appearance = "system" }
+              error = nil
+            } catch { self.error = error.localizedDescription }
+          }
         }
+        .buttonStyle(.bordered).controlSize(.small)
+      } else {
+        Button("Import") { importing = true }.buttonStyle(.bordered).controlSize(.small)
       }
-      Button("Import theme file", systemImage: "square.and.arrow.down") { importing = true }
-      Text(
-        "Import an iTerm2 or VS Code palette. Standard iOS controls follow its light or dark appearance."
-      ).font(.caption)
-      if let error { Text(error).foregroundStyle(.red) }
-    }.fileImporter(isPresented: $importing, allowedContentTypes: [.json, .propertyList, .data]) {
+    }
+    .settingsRowPadding()
+    .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .propertyList, .data]) {
       result in
       do {
         let url = try result.get()

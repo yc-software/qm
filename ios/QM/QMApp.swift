@@ -13,10 +13,13 @@ struct QMApp: App {
   }
 }
 
+/// Pages pushed onto the home conversation list's navigation stack.
+enum HomePage: Hashable {
+  case workspace, search, waiting, archived, setup, settings
+}
+
 struct RootView: View {
-  private enum Page: Hashable {
-    case workspace, search, waiting, archived, setup
-  }
+  private typealias Page = HomePage
 
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
@@ -93,7 +96,7 @@ struct RootView: View {
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if let identity = model.identity {
+        if model.identity != nil {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty {
               ConversationErrorBanner(model: model)
@@ -120,7 +123,7 @@ struct RootView: View {
               .padding(.horizontal, 16)
               .frame(height: 48)
               .background(.thinMaterial, in: Capsule())
-              accountMenu(identity)
+              settingsButton
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -138,10 +141,16 @@ struct RootView: View {
               .task { await model.select(.archived) }
               .onDisappear { Task { await model.select(.active) } }
           case .setup: NativeSetupView(client: client, identity: identity)
+          case .settings: NativeSettingsView(client: client, identity: identity)
           }
         }
       }
     }
+    .environment(
+      \.qmHomeSettingsActions,
+      HomeSettingsActions(
+        changeWorkspace: { choosingWorkspace = true },
+        signOut: { confirmingSignOut = true }))
   }
 
   var body: some View {
@@ -298,29 +307,15 @@ struct RootView: View {
     }
   }
 
-  private func accountMenu(_ identity: Identity) -> some View {
-    Menu {
-      Text(identity.displayName ?? identity.user)
-      NavigationLink("Waiting on you", value: Page.waiting)
-      NavigationLink("Archived conversations", value: Page.archived)
-      Toggle("Web conversations only", isOn: $webOnly)
-      Button("Change workspace") { choosingWorkspace = true }
-      Picker("App appearance", selection: $appearance) {
-        Text("System").tag("system")
-        Text("Light").tag("light")
-        Text("Dark").tag("dark")
-        if let palette = NativeThemeStore.shared.palette {
-          Text(palette.name).tag("custom")
-        }
-      }
-      Button("Sign out", role: .destructive) { confirmingSignOut = true }
-    } label: {
+  private var settingsButton: some View {
+    NavigationLink(value: Page.settings) {
       Image(systemName: "person.crop.circle")
         .font(.system(size: 24))
         .frame(width: 48, height: 48)
         .background(.thinMaterial, in: Circle())
     }
-    .accessibilityLabel("Account")
+    .buttonStyle(.plain)
+    .accessibilityLabel("Settings")
   }
 
   @ToolbarContentBuilder
