@@ -371,7 +371,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   const profile: AgentComputerProfile = {
     backend: "local-docker",
     sizesMemory: true,
-    writablePersistence: "resident_disk",
     processSessions: true,
     parksOnTeardown: true,
     egressEnforcement: "none",

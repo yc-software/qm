@@ -38,7 +38,7 @@ export async function swarmFixture(
   const provisioned: string[] = [];
   const state = { allowed: true, failProvision: false };
   const backend: Sandbox = options.backend ?? {
-    profile: { backend: "modal", writablePersistence: "resident_disk", processSessions: false },
+    profile: { backend: "modal", processSessions: false },
     async provision(id) {
       provisioned.push(id);
       if (state.failProvision) throw new Error("provider unavailable");

@@ -48,7 +48,6 @@ export function hasParentPathSegment(path: string): boolean {
   return path.split("/").includes("..");
 }
 
-type WritablePersistence = "snapshot_to_workspace" | "resident_disk" | "provider_managed";
 export type EgressEnforcement = "none" | "ip_port" | "domain";
 
 export interface AgentComputerSpec {
@@ -65,7 +64,6 @@ export interface AgentComputerSpec {
 
 export interface AgentComputerProfile {
   backend: string;
-  writablePersistence: WritablePersistence;
   processSessions: boolean;
   parksOnTeardown?: boolean;
   egressEnforcement?: EgressEnforcement;
@@ -194,10 +192,6 @@ export function computerVerdict(s: ComputerStatus): ComputerVerdict {
   return s.provisioned ? "wedged" : "down";
 }
 
-export interface StageOptions {
-  timeoutSec?: number;
-}
-
 export interface TeardownOptions {
   keepWarm?: boolean;
   destroy?: boolean;
@@ -213,8 +207,6 @@ export interface Sandbox {
   writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
   readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null>;
-  stageIn?(handle: SandboxHandle, destRelPath: string, blobId: string, opts?: StageOptions): Promise<void>;
-  stageOut?(handle: SandboxHandle, srcRelPath: string, opts?: StageOptions): Promise<string>;
   importFiles?(handle: SandboxHandle, entries: ReadonlyArray<{ path: string; data: Uint8Array }>): Promise<void>;
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
@@ -230,7 +222,6 @@ export interface Sandbox {
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
-  persistHomeSnapshot?(scopeId: string): Promise<void>;
   computerStatus?(scopeId: string, sandboxId?: string): Promise<ComputerStatus>;
   restartComputer?(scopeId: string, memoryGb?: number, sandboxId?: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
@@ -257,16 +248,6 @@ export function supportsAgentComputerExport(
 
 export function supportsScopeProfile(sandbox: Sandbox): sandbox is Sandbox & Required<Pick<Sandbox, "profileFor">> {
   return typeof sandbox.profileFor === "function";
-}
-
-export function supportsBlobStaging(
-  sandbox: Sandbox,
-): sandbox is Sandbox & Required<Pick<Sandbox, "stageIn" | "stageOut" | "importFiles">> {
-  return (
-    typeof sandbox.stageIn === "function" &&
-    typeof sandbox.stageOut === "function" &&
-    typeof sandbox.importFiles === "function"
-  );
 }
 
 export type ProcessSandbox = Sandbox &

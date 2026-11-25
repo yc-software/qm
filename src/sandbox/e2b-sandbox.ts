@@ -9,13 +9,7 @@ import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } fr
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
@@ -73,7 +67,7 @@ export interface StoredE2bSandbox extends SnapshotBookkeeping {
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
-export interface E2bSandboxOptions extends BlobStagingOptions {
+export interface E2bSandboxOptions {
   imageFor?: ImageFor;
   advisoryLock: AdvisoryLock;
   client: E2bClient;
@@ -282,7 +276,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "e2b",
-    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
@@ -336,8 +329,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     defaultHomeDir: HOME_DIR,
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
-
-  const blobStaging = createBackendBlobStaging("e2b", (id, script, t) => execRaw(id, script, t), opts);
 
   async function destroyStoredScope(scope: string): Promise<void> {
     const name = sandboxScopeName(prefix, scope);
@@ -393,7 +384,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -476,17 +466,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     },
 
     exportFiles: execExport.exportFiles,
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
-            scopeByName.set(name, scopeId);
-            const { session } = await ensureSession(scopeId, name);
-            await snapshotHome(scopeId, session);
-          },
-        }
-      : {}),
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);

@@ -6,20 +6,13 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import {
-  createExecExport,
-  createBackendBlobStaging,
-  createExecFileOps,
-  posixJoin,
-  tempPathBeside,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin, tempPathBeside } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
-import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
@@ -115,10 +108,6 @@ export interface Agent37SandboxOptions {
   diskGb?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
-  blobTransfer?: BlobTransferStore;
-  signingSecret?: string;
-  capabilitySecret?: string;
-  apiBaseUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   fetchImpl?: typeof fetch;
@@ -457,7 +446,6 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
   const profile: AgentComputerProfile = {
     backend: "agent37",
     sizesMemory: true,
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: "none",
     spec: {
@@ -491,8 +479,6 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobStaging = createBackendBlobStaging("agent37", (id, script, t) => execRaw(id, script, t), opts);
-
   const execBackup = createExecExport({
     label: "agent37",
     exec: (id, script, t) => execRaw(id, script, t),
@@ -509,7 +495,6 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;

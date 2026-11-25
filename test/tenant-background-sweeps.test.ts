@@ -195,7 +195,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
     const records = createPostgresMap<SandboxResource>(db.app, "t_tenant_job_computers");
     const destroyed: Pair[] = [];
     const backend = {
-      profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
+      profile: { backend: "local", processSessions: false },
       async destroyScope(id: string) {
         destroyed.push([id, currentTenant()]);
       },

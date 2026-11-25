@@ -42,7 +42,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const backend: Sandbox = {
-    profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
+    profile: { backend: "local", processSessions: false },
     async provision(id) {
       provisioned.push(id);
       if (!disks.has(id)) disks.set(id, new Map());
@@ -446,8 +446,6 @@ test("every handle operation rejects retirement before reaching a backend that c
     backend.signalProcess = hit;
     backend.listProcesses = async () => [];
     backend.exportFiles = hit;
-    backend.stageIn = hit;
-    backend.stageOut = hit;
     backend.importFiles = hit;
   });
   const record = await resources.create("alice", "personal:alice", "local");
@@ -468,8 +466,6 @@ test("every handle operation rejects retirement before reaching a backend that c
     () => router.signalProcess!(handle, "process", "TERM"),
     () => router.listProcesses!(handle),
     () => router.exportFiles!(handle),
-    () => router.stageIn!(handle, "file", "blob"),
-    () => router.stageOut!(handle, "file"),
     () => router.importFiles!(handle, []),
     () => resources.status("alice", record.id),
     () => resources.restart("alice", record.id),

@@ -13,12 +13,7 @@ import { shq } from "../util/shell.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import { attemptSnapshot, snapshotDue, type SnapshotBookkeeping } from "./home-snapshot.ts";
-import {
-  createExecFileOps,
-  createExecExport,
-  createBackendBlobStaging,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecFileOps, createExecExport } from "./exec-file-ops.ts";
 import {
   SandboxProvisionCleanupError,
   visibleNotInstalled,
@@ -87,7 +82,7 @@ export interface StoredRenderCleanup {
   error?: string;
 }
 
-export interface RenderSandboxOptions extends BlobStagingOptions {
+export interface RenderSandboxOptions {
   imageFor?: ImageFor;
   client: RenderClient;
   base: RenderBase;
@@ -623,7 +618,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     run: (handle, command, options) =>
       exec(handle.id, command, options?.timeoutMs ? Math.ceil(options.timeoutMs / 1000) : defaultTimeoutSec),
   });
-  const staging = createBackendBlobStaging("render", exec, opts);
   const files = createExecFileOps({ label: "render", exec, writeInline: writeAbsBytes });
   const exports = createExecExport({
     label: "render",
@@ -636,7 +630,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   return {
     profile: {
       backend: "render",
-      writablePersistence: "provider_managed",
       processSessions: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
@@ -695,7 +688,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     listDir: guardHandle(files.listDir),
     removeDir: guardHandle(files.removeDir),
     exportFiles: guardHandle(exports.exportFiles),
-    ...(staging ? { stageIn: guardHandle(staging.stageIn), stageOut: guardHandle(staging.stageOut) } : {}),
     startProcess: guardHandle(processes.startProcess),
     readProcess: guardHandle(processes.readProcess),
     writeStdin: guardHandle(processes.writeStdin),
@@ -703,13 +695,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     listProcesses: guardHandle(processes.listProcesses),
     destroyScope,
 
-    async persistHomeSnapshot(scope) {
-      await withLifecycle(nameFor(scope), async () => {
-        const stored = await store.get(scope);
-        if (!stored) throw new Error(`Render sandbox is not provisioned: ${scope}`);
-        await checkpoint(scope, stored);
-      });
-    },
     async teardown(handle, options) {
       if (handle.scratch)
         return withLifecycle(handle.id, async () => {

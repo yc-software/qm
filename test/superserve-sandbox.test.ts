@@ -46,7 +46,6 @@ afterEach(() => {
 
 test("profile advertises resident disk, process sessions, and the template's toolchain", () => {
   assert.equal(sandbox.profile.backend, "superserve");
-  assert.equal(sandbox.profile.writablePersistence, "resident_disk");
   assert.equal(supportsProcessSessions(sandbox), true);
   for (const tool of ["node", "gh", "aws", "claude", "codex"])
     assert.ok(sandbox.profile.spec?.tools?.includes(tool), tool);

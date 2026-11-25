@@ -41,7 +41,6 @@ function fakeProcessSandbox() {
   const sandbox: Sandbox = {
     profile: {
       backend: "fake",
-      writablePersistence: "resident_disk",
       processSessions: true,
     },
     async provision(): Promise<SandboxHandle> {

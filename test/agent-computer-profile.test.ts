@@ -33,7 +33,6 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
   assert.deepEqual(contract, {
     backend: "sprites",
     sizesMemory: true,
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: "none",
   });

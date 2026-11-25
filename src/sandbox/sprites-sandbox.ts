@@ -7,13 +7,7 @@ import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  tempPathBeside,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, tempPathBeside } from "./exec-file-ops.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
@@ -102,7 +96,7 @@ export interface StoredSprite extends SnapshotBookkeeping {
   pending?: boolean;
 }
 
-export interface SpritesSandboxOptions extends BlobStagingOptions {
+export interface SpritesSandboxOptions {
   token?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -482,7 +476,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
   const profile: AgentComputerProfile = {
     backend: "sprites",
     sizesMemory: true,
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
@@ -514,8 +507,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     exec: (id, script, t) => execRaw(id, script, t),
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
-
-  const blobStaging = createBackendBlobStaging("sprites", (id, script, t) => execRaw(id, script, t), opts);
 
   const execExport = createExecExport({
     label: "sprites",
@@ -553,7 +544,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
     async provision(scope, provOpts) {
       if (!provOpts?.scratch) {
         const name = await nameFor(scope);
@@ -579,22 +569,6 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
         }),
       );
     },
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = await nameFor(scopeId);
-            return base.provisionQueue(scopeId, () =>
-              withLifecycle(name, async () => {
-                await requireInitialized(name);
-                if (!(await spriteExists(name)))
-                  throw new Error(`sprites persistHomeSnapshot: no sprite for ${scopeId}`);
-                await homeSnapshots.snapshotHome(scopeId, name);
-              }),
-            );
-          },
-        }
-      : {}),
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = await nameFor(scopeId);

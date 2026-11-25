@@ -941,14 +941,10 @@ export function buildApp(
       ...(snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
         : {}),
-      blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
   };
@@ -959,13 +955,9 @@ export function buildApp(
       imageFor: sandboxImageFor,
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
-      blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: smolmachinesBodies,
       advisoryLock,
       ...(snapshotS3Bucket
@@ -1033,10 +1025,6 @@ export function buildApp(
       extraTools: [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
@@ -1066,10 +1054,6 @@ export function buildApp(
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: managedAgentsBodies,
       ...(managedAgents.snapshotS3Bucket
         ? {
@@ -1118,10 +1102,6 @@ export function buildApp(
       credentialPaths: deploymentLayer.credentialPaths,
       connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
@@ -1134,12 +1114,8 @@ export function buildApp(
       imageFor: sandboxImageFor,
       ...config.agent37Sandbox,
       advisoryLock,
-      blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
@@ -1176,10 +1152,6 @@ export function buildApp(
         extraTools: deploymentLayer.advertisedTools,
         credentialPaths: deploymentLayer.credentialPaths,
         layerToolFiles: () => deploymentLayer.installFiles,
-        blobTransfer,
-        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
         store: superserveBodies,
         onError: sandboxOnError,
       }),
@@ -1194,10 +1166,6 @@ export function buildApp(
       advisoryLock,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: awsBodies,
       onError: sandboxOnError,
     });
@@ -1207,12 +1175,8 @@ export function buildApp(
       imageFor: sandboxImageFor,
       ...config.porterSandbox,
       advisoryLock,
-      blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
   const buildRender = (): Sandbox => {
@@ -1235,10 +1199,6 @@ export function buildApp(
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
   };

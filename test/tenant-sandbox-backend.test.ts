@@ -30,7 +30,7 @@ before(() => bindBootTenant(async () => undefined));
 function fakeBackend(name: string, provisioned: string[]): Sandbox {
   const handle = (): SandboxHandle => ({ id: `${name}-box`, rootDir: "/w" });
   return {
-    profile: { backend: name, writablePersistence: "resident_disk", processSessions: false },
+    profile: { backend: name, processSessions: false },
     provision: async () => (provisioned.push(name), handle()),
     run: async () => ({ stdout: name, stderr: "", code: 0, timedOut: false }),
     readFile: async () => null,

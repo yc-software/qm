@@ -5,9 +5,8 @@ import assert from "node:assert/strict";
 import { createE2bSandbox, type StoredE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
@@ -258,7 +257,6 @@ test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async
 
 test("profile advertises snapshot persistence and process sessions", () => {
   assert.equal(sandbox.profile.backend, "e2b");
-  assert.equal(sandbox.profile.writablePersistence, "snapshot_to_workspace");
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.egressEnforcement, "none");
 });
@@ -309,52 +307,6 @@ test("a failing snapshot store fails the fallback provision instead of cold-star
   flaky.failReads(false);
   const b = await s.provision(scope);
   assert.equal(await s.readFile(b, "precious.txt"), "irreplaceable\n", "snapshot survives the outage");
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(make()),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, e2b can move bytes by reference");
-});
-
-test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(scope);
-  await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /e2b stageOut/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
-  assert.ok(script, "the stageOut curl reached the guest");
-  assert.match(script, /--upload-file/, "streams from disk rather than buffering in the guest");
-  assert.doesNotMatch(script, /--data-binary/, "the OOM shape must never come back");
-  assert.match(script, /-X POST/, "--upload-file alone would send PUT");
-  assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
-});
-
-test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(scope);
-  await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /e2b stageIn/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
-  assert.match(script, /-o .*\.part/, "downloads to a temp file");
-  assert.match(script, /mv -f /, "and only then moves it into place");
-  assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
 test("native pause skips tar checkpoints and status does not wake a paused sandbox", async () => {

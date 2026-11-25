@@ -4,9 +4,8 @@ import assert from "node:assert/strict";
 import { createModalSandbox, type StoredModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -14,7 +13,11 @@ import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
 import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  createMemorySnapshotStore,
+  type HomeSnapshotStore,
+} from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
 import { sleep } from "../src/util/async.ts";
 
@@ -66,12 +69,28 @@ function gatedCommands(marker: string, gate: Promise<void>, onEnter: () => void)
   };
 }
 
-async function seedPortableHome(s: Sandbox, files: Record<string, string | Uint8Array>): Promise<void> {
+async function seedPortableHome(
+  s: Sandbox,
+  snapshots: HomeSnapshotStore,
+  files: Record<string, string | Uint8Array>,
+): Promise<void> {
   const h = await s.provision(scope);
   for (const [path, data] of Object.entries(files))
     if (typeof data === "string") await s.writeFile(h, path, data);
     else await s.writeFileBytes(h, path, data);
-  await s.persistHomeSnapshot!(scope);
+  const session = (await fake.client.fromName(h.id))!;
+  await createHomeSnapshotOps<ModalSession>({
+    label: "modal",
+    homeDir: "/root",
+    homeTarPath: "/root/.qm-home.tar",
+    prunePaths: [],
+    store: snapshots,
+    io: {
+      runCommand: (live, script, timeoutMs) => live.runCommand(script, { timeoutMs }),
+      readFileBytes: (live, abs) => live.readFileBytes(abs),
+      writeFileBytes: (live, abs, data) => live.writeFileBytes(abs, data),
+    },
+  }).snapshotHome(scope, session);
   fake.terminate(h.id);
 }
 
@@ -395,7 +414,6 @@ test("computerStatus reports a gone sandbox as unprovisioned, not wedged", async
 
 test("profile advertises provider-managed persistence and process sessions", () => {
   assert.equal(sandbox.profile.backend, "modal");
-  assert.equal(sandbox.profile.writablePersistence, "provider_managed");
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.egressEnforcement, "none");
   assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
@@ -435,7 +453,7 @@ test("a scope with only an older portable home is restored from it and then nati
   const store = testMap<StoredModalSandbox>();
   const portable = instrumentedSnapshotStore();
   const s = make({ store, snapshots: portable.store });
-  await seedPortableHome(s, { "legacy.txt": "from the portable era\n" });
+  await seedPortableHome(s, portable.store, { "legacy.txt": "from the portable era\n" });
   assert.equal((await store.get(scope))?.nativeSnapshotId, undefined);
   const b = await s.provision(scope);
   assert.equal(b.coldStart, false);
@@ -448,69 +466,12 @@ test("a scope with only an older portable home is restored from it and then nati
 test("a failing snapshot store fails the legacy portable restore instead of cold-starting empty", async () => {
   const flaky = instrumentedSnapshotStore();
   const s = make({ snapshots: flaky.store });
-  await seedPortableHome(s, { "precious.txt": "irreplaceable\n" });
+  await seedPortableHome(s, flaky.store, { "precious.txt": "irreplaceable\n" });
   flaky.failReads(true);
   await assert.rejects(() => s.provision(scope), /hydration failed/);
   flaky.failReads(false);
   const b = await s.provision(scope);
   assert.equal(await s.readFile(b, "precious.txt"), "irreplaceable\n", "snapshot survives the outage");
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(make()),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, modal can move bytes by reference");
-});
-
-test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(scope);
-  await assert.rejects(() => sb.stageOut!(h, "outbox/big.bin"), /modal stageOut/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
-  assert.ok(script, "the stageOut curl reached the guest");
-  assert.match(script, /--upload-file/, "streams from disk rather than buffering in the guest");
-  assert.doesNotMatch(script, /--data-binary/, "the OOM shape must never come back");
-  assert.match(script, /-X POST/, "--upload-file alone would send PUT");
-  assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
-});
-
-test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
-  const sb = make({
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  const h = await sb.provision(scope);
-  await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /modal stageIn/);
-
-  const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
-  assert.match(script, /-o .*\.part/, "downloads to a temp file");
-  assert.match(script, /mv -f /, "and only then moves it into place");
-  assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
-});
-
-test("persistHomeSnapshot writes the live home to the snapshot store on demand", async () => {
-  const store = testMap<StoredModalSandbox>();
-  const counting = instrumentedSnapshotStore();
-  const s = make({ store, snapshots: counting.store });
-  const h = await s.provision(scope);
-  await s.writeFile(h, "keep.txt", "persist me\n");
-  assert.ok(s.persistHomeSnapshot);
-  await s.persistHomeSnapshot!(scope);
-  assert.equal(counting.puts(), 1);
 });
 
 test("rotation aborts and keeps the old box when the pre-rotation checkpoint fails", async () => {
@@ -583,10 +544,11 @@ test("rotation aborts and keeps the old box when terminating it fails", async ()
 });
 
 test("portable homes larger than the file chunk size export and restore through chunked transfers", async () => {
-  const s = make({ fileChunkBytes: 8 * 1024 });
+  const snapshots = createMemorySnapshotStore();
+  const s = make({ fileChunkBytes: 8 * 1024, snapshots });
   const big = Buffer.alloc(50 * 1024 + 7);
   for (let i = 0; i < big.length; i++) big[i] = (i * 31) % 256;
-  await seedPortableHome(s, { "big.bin": big });
+  await seedPortableHome(s, snapshots, { "big.bin": big });
   const b = await s.provision(scope);
   const back = await s.readFileBytes(b, "big.bin");
   assert.ok(back && Buffer.from(back).equals(big), "chunked snapshot + hydrate round-trips the exact bytes");
@@ -908,56 +870,6 @@ test("ordinary calls never rotate an aged warm sandbox", async () => {
   assert.equal(fake.createdCount(scopeName()), 1);
   await s.provision(scope);
   assert.notEqual((await store.get(scope))!.sandboxId, id);
-});
-
-test("checkpoint writers from separate cores share the durable lifecycle lock", { timeout: 10000 }, async () => {
-  const store = testMap<StoredModalSandbox>();
-  const advisoryLock = testAdvisoryLock();
-  const counting = instrumentedSnapshotStore();
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  let writers = 0;
-  let maximum = 0;
-  const snapshots = {
-    ...counting.store,
-    createUpload: async (id: string) => {
-      writers++;
-      maximum = Math.max(maximum, writers);
-      const upload = await counting.store.createUpload(id);
-      return {
-        ...upload,
-        complete: async () => {
-          await upload.complete();
-          writers--;
-        },
-      };
-    },
-  };
-  const client = checkpointing(async (snapshot) => {
-    writers++;
-    maximum = Math.max(maximum, writers);
-    entered.resolve();
-    await release.promise;
-    writers--;
-    return snapshot();
-  });
-  const first = make({ store, snapshots, advisoryLock, client });
-  const second = make({ store, snapshots, advisoryLock, client });
-  const a = await first.provision(scope);
-  const b = await second.provision(scope);
-  const saving = first.teardown(a);
-  await entered.promise;
-  const exporting = second.persistHomeSnapshot!(scope);
-  try {
-    assert.equal((await second.run(b, "echo second core")).stdout.trim(), "second core");
-    await Promise.race([exporting, new Promise((resolve) => setTimeout(resolve, 200))]);
-  } finally {
-    release.resolve();
-    await Promise.all([saving, exporting]);
-  }
-  assert.equal(maximum, 1);
-  assert.equal(counting.puts(), 1);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
 });
 
 test("failed native checkpoints wait for the interval across cleanup and maintenance", async () => {

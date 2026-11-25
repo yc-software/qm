@@ -9,13 +9,7 @@ import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
 import type {
   AgentComputerProfile,
@@ -67,7 +61,7 @@ export interface StoredMicrovm extends SnapshotBookkeeping {
   orgId?: string;
 }
 
-export interface AwsSandboxOptions extends BlobStagingOptions {
+export interface AwsSandboxOptions {
   imageFor?: ImageFor;
   region: string;
   profile?: string;
@@ -322,7 +316,6 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "aws-microvm",
-    writablePersistence: "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
     egressEnforcement: "none",
@@ -377,8 +370,6 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => rel),
   });
 
-  const blobStaging = createBackendBlobStaging("aws", (id, script, t) => execRaw(id, script, t), opts);
-
   async function terminateBody(id: string): Promise<void> {
     const body = await api.tryGetMicrovm(id);
     if (!body || body.state === "TERMINATED") return;
@@ -419,7 +410,6 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;

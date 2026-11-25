@@ -1,10 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
-import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId, personalScope } from "../src/types.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
@@ -26,7 +25,6 @@ function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
 test("profile declares the AWS MicroVM substrate with S3-backed durability", () => {
   const sb = makeSandbox(installFakeMicrovm());
   assert.equal(sb.profile.backend, "aws-microvm");
-  assert.equal(sb.profile.writablePersistence, "snapshot_to_workspace");
   assert.equal(sb.profile.processSessions, true);
   assert.equal(supportsProcessSessions(sb), true);
 });
@@ -162,20 +160,6 @@ test("concurrent provisions for one scope launch a single body", async () => {
   const [a, b] = await Promise.all([sb.provision(scope), sb.provision(scope)]);
   assert.equal(a.id, b.id);
   assert.equal(fake.runCount, 1);
-});
-
-test("blob staging is advertised only when the channel is actually wired", async () => {
-  assert.equal(
-    supportsBlobStaging(makeSandbox(installFakeMicrovm())),
-    false,
-    "without blobTransfer/secret/apiBaseUrl the capability must not be claimed — copyHome probes for it",
-  );
-  const wired = makeSandbox(installFakeMicrovm(), {
-    blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
-  });
-  assert.equal(supportsBlobStaging(wired), true, "wired up, aws can move bytes by reference");
 });
 
 test("a hydrate failure terminates the fresh body instead of cold-starting over the stored snapshot", async () => {

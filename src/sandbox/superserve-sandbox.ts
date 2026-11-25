@@ -10,13 +10,7 @@ import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
@@ -100,7 +94,7 @@ export function createConfigEpochResolver(
   };
 }
 
-export interface SuperserveSandboxOptions extends BlobStagingOptions {
+export interface SuperserveSandboxOptions {
   imageFor?: ImageFor;
   client: SuperserveClient;
   namePrefix?: string;
@@ -452,7 +446,6 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
 
   const profile: AgentComputerProfile = {
     backend: "superserve",
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: "none",
     spec: {
@@ -511,8 +504,6 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
-  const blobStaging = createBackendBlobStaging("superserve", (id, script, t) => execRaw(id, script, t), opts);
-
   async function destroyStoredScope(scope: string): Promise<void> {
     const name = sandboxScopeName(prefix, scope);
     const stored = await store.get(scope);
@@ -546,7 +537,6 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
       listProcesses: procSessions.listProcesses,
     }),
     ...guardHandleOps(execFileOps),
-    ...(blobStaging ? guardHandleOps(blobStaging) : {}),
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       return pinnedSandbox.exit(async () => {

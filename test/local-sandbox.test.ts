@@ -58,7 +58,6 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
 test("profile declares the local Docker substrate honestly", () => {
   const sb = makeSandbox(installFakeDocker(daemonPort));
   assert.equal(sb.profile.backend, "local-docker");
-  assert.equal(sb.profile.writablePersistence, "resident_disk");
   assert.equal(sb.profile.processSessions, true);
   assert.equal(supportsProcessSessions(sb), true);
 });

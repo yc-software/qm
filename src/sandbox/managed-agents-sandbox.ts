@@ -9,13 +9,7 @@ import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } fr
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
@@ -106,7 +100,7 @@ export interface StoredManagedAgentsSandbox extends SnapshotBookkeeping {
   pendingCheckpointDeletes?: string[];
 }
 
-export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
+export interface ManagedAgentsSandboxOptions {
   imageFor?: ImageFor;
   client: ManagedAgentsClient;
   namePrefix?: string;
@@ -350,7 +344,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
   const profile: AgentComputerProfile = {
     backend: "do-managed-agents",
-    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
@@ -422,8 +415,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
-  const blobStaging = createBackendBlobStaging("do-managed-agents", execNetworked, opts);
-
   async function destroyStoredScope(scope: string): Promise<void> {
     const name = sandboxScopeName(prefix, scope);
     const stored = await store.get(scope);
@@ -454,7 +445,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -542,17 +532,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     },
 
     exportFiles: execExport.exportFiles,
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
-            scopeByName.set(name, scopeId);
-            const { session } = await ensureSession(scopeId, name);
-            await snapshotHome(scopeId, session);
-          },
-        }
-      : {}),
 
     async restartComputer(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);

@@ -31,7 +31,6 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
   const sandbox: ProcessSandbox = {
     profile: {
       backend: "fake",
-      writablePersistence: "resident_disk",
       processSessions: true,
     },
     async provision() {
