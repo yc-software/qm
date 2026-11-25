@@ -36,8 +36,10 @@ enum SlackText {
     let chars = Array(text)
     var out = ""
     var index = 0
+    var code = false
     while index < chars.count {
-      if chars[index] == "*", let close = boldClose(chars, open: index) {
+      if chars[index] == "`" { code.toggle() }
+      if !code, chars[index] == "*", let close = boldClose(chars, open: index) {
         out += "**" + String(chars[(index + 1)..<close]) + "**"
         index = close + 1
       } else {
@@ -54,7 +56,7 @@ enum SlackText {
       !chars[next].isWhitespace, chars[next] != "*"
     else { return nil }
     var index = next
-    while index < chars.count, !chars[index].isNewline {
+    while index < chars.count, !chars[index].isNewline, chars[index] != "`" {
       if chars[index] == "*" {
         let after = index + 1 < chars.count ? chars[index + 1] : nil
         return chars[index - 1].isWhitespace || joinsWord(after) ? nil : index

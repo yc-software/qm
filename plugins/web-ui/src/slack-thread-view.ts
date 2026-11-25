@@ -47,7 +47,8 @@ export function openInSurface(href: string | null, surface: string | undefined):
 
 export function slackWireBubble(text: string): TemplateResult {
   const at = text.indexOf(FORWARD_PREFIX);
-  if (at < 0) return html`<div class="slack-wire-text">${markdown(slackWireToMarkdown(text, charForName))}</div>`;
+  if (at < 0)
+    return html`<div class="slack-wire-text" dir="auto">${markdown(slackWireToMarkdown(text, charForName))}</div>`;
   const rest = text.slice(at + FORWARD_PREFIX.length);
   const close = rest.indexOf("] ");
   const [author, where] = splitOnce(close < 0 ? rest : rest.slice(0, close), " in ");

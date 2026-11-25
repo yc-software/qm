@@ -66,14 +66,39 @@ export function slackWireToPlain(text: string): string {
     .join("");
 }
 
-const SLACK_BOLD = /(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g;
+function joinsWord(c: string | undefined): boolean {
+  return c !== undefined && (c === "*" || (c >= "0" && c <= "9") || c.toLowerCase() !== c.toUpperCase());
+}
+
+function boldClose(text: string, open: number): number {
+  const next = text[open + 1];
+  if (joinsWord(text[open - 1]) || next === undefined || !next.trim() || next === "*") return -1;
+  for (let i = open + 1; i < text.length && text[i] !== "\n" && text[i] !== "`"; i++)
+    if (text[i] === "*") return !text[i - 1]!.trim() || joinsWord(text[i + 1]) ? -1 : i;
+  return -1;
+}
+
+function slackBold(text: string): string {
+  let out = "";
+  let code = false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "`") code = !code;
+    const close = !code && text[i] === "*" ? boldClose(text, i) : -1;
+    if (close < 0) out += text[i];
+    else {
+      out += `**${text.slice(i + 1, close)}**`;
+      i = close;
+    }
+  }
+  return out;
+}
 
 export function slackWireToMarkdown(text: string, emojiFor: (name: string) => string | null): string {
   return splitSlackWire(text)
     .map((seg) => {
       if (seg.kind === "mention") return `<@${seg.handle}>`;
       if (seg.kind === "link") return `[${seg.label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](<${seg.href}>)`;
-      return withEmoji(seg.text, emojiFor).replaceAll("<", "\\<").replace(SLACK_BOLD, "$1**$2**");
+      return slackBold(withEmoji(seg.text, emojiFor).replaceAll("<", "\\<"));
     })
     .join("");
 }
