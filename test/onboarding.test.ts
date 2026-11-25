@@ -23,7 +23,6 @@ async function freshApp(overrides: Partial<Config> = {}) {
     ...overrides,
   });
   const built = buildApp(config);
-  await built.ownSharedState();
   return built;
 }
 

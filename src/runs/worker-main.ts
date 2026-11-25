@@ -10,7 +10,6 @@ const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
-if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
 if (tenant) await inBootTenant(tenant, loadTenant);
 const { runtime } = built;
 inBootTenant(tenant, () => runtime.start());

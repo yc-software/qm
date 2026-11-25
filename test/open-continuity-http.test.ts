@@ -81,7 +81,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
