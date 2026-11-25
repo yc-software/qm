@@ -152,9 +152,10 @@ import {
   BACKFILL_BOT_MARKER_MIGRATION,
   DROP_RETIRED_TRIGGER_FIELDS_MIGRATION,
   MARK_BOT_EDITED_CRONS_MIGRATION,
+  RERUN_BOT_MARKER_BACKFILL_MIGRATION,
 } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
-import { createLoopStore } from "./loops/loop-store.ts";
+import { createLoopStore, HOLD_BOT_LOOP_SHIPS_MIGRATION } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
 import { createInboxPass } from "./loops/verdict/pass.ts";
@@ -2082,6 +2083,8 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(RERUN_BOT_MARKER_BACKFILL_MIGRATION);
+  pgArtifactMap.pool.registerMigration(HOLD_BOT_LOOP_SHIPS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
   pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
