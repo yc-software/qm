@@ -27,6 +27,9 @@ struct ChatView: View {
   // the transcript is lifted instead, so it moves on the panel's own spring.
   @State private var restingBarHeight: CGFloat = 0
   @State private var dictationLift: CGFloat = 0
+  // The last open panel's lift, so the next open can start moving the text on the tap
+  // instead of a layout pass later. The first open uses a typical panel height.
+  @State private var expectedDictationLift: CGFloat = 160
   @State private var liftsTranscript = false
   @State private var previewingAttachment: UploadAttachment?
   @State private var stopping = false
@@ -135,13 +138,14 @@ struct ChatView: View {
         // open, which clipped the last message for a beat. Lifting it is drawn, not laid
         // out, so it tracks the panel frame for frame.
         .offset(y: liftsTranscript ? -dictationLift : 0)
-        .animation(reduceMotion ? nil : barSpring, value: dictationLift)
+        .animation(reduceMotion ? nil : liftMotion, value: dictationLift)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
             .fixedSize(horizontal: false, vertical: dictation.busy)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
               if dictation.busy {
                 dictationLift = max(0, height - restingBarHeight)
+                expectedDictationLift = dictationLift
               } else {
                 restingBarHeight = height
                 dictationLift = 0
@@ -810,6 +814,11 @@ struct ChatView: View {
     .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0)
   }
 
+  /// The text leads the panel up so the last lines are never under it, and trails it down.
+  private var liftMotion: Animation {
+    dictation.busy ? .smooth(duration: 0.26) : .smooth(duration: 0.5)
+  }
+
   private func send(_ proxy: ScrollViewProxy) {
     showingAgents = false
     composerFocused = false
@@ -867,6 +876,7 @@ struct ChatView: View {
           Button {
             composerFocused = false
             liftsTranscript = followsLatest
+            dictationLift = expectedDictationLift
             dictation.start()
           } label: {
             Image(systemName: "mic")
