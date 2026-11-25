@@ -2,10 +2,14 @@ import type { Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
 import { errMessage } from "../util/errors.ts";
 
-const URL_USERINFO = String.raw`(https?://)[^/@[:space:]"]+@`;
-
 export function scrubGitRemotesScript(root: string): string {
-  return `find ${shq(root)} \\( -name node_modules -o -path '*/.git/objects' \\) -prune -o -path '*/.git/config' -type f -print | while IFS= read -r f; do if grep -qE '${URL_USERINFO}' "$f"; then sed -E -i 's#${URL_USERINFO}#\\1#g' "$f" || exit 1; fi; done`;
+  return [
+    `find ${shq(root)} \\( -name node_modules -o -path '*/.git/objects' \\) -prune -o -path '*/.git/config' -type f -print | while IFS= read -r f; do`,
+    `git config --file "$f" --get-regexp '^remote\\..*url$' | while read -r k v; do`,
+    `rest="\${v#*://}"; auth="\${rest%%/*}"`,
+    `case "\${v%%://*}:$auth" in http:*@* | https:*@*) git config --file "$f" --fixed-value --replace-all "$k" "\${v%%://*}://\${auth##*@}\${rest#"$auth"}" "$v" || exit 1;; esac`,
+    "done || exit 1; done",
+  ].join("\n");
 }
 
 export async function scrubGitRemotes(sandbox: Sandbox, handle: SandboxHandle): Promise<string | undefined> {

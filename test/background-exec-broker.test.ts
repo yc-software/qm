@@ -559,5 +559,5 @@ test("a bot's turn cannot send input to or stop a job that saves a sign-in", asy
 test("a credentialed job strips git remote userinfo when it exits", async () => {
   const { broker, starts } = await build();
   await broker.start(handle, "git push", "Push", undefined, { env: { T: "v" }, secrets: [] });
-  assert.match(starts[0]!.command, /^trap .*\.git\/config.* EXIT\ngit push$/);
+  assert.match(starts[0]!.command, /^trap [\s\S]*\.git\/config[\s\S]* EXIT\ngit push$/);
 });
