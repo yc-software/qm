@@ -729,6 +729,22 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   assert.equal(f.calls.length, 1);
 });
 
+test("unknown tools and connections are caller errors answered without reporting a failure", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.join(" ")));
+  const notFound = () => new Response("{}", { status: 404 });
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, notFound(), notFound());
+  const tool = await f.invoke("/v1/composio/execute", { ...execution, tool: "GMAIL_AUTH_TEST" }, null, privateCap);
+  const account = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.deepEqual(
+    [tool.status, tool.data.error, account.status, account.data.error],
+    [404, "tool_not_found", 403, "connection_not_authorized"],
+  );
+  assert.equal(logged.length, 0, logged.join("\n"));
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
