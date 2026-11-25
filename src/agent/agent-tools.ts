@@ -95,6 +95,7 @@ export interface AgentToolsOptions {
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
   readOnly?: boolean;
+  ephemeral?: boolean;
   botActor?: boolean;
   memoryNotebookOnly?: boolean;
   surfaceTools?: boolean;
@@ -107,6 +108,7 @@ export interface AgentToolsOptions {
 export type CoreToolOptions = Omit<
   AgentToolsOptions,
   | "readOnly"
+  | "ephemeral"
   | "botActor"
   | "memoryNotebookOnly"
   | "surfaceTools"
@@ -147,6 +149,19 @@ export function pauseStampAfterToolCall(
 }
 
 const APP_EDIT_TOOL_NAMES = new Set(["app_files", "apps", "execute", "skills", "files", "history"]);
+const EPHEMERAL_OMITTED_TOOLS = new Set([
+  "apps",
+  "app_files",
+  "background",
+  "subagents",
+  "sessions",
+  "sandbox",
+  "cron",
+  "webhook",
+  "admin",
+  "guidance",
+  "goal",
+]);
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const controlTools = !!opts?.controlTools;
@@ -157,7 +172,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const { execute, sandboxManagement, background } = computerTools(kit);
   const { discoverSkills, skill, saveSkill, editSkill, read, write, publish } = workspaceTools(kit);
   const { memory, history } = recallTools(kit);
-  const { subagentTool, sessionTool, sidebarSessions } = sessionTools(kit);
+  const { subagentTool, sessionTool } = sessionTools(kit);
   const { cron } = cronTools(kit);
   const { webhook, guidance, sharingTool, admin } = controlPlaneTools(kit);
   const { surface } = surfaceTool(kit);
@@ -171,13 +186,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
-      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
-      ...(controlTools ? { share: sharingTool("skill") } : {}),
+      ...(!opts?.ephemeral && controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
+      ...(!opts?.ephemeral && controlTools ? { share: sharingTool("skill") } : {}),
     }),
     resourceTool("files", {
       read,
-      write,
-      ...(controlTools ? { share: sharingTool("file") } : {}),
+      ...(!opts?.ephemeral ? { write } : {}),
+      ...(!opts?.ephemeral && controlTools ? { share: sharingTool("file") } : {}),
     }),
     resourceTool("apps", {
       publish,
@@ -187,7 +202,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     memory,
     history,
     ...(!delegateWork ? [background] : []),
-    ...(opts?.sessionTools === false ? [] : [subagentTool, ...(sidebarSessions ? [sessionTool] : [])]),
+    ...(opts?.sessionTools === false ? [] : [subagentTool, sessionTool]),
     sandboxManagement,
     ...(controlTools
       ? [
@@ -204,7 +219,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
-    ...(surfaceTools ? [surface] : [attach]),
+    ...(surfaceTools
+      ? [opts?.surfacePrompt?.transcript ? { ...surface, executionMode: "sequential" as const } : surface]
+      : [attach]),
     finishSilently,
     withdrawApproval,
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },
@@ -217,6 +234,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const active = tools.filter(
     (t) =>
       (!ref.current?.appFiles || APP_EDIT_TOOL_NAMES.has(t.name)) &&
+      (!opts?.ephemeral || !EPHEMERAL_OMITTED_TOOLS.has(t.name)) &&
       (opts?.readOnly
         ? READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t)
         : !(opts?.memoryNotebookOnly && SCHEDULING_TOOL_NAMES.has(t.name))),

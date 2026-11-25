@@ -1,17 +1,21 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
+import { samePerson } from "../directory/person.ts";
+import { automationDestination } from "../core/turn-origin.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { turnFailureText } from "../surfaces/turn-flow.ts";
+import type { WornPersona } from "../types.ts";
 import { slackSectionBlocks } from "./mrkdwn.ts";
 import {
   type StoredApproval,
   approvalDecisionMessage,
   approvalMessage,
+  batchPostMessageArgs,
   clip,
   createApprovalRegistry,
   createThreadTracker,
   recoveredApprovalContext,
   resolveReactionTargets,
-  slackReplyArgs,
+  slackPersonaReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
@@ -74,6 +78,7 @@ export function createApprovals(deps: {
   flow: TurnFlow;
   directory: Directory;
   threads: ReturnType<typeof createThreadTracker>;
+  webUiPublicUrl?: string;
 }): Approvals {
   const { core, flow, directory, threads } = deps;
 
@@ -82,7 +87,10 @@ export function createApprovals(deps: {
     runId?: string;
   }
 
-  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+  async function runTurn(
+    body: CoreTurnBody,
+    hooks: { onQueued?: (runId: string) => void; deferDeliveryAck?: boolean } = {},
+  ): Promise<TurnOutcome> {
     if (deps.externalAccess && body.conversation.kind !== "dm")
       throw new Error("Continue this request privately instead of resuming a shared approval.");
     let runId: string | undefined;
@@ -129,13 +137,26 @@ export function createApprovals(deps: {
       if (!stored) return { state: "gone" };
       return { state: "found", stored: stored as StoredApproval };
     } catch (err) {
-      console.error("[slack-plugin] approval recovery fetch failed:", (err as Error).message);
+      console.error("[slack-plugin] approval recovery fetch failed:", errMessage(err));
       return { state: "unavailable" };
     }
   }
 
-  async function postApprovalFollowup(client: any, ctx: SlackApprovalContext, text: string): Promise<void> {
-    await client.chat.postMessage(slackReplyArgs(ctx.channel, text, ctx.replyThreadTs, { threadOnly: ctx.threadOnly }));
+  async function postApprovalFollowup(
+    client: any,
+    ctx: SlackApprovalContext,
+    text: string,
+    persona?: WornPersona,
+  ): Promise<void> {
+    const args = slackPersonaReplyArgs(ctx.channel, text, ctx.replyThreadTs, {
+      threadOnly: ctx.threadOnly,
+      unfurlLinks: false,
+      persona,
+      webUiPublicUrl: deps.webUiPublicUrl,
+    });
+    for (const batch of batchPostMessageArgs(args)) {
+      await client.chat.postMessage(batch);
+    }
   }
 
   async function handleApprovalAction({ ack, body, action, client }: ActionArgs): Promise<void> {
@@ -233,7 +254,8 @@ export function createApprovals(deps: {
 
     const requesterMatches =
       clickerId === ctx.requesterId ||
-      (ctx.recovered === true && (await directory.classifyActor(client, clickerId)).externalId === ctx.requesterId);
+      (ctx.recovered === true &&
+        samePerson((await directory.classifyActor(client, clickerId)).externalId, ctx.requesterId));
     if (!requesterMatches) {
       await client.chat
         .postEphemeral({
@@ -272,6 +294,7 @@ export function createApprovals(deps: {
     };
 
     const delegated = isSubagentThreadRef(ctx.turn.conversation.threadRef);
+    const deliversElsewhere = Boolean(automationDestination(ctx.turn));
     const cardChannel = ctx.approvalChannel;
     const cardIsRemote = cardChannel !== ctx.channel;
     const decided: ApprovalDecisionRecord = { decision: selected, by: clickerId, at: Date.now(), state: "done" };
@@ -284,7 +307,7 @@ export function createApprovals(deps: {
     try {
       const approver = await directory.classifyActor(client, clickerId);
       const onQueued =
-        messageTs && !cardIsRemote && !delegated
+        messageTs && !cardIsRemote && !delegated && !deliversElsewhere
           ? (runId: string): void => {
               void core
                 .reportRunEditRef(runId, messageTs)
@@ -327,7 +350,10 @@ export function createApprovals(deps: {
         return;
       }
 
-      const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
+      const outcome = await runTurn(
+        { ...ctx.turn, actor: approver, approval },
+        { ...(onQueued ? { onQueued } : {}), ...(deliversElsewhere ? { deferDeliveryAck: true } : {}) },
+      );
       const result = outcome.result;
       settle();
 
@@ -350,16 +376,24 @@ export function createApprovals(deps: {
       }
 
       if (result.status === "ok") {
+        if (deliversElsewhere) {
+          await updateCard(decisionCard(["Results will be delivered to the destination."]));
+          return;
+        }
         if (ctx.threadOnly && ctx.replyThreadTs) threads.mark(ctx.channel, ctx.replyThreadTs, true);
         const cleanedContinuation = cleanAgentReplyForSlack(result.reply ?? "");
         const replyBody = stripAckPrefix(cleanedContinuation.text, ctx.ackedFirstBlock);
         const { reactions } = cleanedContinuation;
+        if (ctx.turn.surfaceTools && !replyBody && !result.attachments?.length && !reactions.length) {
+          await updateCard(decisionCard());
+          return;
+        }
         let reply = result.stopped ? "" : "(no response)";
         if (replyBody) reply = toSlackMrkdwn(replyBody);
         else if (result.attachments?.length || reactions.length) reply = "Done.";
-        if (cardIsRemote || !reply) {
+        if (cardIsRemote || !reply || result.persona) {
           await updateCard(decisionCard());
-          if (reply) await postApprovalFollowup(client, ctx, reply);
+          if (reply) await postApprovalFollowup(client, ctx, reply, result.persona);
         } else {
           const replyBlocks = slackSectionBlocks(reply);
           await updateSlackMessage(
@@ -374,8 +408,8 @@ export function createApprovals(deps: {
           try {
             await uploadAttachments(client, ctx.channel, ctx.replyThreadTs, result.attachments, core);
           } catch (err) {
-            console.error("[slack-plugin] file upload failed:", (err as Error).message);
-            await postApprovalFollowup(client, ctx, uploadFailureNote(err));
+            console.error("[slack-plugin] file upload failed:", errMessage(err));
+            await postApprovalFollowup(client, ctx, uploadFailureNote(err), result.persona);
           }
         }
         const { directives } = resolveReactionTargets(reactions, ctx.allowedTs ?? new Set());
@@ -383,7 +417,7 @@ export function createApprovals(deps: {
         return;
       }
 
-      if (result.status === "silent") {
+      if (result.status === "silent" || result.status === "queued") {
         await updateCard(decisionCard());
         return;
       }

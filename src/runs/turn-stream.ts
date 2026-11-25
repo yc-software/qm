@@ -1,5 +1,5 @@
 import type { GoalRecord } from "../agent/goal.ts";
-import type { TurnRuntime } from "../types.ts";
+import type { TurnRuntime, WornPersona } from "../types.ts";
 
 export interface GoalView {
   objective: string;
@@ -25,10 +25,13 @@ export interface TurnStream {
   settleReasoning(runId: string, step: string, index: number): void;
   reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string): void;
+  noteActivity(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
   noteRuntime(runId: string, runtime: TurnRuntime): void;
   runtime(runId: string): TurnRuntime | null;
+  notePersona(runId: string, persona: WornPersona): void;
+  persona(runId: string): WornPersona | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
@@ -43,6 +46,7 @@ export interface TurnStream {
 interface TurnStreamListener {
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
+  onActivity?(): void;
 }
 
 interface Entry {
@@ -50,6 +54,7 @@ interface Entry {
   totalChars: number;
   goal: GoalView | null;
   runtime: TurnRuntime | null;
+  persona: WornPersona | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
@@ -81,6 +86,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
     totalChars: 0,
     goal: null,
     runtime: null,
+    persona: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
@@ -187,6 +193,10 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       }
     },
 
+    noteActivity(runId) {
+      for (const l of listeners.get(runId) ?? []) l.onActivity?.();
+    },
+
     noteGoal(runId, goal) {
       ensure(runId).goal = goal;
     },
@@ -202,6 +212,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     runtime(runId) {
       return runs.get(runId)?.runtime ?? null;
+    },
+
+    notePersona(runId, persona) {
+      ensure(runId).persona = persona;
+    },
+
+    persona(runId) {
+      return runs.get(runId)?.persona ?? null;
     },
 
     firstBlock(runId) {

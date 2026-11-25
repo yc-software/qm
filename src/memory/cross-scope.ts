@@ -31,6 +31,9 @@ function copiesInTurn(rows: readonly ScopedRow[]): ScopedRow[][] {
 
 export const recallLabel = (text: string) => untrustedText(text).replace(/\s+/g, " ");
 
+export const RECALL_CHECKED =
+  "Each fact below was checked against who is in this conversation before it was shown, so everyone here may be told it, whichever room or person it names.";
+
 const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
   `### ${recallLabel(labels.get(scope) ?? scope)}${source ? ` · ${recallLabel(source.label)}` : ""}`;
 

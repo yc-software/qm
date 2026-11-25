@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
+import { genericChatApprovalCardRoute } from "../src/surfaces/generic-chat/approvals.ts";
+import { GENERIC_CHAT } from "../src/surfaces/generic-chat/protocol.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
@@ -141,4 +143,53 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   assert.equal(delivery?.destination.target, "U9");
   assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
   assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+});
+
+test("automation approvals route through the fallback route and generic-chat destinations", async () => {
+  const deliveries = createDeliveryStore();
+  const store = createRoutedApprovalStore(
+    testMap<PendingApprovalRecord>(),
+    deliveries,
+    { slack: slackApprovalCardRoute },
+    (req) => genericChatApprovalCardRoute(req) ?? slackApprovalCardRoute(req),
+  );
+  const auto = {
+    ...record("cron:c1:1"),
+    request: {
+      ...record("cron:c1:1").request!,
+      surface: "cron",
+      origin: { kind: "automation" as const },
+    },
+  };
+  await store.put("a-cron", auto);
+  await store.put("a-chat", {
+    ...auto,
+    request: {
+      ...auto.request,
+      origin: { kind: "automation" as const, destination: { type: GENERIC_CHAT, target: "acc:room" } },
+    },
+  });
+  assert.deepEqual(
+    (await deliveries.pending("principal")).map((d) => [d.destination.commandApprovalId, d.destination.target]),
+    [["a-cron", "U1"]],
+  );
+  assert.deepEqual(
+    (await deliveries.pending(GENERIC_CHAT)).map((d) => [d.destination.commandApprovalId, d.destination.target]),
+    [["a-chat", "acc:room"]],
+  );
+});
+
+test("a fire's approval reaches its owner's DM whatever surface the run came from", async () => {
+  for (const surface of ["cron", "webhook", "loop", "approval"]) {
+    const deliveries = createDeliveryStore();
+    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+    const approval = record(`cron:c1:${surface}`);
+    approval.request!.surface = surface;
+    approval.request!.actor.externalId = "owner@example.com";
+    await approvals.put("A1", approval);
+    const [delivery] = await deliveries.pending("principal");
+    assert.equal(delivery?.destination.target, "owner@example.com", surface);
+    assert.equal(delivery?.destination.commandApprovalId, "A1");
+    assert.equal((await approvals.get("A1"))?.cardTo, "owner@example.com");
+  }
 });

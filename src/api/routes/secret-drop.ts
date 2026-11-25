@@ -2,6 +2,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import {
   botWorkInPersonsName,
   mintCapabilityToken,
+  scopeAuthorizationClaims,
   verifyCapabilityToken,
   MEMORY_BRAIN_DROP_AUD,
   SECRET_DROP_AUD,
@@ -33,7 +34,6 @@ import {
 } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
-const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 const KEYCHAIN_HELP =
   "What you enter goes straight to the keychain over TLS and is encrypted at rest. It is never shown in chat. This link works once.";
 const BRAIN_HELP =
@@ -156,14 +156,14 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: Capabi
   const audienceScopeId = rec.audienceScopeId;
   if (!audienceScopeId || !isSharedScope(audienceScopeId)) return Promise.resolve(true);
   return ctx.app
-    .authorizesCapabilityScope({
-      actorId: rec.ownerId,
-      scopeId: audienceScopeId,
-      ...(rec.scopeVersion ? { scopeVersion: rec.scopeVersion } : {}),
-      ...(claims?.botActor ? { botActor: true } : {}),
-      ...(claims?.liveActor ? { liveActor: true } : {}),
-      ...(claims?.members ? { members: claims.members } : {}),
-    })
+    .authorizesCapabilityScope(
+      scopeAuthorizationClaims({
+        ...claims,
+        actorId: rec.ownerId,
+        scopeId: audienceScopeId,
+        scopeVersion: rec.scopeVersion,
+      }),
+    )
     .catch(reportFailureAs("secret drop: conversation membership check", false));
 }
 
@@ -355,7 +355,6 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   const capSecret = deps.capabilitySecret ?? secret;
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
-  if (capability.triggered) return sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
   if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   const b = body as {
@@ -427,7 +426,8 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       actorId: ownerId,
       scopeId: capability.scopeId,
       ...(capability.botActor ? { botActor: true } : {}),
-      ...(capability.liveActor ? { liveActor: true } : {}),
+      ...(capability.internalAudience ? { internalAudience: true } : {}),
+      ...(capability.personAuthority ? { personAuthority: true } : {}),
       ...(capability.members ? { members: capability.members } : {}),
       aud: brain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD,
       drop: dropId,

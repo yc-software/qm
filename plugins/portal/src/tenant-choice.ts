@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { LRUCache } from "lru-cache";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { escapeHtml, json, readBody } from "../../chassis/src/http.ts";
-import { isAppHandleShape } from "../../chassis/src/dns-label.ts";
 import { isTenantId } from "../../chassis/src/tenant.ts";
 import { clearCookie, open, readCookie, seal, setCookie } from "./session.ts";
 
@@ -34,12 +32,6 @@ export interface EmailTenants {
 export interface ExternalOrg {
   id: string;
   name: string;
-  partnerChatAccount?: string;
-}
-
-export interface Workspace {
-  tenant: string;
-  trustedClient?: { clientId: string; clientSecret: string };
 }
 
 interface ChoiceClaims {
@@ -119,32 +111,6 @@ async function coreTenants(
       : [],
   );
   return { tenants: valid, shared: body.shared === true, selfServe: body.selfServe === true };
-}
-
-export function coreWorkspace(coreApiUrl: string, signingSecret: string | undefined) {
-  const cache = new LRUCache<string, { found: Workspace | null }>({ max: 1_000, ttl: 60_000 });
-  return async (handle: string): Promise<Workspace | null> => {
-    if (!isAppHandleShape(handle)) return null;
-    const hit = cache.get(handle);
-    if (hit) return hit.found;
-    const path = withSourceAuthNonce(`/v1/auth/broker/workspace?handle=${encodeURIComponent(handle)}`, signingSecret);
-    const r = await fetch(`${coreApiUrl}${path}`, {
-      headers: signedHeaders(signingSecret, "GET", path),
-      signal: AbortSignal.timeout(4_000),
-    });
-    if (!r.ok) throw new Error(`workspace lookup failed: HTTP ${r.status}`);
-    const { tenant, trustedClient: c } = (await r.json()) as {
-      tenant?: unknown;
-      trustedClient?: { clientId?: unknown; clientSecret?: unknown };
-    };
-    const trustedClient =
-      typeof c?.clientId === "string" && typeof c.clientSecret === "string" && c.clientSecret.length >= 32
-        ? { clientId: c.clientId, clientSecret: c.clientSecret }
-        : undefined;
-    const found = isTenantId(tenant) ? { tenant, ...(trustedClient ? { trustedClient } : {}) } : null;
-    cache.set(handle, { found });
-    return found;
-  };
 }
 
 function openChoice(token: string | null, key: Buffer, now: number): ChoiceClaims | null {
@@ -370,7 +336,6 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
     identity: TrustedSignIn & {
       email: string | null;
       returnTo: string;
-      tenant?: string | undefined;
       subject?: string;
       orgs?: ExternalOrg[];
     },
@@ -380,7 +345,7 @@ export function createTenantChoice(deps: TenantChoiceDeps) {
       principal: identity.sub,
     });
     const who = { sub: identity.sub, name: identity.name };
-    const pin = identity.tenant ?? (await deps.pin(identity.returnTo));
+    const pin = await deps.pin(identity.returnTo);
     const orgs = identity.orgs ?? [];
     if (
       found.selfServe &&

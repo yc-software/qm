@@ -25,6 +25,7 @@ import { APP_EDIT_DEFAULT_RUNTIME } from "../runtime-config.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import { credentialInjectionError, type CredentialInjection } from "../../credentials/credential-injection.ts";
+import { isDeploymentDefault } from "../../credentials/deployment-credentials.ts";
 import {
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
@@ -111,21 +112,28 @@ function channelContainer(scope: string): string | undefined {
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
 
+export const PURPOSE_RUNTIME_RESOURCES: readonly {
+  id: string;
+  purpose: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  name: string;
+  label?: string;
+}[] = [
+  { id: "cron-runtime", purpose: "cron", name: "Cron model" },
+  { id: "subagent-runtime", purpose: "subagent", name: "Subagent model" },
+  { id: "fallback-runtime", purpose: "fallback", name: "Fallback model" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    name: "App edit model",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
+
 const RUNTIME_RESOURCES: {
   id: string;
   purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
   label?: string;
-}[] = [
-  { id: "runtime" },
-  { id: "cron-runtime", purpose: "cron" },
-  { id: "subagent-runtime", purpose: "subagent" },
-  { id: "fallback-runtime", purpose: "fallback" },
-  {
-    id: "app-edit-runtime",
-    purpose: "appEdit",
-    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
-  },
-];
+}[] = [{ id: "runtime" }, ...PURPOSE_RUNTIME_RESOURCES];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
@@ -811,7 +819,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const slug = typeof b.slug === "string" ? b.slug : "";
       if (!isValidCredentialSlug(slug)) return { error: "slug must be lowercase kebab-case (a-z, 0-9, -)" };
       const ref = encodeRef(serviceCredRef(slug));
-      const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
+      const allCreds = (await deps.serviceCreds.listServiceCredentials(scope)).filter((c) => !isDeploymentDefault(c));
       const existing = allCreds.find((c) => c.slug === slug);
       if (existing?.source === "deployment")
         return {
@@ -964,9 +972,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         )
           return conflict();
         deletedCredential = true;
-        const replacement: Grant[] = [];
-        grantsWritten = replacement;
         try {
+          const fallsBack = (await deps.serviceCreds.listServiceCredentials(scope)).some(
+            (c) => c.slug === slug && isDeploymentDefault(c),
+          );
+          const replacement: Grant[] = fallsBack ? grantsBefore : [];
+          grantsWritten = replacement;
           if (!(await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsBefore, replacement, actor.id)))
             return mutationFailed("delete");
           auditGrantChanges(grantChanges(replacement));

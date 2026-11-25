@@ -17,17 +17,33 @@ import type { SessionWriter } from "../../sessions/session-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
-import { approvalGrantId } from "./turn-helpers.ts";
+import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
 
-export function grantModesWithin(
+function grantModesWithin(
   allowed: ApprovalGrantModes,
   requested: ApprovalGrantModes | undefined,
 ): { grantModes?: ApprovalGrantModes } {
   const session = allowed.session && (requested?.session ?? true);
   const always = allowed.always && (requested?.always ?? true);
   return session && always ? {} : { grantModes: { session, always } };
+}
+
+export function newApprovalRecord(
+  fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
+  input: OrchestratorInput,
+  allowed: ApprovalGrantModes,
+): PendingApprovalRecord {
+  const { grantModes, ...rest } = fields;
+  return {
+    ...(Object.fromEntries(
+      Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
+    ) as typeof rest),
+    createdAt: Date.now(),
+    request: replayableRequest(input),
+    ...grantModesWithin(allowed, grantModes),
+  };
 }
 
 export function approvalView(requestId: string, record: PendingApprovalRecord): PendingApproval {
@@ -184,20 +200,43 @@ function approvedRequestsStarted(items: readonly Item[]): Set<string> {
   );
 }
 
-export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: string): EarlierApprovals {
-  const started = approvedRequestsStarted(items);
-  const earlier: EarlierApprovals = { decided: new Set(), unstarted: [] };
+function approvedDecisions(
+  items: readonly Item[],
+  actorId: string,
+): Map<string, { call: ApprovedToolCall; approvalKey: string }> {
+  const decisions = new Map<string, { call: ApprovedToolCall; approvalKey: string }>();
   for (const item of items) {
     if (item.kind !== "ElicitationResponse" || item.approved !== true) continue;
     if (!samePerson(item.author ?? undefined, actorId)) continue;
     const call = item.body.call as ApprovedToolCall | undefined;
     const approvalKey = item.body.approvalKey;
     if (!call || call.requestId !== item.elicitId || typeof approvalKey !== "string") continue;
-    if (earlier.decided.has(call.requestId)) continue;
-    earlier.decided.add(call.requestId);
-    if (!started.has(call.requestId)) earlier.unstarted.push({ call, approvalKey });
+    if (!decisions.has(call.requestId)) decisions.set(call.requestId, { call, approvalKey });
   }
-  return earlier;
+  return decisions;
+}
+
+export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: string): EarlierApprovals {
+  const started = approvedRequestsStarted(items);
+  const decisions = approvedDecisions(items, actorId);
+  return {
+    decided: new Set(decisions.keys()),
+    unstarted: [...decisions.values()].filter(({ call }) => !started.has(call.requestId)),
+  };
+}
+
+export function approvedCallRunning(
+  items: readonly Item[],
+  requestId: string,
+  actorId: string,
+): ApprovedToolCall | undefined {
+  const started = items.find((item) => item.kind === "ToolCall" && item.body.approvedRequestId === requestId);
+  if (
+    started?.kind !== "ToolCall" ||
+    items.some((item) => item.kind === "ToolResult" && item.callId === started.callId)
+  )
+    return undefined;
+  return approvedDecisions(items, actorId).get(requestId)?.call;
 }
 
 export const quarantinePreview = (payload: string): string => {

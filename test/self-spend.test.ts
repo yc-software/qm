@@ -7,7 +7,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
@@ -19,14 +22,23 @@ const today = new Date(Math.floor(Date.now() / DAY) * DAY).toISOString().slice(0
 const tomorrow = new Date(Math.floor(Date.now() / DAY) * DAY + DAY).toISOString().slice(0, 10);
 const WINDOW = `from=${today}&to=${tomorrow}`;
 
-async function start(options: { sessions?: false } = {}) {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "self-spend-")) }));
-  const server = createInsecureTestServer(built.app, {
+async function start(options: { sessions?: false; secret?: string } = {}) {
+  const built = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "self-spend-")), signingSecret: options.secret }),
+  );
+  const deps = {
     admin: built.admin,
     sessions: options.sessions === false ? undefined : built.sessions,
     auditLog: built.auditLog,
     runs: built.runs,
-  });
+  };
+  const server = options.secret
+    ? createServer(built.app, {
+        ...deps,
+        signingSecret: options.secret,
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      })
+    : createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   await built.app.upsertDirectory([
@@ -231,6 +243,60 @@ test("self spend: answers 503 without a session store", async () => {
     const response = await s.mine();
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), { error: "spend_unavailable" });
+  } finally {
+    await s.close();
+  }
+});
+
+test("self spend: capability token binds actor, defaults window, scopes shared rooms, blocks bots", async () => {
+  const secret = "self-spend-cap-secret".repeat(2);
+  const s = await start({ secret });
+  try {
+    const [aliceCron, roomCron] = [await s.cron("alice", "personal:alice"), await s.cron("alice", "channel:C1")];
+    await bill(s.built.sessions, `cron:${aliceCron.id}:fire:1`, "dm", "personal:alice", { costUsd: 4 });
+    await bill(s.built.sessions, `cron:${roomCron.id}:fire:1`, "channel", "channel:C1", { costUsd: 6 });
+    await bill(s.built.sessions, "ch:P2:t1", "channel", "channel:P2", { costUsd: 8 });
+    const get = async (
+      path: string,
+      claims: Partial<Parameters<typeof mintCapabilityToken>[0]> & { scopeId: ReturnType<typeof scopeId> },
+    ) =>
+      fetch(`${s.base}${path}`, {
+        headers: {
+          "x-agent-capability": await mintCapabilityToken(
+            {
+              actorId: "alice",
+              exp: Date.now() + CAPABILITY_TTL_MS,
+              personAuthority: true,
+              origin: "cron" as const,
+              ...claims,
+            },
+            secret,
+          ),
+        },
+      });
+    const p = (await (
+      await get("/v1/spend?principalId=bob", {
+        scopeId: scopeId("personal", "alice"),
+        audienceScopeId: scopeId("personal", "alice"),
+      })
+    ).json()) as any;
+    assert.deepEqual([p.scopeId, p.org.costUsd, p.crons.length], ["personal:alice", 18, 2]);
+    const r = (await (
+      await get(`/v1/spend?${WINDOW}`, { scopeId: scopeId("channel", "C1"), audienceScopeId: scopeId("channel", "C1") })
+    ).json()) as any;
+    assert.deepEqual(
+      [r.scopeId, r.org.costUsd, r.people, r.scopes.map((c: any) => c.scopeId), r.crons.map((c: any) => c.cronId)],
+      ["channel:C1", 6, [], ["channel:C1"], [roomCron.id]],
+    );
+    const cross = (await (
+      await get(`/v1/spend?${WINDOW}`, {
+        scopeId: scopeId("personal", "alice"),
+        destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+      })
+    ).json()) as any;
+    assert.deepEqual([cross.scopeId, cross.org.costUsd, cross.people], ["channel:C1", 6, []]);
+    assert.equal((await get("/v1/spend", { scopeId: scopeId("personal", "alice") })).status, 403);
+    assert.equal((await get("/v1/spend", { scopeId: scopeId("channel", "C1"), botActor: true })).status, 403);
   } finally {
     await s.close();
   }

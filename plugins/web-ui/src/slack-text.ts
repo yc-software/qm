@@ -10,7 +10,7 @@ export function safeHttpHref(url: string): string | null {
   return /^(?:https?:\/\/|mailto:)/i.test(decoded) ? decoded : null;
 }
 
-function splitOnce(s: string, sep: string): [string, string | undefined] {
+export function splitOnce(s: string, sep: string): [string, string | undefined] {
   const at = s.indexOf(sep);
   return at < 0 ? [s, undefined] : [s.slice(0, at), s.slice(at + sep.length)];
 }
@@ -87,7 +87,11 @@ export function stripSlackDirectives(text: string): string {
     .trim();
 }
 
-function replaceShortcodes(text: string, emojiFor: (name: string) => string | null): string {
+export const REACTION_PREFIX = "[Slack reaction] ";
+
+export const FORWARD_PREFIX = "[forwarded message from ";
+
+export function withEmoji(text: string, emojiFor: (name: string) => string | null): string {
   const parts = text.split(":");
   let out = parts[0] ?? "";
   for (let i = 1; i < parts.length; i++) {
@@ -101,5 +105,5 @@ function replaceShortcodes(text: string, emojiFor: (name: string) => string | nu
 }
 
 export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
-  return replaceShortcodes(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
+  return withEmoji(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
 }

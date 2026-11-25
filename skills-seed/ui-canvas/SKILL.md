@@ -15,7 +15,7 @@ bottom-right corner lets the person hide, pin or close it.
 The canvas belongs to this conversation and to the person who started this turn. It shows
 in whichever pane has this conversation open, survives reloads and pane moves, and nobody
 else sees it (see "Always on" below for one that follows them everywhere) — not other members of a shared conversation, not people viewing a share
-link. Requires a web turn the person started and the `ui_canvas` feature for them.
+link. Requires a web UI turn and the `ui_canvas` feature for them; their QM tab must be open.
 
 **Your JavaScript runs in their page with their full session.** It can do anything they
 can do in QM, with no sandbox. That is why it exists, and why you must hold to these rules:

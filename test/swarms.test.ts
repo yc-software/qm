@@ -527,7 +527,6 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     const run = (await runs.get(notification.runId!))!;
     assert.equal(run.request.origin.kind, "automation");
     assert.equal(run.request.deliveryTarget, undefined);
-    assert.equal(run.request.origin.kind === "automation" && run.request.origin.useOwnerKeychain, undefined);
     assert.equal(
       runResultDelivery({
         ...run,
@@ -853,7 +852,7 @@ test("correlated bounded waits observe wake:false replies without waking anyone 
   );
 });
 
-test("active recipients receive durable queued unattended work rather than human steer signals", async () => {
+test("active recipients receive durable queued automated work rather than human steer signals", async () => {
   const { service, caller, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
@@ -904,7 +903,7 @@ for (const [from, options] of [
     assert.ok(await service.binding(testTenant, { ...run.request, runId: run.id }));
   });
 
-test("human messages preserve human actor attribution while notifications remain unattended", async () => {
+test("human messages preserve human actor attribution while notifications remain automated", async () => {
   const { service, caller, root } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
@@ -977,8 +976,7 @@ test("the orchestrator sandbox path selects worker storage without changing the 
     memoryScopeId: storageScopeId,
     transferId: "transfer",
     swarmSandboxId: binding.sandboxId,
-    turnSessionDir: "/tmp/session",
-    turnFilesDir: "/tmp/files",
+    turnSessionKey: "session",
     connectorEnv: {},
     isolateOwnerKeychain: false,
     credentialServices: [],

@@ -1064,7 +1064,7 @@ test("Open uses the exact skill snapshot that passed screening despite an in-fli
   assert.doesNotMatch(result.reply ?? "", /UNSCREENED_UPDATE|UNSCREENED_BODY/);
 });
 
-test("steered files materialize in separate inboxes and keep distinct durable artifacts", async () => {
+test("steered files keep distinct durable artifacts and are never written to the computer", async () => {
   const blobTransfer = createMemoryBlobTransferStore();
   const first = await blobTransfer.put(Buffer.from("first file"));
   const second = await blobTransfer.put(Buffer.from("second file"));
@@ -1098,17 +1098,13 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
-  const inboundWrites = [...writes].filter(([path]) => path.endsWith("/report.txt"));
-  assert.equal(inboundWrites.length, 2);
-  assert.deepEqual(
-    inboundWrites.map(([, content]) => content),
-    ["first file", "second file"],
-  );
-  for (const [i, [path]] of inboundWrites.entries()) {
-    assert.ok(prepared[i]!.text.includes(path));
-    assert.ok(await files.get(prepared[i]!.attachments![0]!.artifactId!));
+  assert.deepEqual([...writes.keys()], []);
+  for (const [i, steer] of prepared.entries()) {
+    const artifactId = steer.attachments![0]!.artifactId!;
+    assert.ok(steer.text.includes(`Files ID ${artifactId}`));
+    assert.ok(await files.get(artifactId));
     assert.equal(
-      Buffer.from(prepared[i]!.documents![0]!.dataBase64, "base64").toString(),
+      Buffer.from(steer.documents![0]!.dataBase64, "base64").toString(),
       i === 0 ? "first file" : "second file",
     );
   }
@@ -1736,6 +1732,53 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   assert.doesNotMatch(compacted.system, /NPM_TOKEN/);
   assert.doesNotMatch(compacted.environment, /Changed since the system prompt/);
   assert.equal((await turn(teammate)).system, compacted.system);
+});
+
+test("a message sent from a different app than the session's first one says where it came from", async () => {
+  const { orchestrator } = buildOrchestrator({});
+  const turn = async (clientSurface: "desktop" | "browser") => {
+    const result = await orchestrator.handleTurn({
+      surface: "web",
+      actor,
+      conversation: { kind: "dm", threadRef: "web:U1:clients", audience: [actor] },
+      text: "!sysprompt",
+      origin: { kind: "human" },
+      clientSurface,
+    });
+    const reply = result.reply ?? "";
+    const system = reply.split("\n\n<environment>")[0]!;
+    return { system, environment: reply.slice(system.length) };
+  };
+  const desktop = await turn("desktop");
+  assert.match(desktop.system, /^Sent from the QM desktop app\.$/m);
+  assert.doesNotMatch(desktop.environment, /Changed since the system prompt/);
+  const browser = await turn("browser");
+  assert.equal(browser.system, desktop.system);
+  assert.match(
+    browser.environment,
+    /Removed from "Where you are":\nSent from the QM desktop app\.\nAdded to "Where you are":\nSent from a web browser\./,
+  );
+});
+
+test("every turn declares the desktop tool, whichever app or trigger sent it", async (t) => {
+  const requests = recordRequests(t);
+  const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", actorKey: "test-actor-key" };
+  const routes = createModelRoutes({
+    defaultModelId: "claude-haiku-4-5",
+    modelGateway: { ...gateway, models: { "claude-haiku-4-5": "m" } },
+  });
+  const { orchestrator } = buildOrchestrator({ agent: createAgent({ routes }) });
+  const tools = async (input: OrchestratorInput) => {
+    await orchestrator.handleTurn(input);
+    const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
+    return body.tools.map((tool: { name: string }) => tool.name);
+  };
+  for (const input of [
+    slackDm("slack:D1:desktop-tool", "hi", { origin: { kind: "human" } }),
+    dm("cron:c1:desktop-tool", "tick", { origin: { kind: "automation" } }),
+    dm("web:U1:desktop-tool", "hi", { surface: "web", origin: { kind: "human" }, clientSurface: "browser" }),
+  ])
+    assert.ok((await tools(input)).includes("desktop"), input.conversation.threadRef);
 });
 
 test("a live turn in an app edit chat gets a small prompt of its own and six tools, whatever prompt that chat had saved", async (t) => {

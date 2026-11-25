@@ -110,7 +110,7 @@ test("a fully migrated database skips the base schema and drops the retired obje
           "SELECT column_name FROM information_schema.columns WHERE table_name = 'participants' ORDER BY ordinal_position",
         )
       ).rows.map((row) => row.column_name),
-      ["session_id", "principal_id"],
+      ["session_id", "principal_id", "notified_at"],
     );
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",

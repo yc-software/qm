@@ -1,4 +1,3 @@
-import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
@@ -11,20 +10,63 @@ export function isOwnSlackMessage(
   return Boolean((botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId));
 }
 
+export function isStatusChromeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") return false;
+  const b = block as {
+    type?: unknown;
+    task_id?: unknown;
+    tasks?: unknown;
+    block_id?: unknown;
+  };
+  if (b.type === "task_card") {
+    return typeof b.task_id === "string" && b.task_id.startsWith(SLACK_STATUS_TASK_PREFIX);
+  }
+  if (b.type === "plan") {
+    if (typeof b.block_id === "string" && b.block_id.startsWith(SLACK_STATUS_TASK_PREFIX)) return true;
+    return (
+      Array.isArray(b.tasks) &&
+      b.tasks.some(
+        (t) =>
+          !!t &&
+          typeof t === "object" &&
+          typeof (t as { task_id?: unknown }).task_id === "string" &&
+          (t as { task_id: string }).task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
+      )
+    );
+  }
+  return false;
+}
+
 export function isOwnStatusCard(
-  message: { user?: string; bot_id?: string; blocks?: unknown[] },
-  botUserId: string,
-  ownBotId = "",
+  msg: { bot_id?: unknown; user?: unknown; blocks?: unknown },
+  botUserId?: string,
+  ownBotId?: string,
 ): boolean {
-  return Boolean(
-    isOwnSlackMessage(message, botUserId, ownBotId) &&
-    Array.isArray(message.blocks) &&
-    message.blocks.some((block) =>
-      (isObj(block) && block.type === "plan" && Array.isArray(block.tasks) ? block.tasks : [block]).some(
-        (task) => isObj(task) && typeof task.task_id === "string" && task.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
-      ),
-    ),
-  );
+  if (
+    !isOwnSlackMessage(
+      {
+        user: typeof msg.user === "string" ? msg.user : undefined,
+        bot_id: typeof msg.bot_id === "string" ? msg.bot_id : undefined,
+      },
+      botUserId ?? "",
+      ownBotId ?? "",
+    ) ||
+    !Array.isArray(msg.blocks) ||
+    msg.blocks.length === 0
+  )
+    return false;
+  let hasStatus = false;
+  for (const block of msg.blocks) {
+    if (isStatusChromeBlock(block)) {
+      hasStatus = true;
+      continue;
+    }
+    if (block && typeof block === "object" && (block as { type?: unknown }).type === "context") {
+      continue;
+    }
+    return false;
+  }
+  return hasStatus;
 }
 
 export function mentionsBot(text: string, botUserId: string): boolean {

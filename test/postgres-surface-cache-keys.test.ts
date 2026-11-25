@@ -34,10 +34,12 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
       await pool.query(`ALTER TABLE ${table} DROP COLUMN tenant_id CASCADE, DROP COLUMN surface, DROP COLUMN account`);
       await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key})`);
     }
-    await pool.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE 'surface-cache/store/0010-tenants/%'",
-      ["surface-cache/store/0008", "surface-cache/store/0009"],
-    );
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE $3 OR id LIKE $4", [
+      "surface-cache/store/0008",
+      "surface-cache/store/0009",
+      "surface-cache/store/0010-tenants/%",
+      "surface-cache/store/%-primary-key",
+    ]);
   } finally {
     await pool.end();
   }
@@ -116,8 +118,8 @@ test("legacy mirror rows read identically after the surface-key upgrade", async 
         ["channel_state", "tenant_id, org_id, surface, account, container"],
         ["channel_files", "tenant_id, org_id, surface, account, container, ts, file_id"],
       ] as const) {
-        const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_surface_key`]);
-        assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table} has a unique surface and account key`);
+        const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_pkey`]);
+        assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table}'s primary key is its surface and account key`);
       }
     } finally {
       await pool.end();
@@ -125,4 +127,15 @@ test("legacy mirror rows read identically after the surface-key upgrade", async 
   } finally {
     await cache.close();
   }
+});
+
+test("concurrent first messages in new channels store each message and each channel once", async (t) => {
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
+  t.after(() => cache.close());
+  const channels = Array.from({ length: 40 }, (_, i) => `C${i}`);
+  const ingest = (container: string, ts: string) =>
+    cache.ingest([{ account: "race", container, ts, text: ts, createdAt: 1 }]);
+  await Promise.all(channels.flatMap((c) => ["1", "2", "3", "4", "5", "6", "7", "7"].map((ts) => ingest(c, ts))));
+  const stored = await cache.listContainers({ account: "race" });
+  assert.deepEqual(stored.map((s) => [s.container, s.messageCount]).sort(), channels.map((c) => [c, 7]).sort());
 });

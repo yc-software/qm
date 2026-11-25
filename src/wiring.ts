@@ -10,9 +10,11 @@ import { createDecisionHooks, createReplyCheck, routeTurnRuntime } from "./decis
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import type { SlackThinkingStreamRecord } from "./slack/thinking-stream.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
+import { createApprovalStore } from "./surfaces/approval-store.ts";
+import { createApprovalContinuation } from "./triggers/approval-continuation.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -106,7 +108,13 @@ import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import {
+  createGitFetcher,
+  PACK_LIMITS,
+  packFetcherByKind,
+  resolvePackAuth,
+  type SkillPackFetcher,
+} from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
@@ -140,11 +148,9 @@ import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from ".
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
-import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import {
   BACKFILL_BOT_MARKER_MIGRATION,
-  DROP_RECIPIENT_CONSENT_MIGRATION,
+  DROP_RETIRED_TRIGGER_FIELDS_MIGRATION,
   MARK_BOT_EDITED_CRONS_MIGRATION,
   RERUN_BOT_MARKER_BACKFILL_MIGRATION,
 } from "./triggers/trigger-store.ts";
@@ -223,7 +229,9 @@ import {
 } from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpToolService, mcpServerAuth, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpClient } from "./mcp/mcp-client.ts";
+import { createMcpPackFetcher } from "./skills/mcp-pack-fetcher.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -292,9 +300,10 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
+import { createSecretDropStore, LOGIN_TICKET_SWEEP, type SecretDropStore } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
+  enabledPeople,
   externalAppSharingAllowed,
   type FeatureFlagRecord,
   type FeatureFlagStore,
@@ -329,7 +338,7 @@ import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { bootTenant, inBootTenant, tenancyBooted } from "./tenants/boot.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
-import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { EPHEMERAL_SESSION_TTL_MS, LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
 import { createAgent, agentConfigOptions, oneShot } from "./agent/agent-run.ts";
@@ -377,6 +386,14 @@ import { finishProcessCredentials } from "./credentials/execute-files.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
+import { watchReplyNotices } from "./notifications/reply-notifications.ts";
+import {
+  createWebPush,
+  webPushSubject,
+  type VapidKeyRecord,
+  type WebPush,
+  type WebPushSubscriptionRecord,
+} from "./notifications/web-push.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
@@ -551,6 +568,7 @@ export interface BuiltApp {
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
   keychainApprovals?: KeychainApprovals;
+  approvals: ServerDeps["approvals"];
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
@@ -579,6 +597,7 @@ export interface BuiltApp {
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
+  webPush?: WebPush;
   slackCore: SlackCoreClient;
 }
 
@@ -700,6 +719,12 @@ export function buildApp(
       };
     },
   };
+  const ownModelProviders = async (): Promise<ReadonlySet<string>> =>
+    new Set(
+      (await directModelCredentials.statuses())
+        .filter((status) => status.source === "admin" && status.configured)
+        .map((status) => status.provider),
+    );
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
   const users = createPostgresUserStore(databaseUrl);
   const principalLinks = createPrincipalLinkService(users, advisoryLock);
@@ -726,10 +751,12 @@ export function buildApp(
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
+  const slackKeyMaterial = config.connectorSecretKey ?? randomBytes(32);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
-    config.connectorSecretKey ?? randomBytes(32),
+    slackKeyMaterial,
+    config.publicUrl ? { publicUrl: config.publicUrl } : undefined,
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -1387,7 +1414,8 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(inboundMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap<SecretDropRecord>("secret_drops"));
+  pgArtifactMap.pool.registerMigration(LOGIN_TICKET_SWEEP);
+  const secretDrops: SecretDropStore = createSecretDropStore(inboundMap("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
   memorySessions.store = sessions;
@@ -1451,7 +1479,7 @@ export function buildApp(
     const model = resolveEmbeddingModel(id);
     if (!model) throw new Error(`Embedding model unavailable: ${id}`);
     const key = model.provider === "openai" ? await modelCredentials.resolve("openai") : null;
-    return createMemoryEmbedder(model, key, gatewayTransport, overrides.modelCredentialFetch);
+    return createMemoryEmbedder(model, key, await modelRoutes.companyGateway(model), overrides.modelCredentialFetch);
   };
   const resolveModelProviderKeys = async () => {
     await refreshModels();
@@ -1536,6 +1564,7 @@ export function buildApp(
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
+    ownProviders: ownModelProviders,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
@@ -1569,6 +1598,7 @@ export function buildApp(
         },
       }),
     auditLog,
+    (tenant, actorId, scope) => personas.summaries(tenant, actorId, scope),
   );
   const utilityModelId = (): string => modelRoutes.utilityModelId();
   const judgeModelId = (): string => modelRoutes.utilityModelId(config.judgeModelId);
@@ -1865,6 +1895,7 @@ export function buildApp(
   const directory = withSignInMembers(createPostgresDirectoryStore(databaseUrl), signInSources);
   const admin = createAdminService(adminGrantStore, {
     trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    ...(config.trustedOidcAdminRole ? { trustedOidcAdminRole: config.trustedOidcAdminRole } : {}),
     memberTenants: async (principal) => ((await directory.tenantsForPrincipal?.(principal)) ?? []).map(({ id }) => id),
     users,
   });
@@ -1915,6 +1946,8 @@ export function buildApp(
   });
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions, personas });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams, personas });
+  const isOrgAdmin = async (principalId: string): Promise<boolean> =>
+    (await admin.adminStatusOf(ambientTenant(), identity.classify(principalId))).role === "org_admin";
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions, personas });
   const managesArtifactHome = createManagesArtifactHome(
     { managedGroups: projects, directory, identity, teams, personas },
@@ -1926,8 +1959,7 @@ export function buildApp(
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
     identity.isInternal(identity.classify(actorId)) &&
-    ((await admin.adminStatusOf(ambientTenant(), identity.classify(actorId))).isAdmin ||
-      (await canWriteScope(actorId, scopeId)));
+    ((await isOrgAdmin(actorId)) || (await canWriteScope(actorId, scopeId)));
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
@@ -1959,6 +1991,7 @@ export function buildApp(
       (await vouchedInternalEmail(email)) ||
       (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
+    isOrgAdmin,
     ...(deployGitSecret && deployGitBase
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
@@ -2046,10 +2079,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
-  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
-  pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(DROP_RETIRED_TRIGGER_FIELDS_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
@@ -2124,10 +2154,19 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries, {
-    slack: slackApprovalCardRoute,
-    [GENERIC_CHAT]: genericChatApprovalCardRoute,
-  });
+  const approvals = createApprovalStore(
+    artifactMap<PendingApprovalRecord>("approvals", ["sessionId", "cardTo"]),
+    deliveries,
+    { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
+    async (request, sessionId) => {
+      const generic = genericChatApprovalCardRoute(request);
+      if (generic) return generic;
+      if (request.origin?.kind === "automation" && request.origin.destination?.type === "web") return undefined;
+      const home = (await sessions.get(sessionId))?.surface;
+      if (home === "web" || home === "swarm") return undefined;
+      return slackApprovalCardRoute(request);
+    },
+  );
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2246,10 +2285,12 @@ export function buildApp(
         : []),
     ],
   });
+  const promptSnapshots = artifactMap<PromptSnapshot>("prompt_snapshots");
   const orchestratorDeps: OrchestratorDeps = {
     advisoryLock,
     admittedWork,
     sessionStateBus,
+    uiState,
     externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,
@@ -2314,7 +2355,7 @@ export function buildApp(
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
-    promptSnapshots: artifactMap<PromptSnapshot>("prompt_snapshots"),
+    promptSnapshots,
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2349,7 +2390,7 @@ export function buildApp(
     genericChatRunNotice,
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
-  const skillFetcher = createGitFetcher(
+  const gitSkillFetcher = createGitFetcher(
     keychain
       ? {
           allowLocalRepos: !config.production,
@@ -2370,6 +2411,14 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
+  const skillFetcher = packFetcherByKind({
+    git: gitSkillFetcher,
+    mcp: createMcpPackFetcher({
+      servers: mcpServers,
+      clientFor: (server) =>
+        createMcpClient({ url: server.url, auth: mcpServerAuth(server), maxResponseBytes: PACK_LIMITS.maxTotalBytes }),
+    }),
+  });
   const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
@@ -2432,6 +2481,7 @@ export function buildApp(
     deliveries,
     signals: runSignals,
     advisoryLock,
+    monitors,
   };
   const app = createApp({
     errors,
@@ -2453,6 +2503,7 @@ export function buildApp(
     turnStream,
     runStreamEvents,
     runActivity,
+    promptSnapshots,
     signals: runSignals,
     modelCredentials,
     userModelCredentials,
@@ -2465,6 +2516,7 @@ export function buildApp(
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
     acl,
     admin,
+    isOrgAdmin,
     skills,
     skillPacks,
     skillFetcher,
@@ -2490,6 +2542,7 @@ export function buildApp(
     sandbox,
     files,
     approvals,
+    continueApproval: (decision, actorId) => continueApproval(decision, actorId),
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
@@ -2502,7 +2555,7 @@ export function buildApp(
           ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
         }
       : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: artifactMap<{ lastJudgedAt: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
@@ -2534,11 +2587,13 @@ export function buildApp(
     surfaceCache,
     taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
     sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    thinkingStream: artifactMap<SlackThinkingStreamRecord>("slack_thinking_stream"),
+    runActivity,
+    sessions,
     statusActivity: {
       work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
       publicWebUrl: config.publicWebUrl,
     },
-    featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
@@ -2591,6 +2646,22 @@ export function buildApp(
       const root = await stoppableRoot(sessions, session);
       if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
+  });
+  const pushSubject = webPushSubject(config.publicUrl);
+  const webPush = pushSubject
+    ? createWebPush({
+        subscriptions: artifactMap<WebPushSubscriptionRecord>("web_push_subscriptions", ["principalId"]),
+        vapid: artifactMap<VapidKeyRecord>("web_push_vapid"),
+        key: deriveConnectorKey(config.connectorSecretKey, "web-push"),
+        subject: pushSubject,
+      })
+    : undefined;
+  watchReplyNotices({
+    bus: sessionStateBus,
+    sessions,
+    notifiable: () => enabledPeople(featureFlags, "web_notifications"),
+    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+    ...(webPush ? { send: webPush.send } : {}),
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
@@ -2739,18 +2810,22 @@ export function buildApp(
     const { access: _access, ...internal } = bound;
     return app.turn({ ...req, surfaceOrigin: { ...internal, audience: "internal" } });
   };
+  const triggerDeps = {
+    deliveries,
+    idempotency,
+    identity,
+    run: runTriggered,
+    directory,
+    currentScopeMembers,
+    sessions,
+    resolveRecipient,
+  };
+  const continueApproval = createApprovalContinuation({ ...triggerDeps, approvals });
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
           {
-            deliveries,
-            idempotency,
-            identity,
-            run: runTriggered,
-            directory,
-            currentScopeMembers,
-            sessions,
-            resolveRecipient,
+            ...triggerDeps,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
             getGrant: (id) => keychain.getGrant(id),
@@ -2801,16 +2876,7 @@ export function buildApp(
           }),
         }
       : {}),
-    trigger: {
-      deliveries,
-      idempotency,
-      identity,
-      run: runTriggered,
-      directory,
-      currentScopeMembers,
-      sessions,
-      resolveRecipient,
-    },
+    trigger: triggerDeps,
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
@@ -2856,15 +2922,8 @@ export function buildApp(
     cronOrigin: (cron) => app.cronOrigin(cron),
     advisoryLock,
     crons,
-    deliveries,
-    idempotency,
-    identity,
-    run: runTriggered,
+    ...triggerDeps,
     leaderLease,
-    directory,
-    currentScopeMembers,
-    sessions,
-    resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
     sweepAsks: async (now) => {
@@ -2898,14 +2957,7 @@ export function buildApp(
           monitors,
           processes,
           sandbox,
-          deliveries,
-          idempotency,
-          identity,
-          run: runTriggered,
-          directory,
-          currentScopeMembers,
-          sessions,
-          resolveRecipient,
+          ...triggerDeps,
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
@@ -2990,6 +3042,17 @@ export function buildApp(
         immediate: true,
       })
     : null;
+  const ephemeralSessionSweeper = createSweeper(
+    () =>
+      leaderLease.hold("ephemeral-sessions:retention", async () => {
+        const purged = await app.purgeExpiredEphemeralSessions(Date.now() - EPHEMERAL_SESSION_TTL_MS, {
+          deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
+        });
+        if (purged) console.log(`[ephemeral] purged ${purged} expired ephemeral session(s)`);
+      }),
+    LLM_CAPTURE_SWEEP_MS,
+    { label: "ephemeral-session-retention" },
+  );
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? createSweeper(
         () =>
@@ -3093,6 +3156,7 @@ export function buildApp(
       monitorRetentionSweeper.start();
       personaOwnerSweeper.start();
       spendSweeper?.start();
+      ephemeralSessionSweeper.start();
       llmCaptureSweeper?.start();
       semanticMemory.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
@@ -3130,6 +3194,7 @@ export function buildApp(
       monitorRetentionSweeper.stop(),
       personaOwnerSweeper.stop(),
       spendSweeper?.stop(),
+      ephemeralSessionSweeper.stop(),
       llmCaptureSweeper?.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
@@ -3292,6 +3357,7 @@ export function buildApp(
     ...(keychain ? { keychain } : {}),
     serviceCreds,
     deliveries,
+    approvals,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
@@ -3320,6 +3386,7 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
+    ...(webPush ? { webPush } : {}),
     sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
@@ -3435,6 +3502,7 @@ export function serverDeps(
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
+    approvals: built.approvals,
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
     signals: built.signals,
@@ -3464,6 +3532,7 @@ export function serverDeps(
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
+    ...(built.webPush ? { webPush: built.webPush } : {}),
     environments: built.environments,
     sandboxResources: built.sandboxResources,
   };

@@ -15,6 +15,7 @@ import {
   parseLifecycleEvent,
   parseMessageEvent,
   parseReactionEvent,
+  slackBotName,
 } from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import { slackMessageContent } from "./message-content.ts";
@@ -55,6 +56,8 @@ export function registerSlackEvents(
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
     backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
+    onAgentSessionStopped?: (channel: string, threadTs: string) => Promise<void>;
+    onAgentSessionTitleChanged?: (channel: string, threadTs: string, title: string) => Promise<void>;
     ensureHeader?: (
       client: SurfaceHeaderClient,
       channel: string,
@@ -164,7 +167,7 @@ export function registerSlackEvents(
           rawText: content.text,
           subtype: e.subtype ?? "",
           ...(e.bot_id ? { botId: e.bot_id } : {}),
-          ...(e.bot_profile?.name || e.username ? { authorName: String(e.bot_profile?.name || e.username) } : {}),
+          ...(slackBotName(e) ? { authorName: slackBotName(e) } : {}),
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
@@ -292,7 +295,7 @@ export function registerSlackEvents(
             userId: identity.userId,
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_id ? { botId: m.bot_id } : {}),
-            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            ...(slackBotName(m) ? { authorName: slackBotName(m) } : {}),
             rawText: content.text,
             subtype: m.subtype ?? "",
             files: content.files,
@@ -340,7 +343,7 @@ export function registerSlackEvents(
             userId: identity.userId,
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_id ? { botId: m.bot_id } : {}),
-            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            ...(slackBotName(m) ? { authorName: slackBotName(m) } : {}),
             rawText: content.text,
             subtype: m.subtype ?? "",
             files: content.files,
@@ -410,6 +413,29 @@ export function registerSlackEvents(
 
   app.event("assistant_thread_started", async () => {});
   app.event("assistant_thread_context_changed", async () => {});
+  app.event("agent_session_stopped", async ({ event, body }: EventArgs) => {
+    const e = (event ?? {}) as { channel_id?: string; channel?: string; thread_ts?: string; event_ts?: string };
+    const channel = e.channel_id;
+    const threadTs = e.thread_ts;
+    if (!channel || !threadTs) return;
+    if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel, ts: e.event_ts ?? threadTs }))) return;
+    await deps.onAgentSessionStopped?.(channel, threadTs);
+  });
+  app.event("agent_session_title_changed", async ({ event, body }: EventArgs) => {
+    const e = (event ?? {}) as {
+      channel_id?: string;
+      channel?: string;
+      thread_ts?: string;
+      title?: string;
+      event_ts?: string;
+    };
+    const channel = e.channel_id;
+    const threadTs = e.thread_ts;
+    const title = typeof e.title === "string" ? e.title.trim() : "";
+    if (!channel || !threadTs || !title) return;
+    if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel, ts: e.event_ts ?? threadTs }))) return;
+    await deps.onAgentSessionTitleChanged?.(channel, threadTs, title);
+  });
 
   app.event("reaction_added", async ({ event, body, client }: EventArgs) => {
     const reaction = parseReactionEvent(event);

@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { page, draw as redraw } from "./settings.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 const NEW_PROVIDER = { id: "", protocol: "chat-completions", baseUrl: "", credential: "", editing: false };
 const state = {
   scope: "",
@@ -87,7 +88,7 @@ async function send(body: any, done: () => void) {
     if (result.ok) done();
     state.message = result.ok ? "Saved." : result.data?.message || "Save failed.";
   } catch (error) {
-    state.message = `Could not save: ${error instanceof Error ? error.message : String(error)}`;
+    state.message = `Could not save: ${errChain(error)}`;
   } finally {
     state.saving = false;
     redraw();

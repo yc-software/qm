@@ -114,6 +114,24 @@ describe("tenant settings and operator commands", () => {
     await assert.rejects(read(keyless), /this workspace has no model gateway key of its own/);
   });
 
+  it("atomically reuses a partner account without changing an existing workspace", async () => {
+    const created: string[] = [];
+    await Promise.all(
+      Array.from({ length: 8 }, () =>
+        runTenantCommand(db.owner, ["create", "--partner-chat-account", "example-account"], (id) => created.push(id)),
+      ),
+    );
+    assert.equal(new Set(created).size, 1);
+    const tenant = created[0]!;
+    await run("settings", "set", tenant, "serving", "false");
+    await run("create", "--partner-chat-account", "example-account", "--brand-name", "Replacement");
+    const [row] = await db.owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]);
+    assert.deepEqual(row!.settings, { partnerChatAccount: "example-account", serving: false });
+    await run("create", "--partner-chat-account", "another-account");
+    assert.notEqual(lines.at(-1), tenant);
+    await assert.rejects(run("create", "--partner-chat-account", ""), TenantCommandError);
+  });
+
   it("checks allowed emails per tenant and leaves tenants without a list to the deployment", async () => {
     lines.length = 0;
     await run("create");

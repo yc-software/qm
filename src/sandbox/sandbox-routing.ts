@@ -6,7 +6,6 @@ import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
-  removeDirAndList,
   SandboxProvisionCleanupError,
   supportsBlobStaging,
   supportsProcessSessions,
@@ -97,8 +96,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
-    handle.resourceId ? resources.use(handle.resourceId, action) : action();
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>, lock?: "shared"): Promise<T> =>
+    handle.resourceId ? resources.use(handle.resourceId, action, lock) : action();
 
   const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
     sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
@@ -230,9 +229,6 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const remove = () => forHandle(handle).removeDir(handle, relDir);
       return useHandle(handle, remove);
     },
-    removeDirAndList(handle, removeRelDir, listRelDir) {
-      return useHandle(handle, () => removeDirAndList(forHandle(handle), handle, removeRelDir, listRelDir));
-    },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
       const resourceId = handle.resourceId;
       if (!resourceId) return forHandle(handle).teardown(handle, tdOpts);
@@ -247,34 +243,38 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           const held = parks && !!(await resources.get(resourceId)).holders?.length;
           return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
         },
-        !!tdOpts?.destroy || parks,
+        tdOpts?.destroy || parks ? "exclusive" : undefined,
       );
     },
 
     ...(some(supportsProcessSessions)
       ? {
           startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
-            useHandle(handle, async () => {
-              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
-              const started = await sandbox.startProcess(handle, command, o);
-              try {
-                await register(started.processId);
-              } catch (error) {
+            useHandle(
+              handle,
+              async () => {
+                const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+                const started = await sandbox.startProcess(handle, command, o);
                 try {
-                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
-                    handle,
-                    started.processId,
-                    "KILL",
-                  );
-                } catch (cleanupError) {
-                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
-                    cause: cleanupError,
-                  });
+                  await register(started.processId);
+                } catch (error) {
+                  try {
+                    await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
+                      handle,
+                      started.processId,
+                      "KILL",
+                    );
+                  } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+                      cause: cleanupError,
+                    });
+                  }
+                  throw error;
                 }
-                throw error;
-              }
-              return started;
-            }),
+                return started;
+              },
+              "shared",
+            ),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
               requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
@@ -321,7 +321,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
             const target = await computerTarget(scopeId, sandboxId);
             const action = () =>
               requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
-            return resources.use(target.resourceId, action, true);
+            return resources.use(target.resourceId, action, "exclusive");
           },
         }
       : {}),

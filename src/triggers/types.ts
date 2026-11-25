@@ -6,9 +6,7 @@ export interface TriggerBase {
   ownerScopeId: ScopeId;
   owner: string;
   createdBy: string;
-  ownerConsentedAt?: number;
   botActor?: boolean;
-  taskAuthor?: "automation";
   destination?: Destination;
   enabled: boolean;
   createdAt: number;
@@ -83,6 +81,7 @@ interface WebhookFilter {
 }
 
 export interface Webhook extends TriggerBase {
+  title?: string;
   action: string;
   verification: WebhookVerification;
   filters?: WebhookFilter[];

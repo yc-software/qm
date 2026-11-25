@@ -131,7 +131,10 @@ async function deliveryProvenanceSidecars(
 function requireAdminSession(ctx: ApiCtx, id: string) {
   return requireScopedResource(
     ctx,
-    () => ctx.deps.sessions?.get(id),
+    async () => {
+      const s = await ctx.deps.sessions?.get(id);
+      return s?.ephemeral ? null : s;
+    },
     (s) => s.scopeId,
     "session",
     "fallback",

@@ -3,7 +3,7 @@ import { basename, parse } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
 import { isUserItem, type Item } from "../sessions/items.ts";
-import { hasParentPathSegment, removeDirAndList, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
+import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import {
   MAX_BLOB_BYTES,
   BlobTooLargeError,
@@ -17,37 +17,9 @@ import { MIME_BY_EXT, fileContentRequest } from "./documents.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
-import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
-import { BotComputerRefusedError } from "../sandbox/sandbox-resources.ts";
-
-export const INBOX_DIR = "inbox";
-export const TURN_FILES_DIR = ".agent-turn";
-const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
 
 export function turnFileId(runId?: string, attempt = 1, now = Date.now()): string {
   return `${now.toString(36)}-${hashId([runId ?? randomUUID(), String(attempt)], 24)}`;
-}
-
-export async function clearStaleTurnFiles(
-  sandbox: Sandbox,
-  handle: SandboxHandle,
-  turnSessionDir: string,
-): Promise<void> {
-  const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
-  const paths = await removeDirAndList(sandbox, handle, turnSessionDir, TURN_FILES_DIR);
-  const stale = new Set<string>();
-  for (const path of paths) {
-    const parts = path.split("/");
-    const startedAt = Number.parseInt(parts[2]?.split("-")[0] ?? "", 36);
-    if (parts[0] === TURN_FILES_DIR && parts[1] && parts[2] && Number.isFinite(startedAt) && startedAt < cutoff) {
-      stale.add(`${TURN_FILES_DIR}/${parts[1]}/${parts[2]}`);
-    }
-  }
-  await Promise.all(
-    [...stale].map((dir) =>
-      sandbox.removeDir(handle, dir).catch(swallowAs("orchestrator: stale turn file cleanup", undefined)),
-    ),
-  );
 }
 
 export const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
@@ -199,27 +171,23 @@ function shownToModel(meta: AttachmentMeta): boolean {
 
 export function inboundManifest(
   metas: AttachmentMeta[],
-  inboxDir = INBOX_DIR,
-  unstaged?: Set<string>,
   sharer?: string,
   shortened?: ReadonlyMap<string, number>,
 ): string {
-  return metas
-    .map((m) => {
-      const where = unstaged?.has(m.name)
-        ? `Files ID ${m.artifactId}, not yet on a computer: send it with {file_id: "${m.artifactId}"}, or choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)}`
-        : `./${inboxDir}/${m.name}`;
-      const cut = shortened?.get(m.name);
-      const note = cut
-        ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
-        : "";
-      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where})${note}.`;
-    })
-    .join("\n");
+  if (!metas.length) return "";
+  const lines = metas.map((m) => {
+    const cut = shortened?.get(m.name);
+    const note = cut
+      ? `, saved under a shortened name to fit the ${FILE_NAME_MAX_BYTES}-byte file name limit (the shared name was ${cut} bytes)`
+      : "";
+    return `${m.author ?? sharer ?? "The user"} shared ${m.name} (Files ID ${m.artifactId})${note}.`;
+  });
+  const recipe = `Send a shared file with {file_id: "<Files ID>"}, or download it onto a computer with ${fileContentRequest("<Files ID>")}.`;
+  return [...lines, recipe].join("\n");
 }
 
 export function inboundIssuesNote(issues: readonly string[]): string {
-  return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
+  return issues.length ? `Files shared this turn that you did not receive: ${issues.join("; ")}` : "";
 }
 
 export const withheldName = (name: string, verdict: SecurityScreenVerdict): string =>
@@ -228,6 +196,7 @@ export const withheldName = (name: string, verdict: SecurityScreenVerdict): stri
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
   unavailable?: readonly string[];
+  unsaved?: readonly string[];
   blocked?: readonly string[];
   surfaceNotes?: readonly string[];
 }): string[] {
@@ -240,6 +209,9 @@ export function inboundIssueList(opts: {
   if (opts.unavailable?.length) {
     issues.push(`${opts.unavailable.join(", ")} — no longer available (the upload may have expired)`);
   }
+  if (opts.unsaved?.length) {
+    issues.push(`${opts.unsaved.join(", ")} — could not be saved to Files`);
+  }
   if (opts.blocked?.length) {
     issues.push(`${opts.blocked.join(", ")} — withheld by the external-data security screen`);
   }
@@ -248,12 +220,9 @@ export function inboundIssueList(opts: {
 }
 
 export async function materializeInbound(
-  sandbox: Sandbox,
-  handle: SandboxHandle | (() => Promise<SandboxHandle>),
   attachments: IncomingAttachment[],
   transfer: BlobTransferStore,
-  register?: ArtifactRegistration,
-  inboxDir = INBOX_DIR,
+  register: ArtifactRegistration,
   screenText?: (input: {
     content: string;
     name: string;
@@ -265,23 +234,17 @@ export async function materializeInbound(
   tooMany: string[];
   unavailable: string[];
   blocked: string[];
+  unsaved: string[];
   unscreened: string[];
-  unstaged?: Set<string>;
   shortened?: Map<string, number>;
 }> {
-  let target: Promise<SandboxHandle | null> | undefined;
-  const computer = () =>
-    (target ??= (typeof handle === "function" ? handle() : Promise.resolve(handle)).catch((e: unknown) => {
-      if (e instanceof NoDefaultSandboxError || e instanceof BotComputerRefusedError) return null;
-      throw e;
-    }));
-  const unstaged = new Set<string>();
   const shortened = new Map<string, number>();
   const metas: AttachmentMeta[] = [];
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
   const unavailable: string[] = [];
   const blocked: string[] = [];
+  const unsaved: string[] = [];
   const unscreened: string[] = [];
   const usedNames = new Set<string>();
   for (const a of attachments) {
@@ -309,17 +272,10 @@ export async function materializeInbound(
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
     }
-    const box = await computer();
-    if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
-    const registered = register
-      ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
-      : undefined;
-    if (!box) {
-      if (!registered) {
-        unavailable.push(name);
-        continue;
-      }
-      unstaged.add(name);
+    const registered = await registerArtifact(register, "in", metas.length, name, mimetype, bytes);
+    if (!registered) {
+      unsaved.push(name);
+      continue;
     }
     metas.push({
       name,
@@ -328,7 +284,7 @@ export async function materializeInbound(
       direction: "in",
       ...(a.author ? { author: a.author } : {}),
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
-      ...(registered ? { artifactId: registered.id } : {}),
+      artifactId: registered.id,
     });
     if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
       const imageBytes = await downscaleVisionImage(bytes, mimetype);
@@ -336,7 +292,7 @@ export async function materializeInbound(
         name,
         mimeType: mimetype,
         dataBase64: Buffer.from(imageBytes).toString("base64"),
-        ...(registered ? { artifactId: registered.id } : {}),
+        artifactId: registered.id,
       });
     }
   }
@@ -346,8 +302,8 @@ export async function materializeInbound(
     tooMany,
     unavailable,
     blocked,
+    unsaved,
     unscreened,
-    ...(unstaged.size ? { unstaged } : {}),
     ...(shortened.size ? { shortened } : {}),
   };
 }

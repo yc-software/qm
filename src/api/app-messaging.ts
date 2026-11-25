@@ -1,4 +1,5 @@
 import { loopAdministration } from "./loop-administration.ts";
+import { cronAdministration } from "./cron-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -125,6 +126,7 @@ export function createMessagingMethods(
   | "directoryChannelsFor"
   | "directoryMember"
   | "loopAdministration"
+  | "cronAdministration"
   | "samePerson"
   | "personMatcher"
   | "cronAdminUrl"
@@ -513,6 +515,7 @@ export function createMessagingMethods(
       );
     },
     loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
+    cronAdministration: (tenant, actor, crons) => cronAdministration(deps, tenant, actor, crons),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

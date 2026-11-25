@@ -673,6 +673,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           writeAbs(stored.microvmId, stored.endpoint, posixJoin(APP_DIR, normalizeRelPath(f.path)), f.data),
         ),
       );
+      const executables = edit.files.filter((f) => f.mode === "100755").map((f) => f.path);
+      if (executables.length) {
+        const paths = executables.map((p) => shq(posixJoin(APP_DIR, normalizeRelPath(p)))).join(" ");
+        const r = await execRaw(stored.microvmId, stored.endpoint, `chmod +x ${paths}`, 30);
+        if (r.code !== 0) throw execFailure("aws live edit chmod", r);
+      }
       if (edit.deletedPaths.length) {
         const paths = edit.deletedPaths.map((p) => shq(posixJoin(APP_DIR, normalizeRelPath(p)))).join(" ");
         const r = await execRaw(stored.microvmId, stored.endpoint, `rm -f ${paths}`, 30);

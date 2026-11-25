@@ -1,5 +1,5 @@
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
-import { forInboxLoopsPeople, inboxPreviewEnabled, loadAdministrable, requireLiveHuman } from "./loops.ts";
+import { forInboxLoopsPeople, inboxPreviewEnabled, loadAdministrable, requireSignOff } from "./loops.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import type { LoopIngress, IngressSetup } from "../../loops/ingress.ts";
@@ -31,7 +31,7 @@ async function change(ctx: ApiCtx) {
     return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const ingress = ctx.deps.loopIngress;
   if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
-  if (!(await requireLiveHuman(ctx, loaded.acting))) return;
+  if (!(await requireSignOff(ctx, `Change inbox sources for loop "${loaded.loop.name}"`, true))) return;
   if (loaded.loop.state === "archived") return sendJson(ctx.res, 409, { error: "archived" });
   if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   try {

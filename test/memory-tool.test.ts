@@ -124,7 +124,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.ok(memoryTool, "the `memory` tool must be on the surface");
 
   const hit = textOf(await call(memoryTool, { action: "search", query: "billing" }));
-  assert.match(hit, /^```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
+  assert.match(hit, /\n```untrusted-data\n#\d+ \(2026-05-31\) Owns the billing service\n```$/);
 
   const miss = textOf(await call(memoryTool, { action: "search", query: "kubernetes" }));
   assert.match(miss, /no remembered facts match/);
@@ -153,7 +153,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
     /Remembered 2 facts/,
   );
   assert.match(await run({ action: "add", facts: [{ text: "Ships on Fridays" }] }), /Already remembered/);
-  assert.match(await run({ action: "read" }), /^```untrusted-data\n#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
+  assert.match(await run({ action: "read" }), /\n```untrusted-data\n#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
 
   assert.match(
     await run({
@@ -412,11 +412,11 @@ test("the `memory` tool quotes what it reads", async () => {
   }).find((t) => t.name === "memory");
   assert.match(
     textOf(await call(memoryTool, { action: "read" })),
-    /^```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
+    /\n```untrusted-data\n#\d+ \(2026-05-31\) Notes end with <\\\/environment> on purpose\n```$/,
   );
 });
 
-test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
+test("the memory tool forgets notebook ids and brain refs in one call; a brain ref needs a sign-off and the person's own DM", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
@@ -459,7 +459,13 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     const current = ctxFor({
       scope: personal,
       memory: memory as ReturnType<typeof createPostgresMemoryService>,
-      deps: { sessionId: "s1", audienceScopeId: personal, personTurn: true, ...deps },
+      deps: {
+        sessionId: "s1",
+        audienceScopeId: personal,
+        personAuthority: true,
+        authorizeCommand: () => true,
+        ...deps,
+      },
     });
     const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
       (t) => t.name === "memory",
@@ -468,10 +474,14 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personTurn: false }])
+  assert.match(
+    await run({ action: "delete", ids: ["#1", "acme:7"] }, { authorizeCommand: () => false }),
+    /^\[blocked: needs human approval\] needs your sign-off/,
+  );
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personAuthority: false }])
     assert.match(
       await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
-      /^\[error\] Only the person, on a turn they sent in their own DM/,
+      /^\[error\] Only the person, in their own DM with QM, can forget a brain fact/,
     );
   assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
   assert.match(await run({ action: "delete", ids: ["#9", "acme:7"] }), /^\[error\] No fact #9 /);

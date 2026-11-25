@@ -11,7 +11,6 @@ export interface SecretDropField {
 }
 
 export interface SecretDropRecord {
-  kind?: "login";
   ownerId: string;
   orgId?: string;
   service: string;
@@ -30,7 +29,7 @@ export interface SecretDropRecord {
   createdAt: number;
 }
 
-export type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
+type SecretDropResult = { ok: true; rec: SecretDropRecord } | { ok: false; reason: "not_found" | "expired" };
 
 export interface SecretDropStore {
   mint(rec: Omit<SecretDropRecord, "createdAt">, now?: number): Promise<{ dropId: string }>;
@@ -38,6 +37,14 @@ export interface SecretDropStore {
   redeem(dropId: string, now?: number): Promise<SecretDropResult>;
   siblings(rec: SecretDropRecord, now?: number): Promise<SecretDropRecord[]>;
 }
+
+export const LOGIN_TICKET_SWEEP = {
+  id: "durable-map/secret_drops/0002-delete-login-tickets",
+  statements: [
+    "CREATE TABLE IF NOT EXISTS secret_drops (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+    "DELETE FROM secret_drops WHERE json ->> 'kind' = 'login'",
+  ],
+};
 
 export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
 

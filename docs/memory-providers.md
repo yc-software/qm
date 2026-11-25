@@ -77,7 +77,7 @@ immediate and does not use embeddings.
   "routes": [
     {
       "provider": "default",
-      "scopes": ["personal", "channel", "group", "team"],
+      "scopes": ["personal", "channel", "group", "team", "persona"],
       "capture": "automatic"
     },
     {
@@ -91,7 +91,7 @@ immediate and does not use embeddings.
 }
 ```
 
-Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
+Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). The kinds are `personal`, `channel`, `group`, `team`, `org` and `persona`; a deployment that uses [personas](./personas.md) adds `persona` to the `default` route, since a room that pins a persona saves and recalls in the persona's notebook, a kind no route serves has no memory, and a save made from a room into another scope's notebook reaches the notebook provider alone. Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
 
 Capture policies are:
 
@@ -192,7 +192,11 @@ Set the four client values as `GBRAIN_RO_CLIENT_ID`, `GBRAIN_RO_CLIENT_SECRET`, 
     }
   ],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     {
       "provider": "gbrain",
       "scopes": ["personal"],
@@ -273,7 +277,11 @@ either direction.
 {
   "providers": [{ "id": "procedures", "type": "memorable" }],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     { "provider": "procedures", "scopes": ["personal"], "capture": "automatic", "manage": false, "label": "Procedures" }
   ]
 }
@@ -318,7 +326,7 @@ QM is always an MCP client of gbrain and never gets gbrain's database URL or its
 
 A member can have QM forget a fact that a [registry brain](#memory-registry) holds, their own brain included. Search shows each brain fact with a ref such as `acme:4821`: the brain's id, then gbrain's fact id. The `memory` tool's `delete` and `DELETE /v1/memory/facts` take notebook `#ids` and brain refs together. QM checks every ref and notebook id first, so a call it refuses, a mistyped `#id` included, changes nothing. A call takes at most 20 refs, the same limit as a write, and an id repeated in one call counts once. Then it forgets each ref on its own, with its own result, and deletes the notebook ids together unless a ref's result is unknown. Then it keeps them and says so, and sending the same delete again finishes it: that's a new request to gbrain, which answers a fact it already forgot with `fact_already_expired`, counted as done. A ref that failed or was refused changed nothing, so it doesn't hold the notebook ids back; send it again on its own once its cause is fixed. If the notebook's own delete fails after the refs, the reply still gives each ref's result and adds a `memory_provider_failed` problem for the notebook ids, which stay; QM logs the notebook's error, and sending those ids again on their own finishes it. The refs in one call share one 30-second deadline, so a ref still waiting when it passes ends unknown. A fact saved in both stores is forgotten by passing its `#id` and its ref.
 
-QM sends a ref to the brain only when a binding that isn't disabled serves the conversation's notebook, and the member sent the turn in their own DM with QM. Work QM runs for such a turn can't forget a brain fact, because a forget can't be undone: a subagent, the turn a subagent's report starts and a web session the turn starts are refused like any other turn the member didn't send. Over `DELETE /v1/memory/facts` that turn must also still be running, so a background job or script that outlives its turn can't forget a brain fact. A binding with capture `off` forgets too: capture decides what QM writes, while whether QM may forget is set on the brain host by the attested operations in the operator step below. The web app's first-visit greeting counts as a turn the member sent: QM starts it in the member's own DM when they open the app, with the member's live claims, so it passes every gate for turns a member sent, this one included. Everywhere else QM refuses before anything reaches the brain, with `[error]` in the tool and `403` over HTTP, and nothing changes: in a channel or group, through an admin route, through a member's own edits at `/v1/memory`, in the nightly tidy, on a brain the [gbrain recipe](#gbrain) connects (its facts show no ref), and on turns a bot or an automation such as a cron, webhook or background watch started, even in the member's own DM.
+QM sends a ref to the brain only when a binding that isn't disabled serves the conversation's notebook, the turn carries the member's authority in their own DM with QM, and the member approves the card QM raises for that exact forget, because a forget can't be undone. A binding with capture `off` forgets too: capture decides what QM writes, while whether QM may forget is set on the brain host by the attested operations in the operator step below. Everywhere else QM refuses before anything reaches the brain, with `[error]` in the tool and `403` over HTTP, and nothing changes: in a channel or group, through an admin route, through a member's own edits at `/v1/memory`, in the nightly tidy, on a brain the [gbrain recipe](#gbrain) connects (its facts show no ref), and on turns doing a bot's work, even in the member's own DM.
 
 The call is `forget_fact` with `{ "id": <fact id>, "request_id": "<UUID>" }` and the member in `x-qm-actor`. gbrain forgets only a fact on the member's own page; any other id is `fact_not_found`. Search can still show a ref on a fact from another page the member may read, because gbrain's recall doesn't say which page a fact is on, so gbrain refuses to forget it; that page's member can forget it, or the brain's operator can withdraw it on the brain host with `gbrain forget <fact-id>`. The request id comes from the session and the tool call (over HTTP, the agent run), so a retry of the same call gets gbrain's first receipt back instead of forgetting twice.
 
@@ -346,7 +354,7 @@ gbrain auth rescope --client <client id> --attest-actor qm --attest-ops forget_f
 
 ### A member's own brain
 
-A member who runs their own gbrain connects it as their personal memory from chat: the agent calls `PUT /v1/memory/brain` as them, on a turn they sent that is still running. QM registers it as a brain they own (`owner`, their canonical principal id), under an id derived from that id, with the `gbrain-v1` preset, and binds it to their own personal scope only, with `explicit` capture. Nobody can bind it to another scope, and the body can't name another owner. On their gbrain they need a confidential client-credentials client that may attest an actor, and a link from their gbrain member to the `principalId` that `GET /v1/memory/brain` returns.
+A member who runs their own gbrain connects it as their personal memory from chat: the agent calls `PUT /v1/memory/brain` as them. QM registers it as a brain they own (`owner`, their canonical principal id), under an id derived from that id, with the `gbrain-v1` preset, and binds it to their own personal scope only, with `explicit` capture. Nobody can bind it to another scope, and the body can't name another owner. On their gbrain they need a confidential client-credentials client that may attest an actor, and a link from their gbrain member to the `principalId` that `GET /v1/memory/brain` returns.
 
 A member's brain gets the same transport as one an admin registered ([Brains and bindings](#brains-and-bindings)), and that covers its OAuth token request too. QM never leaves `https` for an `https` MCP server, so a brain's OAuth metadata can't point the token request, and the client secret in it, at an `http://` endpoint.
 
@@ -360,11 +368,11 @@ An org admin's switch, `PUT /v1/admin/memory-registry/member-brains` with `{"ena
 | `PUT /v1/memory/brain`    | `url`, `clientId`, and optionally `label`; `clientSecret` is refused. Audited as `memory-registry.member-brain.update` |
 | `DELETE /v1/memory/brain` | Deletes the brain and its binding. Audited as `memory-registry.member-brain.delete`                                    |
 
-These routes take only an agent capability from a turn the member sent that is still running (never a triggered one), refuse inactive members, and are blocked like any other control-plane change in a strict conversation. Their replies show the brain's `url`, client id and binding, so they answer only in the member's DM or in a conversation whose sharing is open. An admin can still change or delete a member's brain through the admin API outside chat; its `owner` never changes. A member has no route outside chat to their brain, so their own agent may change its `url` or disconnect it on a turn they sent, while that turn is still running. A new `url` clears the brain's secret, and the fresh brain link's form shows the new origin before they enter the secret again.
+These routes take only an agent capability that carries the member's own authority, refuse inactive members, and are blocked like any other control-plane change in a strict conversation. Their replies show the brain's `url`, client id and binding, so they answer only in the member's DM or in a conversation whose sharing is open. An admin can still change or delete a member's brain through the admin API outside chat; its `owner` never changes. A member has no route outside chat to their brain, so their own agent may change its `url` or disconnect it. A new `url` clears the brain's secret, and the fresh brain link's form shows the new origin before they enter the secret again.
 
 ### API
 
-Every `/v1/admin/memory-registry` route needs an org admin and is audited. Every reply carries registry entries, so an admin's agent reads or changes the registry only in the admin's DM or in a conversation whose sharing is open. Outside chat, an org admin calls these routes from an administrator session in the web UI behind the portal (`/api/admin/memory-registry/...`). Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. A request that sets `clientSecret` must also send the brain's `url` (400 otherwise), so a secret goes only to a destination the admin names. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret` or changes an existing brain's `url` (QM refuses both with 400), and it can't delete a brain or binding (403). A binding carries memory only once its brain holds a secret, and a secret is never set in chat. So QM calls no brain an agent registered until an admin sets its secret outside chat, and only an admin outside chat can move or remove an org brain that holds one. An agent's binding to a brain that already holds a secret serves on the next memory operation, within the member links the brain's operator provisioned. A member's own brain is the one exception, described above.
+Every `/v1/admin/memory-registry` route needs an org admin or org owner and is audited; org owners see and manage only org-level brains, their bindings, and the `memberBrains` switch (and can mint secret links for org brains), while member-owned brains stay `org_admin`-only. Every reply carries registry entries, so an admin's agent reads or changes the registry only in the admin's DM or in a conversation whose sharing is open. Outside chat, an org admin calls these routes from an administrator session in the web UI behind the portal (`/api/admin/memory-registry/...`). Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. A request that sets `clientSecret` must also send the brain's `url` (400 otherwise), so a secret goes only to a destination the admin names. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret` or changes an existing brain's `url` (QM refuses both with 400), and it can't delete a brain or binding (403). A binding carries memory only once its brain holds a secret, and a secret is never set in chat. So QM calls no brain an agent registered until an admin sets its secret outside chat, and only an admin outside chat can move or remove an org brain that holds one. An agent's binding to a brain that already holds a secret serves on the next memory operation, within the member links the brain's operator provisioned. A member's own brain is the one exception, described above.
 
 An agent can register a brain for an admin, or connect a member's own, but never carries its client secret. On that person's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. Only an org admin, or the member who owns the brain while member brains are on, can mint or use one. The link stops working if the brain's `url` changes or the person who minted it can no longer set the secret.
 

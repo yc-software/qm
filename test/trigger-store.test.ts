@@ -11,24 +11,14 @@ test("assertNoEscalation: owner == createdBy is always allowed (no consent neede
   assert.doesNotThrow(() => assertNoEscalation({ owner: "U1", createdBy: "U1" }));
 });
 
-test("assertNoEscalation: a different owner WITHOUT consent is rejected", () => {
-  assert.throws(() => assertNoEscalation({ owner: "U2", createdBy: "U1" }), /consent/);
-});
-
-test("assertNoEscalation: a different owner WITH consent is allowed", () => {
-  assert.doesNotThrow(() => assertNoEscalation({ owner: "U2", createdBy: "U1", ownerConsentedAt: 123 }));
-});
-
-test("assertNoEscalation: a falsy/zero consent timestamp does NOT satisfy consent", () => {
-  assert.throws(() => assertNoEscalation({ owner: "U2", createdBy: "U1", ownerConsentedAt: 0 }), /consent/);
+test("assertNoEscalation: a different owner is rejected", () => {
+  assert.throws(() => assertNoEscalation({ owner: "U2", createdBy: "U1" }), /owner must be/);
 });
 
 test("cron store enforces the shared anti-escalation guard at create time", async () => {
   const store = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const base = { action: "x", ownerScopeId: scopeId("personal", "U1"), schedule: { everyMs: 60_000 } };
-  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /consent/);
-  const cron = await store.create({ ...base, owner: "U2", createdBy: "U1", ownerConsentedAt: Date.now() });
-  assert.equal(cron.owner, "U2");
+  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /owner must be/);
 });
 
 test("webhook store enforces the shared anti-escalation guard at create time", async () => {
@@ -38,7 +28,5 @@ test("webhook store enforces the shared anti-escalation guard at create time", a
     action: "triage",
     verification: { scheme: "github" as const, secret: "s" },
   };
-  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /consent/);
-  const wh = await store.create({ ...base, owner: "U2", createdBy: "U1", ownerConsentedAt: Date.now() });
-  assert.equal(wh.owner, "U2");
+  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /owner must be/);
 });

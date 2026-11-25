@@ -33,6 +33,7 @@ const VERIFICATION_FAILURES: Record<string, string> = {
 
 const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FAILURES> = {
   auth: "access_denied",
+  account: "quota_or_rate_limit",
   model_budget: "quota_or_rate_limit",
   rate_limit: "quota_or_rate_limit",
   not_found: "model_unavailable",

@@ -1,7 +1,7 @@
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalNoticeView } from "./turn-presenters.ts";
-import type { Delivery, TurnRequest, TurnResult } from "../types.ts";
+import type { Delivery, TurnRequest, TurnResult, WornPersona } from "../types.ts";
 import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 
 class TurnFailure extends Error {
@@ -14,11 +14,11 @@ export function turnFailureText(err: unknown): string {
   return err instanceof TurnFailure ? err.message : GENERIC_FAILURE_TEXT;
 }
 
-export type CoreTurnBody = Omit<TurnRequest, "surface">;
+export type CoreTurnBody = Omit<TurnRequest, "surface"> & { surface?: string };
 
 export interface RunHooks {
   onReplying?(): void;
-  onFirstBlock?(text: string): void;
+  onFirstBlock?(text: string, persona?: WornPersona): void;
   onSurfacePosted?(): void;
   onGoal?(goal: GoalNoticeView): void | Promise<void>;
 }
@@ -34,7 +34,7 @@ interface TurnHooks {
   onQueued?: (runId: string) => void | Promise<void>;
   onSteered?: (runId: string) => void | Promise<void>;
   onReplying?: () => void;
-  onFirstBlock?: (text: string) => void;
+  onFirstBlock?: (text: string, persona?: WornPersona) => void;
   onSurfacePosted?: () => void;
   onGoal?: (goal: GoalNoticeView) => void;
 }
@@ -89,7 +89,7 @@ export function createTurnFlow(core: TurnCore, label: string): TurnFlow {
           if (attempt >= ACK_RETRY_DELAYS_MS.length) {
             console.error(
               `[${label}] delivery ack failed for run ${runId} (giving up — the poller re-delivers unacked runs):`,
-              (err as Error).message,
+              errMessage(err),
             );
             return;
           }

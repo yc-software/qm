@@ -7,6 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
@@ -21,9 +22,9 @@ async function listFull(store: any, opts?: any): Promise<any[]> {
   return Promise.all(rows.map((r: any) => store.get(r.id)));
 }
 
-function freshApp() {
+function freshApp(overrides?: Parameters<typeof buildApp>[1]) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildApp(testConfig({ dataDir }), overrides);
 }
 
 async function judged(store: any, container: string, ready: (rows: any[]) => boolean = (rows) => rows.length > 0) {
@@ -664,6 +665,34 @@ test("ambient judge: earlier context is capped at the 10 messages before the new
   }
 });
 
+for (const late of ["2.0", "0.5"])
+  test(`a message stored while the channel's last judgment is out is judged once on its own (ts ${late} after 1.0)`, async () => {
+    const held = Promise.withResolvers<void>();
+    let calls = 0;
+    const judge = async (_system: string, prompt: string) => {
+      if (calls++ === 0) await held.promise;
+      else held.resolve();
+      return JSON.stringify(
+        prompt.includes('trigger="true">!engage') ? { act: true, reason: "!post hi" } : { act: false },
+      );
+    };
+    const built = freshApp({ agent: { ...createMockAgent(), judge } });
+    built.runtime.start();
+    try {
+      const container = "C-inflight";
+      await built.app.setChannelPolicy(container, "watch", "U-admin");
+      await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "!engage", createdAt: 1 }]);
+      await settle(async () => calls === 1);
+      await built.app.ingestSurfaceEvents([{ container, ts: late, authorId: "U2", text: "thanks", createdAt: 2 }]);
+      const rows = await judged(built.ambientJudgments!, container, (rows) => rows.length === 2);
+      const expected = ["1.0 act", `${late} ignore`].sort();
+      assert.deepEqual(rows.map((r: any) => `${r.tsFrom} ${r.decision}`).sort(), expected);
+      assert.equal((await pollDeliveries(built.deliveries)).length, 1);
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+
 test("a judged batch records a durable judgment row: prompt, decision, model, ts range (§2.2)", async () => {
   const built = freshApp();
   built.runtime.start();
@@ -1189,19 +1218,14 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
   await built.app.ingestSurfaceEvents([
     { container, ts: "100.1", authorId: "U1", text: "events site is down", createdAt: 1 },
   ]);
-  await built.app.judgeAmbientContainer("slack", container);
-  const firstRef = `slack:${container}:ambient:100.1`;
-  const live = await built.runs.activeForThread(firstRef);
+  const live = await ambientRun(built, `slack:${container}:ambient:100.1`, Boolean);
   assert.ok(live, "first wake spawned a live worker run");
 
   await built.app.ingestSurfaceEvents([
     { container, ts: "100.2", authorId: "U2", text: "same here, meetup page too", createdAt: 2 },
   ]);
   let signals: any[] = [];
-  for (const deadline = Date.now() + 5_000; !signals.length && Date.now() < deadline;) {
-    signals = await built.signals.takePending(live!.id);
-    if (!signals.length) await sleep(50);
-  }
+  await settle(async () => (signals = await built.signals.takePending(live!.id)).length > 0);
   assert.equal(signals.length, 1, "the second wake steered the live run");
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text!, /meetup page too/);
@@ -1214,11 +1238,15 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
   );
 });
 
-async function ambientRun(built: ReturnType<typeof freshApp>, threadRef: string): Promise<any> {
+async function ambientRun(
+  built: ReturnType<typeof freshApp>,
+  threadRef: string,
+  ready = (run: any) => run?.status === "done" || run?.status === "failed",
+): Promise<any> {
   let run: any;
   await settle(async () => {
     run = (await built.runs.list()).find((r) => r.sessionId === threadRef);
-    return run?.status === "done" || run?.status === "failed";
+    return ready(run);
   });
   return run;
 }
@@ -1333,8 +1361,7 @@ async function wakeBesideLiveWorker(policy: string, first: WakeEvent, second: Wa
   }
   await built.app.setChannelPolicy(first.container, policy, "U-admin");
   await built.app.ingestSurfaceEvents([first]);
-  await built.app.judgeAmbientContainer("slack", first.container);
-  const live = await built.runs.activeForThread(`slack:${first.container}:ambient:${first.ts}`);
+  const live = await ambientRun(built, `slack:${first.container}:ambient:${first.ts}`, Boolean);
   assert.ok(live, "the first message spawned a live worker run");
   await built.app.ingestSurfaceEvents(second);
   const signals: any[] = [];
@@ -1402,9 +1429,8 @@ test("a person's degraded ask and a bot's post in one batch start separate worke
     { container, ts: "740.2", authorId: "U-deploybot", bot: true, text: "deploy queued", createdAt: 2 },
     { container, ts: "740.3", authorId: "U2", text: "+1", createdAt: 3 },
   ]);
-  await built.app.judgeAmbientContainer("slack", container);
-  const bot = await built.runs.activeForThread(`slack:${container}:ambient:740.2`);
-  const person = await built.runs.activeForThread(`slack:${container}:ambient:740.3`);
+  const bot = await ambientRun(built, `slack:${container}:ambient:740.2`, Boolean);
+  const person = await ambientRun(built, `slack:${container}:ambient:740.3`, Boolean);
   assert.equal(bot?.request.botActor, true, "the bot's post runs as its own bot-marked worker");
   assert.ok(!bot?.request.text.includes("gpu-2"), "the person's ask stays out of the bot's worker");
   assert.ok(person && !person.request.botActor, "the person's ask runs as its own unmarked worker");
@@ -1432,12 +1458,7 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
     });
     await mirror.mirrorMessageEvent({ ...amazonQAlarm, channel: container, channel_type: "channel", files: [] }, {});
 
-    const deadline = Date.now() + 5_000;
-    let rows: any[] = [];
-    while (Date.now() < deadline && !rows.length) {
-      rows = await listFull(built.ambientJudgments!, { container });
-      if (!rows.length) await sleep(50);
-    }
+    const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.decision, "act");
     assert.match(
@@ -1460,12 +1481,7 @@ test("a batch with no readable text records an ignore without claiming a model c
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "AlarmBot", bot: true, text: "   ", createdAt: 1 },
     ]);
-    const deadline = Date.now() + 5_000;
-    let rows: any[] = [];
-    while (Date.now() < deadline && !rows.length) {
-      rows = await listFull(built.ambientJudgments!, { container });
-      if (!rows.length) await sleep(50);
-    }
+    const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.decision, "ignore");
     assert.equal(rows[0]!.reason, "no readable text in new messages");
@@ -1636,6 +1652,29 @@ test("a judge call that throws is recorded in the admin error log instead of van
     await built.runtime.stop();
   }
 });
+for (const read of ["getOrgAmbientDurable", "containerState"] as const)
+  test(`a judgment whose ${read} read fails leaves its messages for the next judgment`, async () => {
+    const built = freshApp();
+    built.runtime.start();
+    try {
+      const container = `C-${read}-fails`;
+      await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+      const owner: any = read === "containerState" ? built.surfaceCache : built.config;
+      const real = owner[read];
+      owner[read] = async () => {
+        owner[read] = real;
+        throw new Error("read outage");
+      };
+      await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "first", createdAt: 1 }]);
+      await settle(async () => owner[read] === real);
+      await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U2", text: "second", createdAt: 2 }]);
+      const [row] = await judged(built.ambientJudgments!, container);
+      assert.match(row!.prompt!, /<message id="1\.0"[^>]*trigger="true">first</);
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+
 test("with an external Slack account configured, a scheduled check-in with no new messages still starts a worker from the channel's recorded source", async () => {
   const built = isolatedApp();
   built.runtime.start();

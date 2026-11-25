@@ -22,6 +22,7 @@ export type ProviderErrorCode =
   | "rate_limit"
   | "refusal"
   | "auth"
+  | "account"
   | "context_too_long"
   | "not_found"
   | "model_unavailable"
@@ -89,7 +90,26 @@ export const steerWithheldItem = (sender: string): NewItem<"Error"> => ({
 const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The details are in the operator error log.";
 
 export const MODEL_BUDGET_TEXT =
-  "This workspace has used up its model budget, so I can't run until it resets. An admin can raise the limit.";
+  "This workspace has used up its included model budget. Ask an admin to add an organization API key.";
+
+export function modelBudgetMessage(opts: {
+  isAdmin?: boolean;
+  providersUrl?: string;
+  settingsUrl?: string;
+  personalModelAuth?: boolean;
+}): string {
+  if (opts.isAdmin) {
+    return opts.providersUrl
+      ? `This workspace has used up its included model budget. Add your own Anthropic, OpenAI, or OpenRouter API key to keep running: ${opts.providersUrl}`
+      : "This workspace has used up its included model budget. Add your own Anthropic, OpenAI, or OpenRouter API key in Settings → Onboarding to keep running.";
+  }
+  if (opts.personalModelAuth) {
+    return opts.settingsUrl
+      ? `This workspace has used up its included model budget. Connect your own Claude or ChatGPT account (${opts.settingsUrl}), or ask an admin to add an organization API key.`
+      : "This workspace has used up its included model budget. Connect your own Claude or ChatGPT account in Settings, or ask an admin to add an organization API key.";
+  }
+  return MODEL_BUDGET_TEXT;
+}
 
 export function isNonRetryable(err: unknown): boolean {
   return err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);
@@ -97,6 +117,16 @@ export function isNonRetryable(err: unknown): boolean {
 
 export function isModelBudget(err: unknown): err is ProviderTurnError {
   return err instanceof ProviderTurnError && err.code === "model_budget";
+}
+
+const PROVIDER_DECISION_CODES = new Set<ProviderErrorCode>(["refusal", "account", "model_budget"]);
+
+export function isProviderDecision(err: unknown): err is ProviderTurnError {
+  return err instanceof ProviderTurnError && PROVIDER_DECISION_CODES.has(err.code);
+}
+
+export function turnErrorCode(err: unknown): ProviderErrorCode | "error" {
+  return isProviderDecision(err) ? err.code : "error";
 }
 
 export function turnFailureMessage(err: unknown): string {

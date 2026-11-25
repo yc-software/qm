@@ -196,7 +196,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       memory,
       "personal:U1",
       ids,
-      { actorId: "U1", context: "conversation", personTurn: true },
+      { actorId: "U1", context: "conversation", personAuthority: true },
       { audienceScopeId: "personal:U1" },
       "session:call",
     );
@@ -223,7 +223,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   await memory.delete!(
     "personal:U1",
     ["acme:2", "acme:3"],
-    { actorId: "U1", context: "conversation", personTurn: true },
+    { actorId: "U1", context: "conversation", personAuthority: true },
     {
       audienceScopeId: "personal:U1",
       startedAt: Date.now() - 1000,

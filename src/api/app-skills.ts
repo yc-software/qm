@@ -7,7 +7,9 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
 import { computeBundleHash } from "../skills/skill-bundle-store.ts";
 import { persistedSkillRecordPaths, SKILL_MATERIALIZATION_LOCK } from "../skills/skill-collision.ts";
-import { authorPublishesSkill, triggerBlocksSharedSkill } from "./artifact-share.ts";
+import { authorPublishesSkill, sharedSkillRefused, type SkillEditor } from "./artifact-share.ts";
+import { asOrgAdmin } from "../auth/capability-token.ts";
+import type { Skill } from "../skills/skill-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -15,6 +17,7 @@ import { entitledScopes, loadsScopeContext } from "../resolution/context-filter.
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import { ambientTenant } from "../tenants/context.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -22,7 +25,16 @@ export async function skillVisibilityContext(
   principalId: string,
   homes: readonly ScopeId[],
   ownScopeBotWork: boolean,
+  onlyScope?: ScopeId | null,
 ) {
+  const org = scopeId("org", orgIdOf());
+  if (onlyScope !== undefined) {
+    const room = onlyScope && (await h.principalCanAccessCurrentScope(principalId, onlyScope)) ? [onlyScope] : [];
+    const ordered = [...new Set([...room, org])].filter((scope) =>
+      loadsScopeContext(principalId, scope, ownScopeBotWork),
+    );
+    return { ordered, granted: [] };
+  }
   const actor = deps.identity.classify(principalId);
   const sharedHomes = [
     ...new Set(
@@ -36,23 +48,16 @@ export async function skillVisibilityContext(
   const member = sharedHomes.map((sid) => (accessibleScopes.has(sid) ? sid : null));
   const shared = member.filter((sid): sid is ScopeId => sid !== null);
   const teams = (actor.teamIds ?? []).map((t) => scopeId("team", t));
-  const ordered = [
-    ...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())]),
-  ].filter((scope) => loadsScopeContext(principalId, scope, ownScopeBotWork));
-  const entitled = (p: Principal, sess: ScopeId, org: ScopeId) => [
-    ...entitledScopes(ownScopeBotWork)(p, sess, org),
+  const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, org])].filter((scope) =>
+    loadsScopeContext(principalId, scope, ownScopeBotWork),
+  );
+  const entitled = (p: Principal, sess: ScopeId, o: ScopeId) => [
+    ...entitledScopes(ownScopeBotWork)(p, sess, o),
     ...accessibleScopes,
   ];
   const granted = (
     await deps.acl
-      .sharedOfKindForAudience(
-        ambientTenant(),
-        "skill",
-        [actor],
-        scopeId("personal", principalId),
-        scopeId("org", orgIdOf()),
-        entitled,
-      )
+      .sharedOfKindForAudience(ambientTenant(), "skill", [actor], scopeId("personal", principalId), org, entitled)
       .catch(() => [])
   ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };
@@ -153,11 +158,12 @@ async function reconcilePack(
   try {
     repo = await fetcher.fetch(pack);
   } catch (e) {
+    console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
     await packs.recordImport(id, {
       at: Date.now(),
       commit: pack.ref,
       status: "error",
-      error: e instanceof Error ? e.message : String(e),
+      error: errText(e),
     });
     throw e;
   }
@@ -219,11 +225,12 @@ async function reconcilePack(
       await packs.update(id, { updateAvailable: false, available: canonPlan.counts.eligible });
       return result;
     } catch (e) {
+      console.error("%s", `[skills] pack ${id} import failed:`, errMessage(e));
       await packs.recordImport(id, {
         at: Date.now(),
         commit: pack.ref,
         status: "error",
-        error: e instanceof Error ? e.message : String(e),
+        error: errText(e),
       });
       throw e;
     }
@@ -256,6 +263,14 @@ export function createSkillMethods(
   | "deleteOwnedSkill"
 > {
   const { canManageSkill, manageableSkills, republishIfShared } = h;
+  const managesSkillById = async (skill: Skill, principalId: string, opts?: SkillEditor) =>
+    (await canManageSkill(skill, principalId, opts?.botActor === true)) ||
+    asOrgAdmin(deps, {
+      actorId: principalId,
+      botActor: opts?.botActor,
+      personAuthority: opts?.personAuthority,
+      scopeId: skill.scopeId,
+    });
   return {
     listSkills() {
       return deps.skills.list();
@@ -266,13 +281,14 @@ export function createSkillMethods(
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId, ownScopeBotWork) {
+    async listVisibleSkills(principalId, ownScopeBotWork, onlyScope) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
         principalId,
-        (await deps.skills.list()).map((s) => s.scopeId),
+        onlyScope !== undefined ? [] : (await deps.skills.list()).map((s) => s.scopeId),
         ownScopeBotWork,
+        onlyScope,
       );
       return deps.skills.visibleFor(ordered, granted);
     },
@@ -282,8 +298,8 @@ export function createSkillMethods(
     manageableSkills,
     async updateOwnedSkill(id, principalId, patch, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || !(await canManageSkill(skill, principalId, opts?.botActor === true))) return null;
-      if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
+      if (!skill || !(await managesSkillById(skill, principalId, opts))) return null;
+      if (sharedSkillRefused(skill.scopeId, opts)) return "authority_required";
       const live = await deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status === "archived") return null;
@@ -306,9 +322,8 @@ export function createSkillMethods(
     },
     async restoreOwnedSkill(id, principalId, opts) {
       const skill = await deps.skills.get(id);
-      if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId, opts?.botActor === true)))
-        return null;
-      if (triggerBlocksSharedSkill(skill.scopeId, opts?.liveActor === true)) return "trigger_blocked";
+      if (!skill || skill.status !== "archived" || !(await managesSkillById(skill, principalId, opts))) return null;
+      if (sharedSkillRefused(skill.scopeId, opts)) return "authority_required";
       return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
         const current = await deps.skills.get(id);
         if (!current || current.status !== "archived") return null;
@@ -341,11 +356,12 @@ export function createSkillMethods(
         const plan = planIngest(repo, { ...(pack.config ? { config: pack.config } : {}), nativeNames });
         return await packs.update(pack.id, { available: plan.counts.eligible });
       } catch (e) {
+        console.error("%s", `[skills] pack ${pack.id} import failed:`, errMessage(e));
         await packs.recordImport(pack.id, {
           at: Date.now(),
           commit: pack.ref,
           status: "error",
-          error: e instanceof Error ? e.message : String(e),
+          error: errText(e),
         });
         return (await packs.get(pack.id)) ?? pack;
       }
@@ -448,11 +464,11 @@ export function createSkillMethods(
         return published;
       });
     },
-    async deleteOwnedSkill({ principalId, id, liveActor, botActor }) {
+    async deleteOwnedSkill({ principalId, id, ...editor }) {
       const skill = await deps.skills.get(id);
       if (!skill) return "missing";
-      if (!(await canManageSkill(skill, principalId, botActor === true))) return "forbidden";
-      if (triggerBlocksSharedSkill(skill.scopeId, liveActor === true)) return "trigger_blocked";
+      if (!(await managesSkillById(skill, principalId, editor))) return "forbidden";
+      if (sharedSkillRefused(skill.scopeId, editor)) return "authority_required";
       await deps.skills.archive(id);
       h.recordAudit({
         at: Date.now(),

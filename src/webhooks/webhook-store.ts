@@ -5,6 +5,7 @@ import {
   buildTriggerBase,
   contentPart,
   createDeduped,
+  normalizeTitle,
   setTriggerEnabled,
   type CreateTriggerInput,
   ownedBy,
@@ -13,9 +14,15 @@ import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
 export interface CreateWebhookInput extends CreateTriggerInput {
+  title?: string;
   action: string;
   verification: Webhook["verification"];
   filters?: Webhook["filters"];
+}
+
+export interface WebhookPatch {
+  title?: string;
+  action?: string;
 }
 
 export interface WebhookEvent {
@@ -36,7 +43,7 @@ export interface WebhookStore {
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
-  update(id: string, patch: { action: string }): Promise<Webhook | null>;
+  update(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
@@ -82,6 +89,7 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         throw new Error("every webhook filter requires a path and at least one value");
       }
       const filters = input.filters?.length ? input.filters : undefined;
+      const title = normalizeTitle(input.title);
       const contentId = hashId([
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
@@ -89,9 +97,11 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         contentPart(input.verification),
         contentPart(filters),
         contentPart(input.destination),
+        ...(title ? [contentPart(title)] : []),
       ]);
       const webhook = await createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, Date.now()),
+        ...(title ? { title } : {}),
         action: input.action,
         verification: input.verification,
         ...(filters ? { filters } : {}),
@@ -107,7 +117,10 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
       return setTriggerEnabled(backing, id, enabled);
     },
     update(id, patch) {
-      return backing.merge(id, { action: patch.action });
+      return backing.merge(id, {
+        ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
+        ...(patch.action !== undefined ? { action: patch.action } : {}),
+      });
     },
     async recordFire(id, info) {
       await backing.merge(id, {

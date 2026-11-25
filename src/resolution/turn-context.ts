@@ -35,6 +35,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   botActor: boolean;
   ownScopeBotWork: boolean;
   notebookOnly?: boolean;
+  sharedNotebook?: ScopeId;
   memory: MemoryService;
   files: FileArtifactStore;
   skills?: SkillStore;
@@ -50,8 +51,9 @@ export async function resolveTurnContext(input: ContextInput) {
     ? []
     : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = resolution.writableScopeId;
+  const notebookScopeId = input.sharedNotebook ?? memoryScopeId;
   const baseRecallScopes = useMemory
-    ? recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds)
+    ? recallMemoryScopes(memoryPolicy, notebookScopeId, resolution.readOnlyScopeIds)
     : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
@@ -59,7 +61,7 @@ export async function resolveTurnContext(input: ContextInput) {
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
       ? {
-          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          ...(useMemory && memoryPolicy.capture !== "off" ? { write: notebookScopeId } : {}),
           read,
           ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
         }
@@ -96,6 +98,7 @@ export async function resolveTurnContext(input: ContextInput) {
   return {
     sharingSources,
     memoryScopeId,
+    notebookScopeId,
     baseRecallScopes,
     memoryAccess,
     memory,
@@ -110,8 +113,6 @@ export async function resolveTurnContext(input: ContextInput) {
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
-        facts: notebooks.flatMap(({ facts }) => facts ?? []),
-        complete: notebooks.every(({ facts }) => !!facts),
       };
     },
     recallMemory: (

@@ -8,6 +8,7 @@ import type { Principal, Session, SpawnMeta, StopScope } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import { armedWatches, finalWakeMonitorId, type MonitorStore } from "../monitors/monitor-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -15,7 +16,6 @@ import { claimThenBind } from "../tenants/claim.ts";
 import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
-  assertAudienceCompatible,
   doesBotWork,
   isSidebarSession,
   isSubagentThreadRef,
@@ -78,11 +78,9 @@ export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
   mailbox: SessionMailbox;
-  sessions: Pick<
-    SessionStore,
-    "get" | "getByThread" | "latestItemSeq" | "visibleItems" | "childrenOf" | "setSpawnMeta"
-  >;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "visibleItems" | "childrenOf" | "setSpawnMeta">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
+  monitors?: Pick<MonitorStore, "ownedBy">;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
@@ -92,7 +90,6 @@ type ParentMailDeps = Pick<SubagentMailDeps, "mailbox" | "runs" | "maxAttempts" 
 interface ParentSource {
   actor: Principal;
   botActor?: boolean;
-  conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
   peerDepth?: number;
@@ -106,7 +103,7 @@ interface ParentWake {
 
 type ParentMail = Pick<
   SessionMessage,
-  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf" | "peerDepth"
+  "id" | "text" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf" | "peerDepth"
 >;
 
 const messageWake = (id: string, peer = false): ParentWake => ({
@@ -137,8 +134,9 @@ async function delegatingRun(
 }
 
 export async function pendingWork(
-  deps: Pick<SubagentMailDeps, "sessions" | "runs" | "signals" | "mailbox">,
+  deps: Pick<SubagentMailDeps, "sessions" | "runs" | "signals" | "mailbox" | "monitors">,
   session: Session,
+  endedWatchId?: string,
 ): Promise<number> {
   const stopped = async (runId: string | undefined) =>
     !!deps.signals && !!deps.runs.get && !!(await runStopped({ get: deps.runs.get }, deps.signals, runId));
@@ -160,7 +158,10 @@ export async function pendingWork(
       : !(await stopped(resultRunId ?? message.senderRunId ?? message.delegatingRunId));
     if (coming) waiting.add(sender.threadRef);
   }
-  return waiting.size;
+  const watches = deps.monitors
+    ? await armedWatches(deps.monitors, session.scopeId, new Set([session.threadRef]), Date.now())
+    : [];
+  return waiting.size + watches.filter((watch) => watch.id !== endedWatchId).length;
 }
 
 async function parentTurn(
@@ -239,7 +240,6 @@ async function parentTurn(
   if (!originalParent) request.addressed = false;
   if (peer) request.sessionMessageDepth = source.peerDepth;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
-  assertAudienceCompatible(source, prepared);
   return { meta, prepared, ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}) };
 }
 
@@ -289,7 +289,6 @@ async function mailParent(
     senderId: child.id,
     actor: turn.prepared.actor,
     ...(turn.prepared.botActor ? { botActor: true } : {}),
-    audience: turn.prepared.conversation.audience,
     createdAt: Date.now(),
   });
   if (!wake) return "settled";
@@ -301,7 +300,7 @@ export async function wakeOwnParent(
   senderId: string,
   parent: Session,
   source: ParentSource,
-  mail: Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">,
+  mail: Pick<SessionMessage, "id" | "text">,
 ): Promise<"woken" | "busy" | "settled" | undefined> {
   const sender = await deps.sessions.get(senderId);
   if (!sender || sender.parentSessionId !== parent.id || !isSubagentThreadRef(sender.threadRef)) return undefined;
@@ -320,7 +319,7 @@ export async function wakePeer(
   sender: Session,
   recipient: Session,
   source: ParentSource & { peerDepth: number },
-  mail: Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">,
+  mail: Pick<SessionMessage, "id" | "text">,
 ): Promise<"woken" | "busy" | "settled" | undefined> {
   if (!isPeerMessage(sender, recipient)) return undefined;
   const turn = await parentTurn(deps, sender, recipient, source, mail.text, PEER_DISPLAY);
@@ -383,7 +382,6 @@ async function wakeParentForMail(
             const source = {
               actor: message.actor,
               ...(message.botActor ? { botActor: true } : {}),
-              conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
               ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
             };
@@ -430,15 +428,16 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     for (const id of readers) {
       const items = await deps.sessions.visibleItems(child.id, id, { sinceSeq: firstSeq });
       const seqs = new Set(items.map((item) => item.seq));
-      if (outputSeq !== undefined && outputSeq !== null && !seqs.has(outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
       views.push(items);
       seen.push(seqs);
     }
   const shared = (seq: number): boolean => seen.every((seqs) => seqs.has(seq));
   const resultId = `${RESULT_MAIL}${run.id}`;
   const resent = await deps.mailbox.unread(parent.id, resultId);
-  const waiting = result?.stopped || failed || resent ? 0 : await pendingWork(deps, child);
+  const waiting =
+    result?.stopped || failed || resent
+      ? 0
+      : await pendingWork(deps, child, finalWakeMonitorId(run.request.idempotencyKey));
   const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined, waiting);
   const retired =
     (kind === "final_answer" || kind === "no_reply") &&
@@ -481,7 +480,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     id: kind === "in_progress" ? `subagent-progress-${run.id}` : resultId,
     text,
     ...(kind === "in_progress" ? {} : { resultOf: run.id }),
-    ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
   };
   const wakes =
     !quiet &&
@@ -562,7 +560,7 @@ export function mailOf(
   const files = result?.attachments?.map((file) => file.name) ?? [];
   const reply = result?.reply?.trim() || (files.length ? `Produced ${files.join(", ")}.` : "");
   if (waiting) {
-    const note = `Still waiting on ${waiting} subagent${waiting === 1 ? "" : "s"}.`;
+    const note = `Still waiting on ${waiting} subagent${waiting === 1 ? "" : "s"} or watched background job${waiting === 1 ? "" : "s"}.`;
     return { kind: "in_progress", body: reply ? `${reply}\n\n${note}` : note };
   }
   if (result?.status === "ok" && reply) return { kind: "final_answer", body: reply };

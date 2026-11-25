@@ -21,20 +21,22 @@ export const subline = (text: unknown) => html`<span class="subline">${text}</sp
 export const matches = (needle: string, ...parts: unknown[]) =>
   parts.join(" ").toLowerCase().includes(needle.trim().toLowerCase());
 
+function actionButton(a: any) {
+  return html`<button
+    type="button"
+    class=${"btn compact rowbtn" + (a.danger ? " danger" : "")}
+    ?disabled=${!!a.disabled}
+    title=${ifDefined(a.title || undefined)}
+    @click=${a.run}
+  >
+    ${a.label}
+  </button>`;
+}
+
 function cell(value: any): unknown {
   if (value?.node) return value.node;
-  if (value?.action) {
-    const a = value.action;
-    return html`<button
-      type="button"
-      class=${"btn compact rowbtn" + (a.danger ? " danger" : "")}
-      ?disabled=${!!a.disabled}
-      title=${ifDefined(a.title || undefined)}
-      @click=${a.run}
-    >
-      ${a.label}
-    </button>`;
-  }
+  if (value?.actions) return html`<div class="credential-actions">${value.actions.map(actionButton)}</div>`;
+  if (value?.action) return actionButton(value.action);
   if (value && typeof value === "object") return value.text;
   return value == null ? "" : String(value);
 }

@@ -18,10 +18,14 @@ import { credentialInjectionError, type CredentialInjection } from "./credential
 import { claimThenBind } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
-const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
+export const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
 export function isBackendCredential(c: { envKey?: string; fields?: ReadonlyArray<{ envKey: string }> }): boolean {
   return c.envKey === COMPOSIO_ENV_KEY || c.fields?.some((f) => f.envKey === COMPOSIO_ENV_KEY) === true;
+}
+
+export function isUsableComposioKey(c: PublicServiceCredential): boolean {
+  return c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === COMPOSIO_ENV_KEY;
 }
 
 export function isComposioHost(host: string): boolean {
@@ -320,7 +324,6 @@ interface CreateGrantInput {
 }
 
 interface CreateAskInput {
-  triggered?: boolean;
   credentialId: string;
   requesterId: string;
   requesterScopeId: ScopeId;
@@ -367,7 +370,6 @@ interface MaterializedFileCred {
   grantId?: string;
   purpose?: string;
   writeback?: boolean;
-  live?: boolean;
   baseline?: Record<string, string>;
 }
 
@@ -390,7 +392,6 @@ interface GrantListFilter {
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
   create(input: SaveCredentialInput): Promise<KeychainCredentialMeta | null>;
-  withLoginTicket<T>(ticketId: string, fn: () => Promise<T>): Promise<T>;
   claimWriter(ownerId: string, id: string, writer: { holder: string; until: number }): Promise<boolean | null>;
   releaseWriter(ownerId: string, id: string, holder: string): Promise<boolean | null>;
   updateFiles(
@@ -464,10 +465,9 @@ export interface FileCredentialSource {
   service: string;
   grantId?: string;
   writeback?: boolean;
-  live?: boolean;
 }
 
-export type CredentialFileSave = Pick<CredentialFileMerge, "overruled" | "withheld">;
+export type CredentialFileSave = Pick<CredentialFileMerge, "overruled">;
 
 function credentialFilesFingerprint(files: CredentialFile[]): string {
   return fileCredentialFingerprint(
@@ -495,7 +495,7 @@ function keychainFilePath(path: string): string {
   }
 }
 
-export function keychainService(service: string): string {
+function keychainService(service: string): string {
   return service.trim().toLowerCase();
 }
 
@@ -1129,8 +1129,6 @@ export function createKeychain(deps: {
       return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
     },
 
-    withLoginTicket: (ticketId, fn) => lock.withLock(`keychain-login-ticket:${ticketId}`, fn),
-
     async claimWriter(ownerId, id, writer) {
       let claimed: boolean | null = null;
       await deps.creds.update(id, (current) => {
@@ -1154,7 +1152,7 @@ export function createKeychain(deps: {
     },
 
     async updateFiles(materialized, files) {
-      const unchanged = { overruled: [], withheld: [] };
+      const unchanged = { overruled: [] };
       if (!materialized.writeback) return unchanged;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
@@ -1163,7 +1161,6 @@ export function createKeychain(deps: {
       const ours = Object.entries(credentialFileHashes(normalized));
       if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
       let overruled: string[] = [];
-      let withheld: CredentialFileMerge["withheld"] = [];
       let byExpiry: Array<{ path: string; kept: string }> = [];
 
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
@@ -1175,10 +1172,8 @@ export function createKeychain(deps: {
           stored: currentFiles,
           refreshed: normalized,
           hash: (file) => fingerprint([file]),
-          refreshOnly: !materialized.live,
         });
         overruled = merged.overruled;
-        withheld = merged.withheld;
         byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length) {
@@ -1202,15 +1197,11 @@ export function createKeychain(deps: {
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
         );
-      if (withheld.length)
-        console.warn(
-          `[credentials] ${materialized.credentialId}: kept the stored version of ${withheld.map(({ path, reason }) => `${path} (${reason})`).join(", ")} because a run that isn't its owner's live turn saves only token refreshes`,
-        );
       for (const { path, kept } of byExpiry)
         console.warn(
           `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
         );
-      return { overruled, withheld };
+      return { overruled };
     },
 
     async writebackBaseline(source, fileHashes) {
@@ -1227,7 +1218,6 @@ export function createKeychain(deps: {
         baseline: fileHashes,
         ...(source.grantId ? { grantId: source.grantId } : {}),
         ...(source.writeback ? { writeback: true } : {}),
-        ...(source.live ? { live: true } : {}),
       };
     },
 
@@ -1344,10 +1334,10 @@ export function createKeychain(deps: {
         if (askTask(a) !== task) continue;
         if (a.status === "pending") return { ask: a, existing: true };
         if (a.status === "approved") break;
-        if (input.triggered && (a.status === "declined" || a.status === "expired")) {
+        if (a.status === "declined" || a.status === "expired") {
           throw new KeychainError(
             409,
-            "the owner declined or did not answer this task's request — wait for a live owner turn instead of asking again",
+            "the owner declined or did not answer this task's earlier request, so it isn't asked again; the owner can still share it from their own conversation",
           );
         }
       }
@@ -1709,7 +1699,7 @@ export function renderAskNotice(
 export interface KeychainManifestInput {
   scopeId: ScopeId;
   conversationKind: "dm" | "channel" | "group";
-  openSpeakerKeychain?: boolean;
+  openOwnerKeychain?: boolean;
   actorId: string;
   members: Array<{ id: string; displayName?: string }>;
   entriesByOwner: Map<string, KeychainCredentialMeta[]>;

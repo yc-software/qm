@@ -36,12 +36,15 @@ is the ordinary per-turn one: same image, the turn's environment and capability 
 Files and skills, but none of the shared workspace's files. Only that
 turn's commands run there. The result tells the model the command moved. Brokered org
 service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
-computer. Personal conversations stage credentials on their own computer. The owner's other
-runs, scheduled and unattended ones included, use that same computer, so any of the owner's
-runs can change the programs and staging files a live credential command uses.
+computer. In the acting person's own personal conversation, only a command that names a
+saved file login moves to the turn's scratch computer, because a file login is the one kind
+of credential that saves back. Token and environment credentials stay on the person's own
+computer with its workspace. The owner's other runs, scheduled ones included,
+use that same computer, so any of them can change the programs such a command runs.
 
-A background job in a shared conversation that names such a credential starts on its own
-job computer: a sandbox record marked job-only, created on the conversation's provider. It
+A background job in a shared conversation that names such a credential, or in any
+conversation one that names a saved file login, starts on its own job computer: a sandbox
+record marked job-only, created on the conversation's provider. It
 is not listed in the sandbox inventory, cannot be targeted with `sandbox_id` by execute,
 files, apps or skills, cannot be made a default, and refuses `send_input`. Only the job's
 own controls reach it: poll, stop, watch, the reaper and the web output pane, including
@@ -54,9 +57,9 @@ job writes to its home outlives the computer. A provider that cannot retire comp
 jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
-`watch`, and `unwatch`. A job that a person's live turn started with a saved file login
-saves that login's changes as live when it exits, so it takes `send_input` and `stop` only
-from a person's live turn; a scheduled run, a bot's turn and other unattended runs are refused.
+`watch`, and `unwatch`. A job that names a saved file login runs on a job computer, so it
+takes no `send_input`. When it saves that login's changes on exit, a bot's turn cannot stop
+it.
 Process IDs retain their durable saved target even after the scope default changes. Watches retain their durable monitor registration and wake this
 conversation with output or exit. Provider loss or expiry can still interrupt a process.
 

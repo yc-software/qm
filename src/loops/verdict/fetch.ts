@@ -7,6 +7,7 @@ import { gmailAccountOf, gmailThreadOf, gmailToken } from "../sources/gmail.ts";
 import { slackConversationOf } from "../sources/slack.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { slackMessageContent } from "../../slack/message-content.ts";
+import { slackBotName } from "../../slack/payloads.ts";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { TransientTurnFailure } from "../../core/turn-error.ts";
@@ -294,7 +295,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
     const messages: TranscriptMessage[] = [];
     for (const m of raw) {
       const userId = typeof m.user === "string" ? m.user : undefined;
-      const botName = isObj(m.bot_profile) && typeof m.bot_profile.name === "string" ? m.bot_profile.name : undefined;
+      const botName = slackBotName(m);
       const person = userId ? await clients.slackUser(owner, token, userId) : undefined;
       if (person) participants.set(person.id, person);
       const content = slackMessageContent(m);
@@ -304,7 +305,7 @@ export function createConversationFetcher(clients: SourceClients): ConversationF
       messages.push({
         ts: String(m.ts),
         at: Math.round(Number(m.ts) * 1000),
-        author: person?.name ?? botName ?? String(m.username ?? "Slack"),
+        author: person?.name ?? botName ?? "Slack",
         ...(userId ? { authorId: userId } : {}),
         owner: userId === identity.userId,
         text: content.text,

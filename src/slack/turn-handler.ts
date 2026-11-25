@@ -115,11 +115,24 @@ function channelLocation(
 
 export function createTurnHandler(deps: {
   accountId?: string;
+  personaId?: string;
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
-  onSettled?: () => void;
+  onEngaged?: (
+    runId: string,
+    channel: string,
+    threadTs?: string,
+    meta?: {
+      sessionId: string;
+      detailMode: "full" | "brief";
+      recipientUserId?: string;
+      recipientTeamId?: string;
+      unprompted?: boolean;
+      initialTitle?: string;
+    },
+  ) => void;
+  onSettled?: (runId?: string) => void;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -136,6 +149,7 @@ export function createTurnHandler(deps: {
   markEvent?: () => void;
   botToken: string;
   trustedFileHost?: string;
+  webUiPublicUrl?: string;
   ensureHeader?: (
     client: SurfaceHeaderClient,
     channel: string,
@@ -193,6 +207,7 @@ export function createTurnHandler(deps: {
       (classified.actor.isExternalGuest || classified.actor.isBot || !inc.userId || inc.synthetic)
     )
       return;
+    if (deps.personaId && inc.unprompted) return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(classified.actor)) return;
     const actor = botAuthoredActor(classified.actor, inc, ids.identityMode);
@@ -248,6 +263,19 @@ export function createTurnHandler(deps: {
       triggerTs: inc.ts,
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
+      ...(core?.thinkingStream ? { thinkingStream: core.thinkingStream } : {}),
+      sessionId: () => threadRef,
+      detailMode: () =>
+        isExternallyShared(channelInfo) ||
+        Boolean(deps.externalAccess) ||
+        Boolean(actor.isExternalGuest) ||
+        audience.some((a) => a.isExternalGuest)
+          ? "brief"
+          : "full",
+      ...(ids.ownTeamId ? { recipientTeamId: ids.ownTeamId } : {}),
+      ...(inc.unprompted ? { unprompted: true } : {}),
+      ...(inc.rawText ? { initialTitle: inc.rawText } : {}),
+      ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),
     });
@@ -356,6 +384,7 @@ export function createTurnHandler(deps: {
       const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
       const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
         token: deps.botToken,
+        where: { account: ids.ownTeamId, chat: inc.channel },
         ...(deps.trustedFileHost ? { trustedHost: deps.trustedFileHost } : {}),
         core,
         directory,
@@ -396,6 +425,7 @@ export function createTurnHandler(deps: {
         })(),
         text,
         gatewayContext,
+        ...(deps.personaId ? { personaId: deps.personaId } : {}),
         ...(actor.isBot ? { botActor: true } : {}),
         ...(conversationHeader ? { conversationHeader } : {}),
         ...(priorTurns ? { priorTurns } : {}),

@@ -25,13 +25,13 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-function start(enabled = true, databaseUrl?: string) {
+function start(enabled = true, databaseUrl?: string, role?: "org_admin" | "owner") {
   const built = buildApp(
     testConfig({
       ...(databaseUrl ? { databaseUrl } : {}),
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
       orgId: "default-org",
-      ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
+      ...(enabled ? { trustedOidcAdminIssuer: issuer, ...(role ? { trustedOidcAdminRole: role } : {}) } : {}),
     }),
   );
   const server = createServer(built.app, {
@@ -88,16 +88,17 @@ async function send(base: string, payload: unknown, key = identitySecret, source
 }
 
 test("portal provisioning creates a durable ordinary grant once and preserves existing grants", async (t) => {
-  const s = start();
+  const s = start(true, undefined, "owner");
   t.after(s.close);
   const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
   await Promise.all(Array.from({ length: 8 }, () => provisionTrustedAdmin(config, "founder-7")));
   const principal = { id: trustedPrincipal(issuer, "founder-7"), type: "internal" as const };
-  assert.equal((await s.built.admin.adminStatusOf(tenant, principal)).isAdmin, true);
+  assert.equal((await s.built.admin.adminStatusOf(tenant, principal)).role, "owner");
   const first = await s.built.admin.listGrants(tenant);
   await provisionTrustedAdmin(config, "founder-7");
   assert.deepEqual(await s.built.admin.listGrants(tenant), first);
-  assert.equal((await s.built.auditLog.events(tenant)).filter((e) => e.action === "grant.create").length, 1);
+  const ids = (await s.built.auditLog.events(tenant)).flatMap((e) => (e.action === "grant.create" ? [e.resource] : []));
+  assert.deepEqual(ids, [`${principal.id}/owner`]);
   assert.equal((await s.built.admin.adminStatusOf(tenant, { id: "founder-7", type: "internal" })).isAdmin, false);
   assert.equal(
     (await s.built.admin.adminStatusOf(tenant, { id: "founder@example.test", type: "internal" })).isAdmin,

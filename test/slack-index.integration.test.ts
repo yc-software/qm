@@ -302,9 +302,14 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string, hooks?: { onReplying?(): void }): Promise<TurnResult | null> {
+  firstBlock?: { text: string; persona?: TurnResult["persona"] };
+  async waitRun(
+    runId: string,
+    hooks?: { onReplying?(): void; onFirstBlock?(text: string, persona?: TurnResult["persona"]): void },
+  ): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.engageRun) hooks?.onReplying?.();
+    if (this.firstBlock) hooks?.onFirstBlock?.(this.firstBlock.text, this.firstBlock.persona);
     if (this.runGate) await this.runGate;
     return this.result;
   }
@@ -642,6 +647,28 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
       f.client.posts.map((p) => p.text),
       ["agent reply"],
     );
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a DM reply wearing a persona posts under its name and icon", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-persona";
+    const persona = { id: "p1", name: "Ada", icon: { kind: "emoji" as const, value: "🎨" } };
+    f.core.firstBlock = { text: "Checking now.", persona };
+    f.core.result = { status: "ok", reply: "on it", persona };
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hi", ts: "100.1" });
+    assert.equal(f.client.posts.length, 2);
+    for (const post of f.client.posts) {
+      assert.equal(post.username, "Ada");
+      assert.equal(post.icon_emoji, ":art:");
+      assert.deepEqual(post.blocks?.at(-1), {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "From Ada", verbatim: true }],
+      });
+    }
   } finally {
     await f.stop();
   }
@@ -1698,11 +1725,9 @@ test("thread status is detached from reply delivery and steering cannot take own
   const network = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const emojis: unknown[] = [];
   f.core.sessionStatus = {
     start: async (...args) => {
       starts.push(args.slice(1, 5));
-      emojis.push(await args[5]);
       await network;
     },
     reconcile: async () => {},
@@ -1724,8 +1749,6 @@ test("thread status is detached from reply delivery and steering cannot take own
     await original;
     assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
     assert.equal(starts.length, 1);
-    await waitFor(() => emojis.length === 1, 5_000);
-    assert.equal(typeof emojis[0], "string");
   } finally {
     release();
     await f.stop();
@@ -1789,9 +1812,10 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "200.4",
       blocks: [
         {
-          type: "plan",
-          title: "Waiting on subagents",
-          tasks: [{ task_id: "qm_status:test:child", title: "Child", status: "in_progress" }],
+          type: "task_card",
+          task_id: "qm_status:test",
+          title: "Still working: reading Slack docs",
+          status: "in_progress",
         },
       ],
     });

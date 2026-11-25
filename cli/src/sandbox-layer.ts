@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
+import { FrontmatterFenceError, parseFrontmatter } from "./frontmatter.ts";
 import { errMessage } from "./log.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./tool-descriptor.ts";
 
@@ -12,85 +13,29 @@ export interface SkillFrontmatter {
   requiredCapabilities?: string[];
 }
 
-function stripSkillQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    ((trimmed[0] === '"' && trimmed.at(-1) === '"') || (trimmed[0] === "'" && trimmed.at(-1) === "'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function skillIndent(line: string): number {
-  let indent = 0;
-  while (indent < line.length && (line[indent] === " " || line[indent] === "\t")) indent++;
-  return indent;
-}
-
 export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFrontmatter {
-  const source = md.startsWith("\uFEFF") ? md.slice(1) : md;
-  const opening = /^---\r?\n/.exec(source);
-  const closing = opening ? /\r?\n---/.exec(source.slice(opening[0].length)) : null;
-  if (!opening || !closing) throw new Error(`${sourcePath}: missing YAML frontmatter (a leading --- … --- block)`);
-  const contentStart = opening[0].length;
-  const contentEnd = contentStart + closing.index;
-  const body = source.slice(contentEnd + closing[0].length).replace(/^\s+/, "");
+  let attrs: Record<string, unknown>;
+  let body: string;
+  try {
+    ({ attrs, body } = parseFrontmatter(md));
+  } catch (error) {
+    if (error instanceof FrontmatterFenceError) {
+      throw new Error(`${sourcePath}: missing YAML frontmatter (a leading --- … --- block)`, { cause: error });
+    }
+    throw new Error(`${sourcePath}: ${errMessage(error)}`, { cause: error });
+  }
   if (!body.trim()) throw new Error(`${sourcePath}: skill requires a body below the frontmatter`);
 
-  const fields: Record<string, unknown> = {};
-  const lines = source.slice(contentStart, contentEnd).split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    const key = kv[1]!;
-    const rest = kv[2] ?? "";
-    if (rest === ">" || rest === "|" || rest === ">-" || rest === "|-") {
-      const literal = rest[0] === "|";
-      const baseIndent = skillIndent(line);
-      const collected: string[] = [];
-      while (i + 1 < lines.length) {
-        const next = lines[i + 1]!;
-        if (next.trim() && skillIndent(next) <= baseIndent) break;
-        collected.push(next.trim() ? next.slice(Math.min(skillIndent(next), baseIndent + 2)) : "");
-        i++;
-      }
-      fields[key] = (literal ? collected.join("\n") : collected.join(" ").replace(/\s+/g, " ")).trim();
-      continue;
-    }
-    if (rest) {
-      fields[key] =
-        rest.startsWith("[") && rest.endsWith("]")
-          ? rest.slice(1, -1).split(",").map(stripSkillQuotes).filter(Boolean)
-          : stripSkillQuotes(rest);
-      continue;
-    }
-    const baseIndent = skillIndent(line);
-    const items: string[] = [];
-    while (i + 1 < lines.length) {
-      const next = lines[i + 1]!;
-      if (!next.trim() || skillIndent(next) <= baseIndent) break;
-      const item = /^\s*-\s+(.*)$/.exec(next);
-      if (!item) break;
-      items.push(stripSkillQuotes(item[1]!));
-      i++;
-    }
-    fields[key] = items;
-  }
-
-  const name = fields["name"];
-  const description = fields["description"];
-  const requiredCapabilities = fields["requiredCapabilities"] ?? [];
-  if (typeof name !== "string" || !name.trim()) throw new Error(`${sourcePath}: frontmatter is missing "name"`);
+  const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : attrs["name"];
+  const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : attrs["description"];
+  const requiredCapabilities = attrs["requiredCapabilities"] ?? [];
+  if (typeof name !== "string" || !name) throw new Error(`${sourcePath}: frontmatter is missing "name"`);
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?$/.test(name)) {
     throw new Error(
       `${sourcePath}: skill name must be 1-128 ASCII letters, digits, dots, underscores, or hyphens; it must start with a letter or digit and cannot end with a dot`,
     );
   }
-  if (typeof description !== "string" || !description.trim())
+  if (typeof description !== "string" || !description)
     throw new Error(`${sourcePath}: frontmatter is missing "description"`);
   if (
     !Array.isArray(requiredCapabilities) ||

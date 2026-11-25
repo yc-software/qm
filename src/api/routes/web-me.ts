@@ -12,6 +12,7 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
+import { webNotificationsOn } from "../../notifications/web-push.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
@@ -33,16 +34,18 @@ export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
-  const [admin, preview] = await Promise.all([
+  const [admin, preview, notifications] = await Promise.all([
     ctx.actor?.imp
       ? null
       : adminPermissions(ctx.deps, tenantOf(ctx), { id: user, type: "internal" }).catch(
           swallowAs("web: /me admin status", null),
         ),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
+    webNotificationsOn(ctx.deps, user).catch(swallowAs("web: /me notifications flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];
   if (preview) permissions.push("loops", "inbox");
+  if (notifications) permissions.push("notifications");
   return permissions;
 }
 
@@ -51,12 +54,13 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, slack, auth, branding, starters] = await Promise.all([
+  const [permissions, slack, auth, branding, starters, teammate] = await Promise.all([
     permissionsOf(ctx, user),
     app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
+    deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
@@ -76,6 +80,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     ),
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
+    ...(teammate ? { teammate } : {}),
     ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(starters.welcome ? { welcome: starters.welcome } : {}),

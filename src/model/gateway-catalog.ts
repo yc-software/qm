@@ -10,6 +10,7 @@ const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 const STALE_MS = 15 * 60_000;
 const UNRELIABLE_OUTPUT_LIMIT_FALLBACK = 65_536;
+const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function transientFailure(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status;
@@ -36,6 +37,11 @@ function price(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && Number.isFinite(value * 1_000_000)
     ? value * 1_000_000
     : undefined;
+}
+
+function completionsThinkingLevels(value: unknown): GatewayModel["thinkingLevelMap"] {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return Object.fromEntries(REASONING_LEVELS.map((level) => [level, value.includes(level) ? level : null]));
 }
 
 function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | EmbeddingModel | undefined {
@@ -70,6 +76,9 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
   let api: GatewayModel["api"] = "openai-completions";
   if (anthropic) api = "anthropic-messages";
   else if (openai) api = "openai-responses";
+  const reasoning = info.supports_reasoning === true;
+  const thinkingLevelMap =
+    reasoning && api === "openai-completions" ? completionsThinkingLevels(info.supported_reasoning_efforts) : undefined;
   let documentInput: GatewayModel["documentInput"];
   if (openai) documentInput = "files";
   else if (pdf) documentInput = "pdf";
@@ -81,7 +90,8 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
     provider: GATEWAY_PROVIDER,
     api,
     baseUrl: anthropic ? gatewayRoot(baseUrl) : baseUrl,
-    reasoning: (anthropic || openai) && info.supports_reasoning === true,
+    reasoning,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     input: info.supports_vision === true ? ["text", "image"] : ["text"],
     contextWindow,
     maxTokens,

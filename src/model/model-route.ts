@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { isGatewayModelId } from "./gateway-models.ts";
 import type { ProviderKeys } from "./model-runtime.ts";
 import {
   auxiliaryModelFor,
@@ -59,6 +60,7 @@ export interface ModelRouteOptions {
   openrouterApiKey?: string;
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
+  ownProviders?: () => Promise<ReadonlySet<string>>;
 }
 
 export function configRouteOptions(config: Config): ModelRouteOptions {
@@ -79,6 +81,7 @@ export interface ModelRoutes {
   utilityModelId(override?: string): string;
   servedId(id: string, personalKeys?: ProviderKeys): string;
   route(modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute>;
+  companyGateway(model: { id: string; provider: unknown }): Promise<ModelGatewayTransportConfig | undefined>;
   servable(route: ModelRoute): ModelRoute | undefined;
   session(session: { runtime?: { modelId?: string }; providerKeys?: ProviderKeys }): Promise<ModelRoute>;
   utility(modelId?: string): Promise<ModelRoute | undefined>;
@@ -104,11 +107,16 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
   const companyServedId = (id: string) => (opts.companyModelId ? opts.companyModelId(id) : id);
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
     personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
+  const companyGateway = async (model: { id: string; provider: unknown }) => {
+    if (!opts.modelGateway?.models[model.id] || isGatewayModelId(model.id)) return opts.modelGateway;
+    return (await opts.ownProviders?.())?.has(String(model.provider)) ? undefined : opts.modelGateway;
+  };
   const route = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
     const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
     const model = getRequiredModel(personalKeys ? modelId : companyServedId(modelId), !personalKeys);
-    const keys = personalKeys ?? (await companyKeys());
-    const gateway = personalKeys ? undefined : opts.modelGateway;
+    const [keys, gateway] = personalKeys
+      ? [personalKeys, undefined]
+      : await Promise.all([companyKeys(), companyGateway(model)]);
     return {
       modelId,
       model,
@@ -126,6 +134,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     utilityModelId,
     servedId,
     route,
+    companyGateway,
     servable,
     session: (session) => route(session.runtime?.modelId ?? baseModelId(), session.providerKeys),
     utility: async (modelId) => servable(await route(utilityModelId(modelId))),

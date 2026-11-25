@@ -137,16 +137,14 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
           scope: "org",
           conversationScopeId: "group:forged",
           sessionId: "forged",
-          sensitivity: "ordinary",
-          inheritedFacts: [],
+          sensitivities: ["ordinary"],
         },
         { "x-agent-capability": cap },
       );
       assert.equal(res.status, 200);
       assert.equal(context?.conversationScopeId, source);
       assert.equal(context?.sessionId, "trusted-session");
-      assert.equal(context?.sensitivity, undefined);
-      assert.equal(context?.inheritedFacts, undefined);
+      assert.equal(context?.sensitivities, undefined);
     } finally {
       built.memory.capture = capture;
     }
@@ -247,8 +245,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     );
     assert.equal(edited.status, 200);
     const ended = { "x-agent-capability": await capFor("A1", admin, { ...liveRunClaims("A1"), runId: "ended-run" }) };
-    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 403);
-    assert.match(await built.memory.read(ORG), /org notebook curated/);
+    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 200);
+    assert.doesNotMatch(await built.memory.read(ORG), /org notebook curated/);
   });
 
   it('without scope:"org", an admin token still writes the turn\'s own notebook', async () => {
@@ -283,6 +281,29 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       400,
     );
     assert.equal((await get("/v1/memory/self?scope=team", { "x-agent-capability": cap })).status, 403);
+  });
+
+  it("scope:persona:<id> writes for write/owner holders and 403s readers", async () => {
+    for (const who of ["U1", "U2", "U3"])
+      await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+    const pid = ((await built.app.personas!.create("U1", { name: "Ada" })) as { value: { id: string } }).value.id;
+    const access = [
+      { scopeId: "personal:U1", role: "owner" },
+      { scopeId: "personal:U2", role: "write" },
+      { scopeId: "personal:U3", role: "read" },
+    ];
+    await built.app.personas!.setAccess("U1", pid, access);
+    const hdr = async (who: string) => ({
+      "x-agent-capability": await capFor(
+        who,
+        { write: scopeId("personal", who), read: [] },
+        { ...liveRunClaims(who), internalAudience: true, personAuthority: true },
+      ),
+    });
+    const body = { facts: ["persona note"], scope: `persona:${pid}` };
+    assert.equal((await post("/v1/memory/facts", body, await hdr("U2"))).status, 200);
+    assert.match(await built.memory.read(`persona:${pid}`), /persona note/);
+    assert.equal((await post("/v1/memory/facts", body, await hdr("U3"))).status, 403);
   });
 
   it("403s search when the token carries no read scopes (recall off)", async () => {

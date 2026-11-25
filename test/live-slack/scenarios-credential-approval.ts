@@ -114,7 +114,7 @@ const OWNER = { once: "alice", standing: "carol", web: "bob", cron: "alice" } as
 export const credentialApprovalScenarios: Scenario[] = (["once", "standing", "web", "cron"] as const).map((mode) => ({
   name: `credential-approval-card-${mode}`,
   lane: "parallel",
-  tags: ["twin", "keychain"],
+  tags: ["twin", "keychain", "sandbox"],
   actors: [OWNER[mode]],
   timeoutMs: 20 * 60_000,
   async run(ctx) {

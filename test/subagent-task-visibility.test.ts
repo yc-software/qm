@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
@@ -6,7 +7,8 @@ import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { isAgentReply, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { scopeId } from "../src/types.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 
 async function conversation(built: ReturnType<typeof buildApp>, threadRef: string, extra: Partial<TurnRequest> = {}) {
@@ -58,6 +60,87 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.ok((await syscalls.write({ wake: true, target: child.id, text: "Check the tests too" })).ok);
   const second = await finished(() => built.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run));
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
+});
+
+test("a wake's reply in a web conversation replaces the agent's reply since the person last typed, for people with the flag", async () => {
+  const built = buildApp(testConfig({ memoryCapture: "off" }));
+  const threadRef = "web:U1:wake-rewrite";
+  const dm = await conversation(built, threadRef, { surface: "web" });
+  const { session } = dm;
+  const peer = await conversation(built, "web:U1:wake-rewrite-peer", { surface: "web" });
+  built.runtime.start();
+  const latestRun = () => built.runs.list({ threadRef, limit: 1 }).then(([run]) => run);
+  const lastReply = async (sessionId = session.id) =>
+    (await built.sessions.getItems(sessionId)).findLast(isAgentReply)!;
+  const replyTo = async (wake: () => Promise<Run | null | undefined>, sessionId?: string) => {
+    await settle(async () => (await wake())?.status === "done");
+    return lastReply(sessionId);
+  };
+  const subagentReply = async (parent = dm) => {
+    const opened = await parent.syscalls.open({ task: "Summarize the repo" });
+    assert.ok(opened.ok);
+    const [task] = await built.runs.list({ threadRef: (await built.sessions.get(opened.sessionId))!.threadRef });
+    return replyTo(() => built.runs.getByDedupKey(`subagent-return:${task!.id}`), parent.session.id);
+  };
+
+  const stacked = await subagentReply();
+  assert.equal(stacked.body.supersedes, undefined, "flag off: the wake adds a message");
+  await built.featureFlags.setEnabled("wake_reply_rewrite", scopeId("personal", "U1"), true, "test");
+  const rewritten = await subagentReply();
+  assert.equal(rewritten.body.supersedes, stacked.seq);
+  assert.ok(rewritten.text!.includes(`"${stacked.text!.slice(0, 20)}`), "the model is told which message it replaces");
+
+  assert.ok((await peer.syscalls.write({ wake: true, target: session.id, text: "take this over" })).ok);
+  const fromPeer = async () => [await latestRun()].find((run) => run?.request.sessionSenderId === peer.session.id);
+  assert.equal((await replyTo(fromPeer)).body.supersedes, rewritten.seq, "a handoff replaces the previous rewrite");
+
+  await built.sessions.append(
+    { sessionId: session.id },
+    { kind: "UserMessage", text: "ok", body: { speakerId: "U1" } },
+  );
+  const afterTyping = await subagentReply();
+  assert.equal(afterTyping.body.supersedes, undefined, "no reply since the person last typed, so nothing is replaced");
+
+  const request = { ...(await latestRun())!.request, text: "!finish-silent" };
+  const quiet = await built.runs.enqueue({ sessionId: threadRef, request });
+  const silent = await replyTo(() => built.runs.get(quiet.run.id));
+  assert.deepEqual([silent.text, silent.body.supersedes], [null, undefined], "ending silently replaces nothing");
+  const kept = await subagentReply();
+  assert.equal(kept.body.supersedes, afterTyping.seq, "the reply left in place is the one replaced");
+
+  const turn = { surface: "web", actor: { externalId: "U1" }, origin: { kind: "human" as const }, text: "hello" };
+  const fire = { ...turn, conversation: { kind: "dm" as const, threadRef }, surface: "monitor" };
+  await built.app.turn({ ...fire, origin: { kind: "automation" } });
+  assert.notEqual((await lastReply()).seq, kept.seq, "the watch fire posted its own reply");
+  const report = { kind: "AgentMessage" as const, text: "nightly report", body: { via: "cron" } };
+  await built.sessions.append({ sessionId: session.id, turnId: randomUUID() }, report);
+  assert.equal(
+    (await subagentReply()).body.supersedes,
+    kept.seq,
+    "a fire's reply and a delivered report are passed over",
+  );
+
+  const project = (await built.app.createProject("U1", "Launch"))!;
+  await built.app.upsertDirectory([{ principalId: "U2", displayName: "Second", type: "internal" }]);
+  await built.app.addProjectMember(project.id, "U1", "U2");
+  const channelRef = project.scopeId.slice("group:".length);
+  const chat = { kind: "group" as const, channelRef, threadRef: "web:U1:wake-rewrite-shared" };
+  const shared = await conversation(built, chat.threadRef, { surface: "web", conversation: chat });
+  const answer = await lastReply(shared.session.id);
+  assert.equal((await subagentReply(shared)).body.supersedes, answer.seq, "a shared web chat is covered");
+  const second = await conversation(built, chat.threadRef, {
+    ...turn,
+    conversation: chat,
+    actor: { externalId: "U2" },
+  });
+  const theirs = await lastReply(shared.session.id);
+  const added = await subagentReply(shared);
+  assert.ok(added.seq > theirs.seq && added.body.supersedes === undefined, "a reply to someone else is not replaced");
+  await built.app.turn({ ...turn, conversation: chat });
+  const mine = await lastReply(shared.session.id);
+  await built.featureFlags.setEnabled("wake_reply_rewrite", scopeId("personal", "U2"), true, "test");
+  assert.equal((await subagentReply(second)).body.supersedes, undefined, "their wake leaves my reply alone");
+  assert.equal((await subagentReply(shared)).body.supersedes, mine.seq, "my wake passes over their report");
 });
 
 test("a wake runs with a Slack bot's restrictions when either side does a bot's work, and never bot-flagged in a person's conversation", async () => {

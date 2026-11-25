@@ -25,9 +25,9 @@ import type {
   TurnResult,
   TurnRuntime,
 } from "../types.ts";
-import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
+import type { ByteRange } from "../files/durable-byte-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
@@ -54,12 +54,12 @@ import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { type IngestPlan, type ImportResult } from "../skills/ingest.ts";
 import { type SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims, ScopeAuthorizationClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CronFireRecord } from "../cron/fire-store.ts";
-import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { WebhookStore, WebhookEvent, CreateWebhookInput, WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
   ChannelMembership,
@@ -71,8 +71,9 @@ import type {
   GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
-import type { Delivery, Destination } from "../types.ts";
+import type { Delivery, Destination, OutgoingAttachment } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { ReachOpts, ReachResolution, ReachTarget } from "../reach/reach.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -88,9 +89,9 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { PublishedApp, AppDraft } from "../deploy/deploy-store.ts";
+import { lentConnectors, type PublishedApp, type AppDraft } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
-import { type ArtifactHome, type ArtifactType, type ShareAccess } from "./artifact-share.ts";
+import { type ArtifactHome, type ArtifactType, type ShareAccess, type SkillEditor } from "./artifact-share.ts";
 import type {
   DeployService,
   DeployInput,
@@ -99,13 +100,13 @@ import type {
   ReachOptions,
   AppGrantee,
   AppActor,
+  SigningAppActor,
 } from "../deploy/deploy-service.ts";
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
-import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
@@ -149,6 +150,7 @@ export function appView(d: PublishedApp): AppView {
     ...(commit ? { commit } : {}),
     ...(parentCommit ? { parentCommit } : {}),
   }));
+  const connectors = lentConnectors(d);
   return {
     id: d.id,
     ownerScopeId: d.ownerScopeId,
@@ -161,7 +163,7 @@ export function appView(d: PublishedApp): AppView {
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
-    ...(d.connectors ? { connectors: d.connectors } : {}),
+    ...(connectors.length ? { connectors } : {}),
     public: d.public === true,
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
@@ -304,6 +306,7 @@ export interface App {
     viewer?: string,
   ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
+  stopThread(threadRef: string, opts?: { tree?: boolean }): Promise<boolean>;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
@@ -367,7 +370,7 @@ export interface App {
   ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
-    viewer: Pick<CapabilityClaims, "actorId" | "botActor">,
+    viewer: Pick<CapabilityClaims, "actorId" | "botActor"> & { fireScope?: "accessible" | "none" | ScopeId },
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
@@ -447,6 +450,12 @@ export interface App {
   ): Promise<{ resumed: true; goal: GoalView } | { resumed: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
+  deleteEphemeralSession(
+    tenant: Tenant,
+    threadRef: string,
+    principalId: string,
+  ): Promise<{ deleted: true } | { deleted: false; reason: "not_found" | "in_flight" }>;
+  purgeExpiredEphemeralSessions(cutoffMs: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
   forkSession(
     sessionId: string,
     principalId: string,
@@ -469,19 +478,23 @@ export interface App {
     actor: Pick<CapabilityClaims, "actorId" | "botActor">,
     loops: readonly Pick<TriggerBase, "owner" | "ownerScopeId" | "botActor">[],
   ): Promise<boolean[]>;
+  cronAdministration(
+    tenant: Tenant,
+    actor: Pick<CapabilityClaims, "actorId" | "botActor">,
+    crons: readonly Cron[],
+  ): Promise<boolean[]>;
   managesScope(principalId: string, scope: ScopeId): Promise<boolean>;
   currentScopeMembers(scope: ScopeId): Promise<Principal[] | undefined>;
   isCurrentSharedScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
-  authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
-  ): Promise<boolean>;
+  authorizesCapabilityScope(claims: ScopeAuthorizationClaims): Promise<boolean>;
   openFileForViewer(
     tenant: Tenant,
     id: string,
     principalId: string,
     ownScopeBotWork: boolean,
+    range?: (sizeBytes: number) => ByteRange | undefined,
   ): Promise<OpenedFile | null>;
   grant(tenant: Tenant, g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(
@@ -492,8 +505,9 @@ export interface App {
     revokedBy: string,
   ): Promise<void>;
   grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
-  promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
+  promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, personAuthority: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
+  isOrgAdmin(principalId: string): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
   artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
@@ -544,7 +558,7 @@ export interface App {
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
-  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
+  updateWebhook(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
@@ -639,7 +653,11 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string, ownScopeBotWork: boolean): Promise<SkillResolution[]>;
+  listVisibleSkills(
+    principalId: string,
+    ownScopeBotWork: boolean,
+    onlyScope?: ScopeId | null,
+  ): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string, botWork: boolean): Promise<boolean>;
   manageableSkills(
     tenant: Tenant,
@@ -651,13 +669,13 @@ export interface App {
     id: string,
     principalId: string,
     patch: { description?: string; body?: string },
-    opts?: { liveActor?: boolean; botActor?: boolean },
-  ): Promise<Skill | "trigger_blocked" | null>;
+    opts?: SkillEditor,
+  ): Promise<Skill | "authority_required" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
-    opts?: { liveActor?: boolean; botActor?: boolean },
-  ): Promise<Skill | "exists" | "trigger_blocked" | null>;
+    opts?: SkillEditor,
+  ): Promise<Skill | "exists" | "authority_required" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -674,12 +692,9 @@ export interface App {
     body: string;
     requiredCapabilities?: string[];
   }): Promise<Skill | null>;
-  deleteOwnedSkill(input: {
-    principalId: string;
-    id: string;
-    liveActor?: boolean;
-    botActor?: boolean;
-  }): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
+  deleteOwnedSkill(
+    input: SkillEditor & { principalId: string; id: string },
+  ): Promise<"missing" | "forbidden" | "authority_required" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;
   restoreApp(id: string, actorId?: string): Promise<PublishedApp>;
@@ -692,12 +707,8 @@ export interface App {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(
-    idOrName: string,
-    isPublic: boolean,
-    actor: AppActor & { personAtKeyboard: boolean },
-  ): Promise<PublishedApp>;
-  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  setAppPublic(idOrName: string, isPublic: boolean, actor: SigningAppActor): Promise<PublishedApp>;
+  setAppConnectors(idOrName: string, connectors: string[], actor: SigningAppActor): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;
@@ -753,6 +764,7 @@ interface AppGitPrincipals {
 }
 
 export interface AppDeps {
+  isOrgAdmin?: (principalId: string) => Promise<boolean>;
   personas?: PersonaService;
   personaHandover?: PersonaHandover;
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -772,6 +784,7 @@ export interface AppDeps {
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
+  promptSnapshots?: { delete(id: string): Promise<void> };
   signals?: RunSignalStore;
   settleTreeWakes?: (root: Session, botRunsOnly?: boolean) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
@@ -805,6 +818,7 @@ export interface AppDeps {
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
+  continueApproval?: import("../triggers/approval-continuation.ts").ApprovalContinuation;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
   contextRequests: DurableMap<SurfaceContextRequest>;
@@ -818,7 +832,7 @@ export interface AppDeps {
   surfaces: SurfaceRegistry;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
-  ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
+  ambientCursors?: DurableMap<{ lastJudgedAt: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   errors?: ErrorLog;
   ackEmojiPicks?: AckEmojiPickStore;
@@ -862,6 +876,7 @@ interface OpenedFile {
   mimetype: string;
   sizeBytes: number;
   stream: Readable;
+  range?: ByteRange;
 }
 
 export interface ScopeApp {

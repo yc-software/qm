@@ -31,6 +31,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/personas", "/v1/personas"],
   ["GET /api/personas/:id", "/v1/personas/:id"],
   ["GET /api/personas/:id/versions", "/v1/personas/:id/versions"],
+  ["GET /api/personas/:id/slack", "/v1/personas/:id/slack"],
   ["GET /api/skills", "/v1/skills"],
   ["GET /api/skills/:id", "/v1/skills/:id"],
   ["GET /api/memory", "/v1/memory"],
@@ -103,15 +104,24 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["PUT /api/channel-header-pin", "/v1/channel-header-pin"],
   ["POST /api/personas/:id/credentials", "/v1/personas/:id/credentials"],
   ["DELETE /api/personas/:id/credentials/:grantId", "/v1/personas/:id/credentials/:grantId"],
+  ["POST /api/personas/:id/slack/create", "/v1/personas/:id/slack/create"],
+  ["PUT /api/personas/:id/slack", "/v1/personas/:id/slack"],
+  ["DELETE /api/personas/:id/slack", "/v1/personas/:id/slack"],
   ["GET /api/files/by-name/content", "/v1/files/by-name/content"],
   ["GET /api/files/:id/content", "/v1/files/:id/content"],
   ["GET /api/files/:id/content/:name", "/v1/files/:id/content"],
   ["GET /api/playgrounds/:id", "/v1/playgrounds/:id"],
   ["POST /api/turn", "/v1/web/turn"],
+  ["DELETE /api/ephemeral", "/v1/web/ephemeral"],
   ["POST /api/approvals/:requestId", "/v1/web/approvals/:requestId"],
   ["POST /api/runs/:id/signal", "/v1/web/runs/:id/signal"],
+  ["POST /api/desktop/calls/:callId/claim", "/v1/web/desktop/calls/:callId/claim"],
+  ["POST /api/desktop/calls/:callId/result", "/v1/web/desktop/calls/:callId/result"],
   ["GET /api/deliveries/events", "/v1/web/events"],
   ["GET /me", "/v1/web/me"],
+  ["GET /api/push", "/v1/web/push"],
+  ["PUT /api/push/subscription", "/v1/web/push/subscription"],
+  ["DELETE /api/push/subscription", "/v1/web/push/subscription"],
   ["POST /api/runs/:id/withdraw", "/v1/runs/:id/withdraw"],
   ["GET /api/composio/callback", "/v1/composio/callback"],
   ["GET /api/dictation", "/v1/web/dictation"],
@@ -150,6 +160,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/apps/:id/archive", "/v1/apps/:id/archive"],
   ["POST /api/apps/:id/restore", "/v1/apps/:id/restore"],
   ["POST /api/webhooks", "/v1/webhooks"],
+  ["POST /api/webhooks/:id/update", "/v1/webhooks/:id/update"],
   ["POST /api/webhooks/:id/disable", "/v1/webhooks/:id/disable"],
   ["POST /api/webhooks/:id/enable", "/v1/webhooks/:id/enable"],
   ["POST /api/blobs", "/v1/web/blobs"],
@@ -256,7 +267,8 @@ function misconfiguration(deps: BrowserLaneDeps): string | null {
 async function isAdmin(deps: ServerDeps, tenant: Tenant | undefined, principalId: string): Promise<boolean> {
   if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
   if (!tenant) throw new Error("No tenant is bound to this request");
-  return (await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" })).isAdmin;
+  const status = await deps.admin.adminStatusOf(tenant, { id: principalId, type: "internal" });
+  return status.isAdmin && status.role !== "owner";
 }
 
 export async function browserIdentity(

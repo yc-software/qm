@@ -1,4 +1,4 @@
-import { isoFromTs, messageTag, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { isoFromTs, messageTag, speakerAttrs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 
 export interface WakeMessage {
   ts: string;
@@ -31,13 +31,14 @@ function senderRole(m: WakeMessage): "agent" | "bot" | "human" {
 }
 
 function tagMessage(m: WakeMessage, trigger = !!m.trigger): string {
+  const from = senderRole(m);
   return (
     "    " +
     messageTag(
       {
         id: m.ts,
-        from: senderRole(m),
-        ...(m.authorName ? { author: m.authorName } : {}),
+        from,
+        ...speakerAttrs(m.authorName, from),
         ...(m.authorId ? { authorId: m.authorId } : {}),
         ...(isoFromTs(m.ts) ? { sentAt: isoFromTs(m.ts) } : {}),
         ...(m.thread ? { thread: m.thread } : {}),

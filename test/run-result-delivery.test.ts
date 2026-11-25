@@ -540,3 +540,27 @@ test("runResultDelivery notes a reply the reply check retracted and rewrote", ()
   assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
   assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
 });
+
+test("an approved automation replay delivers its result to origin.destination unless surfaceTools handled it", () => {
+  const destination = { type: "slack", target: "C1" };
+  const req = {
+    ...turn("digest"),
+    surface: "cron",
+    origin: { kind: "automation" as const, destination },
+    approval: { requestId: "a-1", approved: true, scope: "once" as const },
+  };
+  assert.deepEqual(runResultDelivery(run({ request: req }))?.destination, destination);
+  assert.equal(runResultDelivery(run({ request: { ...req, surfaceTools: true } })), null);
+  assert.equal(runResultDelivery(run({ request: { ...req, approval: undefined } })), null);
+});
+
+test("an approval continuation started by a trigger leaves its reply to the trigger's own delivery", () => {
+  const destination = { type: "slack", target: "D1" };
+  const req = {
+    ...turn("set it"),
+    surface: "approval",
+    origin: { kind: "automation" as const, fire: true as const, destination },
+    approval: { requestId: "a-2", approved: true, scope: "once" as const },
+  };
+  assert.equal(runResultDelivery(run({ request: req, result: { status: "ok", reply: "done" } })), null);
+});

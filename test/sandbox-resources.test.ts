@@ -25,6 +25,8 @@ import { createPostgresProcessRegistry } from "../src/processes/process-registry
 import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
+import { startedBy } from "./support/live-run.ts";
+import { sleep } from "../src/util/async.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -343,8 +345,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     scopeId: "personal:alice",
     memoryScopeId: "personal:alice",
     transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
+    turnSessionKey: "s",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
@@ -679,7 +680,8 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const registry = createPostgresProcessRegistry(url);
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -698,7 +700,8 @@ test("retirement waits for background startup to commit its live registry row", 
     await release.promise;
     return register(row);
   };
-  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
+  const alice = await startedBy(url, "alice");
+  const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0, ...alice });
   const starting = broker.start(handle, "sleep 60", "Run background tests");
   await entering.promise;
   let destroyed = false;
@@ -706,7 +709,11 @@ test("retirement waits for background startup to commit its live registry row", 
     destroyed = true;
   };
   const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
-  release.resolve();
+  try {
+    assert.equal(await Promise.race([retiring.then(() => "retired"), sleep(100).then(() => "waiting")]), "waiting");
+  } finally {
+    release.resolve();
+  }
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
   assert.equal((await registry.get("job"))?.sandboxId, record.id);
@@ -949,7 +956,7 @@ test("concurrent routed commands hold no Postgres session connection while they 
   }
 });
 
-test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+test("a verified speaker's current turn can create only its own new scope computer without directory mutations", async () => {
   const { resources, router } = fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   await resources.initialize();
@@ -1033,8 +1040,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
       scopeId: "personal:alice",
       memoryScopeId: "personal:alice",
       transferId: runId,
-      turnSessionDir: `turn/${sessionId}`,
-      turnFilesDir: `turn/${sessionId}/${runId}`,
+      turnSessionKey: sessionId,
       connectorEnv: {},
       visibleSkills: [],
       visibleSkillsForTurn: async () => [],
@@ -1066,8 +1072,7 @@ test("same-name skills from distinct sources keep their materialized assets sepa
     scopeId: "personal:alice",
     memoryScopeId: "personal:alice",
     transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
+    turnSessionKey: "s",
     connectorEnv: {},
     visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
       sources.map((source) => ({

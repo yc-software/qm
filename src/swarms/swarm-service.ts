@@ -1137,7 +1137,6 @@ export function createSwarmService(deps: {
         input.surface !== "swarm" ||
         input.deliveryTarget ||
         input.surfaceTools ||
-        input.origin.useOwnerKeychain ||
         !expected ||
         !matchesDispatch(input, expected)
       )

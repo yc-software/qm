@@ -34,12 +34,23 @@ const crons = [
 ];
 
 const patches: unknown[] = [];
+let rejectPatch: string | null = null;
+let releaseRuns: (() => void) | null = null;
+let holdRuns = false;
 
 const { vite, close } = await browserEnv({
   dom: { url: "http://localhost/crons" },
   fetch: (input, init) => {
     const path = String(input);
-    if (init?.method === "PATCH") patches.push(JSON.parse(String(init.body)));
+    if (init?.method === "PATCH") {
+      patches.push(JSON.parse(String(init.body)));
+      if (rejectPatch) return Promise.resolve(Response.json({ error: "bad", message: rejectPatch }, { status: 400 }));
+    }
+    if (path.includes("/runs") && holdRuns) {
+      return new Promise<Response>((resolve) => {
+        releaseRuns = () => resolve(Response.json({ runs: [] }));
+      });
+    }
     if (path === "/api/contexts") return Promise.resolve(Response.json({ contexts: [] }));
     if (path === "/api/crons") return Promise.resolve(Response.json({ crons }));
     return Promise.resolve(Response.json({}));
@@ -80,4 +91,46 @@ test("the schedule picker saves a weekday preset as a calendar schedule in the c
   main.querySelector<HTMLFormElement>(".cron-schedule-form")!.requestSubmit();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(patches.at(-1), { schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" } });
+});
+
+test("cron detail menu, delete dialog Escape/reset, failed notice, unsaved edit, and list disable", async () => {
+  document.body.innerHTML = '<div id="app"></div><main></main>';
+  const main = document.querySelector("main")!;
+  const { appState } = await vite.ssrLoadModule("/src/shell.ts");
+  const { openCronById, renderCronsPage, resetActiveCron } = await vite.ssrLoadModule("/src/crons.ts");
+  appState.currentView = "crons";
+  appState.mainEl = main;
+  appState.me = { user: "tester", org: "test" };
+  holdRuns = true;
+  openCronById("c1");
+  await renderCronsPage();
+  assert.ok(main.querySelector(".cron-more")?.classList.contains("menu-control"));
+  main.querySelector<HTMLButtonElement>(".cron-title-button")!.click();
+  main.querySelector<HTMLInputElement>('.cron-title-form input[name="title"]')!.value = "Unsaved";
+  holdRuns = false;
+  releaseRuns?.();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(main.querySelector<HTMLInputElement>('.cron-title-form input[name="title"]')?.value, "Unsaved");
+  main.querySelector<HTMLButtonElement>(".cron-more .menu-button")!.click();
+  [...main.querySelectorAll<HTMLButtonElement>(".cron-more .menu-option")].at(-1)!.click();
+  main
+    .querySelector<HTMLElement>(".cron-edit-dialog")!
+    .dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(main.querySelector(".cron-edit-dialog"), null);
+  main.querySelector<HTMLButtonElement>(".cron-more .menu-button")!.click();
+  [...main.querySelectorAll<HTMLButtonElement>(".cron-more .menu-option")].at(-1)!.click();
+  resetActiveCron();
+  openCronById("c1");
+  await renderCronsPage();
+  assert.equal(main.querySelector(".cron-edit-dialog"), null);
+  rejectPatch = "schedule.cron must be a 5-field cron expression";
+  main.querySelector<HTMLButtonElement>(".cron-when .btn")!.click();
+  main.querySelector<HTMLFormElement>(".cron-schedule-form")!.requestSubmit();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(main.querySelector(".action-notice")?.textContent?.trim(), rejectPatch);
+  rejectPatch = null;
+  await renderCronsPage();
+  main.querySelector<HTMLButtonElement>('.cron-row-actions button[aria-label="Disable cron"]')!.click();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(main.querySelector(".cron-detail"), null);
 });

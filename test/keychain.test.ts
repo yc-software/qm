@@ -1141,7 +1141,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
     const owner = "HANDLE_OWNER";
-    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const cap = await capFor(owner, scopeId("personal", owner), { internalAudience: true, personAuthority: true });
     const saved = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1319,40 +1319,29 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
   });
-  it("replacing a saved login needs the owner's running turn or a one-time ticket that turn started", async () => {
+  it("an owner's fire replaces their saved login, but work a bot started cannot", async () => {
     const owner = "RELOGIN_OWNER";
-    const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
-    const save = (secret: string, cap: string, loginTicket?: string) =>
-      post("/v1/keychain/credentials", { service: "gh", secret, ...(loginTicket ? { loginTicket } : {}) }, cap);
+    const later = await capFor(owner, undefined, {
+      internalAudience: true,
+      personAuthority: true,
+      threadRef: "cron:relogin:fire:1",
+    });
+    const save = (secret: string, cap: string) => post("/v1/keychain/credentials", { service: "gh", secret }, cap);
     const { credential } = (await (await save("first", later)).json()) as any;
     const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
 
-    assert.equal((await save("swapped", later)).status, 403);
     assert.equal((await save("swapped", await capFor(owner, undefined, { botActor: true }))).status, 403);
-    assert.equal((await post("/v1/keychain/login-tickets", { service: "gh" }, later)).status, 403);
     assert.equal(await secret(), "first");
-
-    const live = await capFor(owner, undefined, liveRunClaims(owner));
-    const { dropId } = (await (await post("/v1/keychain/drops", { service: "gh", purpose: "p" }, live)).json()) as any;
-    assert.equal((await save("swapped", later, dropId)).status, 403);
-    assert.equal((await built.secretDrops!.peek(dropId)).ok, true);
-    const { loginTicket } = (await (await post("/v1/keychain/login-tickets", { service: "GH" }, live)).json()) as any;
-    const racing = await Promise.all([save("relogin", later, loginTicket), save("relogin", later, loginTicket)]);
-    assert.deepEqual(racing.map((response) => response.status).sort(), [200, 403]);
+    assert.equal((await save("relogin", later)).status, 200);
     assert.equal(await secret(), "relogin");
-    assert.equal((await save("typed", live)).status, 200);
-    assert.equal(await secret(), "typed");
-
     const ended = await capFor(owner, undefined, { ...liveRunClaims(owner), runId: "ended-run" });
-    assert.equal((await save("swapped", ended)).status, 403);
-    const next = (await (await post("/v1/keychain/login-tickets", { service: "gh" }, live)).json()) as any;
-    assert.equal((await save("after the turn", ended, next.loginTicket)).status, 200);
+    assert.equal((await save("after the turn", ended)).status, 200);
     assert.equal(await secret(), "after the turn");
   });
 
   it("a credential's writer lease admits one holder until it is released or ends", async () => {
     const owner = "LEASE_OWNER";
-    const cap = await capFor(owner, undefined, { triggered: true });
+    const cap = await capFor(owner);
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "kernel-profile", envKey: "KERNEL_PROFILE", secret: "p" }, cap)
     ).json()) as any;
@@ -1728,7 +1717,7 @@ test("manifest merges credential representations without conflating login identi
   const input: Parameters<typeof renderKeychainManifest>[0] = {
     scopeId: "channel:C1",
     conversationKind: "channel",
-    openSpeakerKeychain: true,
+    openOwnerKeychain: true,
     actorId: "alice@example.com",
     members: [{ id: "alice@example.com", displayName: "Alice" }],
     entriesByOwner: new Map([["alice@example.com", [first, second]]]),

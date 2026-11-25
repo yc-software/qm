@@ -81,7 +81,7 @@ const resource = (id: string, backend: SandboxBackendName, ownerScopeId = "perso
 function stubResources(defaults: Record<string, SandboxResource | null>, extra: SandboxResource[] = []) {
   const byId = new Map<string, SandboxResource>();
   for (const r of [...Object.values(defaults), ...extra]) if (r) byId.set(r.id, r);
-  const locks: Array<{ id: string; exclusive: boolean }> = [];
+  const locks: Array<{ id: string; lock?: "shared" | "exclusive" }> = [];
   let held = 0;
   const stub = {
     locks,
@@ -93,8 +93,8 @@ function stubResources(defaults: Record<string, SandboxResource | null>, extra: 
       if (!r) throw new Error(`sandbox ${id} not found`);
       return r;
     },
-    use: async <T>(id: string, action: () => Promise<T>, exclusive = false) => {
-      locks.push({ id, exclusive });
+    use: async <T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive") => {
+      locks.push({ id, lock });
       held++;
       try {
         return await action();
@@ -128,7 +128,7 @@ test("provision uses the scope's default resource: backend, backing scope, lock,
   assert.equal(h.resourceId, "r1");
   assert.equal(h.scopeId, "personal:a");
   assert.equal(sprites.provisioned[0]!.owner, "sandbox:r1", "owner remapped to the backing scope");
-  assert.deepEqual(resources.locks, [{ id: "r1", exclusive: false }]);
+  assert.deepEqual(resources.locks, [{ id: "r1", lock: undefined }]);
   assert.deepEqual(aws.calls, []);
 });
 
@@ -335,8 +335,8 @@ test("parking backends lock the computer exclusively only to park it, not to kee
   await router.teardown(h, { keepWarm: true });
   await router.teardown(h);
   assert.deepEqual(resources.locks.slice(1), [
-    { id: "r1", exclusive: false },
-    { id: "r1", exclusive: true },
+    { id: "r1", lock: undefined },
+    { id: "r1", lock: "exclusive" },
   ]);
 });
 
@@ -351,8 +351,8 @@ test("computer status/restart target the resource's backing scope under its lock
     ["computerStatus:sandbox:s", "restartComputer:sandbox:s"],
   );
   assert.deepEqual(resources.locks, [
-    { id: "s", exclusive: false },
-    { id: "s", exclusive: true },
+    { id: "s", lock: undefined },
+    { id: "s", lock: "exclusive" },
   ]);
 });
 
@@ -377,52 +377,4 @@ test("computer status/restart on a backend without them is a typed refusal", asy
   });
   await assert.rejects(async () => router.computerStatus!("personal:a"), CapabilityUnsupportedError);
   await assert.rejects(async () => router.restartComputer!("personal:a"), CapabilityUnsupportedError);
-});
-
-for (const combined of [true, false]) {
-  test(`cleanup and listing share one resource lock (provider combined=${combined})`, async () => {
-    const backend = fakeBackend("sprites");
-    const resources = stubResources({});
-    const calls: string[] = [];
-    backend.removeDir = async (_h, path) => {
-      assert.ok(resources.isLocked());
-      calls.push(`remove:${path}`);
-    };
-    backend.listDir = async (_h, path) => {
-      assert.ok(resources.isLocked());
-      calls.push(`list:${path}`);
-      return ["keep/file"];
-    };
-    if (combined)
-      backend.removeDirAndList = async (_h, remove, list) => {
-        assert.ok(resources.isLocked());
-        calls.push(`combined:${remove}:${list}`);
-        return ["keep/file"];
-      };
-    const router = createSandboxRouter({ backends: { sprites: backend }, defaultBackend: "sprites", resources });
-    assert.deepEqual(
-      await router.removeDirAndList!(
-        { id: "box", rootDir: "/workspace", backend: "sprites", resourceId: "resource" },
-        "old",
-        "keep",
-      ),
-      ["keep/file"],
-    );
-    assert.equal(resources.locks.length, 1);
-    assert.deepEqual(calls, combined ? ["combined:old:keep"] : ["remove:old", "list:keep"]);
-  });
-}
-
-test("removeDirAndList keeps the removal strict but treats a failed listing as nothing to clean", async () => {
-  const r = resource("r1", "sprites");
-  const { router, sprites } = build({ "personal:a": r });
-  const h = await router.provision("personal:a");
-  sprites.listDir = async () => {
-    throw new Error("find: Permission denied");
-  };
-  assert.deepEqual(await router.removeDirAndList!(h, "turn/current", "turn"), []);
-  sprites.removeDir = async () => {
-    throw new Error("rm: read-only file system");
-  };
-  await assert.rejects(router.removeDirAndList!(h, "turn/current", "turn"), /read-only file system/);
 });
