@@ -6,6 +6,7 @@ import { mock, test } from "node:test";
 import vm from "node:vm";
 
 const context = { window: {} };
+const electronNet = {};
 const electronApp = {};
 vm.runInNewContext(await readFile(new URL("../segments.js", import.meta.url), "utf8"), context);
 
@@ -44,7 +45,7 @@ test("meeting detection counts only listed meeting apps, including browser helpe
   mock.module("electron", {
     namedExports: {
       app: electronApp,
-      net: {},
+      net: electronNet,
       Menu: {},
       Notification: class {},
       systemPreferences: {},
@@ -62,16 +63,22 @@ test("meeting detection counts only listed meeting apps, including browser helpe
     ]),
     "Google Chrome",
   );
-  assert.equal(meetingApp([{ bundle_id: "com.apple.WebKit.GPU", pid: 5 }]), "Safari");
+  assert.equal(meetingApp([{ bundle_id: "com.apple.WebKit.GPU", pid: 5 }]), undefined);
   assert.equal(meetingApp([{ bundle_id: "com.qm.desktop.helper", pid: 6 }]), undefined);
   assert.equal(meetingApp([]), undefined);
 });
 
-test("a corrupt transcription model is discarded so the next recording downloads it again", async () => {
+test("a saved transcription model of the wrong size is downloaded again", async () => {
   const folder = await mkdtemp(path.join(tmpdir(), "qm-models-"));
   electronApp.getPath = () => folder;
   await writeFile(path.join(folder, "ggml-large-v3-turbo-q5_0.bin"), "truncated");
-  const { discardCorruptModels } = await import("../transcription.mjs");
-  assert.equal(await discardCorruptModels(), true);
-  assert.deepEqual(await readdir(folder), []);
+  const fetched = [];
+  electronNet.fetch = async (url) => {
+    fetched.push(url);
+    return { ok: false, status: 404 };
+  };
+  const { downloadModel } = await import("../transcription.mjs");
+  await assert.rejects(downloadModel(), { message: "Hugging Face answered HTTP 404" });
+  assert.equal(fetched.length, 1);
+  assert.deepEqual(await readdir(folder), ["ggml-large-v3-turbo-q5_0.bin"]);
 });

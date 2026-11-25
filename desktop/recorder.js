@@ -54,7 +54,6 @@
     const timer = setInterval(() => {
       analyser.getFloatTimeDomainData(samples);
       const level = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
-      host.level(speaker, level);
       const segment = cut(Date.now(), level > loudness);
       if (!segment) return;
       finish(current, segment);

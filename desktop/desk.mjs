@@ -144,10 +144,10 @@ export function startWhisper(models) {
     for (const reply of waiting.splice(0)) reply.reject(new Error(failure));
   };
   proc.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-2000)));
-  proc.stdin.on("error", () => {});
+  proc.stdin.on("error", (error) => console.error("desk whisper input failed", error));
   proc.on("error", (error) => end(error.message));
   proc.on("exit", (code, signal) =>
-    end(stderr.trim().split("\n").at(-1) || `desk whisper exited with ${code ?? signal}`),
+    end(`desk whisper exited with ${code ?? signal}${stderr.trim() ? `: ${stderr.trim()}` : ""}`),
   );
   createInterface({ input: proc.stdout }).on("line", (line) => {
     const reply = waiting.shift();

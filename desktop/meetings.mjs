@@ -1,11 +1,11 @@
 import { app, Menu, Notification, systemPreferences } from "electron";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startWhisper, watchMicrophone } from "./desk.mjs";
 import { registerRecorder, startCapture } from "./recorder.mjs";
-import { discardCorruptModels, downloadModel } from "./transcription.mjs";
+import { downloadModel } from "./transcription.mjs";
 
 const meetingApps = [
   ["us.zoom.", "Zoom"],
@@ -27,14 +27,12 @@ const meetingApps = [
   ["com.vivaldi.Vivaldi", "Vivaldi"],
   ["org.mozilla.firefox", "Firefox"],
   ["com.apple.Safari", "Safari"],
-  ["com.apple.WebKit.GPU", "Safari"],
 ];
 const trackNames = { me: "Microphone", others: "Computer audio" };
 const meetingEndGrace = 20_000;
-const silenceLimit = 15 * 60_000;
-const othersQuietWarning = 2 * 60_000;
-const quitFlushWait = 10_000;
 const promptLines = 12;
+const transient = new Set([408, 429, 500, 503, 504]);
+const unusableSegment = new Set(["empty_audio", "invalid_audio", "unsupported_audio", "dictation_rejected"]);
 
 export function meetingApp(apps) {
   for (const { bundle_id: bundle } of apps) {
@@ -87,19 +85,17 @@ function render() {
         visible: item.visible,
         enabled: item.enabled,
         ...(item.label && { label: item.label }),
-        ...(item.type && { checked: item.checked }),
+        ...("checked" in item && { checked: item.checked }),
       });
   }
 }
 
 function prepareModel() {
-  model ??= { progress: 0 };
+  model ??= {};
   model.ready ??= (async () => {
     for (let delay = 5000; local; delay = Math.min(delay * 2, 300_000)) {
       try {
-        model.file = await downloadModel((share) => {
-          model.progress = Math.floor(share * 100);
-        });
+        model.file = await downloadModel();
         model.problem = undefined;
         return model.file;
       } catch (error) {
@@ -135,32 +131,26 @@ async function readSettings() {
   }
 }
 
-async function explain(response) {
-  const text = await response.text().catch((error) => error.message);
-  try {
-    return JSON.parse(text).message ?? JSON.parse(text).error ?? text;
-  } catch {
-    return text;
-  }
-}
-
-async function call(current, run) {
+async function call(current, pathname, run) {
   for (let delay = 1000; ; delay = Math.min(delay * 2, 60_000)) {
     let response;
     let problem;
     try {
-      response = await run(current.controller.signal);
+      response = await run();
     } catch (error) {
       problem = error.message;
     }
     if (response?.ok) return response;
     if (response) {
-      problem = `HTTP ${response.status}: ${await explain(response)}`;
-      if (response.status < 500 && response.status !== 408 && response.status !== 429)
-        throw Object.assign(new Error(problem), {
-          status: response.status,
-          segmentOnly: ![401, 403, 404].includes(response.status),
-        });
+      const text = await response.text().catch((error) => `unreadable body: ${error.message}`);
+      let code;
+      try {
+        ({ error: code } = JSON.parse(text));
+      } catch {
+        code = undefined;
+      }
+      problem = `${pathname} answered HTTP ${response.status}: ${text}`;
+      if (!transient.has(response.status)) throw Object.assign(new Error(problem), { code });
     }
     if (current.uploadProblem !== problem) console.error("QM meeting upload retrying", problem);
     current.uploadProblem = problem;
@@ -179,7 +169,7 @@ function fail(current, error) {
 async function transcribeHere(current, pcm, prompt) {
   if (typeof pcm === "string")
     throw Object.assign(new Error(`The audio could not be decoded (${pcm})`), { segmentOnly: true });
-  const { signal } = current.controller;
+  const { signal } = current.quitting;
   const file = await Promise.race([
     prepareModel(),
     new Promise((_, reject) => {
@@ -188,33 +178,24 @@ async function transcribeHere(current, pcm, prompt) {
       signal.addEventListener("abort", quit, { once: true });
     }),
   ]);
-  const whisper = (current.whisper ??= startWhisper(file));
-  try {
-    return await whisper.transcribe(pcm, prompt);
-  } catch (error) {
-    if (error.segmentOnly) throw error;
-    whisper.discarded ??= discardCorruptModels().then((discarded) => {
-      if (discarded) model = current.whisper = undefined;
-      return discarded;
-    });
-    if (!(await whisper.discarded)) throw error;
-    return transcribeHere(current, pcm, prompt);
-  }
+  current.whisper ??= startWhisper(file);
+  return current.whisper.transcribe(pcm, prompt);
 }
 
 async function transcribeOnline(current, bytes) {
   try {
-    const response = await call(current, (signal) => request("/api/dictation", "POST", signal, "audio/webm", bytes));
+    const response = await call(current, "/api/dictation", () =>
+      request("/api/dictation", "POST", undefined, "audio/webm", bytes),
+    );
     return (await response.json()).text ?? "";
   } catch (error) {
-    if (error.status === 400 && error.message.includes("empty_audio")) return "";
+    if (error.code === "empty_audio") return "";
+    if (unusableSegment.has(error.code)) error.segmentOnly = true;
     throw error;
   }
 }
 
 function upload(current, speaker, at, bytes) {
-  current.lastSpeech = Date.now();
-  if (speaker === "others") current.othersHeard = true;
   current.uploads[speaker] = current.uploads[speaker].then(async () => {
     if (current.failure) return;
     try {
@@ -226,12 +207,12 @@ function upload(current, speaker, at, bytes) {
         current.local ? await transcribeHere(current, bytes, prompt) : await transcribeOnline(current, bytes)
       ).trim();
       if (!text) return;
-      const line = { at, speaker, text };
-      current.lines.push(line);
-      await appendFile(current.file, transcriptLine(line));
+      current.lines.push({ at, speaker, text });
+      await writeFile(current.file, transcript(current));
     } catch (error) {
       if (!error.segmentOnly) return fail(current, error);
-      current.dropped = { count: (current.dropped?.count ?? 0) + 1, problem: error.message };
+      console.error("QM skipped a meeting segment", error);
+      current.dropped.push(error.message);
     }
   });
 }
@@ -263,32 +244,12 @@ function startRecording(detected) {
     detected: Boolean(detected),
     local,
     lines: [],
-    lastSpeech: startedAt,
+    dropped: [],
     tracks: {},
     uploads: { me: Promise.resolve(), others: Promise.resolve() },
-    controller: new AbortController(),
     quitting: new AbortController(),
   };
   recording = current;
-  current.ticker = setInterval(() => {
-    if (Date.now() - current.lastSpeech > silenceLimit) {
-      current.silent = true;
-      void stopRecording();
-    }
-    if (
-      current.capturing &&
-      !current.othersHeard &&
-      !current.othersQuiet &&
-      !current.tracks.others &&
-      Date.now() - current.capturing > othersQuietWarning
-    ) {
-      current.othersQuiet = true;
-      notify(
-        "No sound from your computer",
-        "QM has heard nothing from your computer for 2 minutes. If others are talking, allow QM in System Settings › Privacy & Security › Screen & System Audio Recording.",
-      );
-    }
-  }, 1000);
   render();
   void capture(current).catch((error) => fail(current, error));
   return current;
@@ -299,11 +260,9 @@ async function capture(current) {
   if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("microphone") !== "granted")
     await systemPreferences.askForMediaAccess("microphone");
   if (recording !== current || current.stopping) return;
-  current.capturing = Date.now();
   current.stopCapture = startCapture({
     segment: (speaker, at, bytes) => upload(current, speaker, at, bytes),
     track: (speaker, problem) => trackProblem(current, speaker, problem),
-    level: () => {},
     local: current.local,
   });
   if (current.detected && !meetingNow) endMeetingSoon();
@@ -314,7 +273,6 @@ function stopRecording() {
   if (!current) return Promise.resolve();
   if (current.stopping) return current.stopping;
   clearTimeout(meetingEnded);
-  clearInterval(current.ticker);
   current.stopping = finishRecording(current, Date.now());
   render();
   return current.stopping;
@@ -324,7 +282,7 @@ async function summarize(current, endedAt) {
   const bytes = Buffer.from(transcript(current));
   const sha = createHash("sha256").update(bytes).digest("hex");
   const json = async (pathname, body, type = "application/json") =>
-    (await call(current, (signal) => request(pathname, "POST", signal, type, body))).json();
+    (await call(current, pathname, () => request(pathname, "POST", undefined, type, body))).json();
   const blob = await json(`/api/blobs?sha=${sha}`, bytes, "application/octet-stream");
   const scopeId = `personal:${user}`;
   const { session } = await json("/api/sessions", { principalId: user, scopeId });
@@ -354,28 +312,25 @@ async function finishRecording(current, endedAt) {
   recording = undefined;
   render();
   const kept = `The transcript is kept at ${current.file}.`;
-  const dropped = current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`;
+  const dropped =
+    current.dropped.length > 0 &&
+    `${plural(current.dropped.length)} could not be used: ${[...new Set(current.dropped)].join(" ")}`;
   if (current.failure && current.lines.length)
     notify("Meeting not summarized", [current.failure, kept, dropped].filter(Boolean).join(" "));
   else if (current.failure) notify("Meeting recording failed", current.failure);
   else if (!opened) notify("Nothing was transcribed", [dropped].filter(Boolean).join(" ") || "QM heard no speech.");
   else
-    notify(
-      "Meeting recorded",
-      [current.silent && "Stopped after 15 minutes without speech.", "QM is summarizing it.", dropped]
-        .filter(Boolean)
-        .join(" "),
-      { label: "Open", run: () => openSession(opened) },
-    );
+    notify("Meeting recorded", ["QM is summarizing it.", dropped].filter(Boolean).join(" "), {
+      label: "Open",
+      run: () => openSession(opened),
+    });
 }
 
 export async function quitRecording() {
   const current = recording;
   if (!current) return;
   current.quitting.abort();
-  const deadline = setTimeout(() => current.controller.abort(), quitFlushWait);
   await stopRecording();
-  clearTimeout(deadline);
 }
 
 export const isRecording = () => Boolean(recording);
@@ -396,7 +351,7 @@ function microphoneChanged(apps) {
   if (began && !recording) {
     if (automatic) {
       startRecording(name);
-      notify(`Recording your ${name} meeting`, "Stop it from the QM menu.");
+      notify(`Recording your ${name} meeting`, "Stop it from File › Stop Recording.");
     } else
       notify(`${name} meeting detected`, `${name} is using the microphone.`, {
         label: "Record",
@@ -421,6 +376,7 @@ export function meetingMenu() {
       enabled: !recording?.stopping,
       click: () => void stopRecording(),
     },
+    { id: "meeting-settings", type: "separator", visible: enabled },
     {
       id: "meeting-local",
       label: "Transcribe on This Mac",
@@ -459,18 +415,19 @@ export function configureMeetings(options) {
 export async function refreshMeetings() {
   if (recording) return;
   const check = ++checks;
-  let next = false;
+  let next;
   let who;
   try {
-    const response = await request("/api/meetings", "GET", AbortSignal.timeout(15_000));
-    const body = response.ok ? await response.json() : {};
-    next = body.enabled === true;
-    who = body.user ?? undefined;
+    const response = await request("/api/meetings", "GET");
+    if (!response.ok) throw new Error(`/api/meetings answered HTTP ${response.status}: ${await response.text()}`);
+    ({ enabled: next, user: who } = await response.json());
   } catch (error) {
     console.error("QM could not check meeting recording", error);
+    return;
   }
   if (check !== checks || recording) return;
   user = who;
+  next = next === true;
   if (next === enabled) return;
   enabled = next;
   if (enabled) {

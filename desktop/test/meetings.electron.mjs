@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { app, BrowserWindow, Menu } from "electron";
 import { mkdtempSync, rmSync } from "node:fs";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, truncate, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,8 +30,13 @@ app.commandLine.appendSwitch("use-file-for-fake-audio-capture", wav);
   header.writeUInt32LE(samples.byteLength, 40);
   await writeFile(wav, Buffer.concat([header, Buffer.from(samples.buffer)]));
   await writeFile(path.join(directory, "meetings.json"), JSON.stringify({ automatic: true, local: false }));
-  await writeFile(path.join(directory, "ggml-large-v3-turbo-q5_0.bin"), "model");
-  await writeFile(path.join(directory, "ggml-silero-v5.1.2.bin"), "vad");
+  for (const [name, size] of [
+    ["ggml-large-v3-turbo-q5_0.bin", 574_041_195],
+    ["ggml-silero-v5.1.2.bin", 885_098],
+  ]) {
+    await writeFile(path.join(directory, name), "");
+    await truncate(path.join(directory, name), size);
+  }
   const desk = path.join(directory, "desk.mjs");
   await writeFile(
     desk,
@@ -83,7 +88,8 @@ setInterval(() => {}, 1000);
         failedOnce = true;
         return reply(503, { error: "busy" });
       }
-      if (++speechCount === 4) return reply(422, { error: "unreadable", message: "The audio could not be read." });
+      if (++speechCount === 4)
+        return reply(400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
       return reply(200, { text: "hello" });
     }
     if (url.pathname === "/api/blobs") {

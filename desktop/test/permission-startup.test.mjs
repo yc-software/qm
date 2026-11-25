@@ -44,8 +44,7 @@ test("pending permission setup takes activation and does not open a workspace af
       configureMeetings() {},
       refreshMeetings: async () => {},
       meetingMenu: () => [],
-      startMeeting() {},
-      stopRecording() {},
+
       isRecording: () => false,
       quitRecording() {},
     },
