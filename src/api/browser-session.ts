@@ -172,6 +172,8 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/inbox/sync-cron", "/v1/loops/inbox/sync-cron"],
   ["GET /api/inbox/sent", "/v1/connectors/gmail/sent"],
   ["GET /api/inbox/sent/:messageId", "/v1/connectors/gmail/sent/:messageId"],
+  ["GET /api/calendar/events", "/v1/connectors/google-calendar/events"],
+  ["PATCH /api/calendar/events/:calendarId/:eventId", "/v1/connectors/google-calendar/events/:calendarId/:eventId"],
   ["GET /api/loops", "/v1/loops"],
   ["POST /api/loops", "/v1/loops"],
   ["GET /api/loops/:id", "/v1/loops/:id"],
