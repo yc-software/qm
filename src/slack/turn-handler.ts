@@ -336,6 +336,7 @@ export function createTurnHandler(deps: {
       let detectContext: string | undefined;
       let detectOpener: string | undefined;
       let threadFiles: SlackFile[] = [];
+      let nameById: ReadonlyMap<string, string> | undefined;
       if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
         const serialize = () =>
           serializer.serializeSlackConversation(client, inc, {
@@ -361,6 +362,7 @@ export function createTurnHandler(deps: {
         if (rendered.detectOpener) detectOpener = rendered.detectOpener;
         allowedTs = rendered.allowedTs;
         threadFiles = serialized.threadFiles ?? [];
+        nameById = serialized.view.nameById;
       }
 
       const ownFiles = [...inc.files, ...threadFiles].map((f) =>
@@ -407,7 +409,7 @@ export function createTurnHandler(deps: {
           const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
           return candidates ? { deliveryCandidates: candidates } : {};
         })(),
-        text,
+        text: resolveMentions(text, nameById),
         gatewayContext,
         ...(deps.personaId ? { personaId: deps.personaId } : {}),
         ...(actor.isBot ? { botActor: true } : {}),

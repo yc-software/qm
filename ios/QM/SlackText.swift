@@ -21,7 +21,7 @@ enum SlackText {
   static func markdown(_ wire: String) -> String {
     segments(wire).map { segment in
       switch segment {
-      case .text(let text): text.replacingOccurrences(of: "<", with: "\\<")
+      case .text(let text): bold(text.replacingOccurrences(of: "<", with: "\\<"))
       case .mention(let handle): "@" + handle
       case .link(let address, let label):
         "["
@@ -30,6 +30,43 @@ enum SlackText {
       }
     }
     .joined()
+  }
+
+  private static func bold(_ text: String) -> String {
+    let chars = Array(text)
+    var out = ""
+    var index = 0
+    while index < chars.count {
+      if chars[index] == "*", let close = boldClose(chars, open: index) {
+        out += "**" + String(chars[(index + 1)..<close]) + "**"
+        index = close + 1
+      } else {
+        out.append(chars[index])
+        index += 1
+      }
+    }
+    return out
+  }
+
+  private static func boldClose(_ chars: [Character], open: Int) -> Int? {
+    let next = open + 1
+    guard !joinsWord(open > 0 ? chars[open - 1] : nil), next < chars.count,
+      !chars[next].isWhitespace, chars[next] != "*"
+    else { return nil }
+    var index = next
+    while index < chars.count, !chars[index].isNewline {
+      if chars[index] == "*" {
+        let after = index + 1 < chars.count ? chars[index + 1] : nil
+        return chars[index - 1].isWhitespace || joinsWord(after) ? nil : index
+      }
+      index += 1
+    }
+    return nil
+  }
+
+  private static func joinsWord(_ character: Character?) -> Bool {
+    guard let character else { return false }
+    return character.isLetter || character.isNumber || character == "*"
   }
 
   static func segments(_ wire: String) -> [Segment] {

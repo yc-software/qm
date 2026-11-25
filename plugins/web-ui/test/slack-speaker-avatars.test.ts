@@ -99,7 +99,7 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
     assert.deepEqual(
       rows.map((row) => [
         Boolean(row.querySelector(":scope > .speaker-label")),
-        row.querySelector(".slack-wire-text")?.textContent?.trim(),
+        row.querySelector<HTMLElement & { content?: string }>(".slack-wire-text > qm-markdown")?.content,
         row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
         row.classList.contains("continued-row"),
       ]),

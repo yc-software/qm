@@ -66,6 +66,18 @@ export function slackWireToPlain(text: string): string {
     .join("");
 }
 
+const SLACK_BOLD = /(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g;
+
+export function slackWireToMarkdown(text: string, emojiFor: (name: string) => string | null): string {
+  return splitSlackWire(text)
+    .map((seg) => {
+      if (seg.kind === "mention") return `<@${seg.handle}>`;
+      if (seg.kind === "link") return `[${seg.label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](<${seg.href}>)`;
+      return withEmoji(seg.text, emojiFor).replaceAll("<", "\\<").replace(SLACK_BOLD, "$1**$2**");
+    })
+    .join("");
+}
+
 const REACTION_DIRECTIVE = /\[\[react:[^[\]]*\]\]/gi;
 const TRAILING_OPEN_REACTION = /\[\[react:[^[\]]*$/i;
 const ANY_DIRECTIVE = /\[\[react:/i;
