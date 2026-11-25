@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { postSoul } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -20,6 +19,7 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { encodeRef, skillRef } from "../src/acl/resource-ref.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";

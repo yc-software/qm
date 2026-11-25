@@ -10,7 +10,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -45,6 +44,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);

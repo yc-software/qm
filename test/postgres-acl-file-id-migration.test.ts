@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { ACL_GRANT_MIGRATIONS, createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const BASE = process.env.DATABASE_URL;
 const skip = BASE ? false : "set DATABASE_URL (a Postgres) to run the ACL file-ID migration test";

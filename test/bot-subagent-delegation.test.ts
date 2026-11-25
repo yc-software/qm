@@ -8,7 +8,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls, stopSessionRuns } from "../src/sessions/session-syscalls.ts";
@@ -26,6 +25,7 @@ import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const bot: Principal = { id: "B1", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "U1", type: "internal", displayName: "Alice" };

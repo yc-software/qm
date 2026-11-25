@@ -6,13 +6,13 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createApp } from "../src/api/app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { createPostgresRunActivityStore } from "../src/runs/postgres-run-activity-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { ambientTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 test("ephemeral tools expose read-only memory/files/skills, scratch-only execute, and omit durable tools", () => {
   const tools = createAgentTools({ current: null }, { ephemeral: true, controlTools: true });

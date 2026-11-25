@@ -14,11 +14,11 @@ import {
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore(testDeployBackings());

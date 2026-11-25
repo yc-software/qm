@@ -15,7 +15,6 @@ import { sleep } from "../src/util/async.ts";
 import { splitToScope, sharedSkillRefused } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
@@ -25,6 +24,7 @@ import { signOffs } from "./support/signed-off-action.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import type { Tenant } from "../src/tenants/context.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 

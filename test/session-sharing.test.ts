@@ -1,6 +1,5 @@
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { Readable } from "node:stream";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -13,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 function at(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s1", seq, createdAt: seq });

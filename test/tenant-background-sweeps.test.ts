@@ -15,7 +15,6 @@ import type { ProcessSandbox, Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresFileUploadStore, type FileUpload } from "../src/files/file-upload-store.ts";
 import { createDirectFileUploads } from "../src/files/direct-file-upload.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -35,6 +34,7 @@ import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 type Pair = [string, string];
 const sorted = (rows: Pair[]): Pair[] => [...rows].sort(([l], [r]) => l.localeCompare(r));

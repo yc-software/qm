@@ -6,7 +6,6 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -17,6 +16,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
 import { sleep } from "../src/util/async.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;

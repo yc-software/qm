@@ -22,11 +22,11 @@ import {
   BlobTooLargeError,
   collectBlob,
   createLocalBlobTransferStore,
-  createMemoryBlobTransferStore,
   createS3BlobTransferStore,
   S3_PART_BYTES,
   type BlobTransferStore,
 } from "../src/persistence/blob-transfer.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 function fakeS3(now: () => number = () => Date.now(), hooks: { onAbort?: () => void } = {}) {
   const objects = new Map<string, { body: Buffer; lastModified: Date }>();

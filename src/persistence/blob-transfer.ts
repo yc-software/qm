@@ -18,7 +18,7 @@ import {
   type LifecycleRule,
 } from "@aws-sdk/client-s3";
 import { swallow, swallowAs } from "../util/errors.ts";
-import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
+import { asChunks, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, isNoSuchLifecycleConfiguration, s3Client, type S3Send } from "./s3.ts";
 
 export const MAX_BLOB_BYTES = 1_000_000_000;
@@ -346,41 +346,6 @@ export function createS3BlobTransferStore(options: S3BlobTransferOptions): BlobT
         }),
       );
       return true;
-    },
-  };
-}
-
-export function createMemoryBlobTransferStore(): BlobTransferStore {
-  const blobs = new Map<string, { data: Buffer; at: number }>();
-  return {
-    async put(source, opts) {
-      const { data, sizeBytes, sha256 } = await collectBytes(source, {
-        ...(opts?.maxBytes != null ? { maxBytes: opts.maxBytes } : {}),
-        tooLarge: () => new BlobTooLargeError(),
-      });
-      if (opts?.expectedSha256 && opts.expectedSha256 !== sha256) throw new BlobHashMismatchError();
-      const blobId = newBlobId();
-      blobs.set(blobId, { data, at: Date.now() });
-      return { blobId, sizeBytes, sha256 };
-    },
-    async open(blobId) {
-      const hit = blobs.get(blobId);
-      if (!hit) return null;
-      return { sizeBytes: hit.data.length, stream: Readable.from(hit.data) };
-    },
-    async delete(blobId) {
-      blobs.delete(blobId);
-    },
-    async sweep(maxAgeMs) {
-      const cutoff = Date.now() - maxAgeMs;
-      let removed = 0;
-      for (const [id, v] of blobs) {
-        if (v.at <= cutoff) {
-          blobs.delete(id);
-          removed++;
-        }
-      }
-      return removed;
     },
   };
 }

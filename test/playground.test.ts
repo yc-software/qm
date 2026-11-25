@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import {
   createPlaygroundArtifact,
   normalizePlaygroundTitle,
@@ -8,6 +7,7 @@ import {
 } from "../src/playgrounds/playground.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const HTML = "<!doctype html><button id='go'>Go</button><script>go.onclick=()=>go.textContent='Done'</script>";
 

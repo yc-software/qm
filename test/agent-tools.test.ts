@@ -11,7 +11,6 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -22,6 +21,7 @@ import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testSurfaces } from "./support/single-process.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {

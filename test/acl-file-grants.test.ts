@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAclStore, type GrantPersistence } from "../src/acl/acl-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { type FileArtifactRef } from "../src/files/file-artifact-store.ts";
 import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
 import type { Grant, Principal } from "../src/types.ts";
@@ -10,6 +9,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 const entitledScopes = entitledScopesFor(false);
 
 const owner = "personal:alice";

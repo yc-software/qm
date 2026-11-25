@@ -12,13 +12,13 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { sleep } from "../src/util/async.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;

@@ -7,7 +7,6 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
@@ -16,6 +15,7 @@ import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;

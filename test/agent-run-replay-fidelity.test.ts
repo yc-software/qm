@@ -9,13 +9,13 @@ import { type Item, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId } from "../src/types.ts";
 import { type RunSignalStore } from "../src/runs/run-signal-store.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;

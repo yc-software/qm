@@ -10,7 +10,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -40,6 +39,7 @@ import {
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {

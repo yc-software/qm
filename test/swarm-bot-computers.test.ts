@@ -10,7 +10,6 @@ import { createOrchestrator, type OrchestratorDeps, type OrchestratorInput } fro
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -39,6 +38,7 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { errMessage } from "../src/util/errors.ts";
 import { sleep } from "../src/util/async.ts";
 import { probedCommand } from "./support/probed-command.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const releaseBot: Principal = { id: "release-bot", type: "internal", displayName: "Release bot" };
 const alice: Principal = { id: "alice", type: "internal" };

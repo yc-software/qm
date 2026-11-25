@@ -11,7 +11,6 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -27,6 +26,7 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from ".
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { interimReplyDelivery } from "../src/core/orchestrator/reply-check.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };

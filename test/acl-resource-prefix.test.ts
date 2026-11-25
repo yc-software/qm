@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { cronRef, deployRef, encodeRef, parseRef, serviceCredRef, skillRef } from "../src/acl/resource-ref.ts";
 import { entitledScopes as entitledScopesFor } from "../src/resolution/context-filter.ts";
@@ -9,6 +8,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 const entitledScopes = entitledScopesFor(false);
 
 const ORG = scopeId("org", "default-org");

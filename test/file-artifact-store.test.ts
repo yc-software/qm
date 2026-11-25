@@ -5,7 +5,6 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createMemoryDurableByteStore,
   createLocalDurableByteStore,
   ByteSourceTooLargeError,
   type DurableByteStore,
@@ -14,6 +13,7 @@ import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-st
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");

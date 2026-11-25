@@ -10,7 +10,6 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
@@ -23,6 +22,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
