@@ -183,7 +183,8 @@ struct NativeSettingsView: View {
       }
       Section {
         LabeledContent {
-          Button("Sign out", action: signOut).buttonStyle(.bordered).controlSize(.small)
+          Button("Sign out", role: .destructive, action: signOut).buttonStyle(.bordered)
+            .controlSize(.small)
         } label: {
           SettingsLabel("Account", note: accountNote)
         }
