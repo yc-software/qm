@@ -4,7 +4,8 @@ import { randomBytes } from "node:crypto";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SurfaceUser } from "../surfaces/contract.ts";
-import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
+import type { SecretKey } from "../connectors/connector-client-store.ts";
+import { createEncryptedSecretStore, deleteReplacedSecrets, type SecretStoreFactory } from "./secret-store.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
@@ -583,6 +584,7 @@ export function createKeychain(deps: {
   grants: DurableMap<KeychainGrant>;
   asks: DurableMap<KeychainAsk>;
   key: SecretKey;
+  secrets?: SecretStoreFactory;
   lock: AdvisoryLock;
   refreshConnector?: OAuthRefresh;
   oauthSkewMs?: number;
@@ -591,6 +593,19 @@ export function createKeychain(deps: {
 }): Keychain {
   const now = deps.now ?? Date.now;
   const lock = deps.lock;
+  const secrets = (deps.secrets ?? createEncryptedSecretStore)(deps.key);
+  const secretName = (id: string, slot: "secret" | "refresh-token" | "id-token") => `keychain/${id}/${slot}`;
+
+  const secretRefs = (rec: KeychainCredential | null | undefined) =>
+    rec ? [rec.secretEnc, rec.refresh?.refreshTokenEnc, rec.refresh?.idTokenEnc] : [];
+
+  async function deleteDroppedSecrets(
+    previous: KeychainCredential | null | undefined,
+    stored: KeychainCredential | null | undefined,
+    written: readonly (string | undefined)[] = [],
+  ) {
+    await deleteReplacedSecrets(secrets, [...written, ...secretRefs(previous)], secretRefs(stored));
+  }
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 
@@ -599,8 +614,11 @@ export function createKeychain(deps: {
     return rec && samePerson(rec.ownerId, ownerId) ? rec : null;
   }
 
-  function decryptToEnv(rec: KeychainCredential, extra?: { grantId: string; purpose: string }): MaterializedEnvCred {
-    const raw = decryptSecret(rec.secretEnc, deps.key);
+  async function decryptToEnv(
+    rec: KeychainCredential,
+    extra?: { grantId: string; purpose: string },
+  ): Promise<MaterializedEnvCred> {
+    const raw = await secrets.get(rec.secretEnc);
     let env: Array<{ key: string; value: string; secret?: boolean }>;
     if (rec.fields) {
       const values = JSON.parse(raw) as Record<string, string>;
@@ -620,8 +638,11 @@ export function createKeychain(deps: {
     };
   }
 
-  function decryptToFiles(rec: KeychainCredential, extra?: { grantId: string; purpose: string }): MaterializedFileCred {
-    const raw = decryptSecret(rec.secretEnc, deps.key);
+  async function decryptToFiles(
+    rec: KeychainCredential,
+    extra?: { grantId: string; purpose: string },
+  ): Promise<MaterializedFileCred> {
+    const raw = await secrets.get(rec.secretEnc);
     const files: CredentialFile[] = rec.targets
       ? (JSON.parse(raw) as CredentialFile[])
       : [{ path: keychainFilePath(rec.target ?? ""), contentBase64: Buffer.from(raw, "utf8").toString("base64") }];
@@ -635,9 +656,12 @@ export function createKeychain(deps: {
     };
   }
 
-  function tryDecrypt<T>(rec: KeychainCredential, fn: (rec: KeychainCredential) => T): T | null {
+  async function tryDecrypt<T>(
+    rec: KeychainCredential,
+    fn: (rec: KeychainCredential) => T | Promise<T>,
+  ): Promise<T | null> {
     try {
-      return fn(rec);
+      return await fn(rec);
     } catch (err) {
       console.error(
         `[keychain] credential ${rec.id} (${rec.service}, owner ${rec.ownerId}) does not decrypt under the current key — skipped: ${errMessage(err)}`,
@@ -701,17 +725,10 @@ export function createKeychain(deps: {
     return deps.creds.get(brokerId(orgScopeId, slug));
   }
 
-  function serviceCredentialRecord(
-    orgScopeId: string,
-    input: ServiceCredentialInput,
-    prior: KeychainCredential | null,
-  ): KeychainCredential {
+  function checkServiceCredentialInput(input: ServiceCredentialInput): void {
     const injectionError = credentialInjectionError(input.injection);
     if (injectionError) throw new Error(injectionError);
-    const trimmedSecret = input.secret?.trim();
-    const t = Math.max(now(), (prior?.updatedAt ?? 0) + 1);
-    const delivery = input.delivery ?? "broker";
-    if (delivery === "env") {
+    if ((input.delivery ?? "broker") === "env") {
       if (!input.envKey || !isValidServiceCredentialEnvKey(input.envKey)) {
         throw new Error(
           `env-delivery credential ${input.slug} needs an UPPER_SNAKE_CASE envKey outside AGENT_* (got ${JSON.stringify(input.envKey ?? null)})`,
@@ -720,6 +737,26 @@ export function createKeychain(deps: {
     } else if (input.envKey) {
       throw new Error(`broker-delivery credential ${input.slug} must not carry an envKey`);
     }
+  }
+
+  async function sealServiceSecret(orgScopeId: string, input: ServiceCredentialInput): Promise<string | undefined> {
+    checkServiceCredentialInput(input);
+    const trimmedSecret = input.secret?.trim();
+    return trimmedSecret
+      ? secrets.put(secretName(brokerId(orgScopeId, input.slug), "secret"), trimmedSecret)
+      : undefined;
+  }
+
+  function serviceCredentialRecord(
+    orgScopeId: string,
+    input: ServiceCredentialInput,
+    prior: KeychainCredential | null,
+    sealedSecret: string | undefined,
+  ): KeychainCredential {
+    checkServiceCredentialInput(input);
+    const trimmedSecret = input.secret?.trim();
+    const t = Math.max(now(), (prior?.updatedAt ?? 0) + 1);
+    const delivery = input.delivery ?? "broker";
     return {
       id: brokerId(orgScopeId, input.slug),
       ownerId: orgScopeId,
@@ -737,7 +774,7 @@ export function createKeychain(deps: {
         enabled: input.enabled !== false,
         ...(input.updatedBy ? { updatedBy: input.updatedBy } : {}),
       },
-      secretEnc: trimmedSecret ? encryptSecret(trimmedSecret, deps.key) : (prior?.secretEnc ?? ""),
+      secretEnc: trimmedSecret && sealedSecret ? sealedSecret : (prior?.secretEnc ?? ""),
       fingerprint: trimmedSecret ? fingerprintOf(trimmedSecret) : (prior?.fingerprint ?? ""),
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
@@ -752,11 +789,33 @@ export function createKeychain(deps: {
   const sameVersion = (a: KeychainCredential, b: KeychainCredential) =>
     a.updatedAt === b.updatedAt && a.fingerprint === b.fingerprint;
 
+  interface SealedTokens {
+    accessToken: string;
+    refreshToken?: string;
+    idToken?: string;
+  }
+
+  async function sealTokens(id: string, token: OAuthToken): Promise<SealedTokens> {
+    const [accessToken, refreshToken, idToken] = await Promise.all([
+      secrets.put(secretName(id, "secret"), token.accessToken),
+      token.refreshToken
+        ? secrets.put(secretName(id, "refresh-token"), token.refreshToken)
+        : Promise.resolve(undefined),
+      token.idToken ? secrets.put(secretName(id, "id-token"), token.idToken) : Promise.resolve(undefined),
+    ]);
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(idToken ? { idToken } : {}),
+    };
+  }
+
   function connectorRec(
     id: string,
     host: string,
     principalId: string,
     token: OAuthToken,
+    sealed: SealedTokens,
     accountType: string | undefined,
     prior: KeychainCredential | null,
   ): KeychainCredential {
@@ -770,13 +829,13 @@ export function createKeychain(deps: {
       kind: "env",
       host: host.toLowerCase(),
       managed: "connector",
-      secretEnc: encryptSecret(token.accessToken, deps.key),
+      secretEnc: sealed.accessToken,
       fingerprint: fingerprintOf(token.accessToken),
       origin: "connector-oauth",
       ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
       refresh: {
-        ...(token.refreshToken ? { refreshTokenEnc: encryptSecret(token.refreshToken, deps.key) } : {}),
-        ...(token.idToken ? { idTokenEnc: encryptSecret(token.idToken, deps.key) } : {}),
+        ...(sealed.refreshToken ? { refreshTokenEnc: sealed.refreshToken } : {}),
+        ...(sealed.idToken ? { idTokenEnc: sealed.idToken } : {}),
         ...(token.accountId ? { accountId: token.accountId } : {}),
         ...(at ? { accountType: at } : {}),
         ...(token.clientRef ? { clientRef: token.clientRef } : {}),
@@ -797,8 +856,9 @@ export function createKeychain(deps: {
     const prior = await connectorRecord(host, principalId, accountType);
     const ownerId = prior?.ownerId ?? canonicalPerson(principalId);
     const id = prior?.id ?? oauthId(host, ownerId, accountType);
-    const rec = connectorRec(id, host, ownerId, token, accountType, prior);
+    const rec = connectorRec(id, host, ownerId, token, await sealTokens(id, token), accountType, prior);
     await deps.creds.put(id, rec);
+    await deleteDroppedSecrets(prior, rec);
     return rec;
   }
 
@@ -812,11 +872,16 @@ export function createKeychain(deps: {
     return ids.map((id) => recs.find((rec) => rec.id === id)).find((rec) => rec !== undefined) ?? null;
   }
 
-  function recToOAuthToken(rec: KeychainCredential): OAuthToken {
+  async function recToOAuthToken(rec: KeychainCredential): Promise<OAuthToken> {
+    const [accessToken, refreshToken, idToken] = await Promise.all([
+      secrets.get(rec.secretEnc),
+      rec.refresh?.refreshTokenEnc ? secrets.get(rec.refresh.refreshTokenEnc) : Promise.resolve(undefined),
+      rec.refresh?.idTokenEnc ? secrets.get(rec.refresh.idTokenEnc) : Promise.resolve(undefined),
+    ]);
     return {
-      accessToken: decryptSecret(rec.secretEnc, deps.key),
-      ...(rec.refresh?.refreshTokenEnc ? { refreshToken: decryptSecret(rec.refresh.refreshTokenEnc, deps.key) } : {}),
-      ...(rec.refresh?.idTokenEnc ? { idToken: decryptSecret(rec.refresh.idTokenEnc, deps.key) } : {}),
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(idToken ? { idToken } : {}),
       ...(rec.refresh?.accountId ? { accountId: rec.refresh.accountId } : {}),
       ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
       ...(rec.refresh?.grantedScopes ? { grantedScopes: rec.refresh.grantedScopes } : {}),
@@ -833,8 +898,8 @@ export function createKeychain(deps: {
 
   const refreshDue = (rec: KeychainCredential) =>
     rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin;
-  const accessTokenOf = (rec: KeychainCredential) => tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
-  const unexpiredAccessToken = (rec: KeychainCredential) =>
+  const accessTokenOf = (rec: KeychainCredential) => tryDecrypt(rec, (r) => secrets.get(r.secretEnc));
+  const unexpiredAccessToken = async (rec: KeychainCredential) =>
     oauthExpired(rec, now(), oauthSkew) ? null : accessTokenOf(rec);
 
   async function refreshAndStore(id: string, host: string, refresh: OAuthRefresh): Promise<string | null> {
@@ -842,7 +907,7 @@ export function createKeychain(deps: {
       const rec = await deps.creds.get(id);
       if (!rec) return null;
       if (!refreshDue(rec)) return accessTokenOf(rec);
-      const stored = tryDecrypt(rec, recToOAuthToken);
+      const stored = await tryDecrypt(rec, recToOAuthToken);
       if (!stored?.refreshToken) return unexpiredAccessToken(rec);
       try {
         const fresh = await refresh(host, stored, {
@@ -858,11 +923,18 @@ export function createKeychain(deps: {
           ...(stored.accountId ? { accountId: stored.accountId } : {}),
           ...fresh,
         };
-        const written = await deps.creds.update(id, (current) =>
-          sameVersion(current, rec)
-            ? connectorRec(id, host, rec.ownerId, merged, rec.refresh?.accountType, current)
-            : current,
-        );
+        const sealed = await sealTokens(id, merged);
+        let replaced = false;
+        const written = await deps.creds.update(id, (current) => {
+          if (!sameVersion(current, rec)) return current;
+          replaced = true;
+          return connectorRec(id, host, rec.ownerId, merged, sealed, rec.refresh?.accountType, current);
+        });
+        await deleteDroppedSecrets(replaced ? rec : null, written, [
+          sealed.accessToken,
+          sealed.refreshToken,
+          sealed.idToken,
+        ]);
         return written ? accessTokenOf(written) : null;
       } catch (e) {
         const message = storedRefreshError(e);
@@ -902,7 +974,7 @@ export function createKeychain(deps: {
     return unexpiredAccessToken(rec);
   }
 
-  function credentialRecord(input: SaveCredentialInput) {
+  async function credentialRecord(input: SaveCredentialInput) {
     const service = keychainService(input.service);
     if (!service) throw new KeychainError(400, "service required");
     let files: CredentialFile[] | undefined;
@@ -948,6 +1020,7 @@ export function createKeychain(deps: {
         .join(",")}`;
     const ownerId = canonicalPerson(input.ownerId);
     const id = credId(ownerId, service, slot);
+    const secretEnc = await secrets.put(secretName(id, "secret"), secret);
     const buildRec = (prior?: KeychainCredential | null): KeychainCredential => {
       return {
         id,
@@ -960,7 +1033,7 @@ export function createKeychain(deps: {
         ...(targets ? { targets } : {}),
         ...(input.host ? { host: input.host } : {}),
         ...(input.accountLabel ? { accountLabel: input.accountLabel } : {}),
-        secretEnc: encryptSecret(secret, deps.key),
+        secretEnc,
         fingerprint: fingerprintOf(secret),
         ...(input.origin ? { origin: input.origin } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
@@ -973,8 +1046,18 @@ export function createKeychain(deps: {
   }
 
   async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
-    const { id, buildRec } = credentialRecord(input);
-    const [rec] = await deps.creds.mutateMany([{ id, apply: buildRec }]);
+    const { id, buildRec } = await credentialRecord(input);
+    let previous: KeychainCredential | null = null;
+    const [rec] = await deps.creds.mutateMany([
+      {
+        id,
+        apply: (prior) => {
+          previous = prior;
+          return buildRec(prior);
+        },
+      },
+    ]);
+    await deleteDroppedSecrets(previous, rec);
     return toMeta(rec!);
   }
 
@@ -999,16 +1082,16 @@ export function createKeychain(deps: {
     };
   }
 
-  function materializeDecrypted(
+  async function materializeDecrypted(
     cred: KeychainCredential,
     extra?: { grantId: string; purpose: string },
-  ): MaterializedCred {
+  ): Promise<MaterializedCred> {
     if (isBackendCredential(cred))
       throw new KeychainError(403, "Composio keys stay in the backend; use /v1/composio through the agent API");
-    const materialized = tryDecrypt(cred, (c) =>
+    const materialized = await tryDecrypt(cred, async (c): Promise<MaterializedCred> =>
       c.kind === "file"
-        ? { kind: "file" as const, ...decryptToFiles(c, extra) }
-        : { kind: "env" as const, ...decryptToEnv(c, extra) },
+        ? { kind: "file" as const, ...(await decryptToFiles(c, extra)) }
+        : { kind: "env" as const, ...(await decryptToEnv(c, extra)) },
     );
     if (!materialized) {
       throw new KeychainError(422, "credential does not decrypt under the current key");
@@ -1051,7 +1134,9 @@ export function createKeychain(deps: {
     const { grant, cred } = await authorizedGrant(grantId, scopeId);
     const extra = { grantId: grant.id, purpose: grant.purpose };
     const materialized =
-      cred.managed === "connector" ? await materializeConnectorEnv(cred, extra) : materializeDecrypted(cred, extra);
+      cred.managed === "connector"
+        ? await materializeConnectorEnv(cred, extra)
+        : await materializeDecrypted(cred, extra);
     const version = cred.managed === "connector" ? await deps.creds.get(cred.id) : cred;
     if (
       !version ||
@@ -1118,16 +1203,18 @@ export function createKeychain(deps: {
     for (const grant of await deps.grants.all()) {
       if (grant.credentialId === id && grant.status === "active") await revokeActiveGrant(grant.id);
     }
-    await deps.creds.delete(id);
+    await deleteDroppedSecrets(await deps.creds.take(id), null);
   }
 
   return {
     save: saveCredential,
 
     async create(input) {
-      const { id, buildRec } = credentialRecord(input);
+      const { id, buildRec } = await credentialRecord(input);
       const rec = buildRec();
-      return (await deps.creds.insertIfAbsent(id, rec)) ? toMeta(rec) : null;
+      if (await deps.creds.insertIfAbsent(id, rec)) return toMeta(rec);
+      await deleteDroppedSecrets(null, null, [rec.secretEnc]);
+      return null;
     },
 
     async claimWriter(ownerId, id, writer) {
@@ -1161,55 +1248,55 @@ export function createKeychain(deps: {
       const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
       const ours = Object.entries(credentialFileHashes(normalized));
       if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
-      let overruled: string[] = [];
-      let byExpiry: Array<{ path: string; kept: string }> = [];
-
-      const updated = await deps.creds.update(materialized.credentialId, (current) => {
+      return lock.withLock(`keychain-file-update:${materialized.credentialId}`, async () => {
+        const current = await deps.creds.get(materialized.credentialId);
+        if (!current) throw new KeychainError(410, "Credential was removed during execution");
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
-        const currentFiles = decryptToFiles(current).files;
+        const currentFiles = (await decryptToFiles(current)).files;
         const merged = mergeCredentialFiles({
           baseline,
           stored: currentFiles,
           refreshed: normalized,
           hash: (file) => fingerprint([file]),
         });
-        overruled = merged.overruled;
-        byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length) {
           console.warn(
             `[credentials] ${materialized.credentialId}: a save would have left no files, so the stored login was kept unchanged`,
           );
-          return current;
+          return { overruled: merged.overruled };
         }
-        if (fingerprint(next) === fingerprint(currentFiles)) return current;
-        const secret = JSON.stringify(next);
-        return {
-          ...current,
-          targets: next.map((file) => file.path),
-          secretEnc: encryptSecret(secret, deps.key),
-          fingerprint: fingerprintOf(secret),
-          updatedAt: now(),
-        };
+        if (fingerprint(next) !== fingerprint(currentFiles)) {
+          const secret = JSON.stringify(next);
+          const secretEnc = await secrets.put(secretName(current.id, "secret"), secret);
+          const written = await deps.creds.update(materialized.credentialId, (latest) => ({
+            ...latest,
+            targets: next.map((file) => file.path),
+            secretEnc,
+            fingerprint: fingerprintOf(secret),
+            updatedAt: now(),
+          }));
+          await deleteDroppedSecrets(current, written, [secretEnc]);
+          if (!written) throw new KeychainError(410, "Credential was removed during execution");
+        }
+        if (merged.overruled.length)
+          console.warn(
+            `[credentials] ${materialized.credentialId}: kept the stored version of ${merged.overruled.join(", ")} over a concurrent change`,
+          );
+        for (const { path, kept } of merged.byExpiry)
+          console.warn(
+            `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
+          );
+        return { overruled: merged.overruled };
       });
-      if (!updated) throw new KeychainError(410, "Credential was removed during execution");
-      if (overruled.length)
-        console.warn(
-          `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
-        );
-      for (const { path, kept } of byExpiry)
-        console.warn(
-          `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
-        );
-      return { overruled };
     },
 
     async writebackBaseline(source, fileHashes) {
       const current = await deps.creds.get(source.credentialId);
       if (!current || current.kind !== "file" || !samePerson(current.ownerId, source.ownerId))
         throw new KeychainError(410, "Credential was removed during execution");
-      const files = decryptToFiles(current).files;
+      const files = (await decryptToFiles(current)).files;
       return {
         kind: "file",
         credentialId: current.id,
@@ -1249,7 +1336,7 @@ export function createKeychain(deps: {
     async readOwnSecret(ownerId, id) {
       const rec = await getOwned(ownerId, id);
       if (!rec || rec.kind !== "env") return null;
-      return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+      return tryDecrypt(rec, (r) => secrets.get(r.secretEnc));
     },
 
     async remove(ownerId, id) {
@@ -1448,25 +1535,33 @@ export function createKeychain(deps: {
     },
 
     async setServiceCredential(orgScopeId, input) {
+      const sealed = await sealServiceSecret(orgScopeId, input);
       const prior = await brokerRecord(orgScopeId, input.slug);
-      const rec = serviceCredentialRecord(orgScopeId, input, prior);
+      const rec = serviceCredentialRecord(orgScopeId, input, prior, sealed);
       await deps.creds.put(rec.id, rec);
+      await deleteDroppedSecrets(prior, rec);
     },
 
     async setServiceCredentialIfAbsent(orgScopeId, input) {
-      const rec = serviceCredentialRecord(orgScopeId, input, null);
-      return (await deps.creds.insertIfAbsent(rec.id, rec)) ? rec.updatedAt : null;
+      const rec = serviceCredentialRecord(orgScopeId, input, null, await sealServiceSecret(orgScopeId, input));
+      if (await deps.creds.insertIfAbsent(rec.id, rec)) return rec.updatedAt;
+      await deleteDroppedSecrets(null, null, [rec.secretEnc]);
+      return null;
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
       let updatedAt: number | null = null;
-      await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
+      let replaced: KeychainCredential | null = null;
+      const sealed = await sealServiceSecret(orgScopeId, input);
+      const stored = await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
         if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
           return prior;
-        const next = serviceCredentialRecord(orgScopeId, input, prior);
+        const next = serviceCredentialRecord(orgScopeId, input, prior, sealed);
         updatedAt = next.updatedAt;
+        replaced = prior;
         return next;
       });
+      await deleteDroppedSecrets(replaced, stored, [sealed]);
       return updatedAt;
     },
 
@@ -1477,14 +1572,19 @@ export function createKeychain(deps: {
     },
 
     async deleteServiceCredential(orgScopeId, slug) {
-      await deps.creds.delete(brokerId(orgScopeId, slug));
+      await deleteDroppedSecrets(await deps.creds.take(brokerId(orgScopeId, slug)), null);
     },
 
     async deleteServiceCredentialIfCurrent(orgScopeId, slug, expectedUpdatedAt) {
-      return deps.creds.deleteIf(
-        brokerId(orgScopeId, slug),
-        (prior) => prior.kind === "broker" && prior.ownerId === orgScopeId && prior.updatedAt === expectedUpdatedAt,
-      );
+      let deleted: KeychainCredential | undefined;
+      const removed = await deps.creds.deleteIf(brokerId(orgScopeId, slug), (prior) => {
+        if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
+          return false;
+        deleted = prior;
+        return true;
+      });
+      if (removed) await deleteDroppedSecrets(deleted, null);
+      return removed;
     },
 
     async getServiceCredentialSecret(orgScopeId, slug) {
@@ -1494,7 +1594,7 @@ export function createKeychain(deps: {
       return {
         slug: rec.service,
         name: b.name,
-        secret: decryptSecret(rec.secretEnc, deps.key),
+        secret: await secrets.get(rec.secretEnc),
         delivery: b.delivery ?? "broker",
         ...(b.envKey ? { envKey: b.envKey } : {}),
         host: rec.host ?? "",
@@ -1546,7 +1646,7 @@ export function createKeychain(deps: {
       const accessToken = await connectorTokenForRecord(rec);
       if (accessToken === null) return null;
       const fresh = (await connectorRecord(host, principalId, accountType)) ?? rec;
-      const token = tryDecrypt(fresh, recToOAuthToken);
+      const token = await tryDecrypt(fresh, recToOAuthToken);
       if (!token) return null;
       return {
         accessToken: token.accessToken,
@@ -1569,7 +1669,7 @@ export function createKeychain(deps: {
     async composioKey(ownerId, credentialId) {
       const cred = await getOwned(ownerId, credentialId);
       if (!cred || cred.kind !== "env" || !isBackendCredential(cred) || credExpired(cred, now())) return null;
-      return tryDecrypt(cred, decryptToEnv)?.env.find((e) => e.key === COMPOSIO_ENV_KEY)?.value ?? null;
+      return (await tryDecrypt(cred, decryptToEnv))?.env.find((e) => e.key === COMPOSIO_ENV_KEY)?.value ?? null;
     },
     prepareMaterialize,
 
@@ -1592,51 +1692,47 @@ export function createKeychain(deps: {
 
     async materializeOwn(ownerId) {
       const t = now();
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter(
-          (c) =>
-            samePerson(c.ownerId, ownerId) &&
-            c.kind === "env" &&
-            !c.managed &&
-            !isBackendCredential(c) &&
-            !expired(c, t),
-        )
-        .map((c) => tryDecrypt(c, decryptToEnv))
-        .filter((c): c is MaterializedEnvCred => c !== null);
+      const owned = (await deps.creds.select({ where: byOwners([ownerId]) })).filter(
+        (c) =>
+          samePerson(c.ownerId, ownerId) && c.kind === "env" && !c.managed && !isBackendCredential(c) && !expired(c, t),
+      );
+      return (await Promise.all(owned.map((c) => tryDecrypt(c, decryptToEnv)))).filter(
+        (c): c is MaterializedEnvCred => c !== null,
+      );
     },
 
     async materializeOwnFiles(ownerId) {
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
-        .map((c) => tryDecrypt(c, decryptToFiles))
-        .filter((c): c is MaterializedFileCred => c !== null);
+      const owned = (await deps.creds.select({ where: byOwners([ownerId]) })).filter(
+        (c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c),
+      );
+      return (await Promise.all(owned.map((c) => tryDecrypt(c, decryptToFiles)))).filter(
+        (c): c is MaterializedFileCred => c !== null,
+      );
     },
 
     async materializeStanding(scopeId) {
-      const out: MaterializedEnvCred[] = [];
-      for (const grant of await activeGrantsFor(scopeId)) {
-        if (grant.mode !== "standing") continue;
-        const cred = await deps.creds.get(grant.credentialId);
-        if (!cred || cred.kind !== "env" || isBackendCredential(cred)) continue;
-        if (cred.managed === "connector") {
-          const value = cred.host ? await connectorTokenForRecord(cred) : null;
-          if (value && cred.host) {
-            out.push({
+      const standing = (await activeGrantsFor(scopeId)).filter((g) => g.mode === "standing");
+      const results = await Promise.all(
+        standing.map(async (grant): Promise<MaterializedEnvCred | null> => {
+          const cred = await deps.creds.get(grant.credentialId);
+          if (!cred || cred.kind !== "env" || isBackendCredential(cred)) return null;
+          if (cred.managed === "connector") {
+            const value = cred.host ? await connectorTokenForRecord(cred) : null;
+            if (!value || !cred.host) return null;
+            return {
               credentialId: cred.id,
               ownerId: cred.ownerId,
               service: cred.service,
               env: [{ key: envKey(cred.host), value }],
               grantId: grant.id,
               purpose: grant.purpose,
-            });
+            };
           }
-          continue;
-        }
-        if (cred.managed || credExpired(cred, now())) continue;
-        const mat = tryDecrypt(cred, (c) => decryptToEnv(c, { grantId: grant.id, purpose: grant.purpose }));
-        if (mat) out.push(mat);
-      }
-      return out;
+          if (cred.managed || credExpired(cred, now())) return null;
+          return tryDecrypt(cred, (c) => decryptToEnv(c, { grantId: grant.id, purpose: grant.purpose }));
+        }),
+      );
+      return results.filter((c): c is MaterializedEnvCred => c !== null);
     },
   };
 }

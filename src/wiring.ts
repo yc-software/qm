@@ -17,6 +17,7 @@ import { createApprovalContinuation } from "./triggers/approval-continuation.ts"
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
+import { createEncryptedSecretStore, type SecretStoreFactory } from "./credentials/secret-store.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   createRenderSandbox,
@@ -695,9 +696,11 @@ export function buildApp(
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
+  const secretStore: SecretStoreFactory = createEncryptedSecretStore;
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+    secrets: secretStore,
     fallback: {
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
       ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
@@ -738,6 +741,7 @@ export function buildApp(
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
+    secrets: secretStore,
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
@@ -749,7 +753,7 @@ export function buildApp(
     config.orgId,
     artifactMap("slack_installation"),
     slackKeyMaterial,
-    config.publicUrl ? { publicUrl: config.publicUrl } : undefined,
+    { ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}), secrets: secretStore },
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -881,9 +885,11 @@ export function buildApp(
     createSweeper,
   });
   const memorySessions: { store?: SessionStore } = {};
+  const memoryRegistryKey = deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "memory-registry");
   const memoryRegistry = createMemoryRegistryStore({
     map: artifactMap<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
-    key: deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "memory-registry"),
+    key: memoryRegistryKey,
+    secrets: secretStore(memoryRegistryKey),
     ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
   });
   const baseMemory: MemoryService = withMemoryTidy(
@@ -1349,6 +1355,7 @@ export function buildApp(
     grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
     asks: artifactMap<KeychainAsk>("keychain_asks"),
     key: credentialKey,
+    secrets: secretStore,
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
@@ -1397,7 +1404,11 @@ export function buildApp(
       : {}),
   });
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
+    ? createBrowserSessionStore({
+        sessions: artifactMap<StoredBrowserSession>("browser_sessions"),
+        key: credentialKey,
+        secrets: secretStore,
+      })
     : undefined;
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(inboundMap<ConsentLinkRecord>("consent_links"));
@@ -1429,6 +1440,7 @@ export function buildApp(
     write: writeModelRegistry,
     backing: artifactMap("custom_model_providers"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
+    secrets: secretStore,
   });
   const modelVerifier = createModelVerifier({
     credentials: modelCredentials,
@@ -1801,6 +1813,7 @@ export function buildApp(
       region: config.s3Region,
       store: artifactMap<StoredRenderAppStorage>("render_app_storage"),
       keyMaterial: config.connectorSecretKey,
+      secrets: secretStore,
     });
     return createRenderDeployProvider({
       ...render,
@@ -2638,6 +2651,7 @@ export function buildApp(
         subscriptions: artifactMap<WebPushSubscriptionRecord>("web_push_subscriptions", ["principalId"]),
         vapid: artifactMap<VapidKeyRecord>("web_push_vapid"),
         key: deriveConnectorKey(config.connectorSecretKey, "web-push"),
+        secrets: secretStore,
         subject: pushSubject,
       })
     : undefined;
