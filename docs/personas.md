@@ -126,8 +126,9 @@ edits those messages under the persona's name and icon, ahead of any deployment-
 the app manifest requests) (a Unicode emoji maps to its Slack
 shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
-link when there is one. File uploads and the in-progress task card still show the app's own
-identity, since Slack doesn't let an app rename those.
+link when there is one. The in-progress task card wears the persona too: it sits inside the
+persona's latest message, or is posted under its name and icon when it stands alone. File
+uploads still show the app's own identity, since Slack doesn't let an app rename those.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
