@@ -12,6 +12,9 @@ import {
   assertAwsServiceDiscovery,
   assertAwsPublicListener,
   assertAwsPublicRouting,
+  awsColorRoutes,
+  awsRequireColorDrained,
+  awsTakeColorTraffic,
   assertGithubDeployTrust,
   awsCheckLive,
   awsCoreRequest,
@@ -232,6 +235,8 @@ else if (a.includes("elbv2 describe-rules")) {
   if (process.env.AWS_FAKE_CORE_HOST_RULE) rules.unshift({ IsDefault: false, Priority: "10", Actions: [{ Type: "forward", TargetGroupArn: process.env.AWS_FAKE_CORE_HOST_RULE }], Conditions: [{ Field: "host-header", HostHeaderConfig: { Values: ["api.agent.acme.example"] } }] });
   if (process.env.AWS_FAKE_FRONT_DOOR_HOST === "1") rules[rules.length - 1].Conditions = [{ Field: "host-header", HostHeaderConfig: { Values: ["api.agent.acme.example"] } }];
   if (process.env.AWS_FAKE_EXTRA_RULE === "1") rules.push({ IsDefault: false, Actions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "503" } }], Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/status/*"] } }] });
+  const peerActive = process.env.AWS_FAKE_PEER_ACTIVE_FILE ? fs.existsSync(process.env.AWS_FAKE_PEER_ACTIVE_FILE) ? fs.readFileSync(process.env.AWS_FAKE_PEER_ACTIVE_FILE, "utf8").split(",") : [] : [];
+  for (const rule of rules) for (const target of rule.Actions?.[0]?.ForwardConfig?.TargetGroups ?? []) if (peerActive.includes("all") || peerActive.includes(rule.RuleArn)) target.Weight = target.Weight ? 0 : 1;
   console.log(JSON.stringify({ Rules: rules }));
 }
 else if (a.includes("elbv2 describe-tags")) console.log(JSON.stringify({ TagDescriptions: [] }));
@@ -1242,6 +1247,175 @@ test("AWS routes a separate apiUrl host and apps domain straight to core's API t
         attached,
         /shared ALB requires one blue\/green core front-door ingress without additional public routes/,
       );
+  }
+});
+
+function colorPairFixture(peerActive = "") {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-color-pair-"));
+  const hosts = ["api.agent.acme.example", "*.apps.agent.acme.example"];
+  const paired: QmConfig = {
+    ...config,
+    apiUrl: "https://api.agent.acme.example",
+    env: { ...config.env, core: { ...config.env.core, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
+    aws: {
+      ...config.aws!,
+      alb: "shared-colors",
+      peerTargetGroups: { "core-public": frontDoorAlternate, core: coreApiAlternate },
+    },
+  };
+  const flip = join(dir, "peer-active");
+  if (peerActive) writeFileSync(flip, peerActive);
+  const requests = join(dir, "requests");
+  const fake = fakeAws(
+    dir,
+    `if (a.includes("elbv2 modify-rule")) {
+  const args = process.argv.slice(2);
+  const rule = args[args.indexOf("--rule-arn") + 1];
+  const left = fs.existsSync(${JSON.stringify(flip)}) ? fs.readFileSync(${JSON.stringify(flip)}, "utf8").split(",").filter((arn) => arn !== rule && arn !== "all") : [];
+  fs.writeFileSync(${JSON.stringify(flip)}, left.join(","));
+  console.log("{}");
+} else if (a.includes("ecs describe-services")) {
+  console.log(JSON.stringify({ services: [{ serviceName: "acme-core", loadBalancers: ${JSON.stringify(frontDoorAttachments({ apiHosts: hosts }))} }] }));
+} else if (a.includes("cloudwatch get-metric-statistics")) {
+  const counts = fs.existsSync(${JSON.stringify(requests)}) ? fs.readFileSync(${JSON.stringify(requests)}, "utf8").split(",").map(Number) : [0];
+  const sum = counts.shift() ?? 0;
+  fs.writeFileSync(${JSON.stringify(requests)}, counts.join(","));
+  console.log(JSON.stringify({ Datapoints: sum ? [{ Sum: sum }] : [] }));
+}`,
+    { blueGreen: true, apiHosts: hosts },
+  );
+  process.env.AWS_FAKE_PEER_ACTIVE_FILE = flip;
+  const services = new Map([["core", { loadBalancers: frontDoorAttachments({ apiHosts: hosts }) }]]);
+  return {
+    paired,
+    services,
+    log: fake.log,
+    requests,
+    cleanup: () => {
+      delete process.env.AWS_FAKE_PEER_ACTIVE_FILE;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("AWS accepts two color stacks on one ALB and reports this stack's own target groups", () => {
+  for (const peerActive of ["", "all"]) {
+    const f = colorPairFixture(peerActive);
+    try {
+      assert.deepEqual([...assertAwsPublicRouting(f.paired, f.services)].sort(), [
+        ["core", targetGroupArn("core-api")],
+        ["core-public", targetGroupArn(awsTargetGroupName(config, "core-public"))],
+      ]);
+      assert.throws(
+        () =>
+          assertAwsPublicRouting(
+            { ...f.paired, aws: { ...f.paired.aws!, peerTargetGroups: { "core-public": frontDoorAlternate } } },
+            f.services,
+          ),
+        /aws\.peerTargetGroups must name the peer target group of exactly core, core-public/,
+      );
+      assert.throws(
+        () =>
+          assertAwsPublicRouting(
+            {
+              ...f.paired,
+              aws: { ...f.paired.aws!, peerTargetGroups: { "core-public": frontDoorAlternate, core: "gone" } },
+            },
+            f.services,
+          ),
+        /peer target group for core is missing/,
+      );
+      assert.throws(
+        () =>
+          assertAwsPublicRouting(
+            f.paired,
+            new Map([
+              [
+                "core",
+                {
+                  loadBalancers: frontDoorAttachments({
+                    blueGreen: true,
+                    apiHosts: ["api.agent.acme.example", "*.apps.agent.acme.example"],
+                  }),
+                },
+              ],
+            ]),
+          ),
+        /color-paired ALB cannot also use ECS blue\/green alternate target groups/,
+      );
+    } finally {
+      f.cleanup();
+    }
+  }
+});
+
+test("AWS moves every rule of a color pair to this stack and only then reports success", () => {
+  const f = colorPairFixture(`${productionRuleArn("core")},${productionRuleArn("core-public")}`);
+  try {
+    const before = awsColorRoutes(f.paired).routes;
+    assert.deepEqual(
+      before.map((route) => [route.route, route.ownWeight, route.peerWeight]),
+      [
+        ["core", 0, 1],
+        ["core-public", 0, 1],
+      ],
+    );
+    const lines: string[] = [];
+    awsTakeColorTraffic(f.paired, (line) => lines.push(line));
+    assert.equal(lines.length, 2);
+    const modifies = readFileSync(f.log, "utf8")
+      .split("\n")
+      .filter((line) => line.includes("elbv2 modify-rule"));
+    assert.equal(modifies.length, 2);
+    for (const line of modifies) assert.match(line, /"Weight":1\},\{"TargetGroupArn":"[^"]+","Weight":0\}/);
+    assert.ok(awsColorRoutes(f.paired).routes.every((route) => route.ownWeight === 1 && route.peerWeight === 0));
+    awsTakeColorTraffic(f.paired, (line) => lines.push(line));
+    assert.equal(
+      readFileSync(f.log, "utf8")
+        .split("\n")
+        .filter((line) => line.includes("elbv2 modify-rule")).length,
+      2,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("AWS waits for an idle color to serve no requests before calling it drained", async () => {
+  const idle = colorPairFixture("all");
+  try {
+    let clock = Date.parse("2026-11-25T10:30:00Z");
+    const lines: string[] = [];
+    const opts = {
+      now: () => clock,
+      sleep: async (ms: number) => void (clock += ms),
+      log: (line: string) => lines.push(line),
+      deadlineMs: 120_000,
+      pollMs: 30_000,
+    };
+    writeFileSync(idle.requests, "118,0,3,0,0,0");
+    await awsRequireColorDrained(idle.paired, opts);
+    assert.match(lines.at(-1)!, /served no requests from 2026-11-25T10:2\d:00\.000Z to 2026-11-25T10:2\d:00\.000Z/);
+    assert.equal(lines.filter((line) => line.includes("waiting for it to drain")).length, 2);
+    assert.match(readFileSync(idle.log, "utf8"), /Name=TargetGroup,Value=targetgroup\/core-api\/1/);
+    writeFileSync(idle.requests, "5,5,5,5,5,5,5,5,5,5,5,5");
+    await assert.rejects(
+      () => awsRequireColorDrained(idle.paired, opts),
+      /still served 10 requests .* it has not drained/,
+    );
+    assert.doesNotMatch(readFileSync(idle.log, "utf8"), /modify-rule|update-service/);
+  } finally {
+    idle.cleanup();
+  }
+  const live = colorPairFixture();
+  try {
+    await assert.rejects(
+      () => awsRequireColorDrained(live.paired, { sleep: async () => {} }),
+      /still receives core, core-public traffic/,
+    );
+  } finally {
+    live.cleanup();
   }
 });
 

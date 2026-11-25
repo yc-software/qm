@@ -107,6 +107,7 @@ export interface AwsConfig {
   imageLabel: string;
   alb?: string;
   sharedAlb?: boolean;
+  peerTargetGroups?: Record<string, string>;
   backgroundWorkControl?: boolean;
   rdsInstance?: string;
   dbInstanceClass?: string;
@@ -1069,6 +1070,9 @@ function validatePluginSecrets(raw: unknown, path: string, pluginIndex: number):
   });
 }
 
+const validElbName = (name: string): boolean =>
+  name.length <= 32 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(name);
+
 function validateAws(
   raw: unknown,
   path: string,
@@ -1134,7 +1138,7 @@ function validateAws(
   let alb: string | undefined;
   if (raw["alb"] !== undefined) {
     alb = requiredString(raw["alb"], "alb");
-    if (alb.length > 32 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(alb) || alb.startsWith("internal-")) {
+    if (!validElbName(alb) || alb.startsWith("internal-")) {
       throw new CliError(
         `${path}: "aws.alb" must be a valid load balancer name (at most 32 letters, digits, and interior hyphens, not starting with "internal-")`,
       );
@@ -1148,6 +1152,25 @@ function validateAws(
   }
   if (raw["sharedAlb"] === true && !alb) {
     throw new CliError(`${path}: "aws.sharedAlb" requires "aws.alb"`);
+  }
+  let peerTargetGroups: Record<string, string> | undefined;
+  if (raw["peerTargetGroups"] !== undefined) {
+    const peers = raw["peerTargetGroups"];
+    if (!peers || typeof peers !== "object" || Array.isArray(peers) || !Object.keys(peers).length) {
+      throw new CliError(`${path}: "aws.peerTargetGroups" must map ingress routes to target group names`);
+    }
+    if (!alb || raw["sharedAlb"] === true) {
+      throw new CliError(
+        `${path}: "aws.peerTargetGroups" requires "aws.alb" and cannot be combined with "aws.sharedAlb"`,
+      );
+    }
+    peerTargetGroups = {};
+    for (const [route, name] of Object.entries(peers as Record<string, unknown>)) {
+      if (typeof name !== "string" || !validElbName(name)) {
+        throw new CliError(`${path}: "aws.peerTargetGroups.${route}" must be a target group name`);
+      }
+      peerTargetGroups[route] = name;
+    }
   }
   let rdsInstance: string | undefined;
   if (raw["rdsInstance"] !== undefined) {
@@ -1456,6 +1479,7 @@ function validateAws(
   if (deploymentState) out.deploymentState = deploymentState;
   if (alb) out.alb = alb;
   if (raw["sharedAlb"] !== undefined) out.sharedAlb = raw["sharedAlb"] as boolean;
+  if (peerTargetGroups) out.peerTargetGroups = peerTargetGroups;
   if (raw["backgroundWorkControl"] !== undefined) out.backgroundWorkControl = raw["backgroundWorkControl"] as boolean;
   if (out.backgroundWorkControl && (services.core?.ecsService.length ?? 0) > 219)
     throw new CliError(
