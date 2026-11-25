@@ -5,7 +5,7 @@ import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { isAgentReply, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import { isAgentReply, isNarration, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
 import type { FeatureName } from "../../feature-flags.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
@@ -132,8 +132,7 @@ export async function appendTurnGuidance(turn: {
   return systemPrompt;
 }
 
-const isSpoken = (item: Item): boolean =>
-  isShownReply(item) || (item.kind === "AgentMessage" && item.variant === "narration" && !!item.text?.trim());
+const isSpoken = (item: Item): boolean => isShownReply(item) || (isNarration(item) && !!item.text?.trim());
 
 const supersededIn = (items: readonly Item[]): Set<number> =>
   new Set(
