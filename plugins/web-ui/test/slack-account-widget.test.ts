@@ -27,10 +27,11 @@ test("recalled personal Slack widget renders independently and respects installa
     assert.equal(widget.querySelector(".welcome-picker"), null);
     installed = false;
     window.dispatchEvent(new window.Event("focus"));
-    for (let i = 0; i < 100 && widget.querySelector("qm-slack-account"); i++)
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.match(widget.textContent ?? "", /needs to be added/);
-    assert.equal(widget.querySelector("qm-slack-account"), null);
+    const button = () => widget.querySelector<HTMLButtonElement>("qm-slack-account .welcome-slack");
+    for (let i = 0; i < 100 && !button()?.disabled; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(button()?.disabled, true, "the card stays dimmed and disabled instead of turning into text");
+    assert.ok(button()?.classList.contains("pending"));
+    assert.doesNotMatch(widget.textContent ?? "", /needs to be added/);
   } finally {
     globalThis.fetch = previousFetch;
     await h.close();

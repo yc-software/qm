@@ -17,8 +17,7 @@ export async function nativeSlackConfigured(ctx: ApiCtx): Promise<boolean> {
   }
 }
 
-export async function nativeSlackConnection(ctx: ApiCtx) {
-  const principal = ctx.actor!.p;
+export async function nativeSlackConnection(ctx: ApiCtx, principal = ctx.actor!.p) {
   for (const id of personIds(principal)) {
     for (const accountType of ACCOUNT_TYPES) {
       const auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("slack.com", id, accountType);

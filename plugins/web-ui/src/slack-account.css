@@ -173,3 +173,14 @@ qm-onboarding-slack {
   font-size: 12px;
   margin: 0 0 12px;
 }
+
+.welcome-slack:disabled {
+  cursor: default;
+}
+.welcome-slack:disabled:hover {
+  background: var(--background);
+}
+.welcome-slack.pending {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}

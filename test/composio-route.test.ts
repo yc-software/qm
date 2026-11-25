@@ -550,6 +550,29 @@ test("Slack connection links verified workspace identity to the web owner and pe
   }
 });
 
+test("Slack status tells an agent caller the workspace install is missing", async () => {
+  const f = fixture();
+  const agent = { actorId: "alice", scopeId: "personal:alice", ownerConnections: true } as CapabilityClaims;
+  const status = await f.invoke("/v1/composio/slack", undefined, null, agent);
+  assert.deepEqual(
+    [status.status, status.data],
+    [200, { connected: false, workspaceInstalled: false, nativeOAuth: false, linkAvailable: false }],
+  );
+  assert.equal(f.calls.length, 0);
+});
+
+test("Slack status reports linking unavailable instead of failing when no app-connection key exists", async () => {
+  const f = fixture();
+  f.deps.slackEnvBotToken = "xoxb-installed";
+  for (const capability of [undefined, { actorId: "alice", scopeId: "personal:alice", ownerConnections: true }]) {
+    const status = await f.invoke("/v1/composio/slack", undefined, "alice", capability as CapabilityClaims | undefined);
+    assert.deepEqual(
+      [status.status, status.data],
+      [200, { connected: false, workspaceInstalled: true, nativeOAuth: false, linkAvailable: false }],
+    );
+  }
+});
+
 test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
   const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { mintSignedPayload } = await import("../src/auth/signed-token.ts");

@@ -8,7 +8,7 @@ import {
   type ConnectionAttempt,
   ACCOUNT_ID,
 } from "./connection-return";
-import { LitElement, html, nothing, type TemplateResult } from "lit";
+import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
@@ -69,7 +69,6 @@ export class OnboardingWelcome extends LitElement {
     connectionError: { state: true },
     workspaceConnected: { state: true },
     slackLinked: { state: true },
-    workspaceError: { state: true },
     about: { state: true },
   };
   declare me: Me | null;
@@ -91,7 +90,7 @@ export class OnboardingWelcome extends LitElement {
   private connectionError = "";
   private workspaceConnected: boolean | null = null;
   private slackLinked = false;
-  private workspaceError = false;
+  private workspaceRetry: ReturnType<typeof setTimeout> | undefined;
   private realReturn: ConnectionAttempt | null = null;
   private connectionsController?: AbortController;
   private restoreScrollTop: number | null = null;
@@ -151,11 +150,13 @@ export class OnboardingWelcome extends LitElement {
       const status = await response.json();
       this.workspaceConnected = status.workspaceInstalled === true;
       this.slackLinked = status.connected === true;
-      this.workspaceError = false;
     } catch {
-      this.workspaceConnected = null;
-      this.workspaceError = true;
+      if (this.isConnected) this.workspaceRetry = setTimeout(() => void this.refreshWorkspace(), 3000);
     }
+  }
+  protected updated(changed: PropertyValues): void {
+    const moved = changed.get("toolkit") && this.widget === "apps" && this.toolkit;
+    if (moved && !this.services.some((service) => service.id === this.toolkit)) void this.loadCatalog();
   }
   protected firstUpdated(): void {
     void this.refreshWorkspace();
@@ -264,6 +265,7 @@ export class OnboardingWelcome extends LitElement {
   }
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    clearTimeout(this.workspaceRetry);
     this.controller?.abort();
     this.connectionsController?.abort();
     window.removeEventListener("focus", this.refreshConnections);
@@ -657,10 +659,17 @@ export class OnboardingWelcome extends LitElement {
             ></qm-onboarding-slack>`
           : nothing
       }
-      ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
-      ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
       <div class="welcome-beat" style="--welcome-delay:1100ms">
-        ${this.workspaceConnected && (this.widget === "slack-account" || (!["apps", "slack"].includes(this.widget) && !this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-linked=${() => void this.refreshWorkspace()}></qm-slack-account>` : nothing}
+        ${
+          this.widget === "slack-account" ||
+          (this.workspaceConnected && !["apps", "slack"].includes(this.widget) && !this.loading && !this.error)
+            ? html`<qm-slack-account
+                .user=${this.previewUser()}
+                .pending=${this.workspaceConnected !== true}
+                @slack-linked=${() => void this.refreshWorkspace()}
+              ></qm-slack-account>`
+            : nothing
+        }
       </div>
       ${
         card || ["slack", "slack-account"].includes(this.widget)

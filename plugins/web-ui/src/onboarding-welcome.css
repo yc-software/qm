@@ -167,13 +167,15 @@ qm-onboarding-welcome.inline-setup + .streaming-text {
   gap: 8px;
   margin-left: auto;
 }
-.connection-card-status :is(svg, .mc-spinner) {
+.connection-card-status svg {
   flex: none;
 }
-.connection-card-status .mc-spinner {
-  width: 10px;
-  height: 10px;
-  border-width: 1.5px;
+.connection-card.pending {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.connection-card.pending .connection-card-status {
+  visibility: hidden;
 }
 .connection-card[data-tone="success"] .connection-card-status svg {
   color: var(--success);

@@ -80,7 +80,7 @@ before mentioning Slack bot setup. If their role is unclear, use
 - `configured: true`: skip silently and go straight to personal connections. Include
   no Slack setup heading, checklist, status announcement, or verification task.
 - Confirmed missing bot: offer the setup early. With `installAvailable: true` in web
-  chat, show the `::add-to-slack{}` card and say to pick their own organization's
+  chat, call the `card` tool with kind `add_to_slack` and say to pick their own organization's
   workspace, not another shared workspace they belong to. Otherwise give the available
   steps and links together as described in the admin skill. Do not make the admin ask
   for each step.
@@ -106,9 +106,9 @@ form, never into chat.
 ### Personal connections
 
 Check Composio availability through `GET /v1/composio/toolkits` on the authenticated QM API. When available
-in web chat, show the `::connect-apps{}` app picker instead of listing apps or links. Write each card
-directive as its own paragraph, outside code fences and quotations; both may share a reply. Keep plain
-links on other surfaces and for apps that connect elsewhere. Load the composio skill with the skills tool
+in web chat, call the `card` tool with kind `apps` to show the app picker instead of listing apps or
+links. When `card` returns an error, no card is shown; do what the error says. Keep plain links on other
+surfaces and for apps that connect elsewhere. Load the composio skill with the skills tool
 for discovery and its consent flow for the user's choices. Reuse their connected accounts after checking identity and permissions;
 a project key is not proof that a personal account is connected. Do not ask them to
 create OAuth apps for connections this source already provides. Do not infer that Composio is unavailable from an empty direct OAuth list

@@ -21,13 +21,25 @@ export interface ConnectionStanding {
 }
 
 type Status = { text: string; tone: string; mark?: IconNode };
-const WAITING: Status = { text: "Checking…", tone: "muted" };
+
+function waiting(at: ConnectionStanding | undefined): boolean {
+  return !at || at.outcome === "checking" || (!at.checked && !at.working && !at.problem);
+}
+
+const unknown: ConnectionStanding = {
+  outcome: "",
+  notice: "",
+  checked: true,
+  connected: false,
+  stale: false,
+  working: "",
+  problem: "",
+  connect: () => {},
+};
 
 function status(at: ConnectionStanding): Status {
-  if (at.outcome === "checking") return { text: at.notice, tone: "muted" };
   if (at.working) return { text: at.working, tone: "muted" };
   if (at.problem) return { text: at.problem, tone: "error", mark: CircleAlert };
-  if (!at.checked) return WAITING;
   if (at.outcome === "failed") return { text: at.notice, tone: "error", mark: CircleAlert };
   if (at.connected && !at.stale) return { text: "Connected", tone: "success", mark: Check };
   if (at.outcome === "cancelled" || at.outcome === "expired") return { text: at.notice, tone: "muted", mark: Circle };
@@ -52,14 +64,17 @@ export function connectionActions(
 
 export function connectionCard(
   service: Pick<ConnectionService, "id" | "logoUrl"> & { name?: string },
-  at?: ConnectionStanding,
+  known?: ConnectionStanding,
 ): TemplateResult {
-  const { text, tone, mark } = at ? status(at) : WAITING;
+  const name = service.name ?? nothing;
+  const pending = waiting(known);
+  const lastSeen = `qm-connection-card:${service.id}`;
+  const at = pending ? { ...unknown, connected: localStorage.getItem(lastSeen) === "connected" } : known!;
+  const { text, tone, mark } = status(at);
+  const busy = pending || Boolean(at.working);
   const button = (label: string, name: string, run: () => void, style = "btn") =>
-    html`<button type="button" class=${style} aria-label=${name} ?disabled=${Boolean(at?.working)} @click=${run}>
-      ${label}
-    </button>`;
-  const settled = at?.checked && at.outcome !== "checking";
+    html`<button type="button" class=${style} aria-label=${name} ?disabled=${busy} @click=${run}>${label}</button>`;
+  const settled = at.checked;
   let next: TemplateResult | typeof nothing = nothing;
   if (settled && at.stale && at.reconnect)
     next = button("Reconnect", `Reconnect ${service.name}`, at.reconnect, "btn primary");
@@ -67,18 +82,27 @@ export function connectionCard(
     next = button("Try again", `Try connecting ${service.name} again`, at.connect, "btn primary");
   else if (settled && !at.connected) next = button("Connect", `Connect ${service.name}`, at.connect, "btn primary");
   const looks = ["connector-widget", "connection-card"];
-  if (next === nothing && !at?.recheck && tone !== "error") looks.push("compact");
+  if (next === nothing && !at.recheck && tone !== "error") looks.push("compact");
+  if (!pending) {
+    if (looks.includes("compact")) localStorage.setItem(lastSeen, "connected");
+    else localStorage.removeItem(lastSeen);
+  }
   if (tone === "success") looks.push("connected");
-  return html`<div class=${looks.join(" ")} data-tone=${tone} role="group" aria-label=${service.name ?? nothing}>
+  if (pending) looks.push("pending");
+  return html`<div
+    class=${looks.join(" ")}
+    data-tone=${tone}
+    aria-busy=${pending ? "true" : nothing}
+    role="group"
+    aria-label=${name}
+  >
     ${connectorLogo(service.id, service.logoUrl)}
     <span class="connector-widget-text">
-      ${service.name ? html`<strong>${service.name}</strong>` : nothing}
-      <small class="connection-card-status" role="status"
-        >${mark ? icon(mark, 12) : html`<span class="mc-spinner"></span>`}${text}</small
-      >
+      <strong>${service.name ?? "\u00a0"}</strong>
+      <small class="connection-card-status" role="status">${mark ? icon(mark, 12) : nothing}${text}</small>
     </span>
     <span class="connection-card-actions"
-      >${settled ? connectionActions(service.name, Boolean(at.working), at.stale ? undefined : at.reconnect, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
+      >${settled ? connectionActions(service.name, busy, at.stale ? undefined : at.reconnect, at.disconnect) : nothing}${at.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
     >
   </div>`;
 }
