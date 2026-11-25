@@ -475,13 +475,17 @@ const versioned = (record: MemoryRegistry): MemoryRegistry => ({
   schema: record.brains.some((brain) => brain.owner) ? 2 : 1,
 });
 
-export const brainSecretName = (id: string) => `memory-brains/${id}`;
+const brainSecretName = (id: string) => `memory-brains/${id}`;
 
 const brainSecretRefs = (registry: MemoryRegistry) => registry.brains.map((brain) => brain.auth.clientSecretEnc);
 
 export interface MemoryRegistryStore extends RegistryContext {
   current(): Promise<{ version: string; record: unknown }>;
-  update(change: (record: MemoryRegistry) => MemoryRegistry): Promise<MemoryRegistry>;
+  resolve(record: MemoryRegistry): Promise<{ config: MemoryProviderConfig; disabled: DisabledRegistryRoute[] }>;
+  update(
+    change: (record: MemoryRegistry, clientSecretRef?: string) => MemoryRegistry,
+    secret?: { brainId: string; value: string },
+  ): Promise<MemoryRegistry>;
 }
 
 export function createMemoryRegistryStore(opts: {
@@ -497,27 +501,44 @@ export function createMemoryRegistryStore(opts: {
     if (slot.cached?.version !== version) slot.cached = { version, record: await opts.map.get(RECORD_ID) };
     return slot.cached;
   };
-  return {
+  const ctx: RegistryContext = {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     key: opts.key,
     ...(opts.secrets ? { secrets: opts.secrets } : {}),
+  };
+  return {
+    ...ctx,
     current,
-    async update(change) {
-      const seen = readRegistry((await current()).record);
-      if (change(seen) === seen) return seen;
+    async resolve(record) {
+      return resolveMemoryRegistry(record, ctx, await openBrainSecrets(record, ctx));
+    },
+    async update(change, secret) {
+      const clientSecretRef =
+        opts.secrets && secret ? await opts.secrets.put(brainSecretName(secret.brainId), secret.value) : undefined;
       let previous: MemoryRegistry | undefined;
-      const [next] = await opts.map.mutateMany([
-        {
-          id: RECORD_ID,
-          apply: (stored) => {
-            previous = readRegistry(stored);
-            return versioned(change(previous));
+      let next: MemoryRegistry | undefined;
+      try {
+        const seen = readRegistry((await current()).record);
+        if (change(seen, clientSecretRef) === seen) return seen;
+        [next] = await opts.map.mutateMany([
+          {
+            id: RECORD_ID,
+            apply: (stored) => {
+              previous = readRegistry(stored);
+              return versioned(change(previous, clientSecretRef));
+            },
           },
-        },
-      ]);
-      if (opts.secrets && previous)
-        await deleteReplacedSecrets(opts.secrets, brainSecretRefs(previous), brainSecretRefs(next!));
-      return next!;
+        ]);
+        return next!;
+      } finally {
+        if (opts.secrets) {
+          await deleteReplacedSecrets(
+            opts.secrets,
+            next ? [clientSecretRef, ...(previous ? brainSecretRefs(previous) : [])] : [clientSecretRef],
+            next ? brainSecretRefs(next) : [],
+          );
+        }
+      }
     },
   };
 }

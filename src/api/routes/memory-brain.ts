@@ -6,8 +6,6 @@ import {
   putMemberBrain,
   readRegistry,
   redactBrain,
-  openBrainSecrets,
-  resolveMemoryRegistry,
   type MemoryRegistry,
   type MemoryRegistryStore,
   type RegistryChange,
@@ -57,7 +55,7 @@ async function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, o
     memberBrains: memberBrainsOn(record),
     brain: brain ? redactBrain(brain) : null,
     binding: bindings[0] ?? null,
-    disabled: own ? resolveMemoryRegistry(own, registry, await openBrainSecrets(own, registry)).disabled : [],
+    disabled: own ? (await registry.resolve(own)).disabled : [],
   };
 }
 
