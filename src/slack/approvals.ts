@@ -307,7 +307,7 @@ export function createApprovals(deps: {
     try {
       const approver = await directory.classifyActor(client, clickerId);
       const onQueued =
-        messageTs && !cardIsRemote && !delegated && !deliversElsewhere
+        messageTs && !ctx.turn.surfaceTools && !cardIsRemote && !delegated && !deliversElsewhere
           ? (runId: string): void => {
               void core
                 .reportRunEditRef(runId, messageTs)

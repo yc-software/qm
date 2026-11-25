@@ -8,9 +8,10 @@ import type { TurnResult } from "../src/types.ts";
 
 type ActionHandler = (args: any) => Promise<void>;
 
-function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
+function fixture(results: { submit: TurnResult; wait: TurnResult | null; surfaceTools?: boolean }) {
   const pinnedDuringWait: boolean[] = [];
   const events: string[] = [];
+  const editRefs: Array<[string, string]> = [];
   const core = {
     submitTurn: async () => results.submit,
     waitRun: async (runId: string) => {
@@ -18,7 +19,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
       return results.wait;
     },
     ackRunDelivery: async (runId: string) => void events.push(`ack:${runId}`),
-    reportRunEditRef: async () => {},
+    reportRunEditRef: async (runId: string, editRef: string) => void editRefs.push([runId, editRef]),
   } as unknown as SlackCoreClient;
   const flow = createTurnFlow(core, "slack");
   const directory = {
@@ -38,6 +39,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
       conversation: { kind: "dm", threadRef: "dm:D1", audience: [{ externalId: "U1" }] },
       deliveryTarget: "D1",
       text: "please run it",
+      ...(results.surfaceTools ? { surfaceTools: true } : {}),
     },
   });
   const updates: any[] = [];
@@ -60,7 +62,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
       client,
     });
   };
-  return { flow, updates, events, pinnedDuringWait, clickApprove };
+  return { flow, updates, events, editRefs, pinnedDuringWait, clickApprove };
 }
 
 test("an approved resume that comes back security-quarantined acks the delivery after the card conveys it", async () => {
@@ -103,4 +105,26 @@ test("an approved resume that is stopped before replying settles the card withou
     f.updates.some((u) => /Stopped\.|\(no response\)/.test(String(u?.text ?? ""))),
     false,
   );
+});
+
+test("an approved resume of a surface-tools turn does not hand the card ts to the run as its edit target", async () => {
+  const f = fixture({
+    submit: { status: "queued", runId: "R4" },
+    wait: { status: "ok", reply: "" },
+    surfaceTools: true,
+  });
+  await f.clickApprove();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.editRefs, []);
+  assert.match(String(f.updates.at(-1)?.text ?? ""), /allowed/i);
+});
+
+test("an approved resume of a reply-delivered turn still records the card as the run's edit target", async () => {
+  const f = fixture({
+    submit: { status: "queued", runId: "R5" },
+    wait: { status: "ok", reply: "done" },
+  });
+  await f.clickApprove();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.editRefs, [["R5", "1.0"]]);
 });
