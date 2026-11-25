@@ -65,6 +65,7 @@ import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts"
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, turnAuthority, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
+import { brainRefused, providerRef } from "../memory/provider-router.ts";
 import {
   forgetFacts,
   withProviders,
@@ -259,6 +260,7 @@ export interface ToolContext extends SurfaceToolDeps {
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
   callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string>;
   mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
@@ -1233,6 +1235,18 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
       });
+    },
+
+    async lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string> {
+      if (!memory?.lookup || !deps.memoryScopeId || !deps.memoryAccess?.read.includes(deps.memoryScopeId))
+        throw brainRefused("No brain is connected to this conversation.");
+      return memory.lookup(
+        deps.memoryScopeId,
+        providerRef(brain, tool),
+        args,
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personAuthority),
+        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+      );
     },
 
     async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
