@@ -2,7 +2,7 @@ name: iOS TestFlight
 
 on:
   push:
-    branches: [main]
+    branches: [main, ios-testflight-on-merge]
     paths:
       - "ios/**"
       - "desktop/assets/becalmed-off-halfway-rock.webp"
@@ -44,7 +44,7 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" QM_BUNDLE_ID="${{ vars.QM_BUNDLE_ID }}" \
             QM_BASE_URL="${{ vars.QM_BASE_URL }}" \
-            CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d).${{ github.run_number }}" \
+            CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d.%H%M)" \
             archive
       - name: Upload to TestFlight
         run: |
