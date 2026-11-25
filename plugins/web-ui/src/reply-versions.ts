@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { html, nothing, type TemplateResult } from "lit";
-import { ChevronDown, ChevronRight } from "lucide";
+import { ChevronRight } from "lucide";
 import { icon } from "./icons.ts";
 import { messageText, type AssistantWork } from "./core-bridge.ts";
 import { markdown } from "./message-markdown.ts";
@@ -105,7 +105,7 @@ export function replyVersionsToggle(message: AgentMessage, redraw: () => void): 
       redraw();
     }}
   >
-    · edited ${icon(open ? ChevronDown : ChevronRight, 12)}
+    · edited <span class="activity-chevron">${icon(ChevronRight, 12)}</span>
   </button>`;
 }
 

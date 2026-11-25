@@ -3096,7 +3096,8 @@ qm-markdown .tok-in {
 }
 .work[open] > summary > .activity-chevron,
 .work-fold[open] > summary > .activity-chevron,
-.tool-expandable[open] > summary > .activity-chevron {
+.tool-expandable[open] > summary > .activity-chevron,
+.reply-versions-toggle[aria-expanded="true"] > .activity-chevron {
   transform: rotate(90deg);
 }
 .work-fold > summary > .activity-chevron,
@@ -3228,6 +3229,11 @@ qm-markdown .tok-in {
 .message-meta.has-versions {
   opacity: 1;
   pointer-events: auto;
+}
+@media (hover: hover) {
+  .message-row:not(:hover) .message-meta.has-versions:not(:focus-within) > .msg-copy {
+    opacity: 0;
+  }
 }
 .reply-versions-toggle {
   display: inline-flex;
