@@ -4,7 +4,7 @@ import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
 import type { ProjectIcon } from "./projects/project-store.ts";
-import { personUserId, userPerson } from "./directory/person-refs.ts";
+import { personScopeAlias, scopeAliasPerson } from "./directory/person-refs.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -31,7 +31,7 @@ function isScopeKind(s: string): s is ScopeKind {
 }
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
-  return `${kind}:${kind === "personal" ? personUserId(ref) : ref}`;
+  return `${kind}:${kind === "personal" ? personScopeAlias(ref) : ref}`;
 }
 
 export interface WornPersona {
@@ -61,7 +61,7 @@ export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string
   if (sep < 0) return { kind: null, ref: "" };
   const raw = id.slice(0, sep);
   const ref = id.slice(sep + 1);
-  if (raw === "personal") return { kind: raw, ref: userPerson(ref) };
+  if (raw === "personal") return { kind: raw, ref: scopeAliasPerson(ref) };
   return { kind: isScopeKind(raw) ? raw : null, ref };
 }
 

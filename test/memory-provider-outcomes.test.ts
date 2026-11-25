@@ -102,8 +102,7 @@ test("an attested provider sends the canonical person on every request and the s
   installPrincipalLinks({
     canonical: (key) => (key === "u1@acme.test" || key === "U1" ? "U1" : undefined),
     aliases: () => ["u1@acme.test"],
-    userId: () => undefined,
-    claim: () => {},
+    scopeAlias: () => undefined,
   });
   t.after(() => installPrincipalLinks(null));
   const seen: Array<Record<string, unknown>> = [];
@@ -163,8 +162,7 @@ test("an attested provider is called only for the person whose private conversat
   installPrincipalLinks({
     canonical: (key) => (key === "system:digest" ? "U1" : undefined),
     aliases: () => [],
-    userId: () => undefined,
-    claim: () => {},
+    scopeAlias: () => undefined,
   });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });

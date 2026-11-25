@@ -47,11 +47,8 @@ function tenantLinks(): UserLinkStore {
     async links() {
       return [...own().values()];
     },
-    async ensure() {
-      return randomUUID();
-    },
     async link(link) {
-      const row = { ...link, userId: randomUUID() };
+      const row = { ...link, scopeAlias: link.canonicalId };
       own().set(link.principalId, row);
       return row;
     },

@@ -3,7 +3,6 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 import { isSystemActor } from "../types.ts";
-import { reportFailureAs } from "../util/errors.ts";
 import type { UserLink, UserLinkStore } from "./user-store.ts";
 
 interface PrincipalLinkInput {
@@ -42,24 +41,18 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
   const links = perTenant(() => ({
     byAlias: new Map<string, UserLink>(),
     byCanonical: new Map<string, UserLink[]>(),
-    userOf: new Map<string, string>(),
-    primaryOf: new Map<string, string>(),
-    claimed: new Set<string>(),
+    scopeOf: new Map<string, string>(),
     refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
   }));
 
   function index(rows: UserLink[]): void {
-    const { byAlias, byCanonical, userOf, primaryOf } = links();
+    const { byAlias, byCanonical, scopeOf } = links();
     byAlias.clear();
     byCanonical.clear();
-    userOf.clear();
-    primaryOf.clear();
+    scopeOf.clear();
     for (const row of rows) {
-      userOf.set(foldPrincipalId(row.principalId), row.userId);
-      if (row.principalId === row.canonicalId) {
-        primaryOf.set(row.userId, row.canonicalId);
-        continue;
-      }
+      scopeOf.set(foldPrincipalId(row.principalId), row.scopeAlias);
+      if (row.principalId === row.canonicalId) continue;
       byAlias.set(foldPrincipalId(row.principalId), row);
       const key = foldPrincipalId(row.canonicalId);
       const list = byCanonical.get(key) ?? [];
@@ -72,22 +65,10 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
 
   return {
     canonical(key) {
-      return links().byAlias.get(key)?.canonicalId ?? links().primaryOf.get(key);
+      return links().byAlias.get(key)?.canonicalId;
     },
-    userId(key) {
-      const { userOf, primaryOf } = links();
-      return userOf.get(key) ?? (primaryOf.has(key) ? key : undefined);
-    },
-    claim(key, userId) {
-      const { userOf, primaryOf, claimed } = links();
-      if (isSystemActor(key) || claimed.has(key)) return;
-      claimed.add(key);
-      userOf.set(key, userId);
-      primaryOf.set(userId, key);
-      void store
-        .ensure(key)
-        .catch(reportFailureAs(`principal links: could not record the user for ${key}`, undefined))
-        .finally(() => claimed.delete(key));
+    scopeAlias(key) {
+      return links().scopeOf.get(key);
     },
     aliases(key) {
       return (links().byCanonical.get(key) ?? []).map((row) => row.principalId);

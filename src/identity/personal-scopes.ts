@@ -1,8 +1,6 @@
 import type { PoolClient } from "pg";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { msOf } from "../sessions/items.ts";
 import { fold } from "./user-tenancy.ts";
-import { USER_ID_NAMESPACE } from "../directory/person-refs.ts";
 
 const MACHINE_TABLES = [
   "sprites_initialization",
@@ -57,19 +55,14 @@ const JSON_TABLES = `
    WHERE c.table_schema = current_schema() AND c.column_name = 'json' AND c.data_type = 'jsonb'
      AND c.table_name::text <> ALL (ARRAY['${MACHINE_TABLES.join("', '")}'])`;
 
-const FOUNDING_ID = (alias: string): string => `(SELECT (substr(h, 1, 12) || '8' || substr(h, 14, 3)
-     || to_hex((('x' || substr(h, 17, 1))::bit(4)::int & 3) | 8) || substr(h, 18, 15))::uuid
-   FROM (SELECT encode(sha256(decode('${USER_ID_NAMESPACE.replaceAll("-", "")}', 'hex') || convert_to(${alias}, 'UTF8')), 'hex') AS h) f)`;
-
 const PERSONAL_STRINGS = `'strict $.** ? (@.type() == "string" && @ starts with "personal:")'`;
 
 const tenantOf = (alias: string): string => `CASE WHEN target.tenanted THEN '${alias}.tenant_id' ELSE 'NULL::uuid' END`;
 const sameTenant = `CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END`;
 const quoted = (sql: string): string => sql.replaceAll("'", "''");
-const foldedMatch = (e: string): string => quoted(`${e} LIKE 'personal:%%' AND m.alias = ${ref(e)} %3$s`);
-const exactMatch = (e: string): string => quoted(`${e} = 'personal:' || m.alias %3$s`);
+const match = (e: string): string => quoted(`${e} = 'personal:' || m.alias %3$s`);
 
-const moveFunction = (name: string, match: (e: string) => string): string => `CREATE OR REPLACE FUNCTION ${name}()
+const MOVE_FUNCTION = `CREATE OR REPLACE FUNCTION qm_move_exact_personal_scopes()
   RETURNS TABLE(scope_table text, scope_tenant uuid, moved_rows bigint, dropped_rows bigint) LANGUAGE plpgsql AS $qm_move$
 DECLARE
   target record;
@@ -144,94 +137,44 @@ BEGIN
   DELETE FROM personal_scope_tally;
 END $qm_move$`;
 
-const UNMATCHED = `
-  FOR target IN ${SCOPE_COLUMNS} LOOP
-    EXECUTE format(
-      'INSERT INTO personal_scope_unmatched SELECT DISTINCT %3$s, %1$L, t.%2$I FROM %1$I t
-        WHERE t.%2$I LIKE ''personal:%%'' AND NOT pg_input_is_valid(substr(t.%2$I, 10), ''uuid'')',
-      target.tbl, target.col, ${tenantOf("t")});
-  END LOOP;
-  FOR target IN ${ARRAY_COLUMNS} LOOP
-    EXECUTE format(
-      'INSERT INTO personal_scope_unmatched SELECT DISTINCT %3$s, %1$L, u.e FROM %1$I t CROSS JOIN LATERAL unnest(t.%2$I) u(e)
-        WHERE u.e LIKE ''personal:%%'' AND NOT pg_input_is_valid(substr(u.e, 10), ''uuid'')',
-      target.tbl, target.col, ${tenantOf("t")});
-  END LOOP;
-  FOR target IN ${JSON_TABLES} LOOP
-    EXECUTE format(
-      'INSERT INTO personal_scope_unmatched SELECT DISTINCT %2$s, %1$L || ''.json'', v.s FROM %1$I t
-        CROSS JOIN LATERAL (SELECT x #>> ''{}'' AS s FROM jsonb_path_query(t.json, ${quoted(PERSONAL_STRINGS)}) x) v
-        WHERE t.json::text LIKE ''%%"personal:%%'' AND NOT pg_input_is_valid(substr(v.s, 10), ''uuid'')',
-      target.tbl, ${tenantOf("t")});
-  END LOOP;`;
+const REKEYED = "users/v2/0007-personal-scopes-by-user-id";
 
 export const PERSONAL_SCOPE_MIGRATIONS: PgMigrationDefinition[] = [
   {
-    id: "users/v2/0007-personal-scopes-by-user-id",
+    id: "users/v2/0008-scope-alias",
     statements: [
-      moveFunction("qm_move_personal_scopes", foldedMatch),
-      moveFunction("qm_move_exact_personal_scopes", exactMatch),
-      `DO $personal_scopes_by_user_id$
-       DECLARE
-         target record;
-         tenant uuid;
+      MOVE_FUNCTION,
+      `DROP FUNCTION IF EXISTS qm_move_personal_scopes()`,
+      `DO $scopes_back_under_aliases$
        BEGIN
+         IF NOT EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${REKEYED}') THEN RETURN; END IF;
          CREATE TEMP TABLE personal_scope_moves(tenant_id uuid, alias text, to_scope text) ON COMMIT DROP;
-         CREATE TEMP TABLE IF NOT EXISTS personal_scope_dropped(tbl text, tenant_id uuid, row_data jsonb) ON COMMIT DROP;
-         CREATE TEMP TABLE personal_scope_report(scope_table text, scope_tenant uuid, moved_rows bigint, dropped_rows bigint)
-           ON COMMIT DROP;
-         CREATE TEMP TABLE personal_scope_unmatched(tenant_id uuid, tbl text, scope text) ON COMMIT DROP;
-         ${UNMATCHED}
-         DELETE FROM personal_scope_unmatched u USING user_links l
-          WHERE l.alias_id = ${ref("u.scope")} AND (u.tenant_id IS NULL OR l.tenant_id = u.tenant_id);
-         FOR tenant IN SELECT id FROM tenants LOOP
-           PERFORM set_config('qm.tenant_id', tenant::text, true);
-           INSERT INTO users(id, primary_alias)
-             SELECT DISTINCT ${FOUNDING_ID("a.alias")}, a.alias
-               FROM (SELECT ${ref("u.scope")} AS alias FROM personal_scope_unmatched u
-                      WHERE u.tenant_id = tenant OR u.tenant_id IS NULL) a
-              WHERE a.alias <> '' AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = tenant AND l.alias_id = a.alias)
-             ON CONFLICT DO NOTHING;
-           INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-             SELECT u.primary_alias, u.id, 'primary', now() FROM users u
-              WHERE u.tenant_id = tenant
-                AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = tenant AND l.alias_id = u.primary_alias)
-             ON CONFLICT DO NOTHING;
-           DELETE FROM personal_scope_moves;
-           INSERT INTO personal_scope_moves
-             SELECT l.tenant_id, l.alias_id, 'personal:' || l.user_id FROM user_links l WHERE l.tenant_id = tenant;
-           INSERT INTO personal_scope_report SELECT * FROM qm_move_personal_scopes();
-         END LOOP;
-         RAISE NOTICE 'personal scopes keyed by user id: % rows moved, % duplicate rows dropped, % scopes matched no user',
-           (SELECT coalesce(sum(moved_rows), 0) FROM personal_scope_report),
-           (SELECT coalesce(sum(dropped_rows), 0) FROM personal_scope_report),
-           (SELECT count(DISTINCT (tenant_id, scope)) FROM personal_scope_unmatched);
-         IF to_regclass('audit_log') IS NULL THEN RETURN; END IF;
-         INSERT INTO audit_log(tenant_id, at, principal_id, action, resource, scope_label, detail)
-         SELECT t.tenant_id, ${msOf("now()")}, 'system:migration', 'personal_scopes_by_user_id', 'personal scopes', 'users',
-                jsonb_build_object(
-                  'moved', (SELECT coalesce(jsonb_object_agg(r.tbl, r.n), '{}') FROM (SELECT scope_table AS tbl, sum(moved_rows) AS n
-                             FROM personal_scope_report WHERE scope_tenant = t.tenant_id GROUP BY scope_table) r WHERE r.n > 0),
-                  'dropped', (SELECT coalesce(jsonb_object_agg(r.tbl, r.n), '{}') FROM (SELECT scope_table AS tbl, sum(dropped_rows) AS n
-                               FROM personal_scope_report WHERE scope_tenant = t.tenant_id GROUP BY scope_table) r WHERE r.n > 0),
-                  'droppedRows', (SELECT coalesce(jsonb_agg(jsonb_build_object('table', d.tbl, 'row', d.row_data)), '[]')
-                                    FROM personal_scope_dropped d WHERE d.tenant_id = t.tenant_id),
-                  'unmatched', (SELECT coalesce(jsonb_agg(jsonb_build_object('scope', u.scope, 'tables', u.tables)
-                                                          ORDER BY u.scope), '[]')
-                                  FROM (SELECT scope, jsonb_agg(DISTINCT tbl) AS tables FROM personal_scope_unmatched
-                                         WHERE tenant_id = t.tenant_id GROUP BY scope) u))::text
-           FROM (SELECT scope_tenant AS tenant_id FROM personal_scope_report UNION SELECT tenant_id FROM personal_scope_unmatched) t
-          WHERE t.tenant_id IS NOT NULL;
-       END $personal_scopes_by_user_id$`,
+         INSERT INTO personal_scope_moves SELECT tenant_id, id::text, 'personal:' || primary_alias FROM users;
+         PERFORM qm_move_exact_personal_scopes();
+       END $scopes_back_under_aliases$`,
+      `ALTER TABLE users ADD COLUMN scope_alias TEXT`,
+      `UPDATE users SET scope_alias = primary_alias`,
+      `ALTER TABLE users ALTER COLUMN scope_alias SET NOT NULL`,
+      `ALTER TABLE users ADD CONSTRAINT users_scope_alias_link FOREIGN KEY (tenant_id, id, scope_alias)
+         REFERENCES user_links(tenant_id, user_id, alias_id) DEFERRABLE INITIALLY DEFERRED`,
+      `CREATE FUNCTION users_scope_alias() RETURNS trigger LANGUAGE plpgsql AS $users_scope_alias$
+       BEGIN
+         NEW.scope_alias := coalesce(NEW.scope_alias, NEW.primary_alias);
+         RETURN NEW;
+       END $users_scope_alias$`,
+      `CREATE TRIGGER users_scope_alias BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION users_scope_alias()`,
     ],
   },
 ];
 
-export async function movePersonalScope(client: PoolClient, fromUserId: string, toScope: string): Promise<void> {
+export async function movePersonalScope(client: PoolClient, fromAlias: string, toUserId: string): Promise<void> {
   await client.query(
     `CREATE TEMP TABLE IF NOT EXISTS personal_scope_moves(tenant_id uuid, alias text, to_scope text) ON COMMIT DROP`,
   );
-  await client.query(`INSERT INTO personal_scope_moves VALUES (qm_bound_tenant(), $1, $2)`, [fromUserId, toScope]);
+  await client.query(
+    `INSERT INTO personal_scope_moves SELECT tenant_id, $1, 'personal:' || scope_alias FROM users WHERE id = $2`,
+    [fromAlias, toUserId],
+  );
   await client.query(`SELECT FROM qm_move_exact_personal_scopes()`);
   await client.query(`DELETE FROM personal_scope_moves`);
 }

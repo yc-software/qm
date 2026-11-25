@@ -123,8 +123,7 @@ test("an inbox event emitted outside any tenant binding is forwarded inside the 
   installPrincipalLinks({
     canonical: () => (currentTenant(), undefined),
     aliases: () => [],
-    userId: () => undefined,
-    claim: () => {},
+    scopeAlias: () => undefined,
   });
   withoutTenant(() => events.start());
   try {

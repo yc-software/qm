@@ -331,8 +331,7 @@ test("actor attestation is opt-in and taken from capability claims", async (t) =
   installPrincipalLinks({
     canonical: () => undefined,
     aliases: (id) => (id === "actor-42" ? ["provider:stable-7"] : []),
-    userId: () => undefined,
-    claim: () => {},
+    scopeAlias: () => undefined,
   });
   t.after(() => installPrincipalLinks(null));
   for (const actor of [undefined, false, true]) {

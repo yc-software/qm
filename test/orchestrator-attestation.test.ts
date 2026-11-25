@@ -288,8 +288,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
   installPrincipalLinks({
     canonical: (key) => (key === "u1@example.test" ? "U1" : undefined),
     aliases: () => [],
-    userId: () => undefined,
-    claim: () => {},
+    scopeAlias: () => undefined,
   });
   t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
