@@ -554,13 +554,10 @@ test("Render clears expired temporary credentials after a native restore", async
 
 test("Render disposes a new native checkpoint when its staging record write fails", async (t) => {
   const { make, fake, store, scope } = setup(t);
-  const info = await fake.client.create({ lifetimeSec: 86400 });
-  await store.put(scope, {
-    sandboxId: info.id,
-    expiresAtMs: info.expiresAtMs,
-    lastActivityMs: Date.now(),
-    baseImage: BASE_REF,
-  });
+  const sandbox = make();
+  const handle = await sandbox.provision(scope);
+  const before = (await store.get(scope))!;
+  const snapshots = fake.snapshots.size;
   const merge = store.merge;
   let failed = false;
   store.merge = async (key, patch) => {
@@ -570,13 +567,13 @@ test("Render disposes a new native checkpoint when its staging record write fail
     }
     return merge(key, patch);
   };
-  const sandbox = make();
-  await sandbox.teardown(await sandbox.provision(scope));
+  await sandbox.teardown(handle);
   const stored = (await store.get(scope))!;
+  assert.equal(failed, true);
   assert.equal(stored.recoveryError, "pending record outage");
-  assert.equal(stored.checkpoint, undefined);
+  assert.equal(stored.checkpoint?.id, before.checkpoint?.id);
   assert.equal(stored.retiredResources, undefined);
-  assert.equal(fake.snapshots.size, 0);
+  assert.equal(fake.snapshots.size, snapshots);
   await sandbox.destroyScope!(scope);
   assert.equal(await store.get(scope), null);
 });
@@ -891,7 +888,7 @@ test("Render preserves a write that arrives during native snapshot capture", asy
   const { make, fake, store, scope } = setup(t);
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
-  const sandbox = make(5 * 60_000);
+  const sandbox = make();
   const handle = await sandbox.provision(scope);
   const captured = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
