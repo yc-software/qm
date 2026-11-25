@@ -43,7 +43,13 @@ async function setup() {
     return result.sessionId!;
   };
   const subagent = async (parentId: string, thread: string) => {
-    const child = await built.sessions.getOrCreateByThread(thread, "dm", "personal:owner", undefined, "web");
+    const child = await built.sessions.getOrCreateByThread(
+      thread,
+      "dm",
+      scopeId("personal", "owner"),
+      undefined,
+      "web",
+    );
     await built.sessions.addParticipant(child.id, "owner");
     await built.sessions.setParentSession(child.id, parentId);
     return child;
@@ -76,7 +82,7 @@ test("moving a chat where nobody new can read it re-homes the same chat without 
   assert.equal(view.title, "Launch checklist");
   assert.equal(view.pinned, true);
   assert.equal(view.archived, undefined);
-  assert.equal((await built.sessions.listByScope("personal:owner")).length, 0, "nothing is left behind");
+  assert.equal((await built.sessions.listByScope(scopeId("personal", "owner"))).length, 0, "nothing is left behind");
   const audits = (await built.auditLog.events(tenant)).filter((e) => e.action === "session.move");
   assert.equal(audits.length, 1);
   assert.equal(audits[0]!.resource, sid);
@@ -109,7 +115,7 @@ test("broadening a chat's readers needs the user to confirm exactly who gains ac
     },
     "someone who joined after the confirmation was shown is not let in",
   );
-  assert.equal((await built.sessions.get(sid))!.scopeId, "personal:owner");
+  assert.equal((await built.sessions.get(sid))!.scopeId, scopeId("personal", "owner"));
 
   assert.equal((await move(sid, "owner", scope, { audience: ["member", "outsider"] })).outcome, "moved");
   const view = await built.app.getSessionForViewer(sid, { actorId: "member" });
@@ -127,8 +133,8 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
   const sid = await personal("owner", "web:owner:move-attached", "Keep an eye on the launch");
   const thread = (await built.sessions.get(sid))!.threadRef;
   await built.sessions.setGoal({ sessionId: sid }, createGoalRecord({ objective: "ship the launch" }));
-  const destination = { type: "web", target: thread, audienceScopeId: "personal:owner" as const };
-  const owned = { ownerScopeId: "personal:owner" as const, owner: "owner", createdBy: "owner", destination };
+  const destination = { type: "web", target: thread, audienceScopeId: scopeId("personal", "owner") };
+  const owned = { ownerScopeId: scopeId("personal", "owner"), owner: "owner", createdBy: "owner", destination };
   const cron = await built.crons.create({
     ...owned,
     schedule: { everyMs: 3_600_000 },
@@ -194,11 +200,11 @@ test("a chat's goal, schedules, watches, webhooks, subagents and their computers
   assert.equal(movedCron.destination?.audienceScopeId, scope);
   assert.equal(movedCron.destination?.target, thread, "and still posts into the same chat");
   assert.deepEqual(movedCron.script, { command: "true" }, "its pinned personal computer stays behind");
-  assert.equal((await built.crons.get(elsewhere.id))!.ownerScopeId, "personal:owner");
+  assert.equal((await built.crons.get(elsewhere.id))!.ownerScopeId, scopeId("personal", "owner"));
   assert.equal((await built.app.getWebhook(webhook.id))!.ownerScopeId, scope);
   assert.equal((await built.monitors.get(watch.id))!.ownerScopeId, scope);
   const movedLoop = (await built.loops.store.get(loop.id))!;
-  assert.equal(movedLoop.ownerScopeId, "personal:owner", "a loop belongs to its space and stays");
+  assert.equal(movedLoop.ownerScopeId, scopeId("personal", "owner"), "a loop belongs to its space and stays");
   assert.deepEqual(
     movedLoop.destination,
     { type: "web", target: thread, audienceScopeId: scope },
@@ -250,7 +256,7 @@ test("only work that is running right now holds a move back", async () => {
   });
   await built.processes!.register({
     processId: "p-move-job",
-    scopeId: "personal:owner",
+    scopeId: scopeId("personal", "owner"),
     sandboxId: "personal-box",
     kind: "background",
     command: "bg: npm run build",
@@ -289,7 +295,7 @@ test("only work that is running right now holds a move back", async () => {
   await built.processes!.markStatus("p-move-job", "exited");
   const second = await moveAll([other]);
   assert.ok(second.outcome === "moved" && second.sessions.length === 1, "a finished job no longer holds it back");
-  assert.equal((await built.sessions.get(sid))!.scopeId, "personal:owner", "refused moves change nothing");
+  assert.equal((await built.sessions.get(sid))!.scopeId, scopeId("personal", "owner"), "refused moves change nothing");
 });
 
 test("moves are refused for non-members, strangers, side chats, and non-project targets", async () => {
@@ -304,7 +310,7 @@ test("moves are refused for non-members, strangers, side chats, and non-project 
     held: [{ sessionId: sid, reason: "not_found" }],
     stoppedLoops: [],
   });
-  assert.deepEqual(await move(sid, "owner", "personal:owner"), { outcome: "not_project" });
+  assert.deepEqual(await move(sid, "owner", scopeId("personal", "owner")), { outcome: "not_project" });
   const sideChat = await built.app.forkSession(sid, "owner", {
     sideChat: { entrySeq: 0, quote: "private notes", occurrence: 0 },
   });

@@ -347,7 +347,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await db
         .forTenant(tenant)
         .q(participantSessionsSql(" AND s.tenant_id = $3 AND s.id = ANY($2::text[])"), [
-          principalId,
+          rosterIds(principalId),
           [...ids],
           tenant.id,
         ]);
