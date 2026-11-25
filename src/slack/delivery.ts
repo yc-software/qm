@@ -105,7 +105,8 @@ export async function personaContinues(
     return (await read(at.channel, { ...own, at: at.threadTs }))[0];
   };
   const last = await previous().catch(swallowAs("slack: previous persona lookup", undefined));
-  return last?.authorName !== undefined && last.authorName === persona.name.trim();
+  const name = botIdentityArgs(persona).username;
+  return name !== undefined && last?.authorName === name;
 }
 
 export function slackReplyArgs(
