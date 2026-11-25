@@ -30,7 +30,9 @@ fn has_role(e: &El, roles: &[&str]) -> bool {
 
 fn describe(e: &El) -> String {
     let role = str_attr(e, "AXRole").unwrap_or_default();
-    let name = str_attr(e, "AXTitle").or_else(|| str_attr(e, "AXDescription")).or_else(|| str_attr(e, "AXValue"));
+    let name = str_attr(e, "AXTitle")
+        .or_else(|| str_attr(e, "AXDescription"))
+        .or_else(|| (!secure_element(e)).then(|| str_attr(e, "AXValue")).flatten());
     match name {
         Some(n) => format!("{} \"{}\"", role.trim_start_matches("AX"), clip(&n, 40)),
         None => role.trim_start_matches("AX").to_string(),
@@ -513,6 +515,12 @@ pub(super) fn set_value(
     submit: Option<bool>,
     focus: impl FnOnce() -> Result<(), Failure>,
 ) -> Result<(), Failure> {
+    if secure_element(e) {
+        return Err(fail(
+            ErrorCode::ActionFailed,
+            format!("element {index} is a password field; setValue never reads password fields, so it cannot verify them. Click it and use typeText"),
+        ));
+    }
     if !settable(e, "AXValue") {
         return Err(fail(
             ErrorCode::ActionFailed,
@@ -564,16 +572,41 @@ pub(super) fn set_value(
         0 => {}
         n => return Err(fail(ErrorCode::ActionFailed, format!("setting element {index}'s value failed (AXError {n})"))),
     }
-    let old = before.as_ref().and_then(text_of);
-    let now = attr(e, "AXValue").as_ref().and_then(text_of);
-    if texty && now.as_deref() != Some(value) && now.is_some() && now == old {
-        return Err(fail(
-            ErrorCode::ActionFailed,
-            format!(
-                "element {index} did not take the value (it still reads {:?}); click it and use typeText or paste",
-                clip(&now.unwrap_or_default(), 80)
-            ),
-        ));
+    let want = held(&new).ok_or_else(|| fail(ErrorCode::ActionFailed, format!("element {index}'s new value could not be prepared")))?;
+    let old = before.as_ref().and_then(held);
+    let mut now = None;
+    crate::outcome::after(
+        || {
+            now = attr(e, "AXValue").as_ref().and_then(held);
+            Ok(crate::outcome::Check::new(now.as_ref().is_some_and(|now| text::holds(&want, now)), ""))
+        },
+        SETTLE_MAX.as_millis() as u32,
+        cancellation::wait,
+        cancellation::cancelled,
+    )?;
+    match now {
+        Some(now) if text::holds(&want, &now) => {}
+        Some(now) if texty && Some(&now) == old.as_ref() => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!(
+                    "element {index} did not take the value (it still reads {:?}); click it and use typeText or paste",
+                    clip(&now.shown(), 80)
+                ),
+            ))
+        }
+        Some(now) => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!("element {index} reads {:?} after the write, not {value:?}; observe it before retrying", clip(&now.shown(), 80)),
+            ))
+        }
+        None => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!("element {index}'s value could not be read back after the write, so it is unconfirmed; observe it before retrying"),
+            ))
+        }
     }
     if submit == Some(true) {
         if actions(e).iter().any(|a| a == "AXConfirm") {

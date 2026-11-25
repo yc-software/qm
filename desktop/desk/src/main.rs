@@ -9,6 +9,8 @@ mod focus_protocol;
 mod intervention;
 #[cfg(any(target_os = "macos", test))]
 mod keys;
+#[cfg(any(target_os = "macos", test))]
+mod outcome;
 mod protocol;
 mod text;
 #[cfg(any(target_os = "macos", test))]
@@ -41,6 +43,7 @@ use std::io::{BufRead, Write};
 const USAGE: &str = "usage:
   desk permissions [--prompt]
   desk apps
+  desk windows <app>
   desk observe <app> [--png out.png]
   desk act <app> '<actions json>' [--png out.png]
   desk serve            JSON lines on stdin/stdout (see PROTOCOL.md)";
@@ -61,7 +64,8 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("serve") => return serve(&mut desk),
         Some("permissions") => Command::Permissions { prompt: args.iter().any(|a| a == "--prompt") },
         Some("apps") => Command::Apps,
-        Some("observe") => Command::Observe { app: arg(1)?, screenshot: png.is_some(), diff: false },
+        Some("windows") => Command::Windows { app: arg(1)? },
+        Some("observe") => Command::Observe { app: arg(1)?, screenshot: png.is_some(), diff: false, tree: true, window: None },
         Some("act") => Command::Act {
             app: arg(1)?,
             actions: serde_json::from_str(&arg(2)?).map_err(|e| format!("bad actions json: {e}"))?,
@@ -69,11 +73,14 @@ fn run(args: &[String]) -> Result<(), String> {
             screenshot: png.is_some(),
             pace: false,
             diff: false,
+            window: None,
+            expect: None,
         },
         _ => return Err(USAGE.into()),
     };
     if let Command::Act { app, .. } = &cmd {
-        if let Reply::Error(error) = desk.handle(Command::Observe { app: app.clone(), screenshot: false, diff: false }, &mut |_, _| Ok(()))
+        if let Reply::Error(error) =
+            desk.handle(Command::Observe { app: app.clone(), screenshot: false, diff: false, tree: true, window: None }, &mut |_, _| Ok(()))
         {
             return print(Reply::Error(error), None);
         }
@@ -86,6 +93,9 @@ fn show(o: &Observation, png: Option<&str>) -> Result<(), String> {
     let f = o.frame;
     println!("{} \"{}\" pid {} @{:.0},{:.0} {:.0}x{:.0}, {} elements{cut}", o.app, o.window, o.pid, f.x, f.y, f.w, f.h, o.elements);
     print!("{}", o.tree);
+    if let Some(error) = &o.screenshot_error {
+        println!("screenshot unavailable: {error}");
+    }
     if let (Some(s), Some(path)) = (&o.screenshot, png) {
         let bytes = base64::engine::general_purpose::STANDARD.decode(&s.png_base64).map_err(|e| e.to_string())?;
         std::fs::write(path, bytes).map_err(|e| e.to_string())?;
@@ -97,8 +107,11 @@ fn show(o: &Observation, png: Option<&str>) -> Result<(), String> {
 fn print(reply: Reply, png: Option<&str>) -> Result<(), String> {
     match &reply {
         Reply::Observation(o) => show(o, png),
-        Reply::Acted { completed, failure, observation, observation_failure } => {
+        Reply::Acted { completed, failure, observation, observation_failure, outcome } => {
             println!("completed {completed} action(s)");
+            if let Some(o) = outcome {
+                println!("outcome {:?}: {}", o.status, o.detail);
+            }
             if let Some(f) = failure {
                 println!("action {} failed: {:?}: {}", f.action.unwrap_or(0), f.code, f.message);
             }
@@ -111,6 +124,13 @@ fn print(reply: Reply, png: Option<&str>) -> Result<(), String> {
             for a in apps {
                 let active = if a.active { " (active)" } else { "" };
                 println!("{:<28} {:<40} pid {:<6}{active}", a.name, a.bundle_id.as_deref().unwrap_or("-"), a.pid);
+            }
+            Ok(())
+        }
+        Reply::Windows { windows } => {
+            for w in windows {
+                let f = w.frame.map(|f| format!("{:.0}x{:.0}", f.w, f.h)).unwrap_or_else(|| "-".into());
+                println!("{:<10} {:<24} {:<40} {f}", w.id, w.subrole.as_deref().unwrap_or(&w.role), w.title);
             }
             Ok(())
         }
