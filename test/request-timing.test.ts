@@ -15,7 +15,7 @@ import { withTraceCarrier } from "../src/runs/run-store.ts";
 import { collectSpans, segments } from "./support/sentry-spans.ts";
 
 const sentry = await collectSpans();
-initializeErrorReporting(Sentry, "core", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
+initializeErrorReporting(Sentry, "core", undefined, { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
 after(() => sentry.close());
 
 async function settle(predicate: () => boolean): Promise<void> {

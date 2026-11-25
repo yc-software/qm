@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type * as Sentry from "@sentry/node";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -66,6 +67,7 @@ const SQL_VERBS = new Set(
 );
 const POOL_CHECKOUT = "pg-pool.connect";
 const IDLE_CHECKOUT_SECONDS = 0.001;
+const EVENT_LOOP_BLOCK_MS = 500;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
 const SPAN_STATUS_NAMES = new Set<unknown>(
   "cancelled unknown_error invalid_argument deadline_exceeded not_found already_exists permission_denied resource_exhausted failed_precondition aborted out_of_range unimplemented internal_error unavailable data_loss unauthenticated".split(
@@ -93,6 +95,13 @@ export interface TraceCarrier {
 
 type StreamedSpan = Parameters<Parameters<typeof Sentry.withStreamedSpan>[0]>[0];
 type Envelope = Parameters<NonNullable<ReturnType<typeof Sentry.getClient>>["sendEnvelope"]>[0];
+type LoadNative = () => Promise<{
+  eventLoopBlockIntegration(options: {
+    threshold: number;
+    maxEventsPerHour: number;
+    staticTags: Record<string, string>;
+  }): Parameters<Sentry.NodeClient["addIntegration"]>[0];
+}>;
 
 function firstWord(text: string | undefined, allowed: Set<string>): string | undefined {
   const word = /^[A-Za-z]+/.exec(text ?? "")?.[0]?.toUpperCase();
@@ -189,20 +198,44 @@ function sampler(rate: number) {
   };
 }
 
+function serverName(env: NodeJS.ProcessEnv): string {
+  const metadata = env.ECS_CONTAINER_METADATA_URI_V4;
+  if (!metadata) return hostname();
+  const container = URL.parse(metadata)?.pathname.split("/").at(-1);
+  return container?.split("-")[0] || hostname();
+}
+
+async function watchEventLoop(sdk: typeof Sentry, loadNative: LoadNative, server: string): Promise<void> {
+  try {
+    const { eventLoopBlockIntegration } = await loadNative();
+    sdk.getClient()?.addIntegration(
+      eventLoopBlockIntegration({
+        threshold: EVENT_LOOP_BLOCK_MS,
+        maxEventsPerHour: Number.POSITIVE_INFINITY,
+        staticTags: { server_name: server },
+      }),
+    );
+  } catch (error) {
+    swallow("event loop block detection", error);
+  }
+}
+
 export function initializeErrorReporting(
   sdk: typeof Sentry,
   service: string,
+  loadNative?: LoadNative,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (!env.SENTRY_DSN || client) return;
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   const traced = tracesSampleRate > 0;
   const deployment = env.SENTRY_DEPLOYMENT ?? env.ORG_ID ?? env.CORE_ORG_ID;
+  const server = serverName(env);
   sdk.init({
     dsn: env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT ?? env.NODE_ENV ?? "development",
     release: env.SENTRY_RELEASE ?? env.GIT_SHA,
-    serverName: "",
+    serverName: server,
     defaultIntegrations: false,
     integrations: [
       sdk.onUncaughtExceptionIntegration(),
@@ -248,6 +281,7 @@ export function initializeErrorReporting(
   }
   client = sdk;
   tracing = traced;
+  if (loadNative) void watchEventLoop(sdk, loadNative, server);
   process.on("unhandledRejection", (reason: unknown) => {
     sdk.captureException(reason, {
       captureContext: { level: "fatal" },

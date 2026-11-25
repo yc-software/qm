@@ -14,7 +14,7 @@ import { collectSpans } from "./support/sentry-spans.ts";
 import { personalScope } from "../src/types.ts";
 
 const sentry = await collectSpans();
-initializeErrorReporting(Sentry, "worker", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
+initializeErrorReporting(Sentry, "worker", undefined, { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
 after(() => sentry.close());
 
 function anthropicStream(block: Record<string, unknown>, delta: Record<string, unknown>, stopReason: string): string {

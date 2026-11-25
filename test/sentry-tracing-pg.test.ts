@@ -15,7 +15,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
 
 const sentry = await collectSpans();
-initializeErrorReporting(Sentry, "worker", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
+initializeErrorReporting(Sentry, "worker", undefined, { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
 after(() => sentry.close());
 
 test("Postgres queries become spans that name the SQL verb and nothing else", { skip }, async () => {
