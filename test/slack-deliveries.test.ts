@@ -24,6 +24,7 @@ async function deliver(
     approval?: unknown;
     updateError?: string;
     provenance?: Record<string, unknown>;
+    readSurfaceMessages?: (container: string, opts: Record<string, unknown>) => Promise<unknown[]>;
   } = {},
 ) {
   const delivery = {
@@ -55,6 +56,7 @@ async function deliver(
   };
   const ackBodies: Array<Record<string, unknown>> = [];
   const core = {
+    ...(row.readSurfaceMessages ? { readSurfaceMessages: row.readSurfaceMessages } : {}),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
     failDelivery: async (id: string, code: string) => void failures.push([id, code]),
@@ -262,6 +264,23 @@ for (const [label, destination, sourceThreadRef, webUiPublicUrl, footer] of [
     });
   });
 }
+
+test("a persona post drops its origin when the thread's previous own message wore the same persona", async () => {
+  const reads: unknown[] = [];
+  const footer = async (authorName: string) => {
+    const readSurfaceMessages = async (container: string, opts: Record<string, unknown>) => {
+      reads.push({ container, sub: opts.sub, self: opts.self });
+      return [{ authorName }];
+    };
+    const { posts } = await deliver({ persona: { id: "a", name: "Ada" } }, undefined, undefined, "Hi", {
+      readSurfaceMessages,
+    });
+    return (posts[0]!.blocks as Array<{ elements?: Array<{ text: string }> }> | undefined)?.at(-1)?.elements?.[0]?.text;
+  };
+  assert.equal(await footer("Ada"), undefined);
+  assert.equal(await footer("Bo"), "From Ada");
+  assert.deepEqual(reads[0], { container: "C1", sub: "100.200", self: true });
+});
 
 test("ordinary deliveries omit cron settings even with a configured web UI", async () => {
   const { posts } = await deliver({ unfurlLinks: false }, "dm:D1", "https://agent.example/web-ui");

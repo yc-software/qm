@@ -7,6 +7,7 @@ import { emojiNameOf } from "./emoji-map.ts";
 import { blocksWithContext, escapeSlackText } from "./mrkdwn.ts";
 import { projectScopeId } from "../projects/project-store.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
+import type { CachedMessage, ReadMessagesOpts } from "../surface-cache/types.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -89,6 +90,24 @@ export function originContext(opts: {
   return parts.length ? { type: "mrkdwn", text: parts.join(" · "), verbatim: true } : undefined;
 }
 
+export type SurfaceMessageReader = (container: string, opts: ReadMessagesOpts) => Promise<CachedMessage[]>;
+
+export async function personaContinues(
+  read: SurfaceMessageReader | undefined,
+  at: { channel: string; threadTs?: string; before?: string },
+  persona: WornPersona | undefined,
+): Promise<boolean> {
+  if (!read || !persona) return false;
+  const own = { self: true, limit: 1, noFallback: true, ...(at.before ? { before: at.before } : {}) };
+  const previous = async (): Promise<CachedMessage | undefined> => {
+    const [reply] = await read(at.channel, { ...own, sub: at.threadTs ?? null });
+    if (reply || !at.threadTs) return reply;
+    return (await read(at.channel, { ...own, at: at.threadTs }))[0];
+  };
+  const last = await previous().catch(swallowAs("slack: previous persona lookup", undefined));
+  return last?.authorName !== undefined && last.authorName === persona.name.trim();
+}
+
 export function slackReplyArgs(
   channel: string,
   text: string,
@@ -126,11 +145,13 @@ export function slackPersonaReplyArgs(
     persona?: WornPersona;
     webUiPublicUrl?: string;
     footer?: Array<Record<string, unknown>>;
+    hideOrigin?: boolean;
   },
 ): PostMessageArgs {
-  const origin = opts?.persona
-    ? originContext({ persona: opts.persona, webUiPublicUrl: opts.webUiPublicUrl })
-    : undefined;
+  const origin =
+    opts?.persona && !opts.hideOrigin
+      ? originContext({ persona: opts.persona, webUiPublicUrl: opts.webUiPublicUrl })
+      : undefined;
   const footer = [...(opts?.footer ?? []), ...(origin ? [origin] : [])];
   return {
     ...slackReplyArgs(channel, text, replyThreadTs, opts),

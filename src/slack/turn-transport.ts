@@ -3,8 +3,10 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { attachmentList, logAttachmentFailure } from "../surfaces/attachments.ts";
 import {
   type PostMessageArgs,
+  type SurfaceMessageReader,
   batchPostMessageArgs,
   botIdentityArgs,
+  personaContinues,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
@@ -31,6 +33,7 @@ export function createSlackTurnTransport(at: {
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
   webUiPublicUrl?: string;
+  readSurfaceMessages?: SurfaceMessageReader;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
 }): SurfaceTransport {
@@ -45,6 +48,7 @@ export function createSlackTurnTransport(at: {
           ...baseOpts,
           webUiPublicUrl: at.webUiPublicUrl,
           ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
+          hideOrigin: await personaContinues(at.readSurfaceMessages, { channel, threadTs }, opts.persona),
         });
     if (opts.idempotencyKey) return (await postWithVerify(client, args, opts.idempotencyKey)).ts;
     let firstTs: string | undefined;
