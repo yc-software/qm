@@ -56,10 +56,6 @@ export function runDeliveryId(d: Pick<Delivery, "idempotencyKey">): string | und
   return d.idempotencyKey?.startsWith("run:") ? d.idempotencyKey.slice("run:".length) : undefined;
 }
 
-export function postingRunId(d: Pick<Delivery, "idempotencyKey">): string | undefined {
-  return runDeliveryId(d) ?? /^post:([^:]+):/.exec(d.idempotencyKey ?? "")?.[1];
-}
-
 export function liveRunHoldsDelivery(
   inFlightRuns: Pick<TurnFlow["inFlightRuns"], "has">,
   d: Pick<Delivery, "idempotencyKey" | "createdAt">,

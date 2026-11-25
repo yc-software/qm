@@ -179,8 +179,11 @@ export function createSlackSessionStatus(
             swallowAs("slack: session status after a post", undefined),
           );
         },
-        release: (ts: string) =>
-          sync(client, id, undefined, ts).catch(swallowAs("slack: release session status", undefined)),
+        async release(ts: string) {
+          const row = await store.get(id);
+          if (!row || ![row.cardTs, row.host?.ts].includes(ts)) return;
+          await sync(client, id, undefined, ts).catch(swallowAs("slack: release session status", undefined));
+        },
       };
     },
     async reconcile(client: StatusClient, account: string) {

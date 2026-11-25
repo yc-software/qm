@@ -33,7 +33,7 @@ import {
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
-import { liveRunHoldsDelivery, postingRunId, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
+import { liveRunHoldsDelivery, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
@@ -354,14 +354,8 @@ export function createSlackDeliverer(deps: {
           );
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
-          const by = postingRunId(d);
-          if (
-            by &&
-            threadTs &&
-            res.ts &&
-            !res.parts &&
-            d.provenance?.sourceThreadRef.endsWith(`${channel}:${threadTs}`)
-          )
+          const by = d.provenance?.sourceRunId ?? runDeliveryId(d);
+          if (by && threadTs && res.ts && !res.parts)
             void deps
               .card?.(channel, threadTs)
               ?.posted({ text, ...(footerBlocks ? { blocks: footerBlocks } : {}) }, res.ts, by);
