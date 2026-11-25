@@ -15,12 +15,19 @@ pub enum Command {
         prompt: bool,
     },
     Apps,
+    Windows {
+        app: String,
+    },
     Observe {
         app: String,
         #[serde(default)]
         screenshot: bool,
         #[serde(default = "yes")]
         diff: bool,
+        #[serde(default = "yes")]
+        tree: bool,
+        #[serde(default)]
+        window: Option<u32>,
     },
     Act {
         app: String,
@@ -33,6 +40,10 @@ pub enum Command {
         pace: bool,
         #[serde(default = "yes")]
         diff: bool,
+        #[serde(default)]
+        window: Option<u32>,
+        #[serde(default)]
+        expect: Option<Expect>,
     },
     Arrived,
 }
@@ -107,6 +118,22 @@ pub enum Action {
     Wait {
         ms: u32,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Expect {
+    pub condition: Condition,
+    #[serde(default)]
+    pub timeout_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Condition {
+    Gone { index: u32 },
+    Value { index: u32, equals: String },
+    Window { title: String, open: bool },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -191,11 +218,31 @@ pub struct Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
-    Permissions { accessibility: bool, screen_recording: bool, binary: String, help: String },
-    Apps { apps: Vec<AppInfo> },
+    Permissions {
+        accessibility: bool,
+        screen_recording: bool,
+        input_monitoring: bool,
+        binary: String,
+        help: String,
+    },
+    Apps {
+        apps: Vec<AppInfo>,
+    },
+    Windows {
+        windows: Vec<WindowInfo>,
+    },
     Observation(Observation),
-    Acted { completed: u32, failure: Option<Failure>, observation: Option<Observation>, observation_failure: Option<Failure> },
-    Pointer { action: u32, point: Point },
+    Acted {
+        completed: u32,
+        failure: Option<Failure>,
+        observation: Option<Observation>,
+        observation_failure: Option<Failure>,
+        outcome: Option<Outcome>,
+    },
+    Pointer {
+        action: u32,
+        point: Point,
+    },
     Error(Failure),
 }
 
@@ -206,6 +253,35 @@ pub struct AppInfo {
     pub bundle_id: Option<String>,
     pub pid: i32,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowInfo {
+    pub id: u32,
+    pub title: String,
+    pub role: String,
+    pub subrole: Option<String>,
+    pub frame: Option<Rect>,
+    pub focused: bool,
+    pub main: bool,
+    pub minimized: bool,
+    pub parent: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Outcome {
+    pub status: OutcomeStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutcomeStatus {
+    Verified,
+    Already,
+    Unmet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +299,7 @@ pub struct Observation {
     pub tree: String,
     pub removed: Vec<u32>,
     pub screenshot: Option<Screenshot>,
+    pub screenshot_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -269,5 +346,49 @@ pub enum ErrorCode {
 impl Failure {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Failure { code, message: message.into(), action: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_requests_parse_with_window_tree_and_expect() {
+        let observe: Command =
+            serde_json::from_str(r#"{"type":"observe","app":"Mail","screenshot":true,"diff":false,"tree":false,"window":42}"#).unwrap();
+        assert!(matches!(observe, Command::Observe { screenshot: true, tree: false, window: Some(42), .. }));
+        let defaults: Command = serde_json::from_str(r#"{"type":"observe","app":"Mail"}"#).unwrap();
+        assert!(matches!(defaults, Command::Observe { tree: true, window: None, .. }));
+        let act: Command = serde_json::from_str(
+            r#"{"type":"act","app":"Mail","actions":[{"type":"click","target":{"index":3}}],"observe":false,"window":42,
+                "expect":{"condition":{"type":"window","title":"Save","open":false},"timeout_ms":500}}"#,
+        )
+        .unwrap();
+        let Command::Act { window: Some(42), expect: Some(expect), .. } = act else { panic!("{act:?}") };
+        assert!(matches!(expect.condition, Condition::Window { ref title, open: false } if title == "Save"));
+        assert_eq!(expect.timeout_ms, Some(500));
+        assert!(serde_json::from_str::<Expect>(r#"{"condition":{"type":"gone","index":1},"extra":1}"#).is_err());
+        let windows: Command = serde_json::from_str(r#"{"type":"windows","app":"Mail"}"#).unwrap();
+        assert!(matches!(windows, Command::Windows { .. }));
+    }
+
+    #[test]
+    fn replies_carry_outcomes_and_screenshot_errors() {
+        let reply = Reply::Acted {
+            completed: 0,
+            failure: None,
+            observation: None,
+            observation_failure: None,
+            outcome: Some(Outcome {
+                status: OutcomeStatus::Already,
+                detail: "element 4 is gone before the action, so it was not sent".into(),
+            }),
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["outcome"]["status"], "already");
+        let parsed: Reply =
+            serde_json::from_str(r#"{"type":"acted","completed":1,"failure":null,"observation":null,"observation_failure":null}"#).unwrap();
+        assert!(matches!(parsed, Reply::Acted { outcome: None, .. }));
     }
 }

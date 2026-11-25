@@ -3,7 +3,7 @@ import { isProviderDecision, ProviderTurnError } from "../core/turn-error.ts";
 import { errMessage } from "../util/errors.ts";
 import { routeLabel, type ModelRoute } from "../model/model-route.ts";
 
-export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth", "account"]);
+export const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth", "account", "transient"]);
 export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
@@ -22,7 +22,7 @@ export function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute,
     `${failure.message} — the fallback ${routeLabel(fallback)} also failed: ${errMessage(error)}`,
     {
       code,
-      retryable: false,
+      retryable: failure.retryable,
       status: failure.status,
       raw: `${failure.raw}\n${error instanceof ProviderTurnError ? error.raw : errMessage(error)}`,
     },

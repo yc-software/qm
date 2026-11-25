@@ -60,7 +60,7 @@ export interface ConversationSerializer {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView }>;
+  ): Promise<{ view: ConversationView; threadFiles?: SlackFile[] }>;
   recentMessageWindow: number;
 }
 
@@ -163,6 +163,21 @@ export function createConversationSerializer(deps: {
     });
   }
 
+  function unansweredThreadFiles(
+    raw: SlackHistoryMessage[],
+    inc: { threadTs?: string; ts: string; userId?: string },
+  ): SlackFile[] {
+    if (!inc.threadTs) return [];
+    const thread = raw
+      .filter(isConversationMessage)
+      .filter((m) => m.ts < inc.ts && (m.ts === inc.threadTs || String(m.thread_ts ?? "") === inc.threadTs))
+      .sort((a, b) => a.ts.localeCompare(b.ts));
+    return thread
+      .slice(thread.findLastIndex(isSelfMessage) + 1)
+      .filter((m) => m.ts === inc.threadTs || (inc.userId && m.user === inc.userId))
+      .flatMap((m) => slackMessageContent(m).files.map((f) => (f.user || !m.user ? f : { ...f, user: m.user })));
+  }
+
   async function serializeSlackConversation(
     client: any,
     inc: {
@@ -180,7 +195,7 @@ export function createConversationSerializer(deps: {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView }> {
+  ): Promise<{ view: ConversationView; threadFiles?: SlackFile[] }> {
     const empty: ConversationView = {
       channel: { kind: ctx.kind ?? inc.kind },
       messages: [],
@@ -234,7 +249,8 @@ export function createConversationSerializer(deps: {
       nameById: people.names,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
-    return { view };
+    const threadFiles = unansweredThreadFiles(raw, inc);
+    return { view, ...(threadFiles.length ? { threadFiles } : {}) };
   }
 
   return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: RECENT_MESSAGE_WINDOW };

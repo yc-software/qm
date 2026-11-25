@@ -367,6 +367,9 @@ export function createTurnMethods(
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
+        ...(req.declinePendingApprovals && !req.approval && origin.kind === "human"
+          ? { declinePendingApprovals: true }
+          : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(project ? { scopeVersion: project.version } : {}),
       };

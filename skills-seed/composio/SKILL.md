@@ -50,7 +50,7 @@ Check `connections` before work that depends on an app. If the app is in the cat
 
 ## Apps connected somewhere else
 
-Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, give the person its `connectUrl` as a plain link, in any surface, and say you'll continue when they reply. Don't show a connect card or call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
+Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, in web chat show its card with `::connect-apps{toolkit="<id>"}` as its own paragraph: the card opens `connectUrl`. On other surfaces, give its `connectUrl` as a plain link. Either way, say you'll continue when they reply. Never call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
 
 ## Reconnect or disconnect an app
 

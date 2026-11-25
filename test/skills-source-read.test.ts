@@ -14,7 +14,6 @@ async function fixture(t: TestContext) {
   }
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let provisions = 0;

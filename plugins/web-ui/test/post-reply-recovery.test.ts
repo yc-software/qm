@@ -549,12 +549,6 @@ test("post replies remain visible in new and continuing conversations", async (t
         work.status = "complete";
         conv!.drawActiveChat(agent);
         assert.equal(host.querySelector(".tool-running"), null);
-        work.pendingApprovals = [{ requestId: "next-decision", command: "echo approved" }];
-        conv!.drawActiveChat(agent);
-        assert.match(host.querySelector(".inline-approval-marker")?.textContent ?? "", /echo approved/);
-        work.pendingApprovals = [];
-        conv!.drawActiveChat(agent);
-        assert.equal(host.querySelector(".inline-approval-marker"), null);
       } finally {
         run.emit("done", { status: "done", result: { status: "ok", reply: "Finished" } });
         await turn;

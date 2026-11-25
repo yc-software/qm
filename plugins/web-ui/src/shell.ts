@@ -736,7 +736,7 @@ export function renderSidebarTop(): void {
             personas.length
               ? html`
                   <div class="new-chat-menu-sep" role="separator"></div>
-                  <div class="new-chat-menu-head" role="presentation">Personas</div>
+                  <div class="new-chat-menu-head" role="presentation">Bots</div>
                   ${personas.map(
                     (persona) => html`
                       <button

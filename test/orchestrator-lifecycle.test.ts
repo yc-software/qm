@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { modelBudgetMessage } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -308,14 +308,15 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
 
   const refused = await app.turn(dm("!over-budget", { idempotencyKey: "over-budget-1" }));
   assert.equal(refused.status, "refused");
+  const expectedReason = modelBudgetMessage({ personalModelAuth: true });
   assert.equal(refused.refusalKind, "model_budget");
-  assert.equal(refused.reason, MODEL_BUDGET_TEXT);
+  assert.equal(refused.reason, expectedReason);
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
 
   const found = await app.getSession(t1.sessionId!);
   const failures = found!.items.filter((e) => turnFailure(e));
   assert.equal(failures.length, 1, "the explanation survives a reload");
-  assert.equal(turnFailure(failures[0]!)!, MODEL_BUDGET_TEXT);
+  assert.equal(turnFailure(failures[0]!)!, expectedReason);
   const logged = (await errors.list(tenant)).find((e) => e.category === "turn" && e.code === "model_budget");
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });

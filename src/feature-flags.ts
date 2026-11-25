@@ -9,8 +9,8 @@ export const FEATURES = {
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
   personas: {
-    label: "Personas",
-    hint: "Lets the selected people create, share and chat with personas: reusable agents with their own instructions, skills and credentials.",
+    label: "Bots",
+    hint: "Lets the selected people create, share and chat with bots: reusable agents with their own instructions, skills and credentials.",
   },
   inbox_loops: { label: "Inbox Loops" },
   company_welcome: {

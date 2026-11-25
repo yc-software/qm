@@ -9,8 +9,10 @@ Request  { id: u64, cmd: Command }
 
 Command  = permissions { prompt?: bool = false }
          | apps
-         | observe     { app: string, screenshot?: bool = false, diff?: bool = true }
-         | act         { app: string, actions: [Action], observe?: bool = true, screenshot?: bool = false, pace?: bool = false, diff?: bool = true }
+         | windows     { app: string }
+         | observe     { app: string, screenshot?: bool = false, diff?: bool = true, tree?: bool = true, window?: u32 }
+         | act         { app: string, actions: [Action], observe?: bool = true, screenshot?: bool = false, pace?: bool = false, diff?: bool = true,
+                         window?: u32, expect?: Expect }
          | arrived                                           // only as the answer to a pointer reply, with the same id
 
 Action   = click       { target: Target, button?: left|right|middle = left, count?: u8 = 1,
@@ -26,6 +28,11 @@ Action   = click       { target: Target, button?: left|right|middle = left, coun
          | perform     { index: u32, action: string }        // any AX action the element lists, e.g. "ShowMenu", "Increment"
          | raise                                             // bring the app's window to the front (steals focus)
          | wait        { ms: u32 }                            // capped at 10000
+
+Expect    { condition: Condition, timeout_ms?: u32 = 2000 }
+Condition = gone     { index: u32 }
+          | value    { index: u32, equals: string }
+          | window   { title: string, open: bool }             // case-insensitive substring of a window title
 
 Target   = { "index": u32 } | { "point": Point }
 Amount   = { "pages": f64 } | { "pixels": u32 }
@@ -46,16 +53,19 @@ Example:
 ```
 Response { id: u64, reply: Reply }          // id 0 when the line could not be parsed
 
-Reply    = permissions { accessibility: bool, screen_recording: bool, binary: string, help: string }
+Reply    = permissions { accessibility: bool, screen_recording: bool, input_monitoring: bool, binary: string, help: string }
          | apps        { apps: [AppInfo] }
+         | windows     { windows: [WindowInfo] }
          | observation { ...Observation }
-         | acted       { completed: u32, failure: Failure?, observation: Observation?, observation_failure: Failure? }
+         | acted       { completed: u32, failure: Failure?, observation: Observation?, observation_failure: Failure?, outcome: Outcome? }
          | pointer     { action: u32, point: Point }        // paced act only; point is in global screen points
          | error       { ...Failure }
 
 AppInfo     { name, bundle_id?, pid: i32, active: bool }
+WindowInfo  { id: u32, title, role, subrole?, frame: Rect?, focused: bool, main: bool, minimized: bool, parent: u32? }
+Outcome     { status: verified|already|unmet, detail: string }
 Observation { app, bundle_id?, pid, window: string, window_id: u32, frame: Rect, elements: u32, truncated: bool,
-              diffed: bool, tree: string, removed: [u32], screenshot: Screenshot? }
+              diffed: bool, tree: string, removed: [u32], screenshot: Screenshot?, screenshot_error: string? }
 Rect        { x, y, w, h }                   // global screen points, top-left origin
 Screenshot  { png_base64, width, height, pixels_per_point, frame: Rect }   // frame = global screen points the image covers
 Failure     { code: ErrorCode, message: string, action: u32? }   // action = index of the failed action in a batch
@@ -65,6 +75,7 @@ ErrorCode   = bad_request | unsupported_platform | permission_missing | app_not_
 
 ## Observation semantics
 
+- `windows` lists the app's accessibility windows (plus its focused and main window) with their native window IDs; each sheet follows its window with `parent` set to that window's ID. `observe` and `act` with `window` use exactly that window or sheet instead of the default choice below, and fail with `no_window` once it is gone. `act` refuses a `window` that differs from the latest observation's.
 - The tree covers the visible part of the app's focused window (else main, else the last entry in its accessibility window list). A minimized selected window is refused rather than replaced by another document. One line per kept element:
   `[id] Role:Subrole "name" (description) = "value" placeholder "…" url "…" [focused disabled selected checked|unchecked|mixed expanded|collapsed settable] <Actions>`.
   The name is `AXTitle`, else the text of the element's `AXTitleUIElement` label. Checkbox, radio and switch values are
@@ -78,6 +89,7 @@ ErrorCode   = bad_request | unsupported_platform | permission_missing | app_not_
 - Open menus (context menus and menu-bar menus) and the app's other sheets, popovers, drawers and dialog or floating
   windows come first, under `Open menus and other windows of this app:`, followed by `Window "title":` and the
   window's tree. Without any, the tree starts directly.
+- Password fields (role `AXSecureTextField`, or subrole `AXSecureTextField`) are tagged `password`. desk reads an element's role and subrole before its value, and never requests the value, visible range, attributed text, text markers or selected text of a password field; `select_text`, `paste` into a focused password field, `set_value` and a `value` condition on one fail with `action_failed` instead of reading it.
 - After the tree, `Focus: [id]` names the app's focused element (or describes it when it is not in the tree), and
   `Selected text: "…"` quotes its selection when there is one.
 - Children outside the window, or outside an enclosing `AXScrollArea` or `AXWebArea`, are not walked. Each container
@@ -89,13 +101,14 @@ ErrorCode   = bad_request | unsupported_platform | permission_missing | app_not_
 reached`.
 - A web area, or a childless group or scroll area, covering at least 40% of the window with nothing readable inside gets
   `… nothing readable inside; the app may draw this area itself (for example a canvas). Use the screenshot and point targets`.
-- Each element's attributes are read in one batched call; actions and settability only for elements that are walked.
+- Each element's attributes other than its value are read in one batched call, then, unless it is a password field, its value (and a text field's visible range) in a second call; actions and settability only for elements that are walked.
   While desk is subscribed to an app's accessibility notifications, it reuses each element's actions and settability
   from earlier observations until the app posts any notification, which clears them all; without a subscription it
   reads them fresh every time.
   On the first observation of an app desk sets `AXManualAccessibility` and waits up to 1 s for an empty web area to
   fill. Only if that attribute is refused and a web area is still empty does it set `AXEnhancedUserInterface` and wait
   again. Whichever it turned on is set back to off when desk exits; attributes that were already on are left alone.
+- With `tree: false` (a screenshot-only request, which needs `screenshot: true`), desk does not walk the tree or read the focus: `tree` is empty, `elements` is 0, and the latest observation's lines stay the diff baseline. Its window and frame are updated for point targets; a different window replaces the observation with an empty one, so index targets need a new tree first. If capture fails here the request fails. When a tree was requested too, a failed capture leaves `screenshot` null and puts the reason in `screenshot_error`; the tree and observation are kept.
 - `point` targets are **window-relative points** (origin = window top-left).
   On macOS 14+, the screenshot covers its own `frame`: the window plus the app's menus, popovers and sheets in front of it, so it can reach past the window. On macOS 12.3–13 it covers only the main window.
   It is captured at nominal resolution, so one PNG pixel is about one point; `pixels_per_point` says what it really was.
@@ -103,6 +116,7 @@ reached`.
 - Observe before acting; absent snapshots are rejected. Ids are stable: an element keeps its id across observations of the same window for as long as it is the same AX object, including while it is scrolled out of view for up to 30 observations. When the app replaces an object (a re-render), the new one inherits the id if exactly one old object and exactly one new object have the same role, subrole, identifier, name and ancestry, the old object is gone, and neither sits inside a list, table, outline, row or cell. An inherited id's line is always marked `~` in a diff. Acting on an id whose object is gone looks for that single replacement first and fails with `bad_index` if there is none. A different window starts ids again. `index` in actions means this id, from the latest observation of that app.
 - With `diff` (the default) and an earlier observation of the same window, `tree` holds only new lines, prefixed `+ `, and changed ones, prefixed `~ `; `removed` lists ids that disappeared and `diffed` is true. When more than 60% of the lines are new or changed, a selection/state/note line disappears, or no earlier observation is available, `tree` is the whole tree, unprefixed, and `diffed` is false.
 - `act` returns as soon as its actions are sent. The next observation of that app (`observe`, or `act` with `observe`) first waits for that app's accessibility notifications to go quiet (other apps' notifications do not count): at least 200 ms after the last action, then until 300 ms pass with no notification, at most 2 s after the action. If desk could not subscribe to the app's notifications it waits until 1 s has passed instead. Then it waits up to 5 s more while the window shows a busy or progress indicator. An observation with no action since the previous one does not wait. A batch of only `wait` actions does not count as an action.
+- With `expect`, desk evaluates the condition against the latest observation's ids before the batch. If it already holds, no action is sent, `completed` is 0 and `outcome.status` is `already`. Otherwise, after the batch completes without failure, it polls every 100 ms until the condition holds (`verified`) or `timeout_ms` passes (`unmet`), which is not capped beyond the caller's own request deadline; `detail` states what was last found, e.g. `element 40 is still present`. `gone` holds once the element no longer resolves to a live object at its observed path, `value` compares as the element's value type (text exactly after line-ending and non-breaking-space normalisation, numbers and `true`/`false` numerically), and `window` checks unminimized window and sheet titles. An unknown id fails with `bad_index` before anything is sent. A failed batch carries no outcome; a check that fails after the actions were sent is reported as `failure`.
 - A batch stops at the first failed action. `acted.completed` counts each action once its input is sent, even if later cleanup fails; a refused action does not count. The observation or `observation_failure` comes back without losing the completion count.
 
 ## Pacing
@@ -124,7 +138,7 @@ With `pace: true`, before each `click`, `scroll` and `drag`, desk writes `pointe
 - `click` holds `modifiers` and keeps the button down for `hold_ms`. `press_key` holds the key for `hold_ms`.
 - `scroll` by pages first scrolls the enclosing scroll area (of the target element, or at the target point or window centre) without pointer events: its `AXScroll…ByPage` action for whole pages, else by moving its scroll bar by 85% of the visible part per page. Otherwise, and for `pixels`, it sends pixel wheel events in 120 px steps; a page is 85% of the target element's height (or width), else the window's.
 - `select_text` accepts nonempty native text or an exact excerpt of an observed Markdown body, excluding structural tree indentation. Matches in `AXValue` and observed Markdown are combined after filtering by adjacent `prefix` and `suffix` within each representation, then deduplicated by native UTF-16 range; exactly one range is required. Renderer provenance maps escaped text and link labels without interpreting literal Markdown, and generated syntax or link destinations alone cannot select text. A SHA-256 fingerprint of the full native value invalidates its observed mapping when the value changes and requires another observation. Mapping allocations have a 1 MiB aggregate observation budget; controls exceeding it use the plain-text observation fallback. It checks that `AXSelectedTextRange` is writable before focusing the element, verifies focus and unchanged text, then selects the match or places a caret before or after it. Unsupported selection, ambiguous matches and failed focus return an error without writing a selection.
-- `set_value` fails unless `AXValue` is settable. It writes the value as the type the element holds: a number (`true`/`false` count as 1/0) or boolean, a date, or otherwise a string. Dates use the system’s short date/time format, with seconds included when the control exposes them (full month name and year for month/year controls), changing only the components exposed by the control. Invalid dates and changes that would normalize a preserved component are refused before mutation. Text fields are focused and their focus is verified before writing; interruption is checked immediately before the value write. If a text field still shows its old value afterwards the action fails. Only with `submit: true` desk then sends `AXConfirm`, or Return when the element lacks it and still has keyboard focus. `perform` validates its name against the element’s current AX actions before running it. The primary `Press` action is omitted from observation text because `click` already invokes it; secondary actions remain listed.
+- `set_value` fails unless `AXValue` is settable. It writes the value as the type the element holds: a number (`true`/`false` count as 1/0) or boolean, a date, or otherwise a string. Dates use the system’s short date/time format, with seconds included when the control exposes them (full month name and year for month/year controls), changing only the components exposed by the control. Invalid dates and changes that would normalize a preserved component are refused before mutation. Text fields are focused and their focus is verified before writing; interruption is checked immediately before the value write. After the write desk reads the value back for up to 2 s (the observation settle limit) and fails unless it holds the written value (compared as in `expect`, dates to the second); the message says what the element reads instead, or that it could not be read back. Password fields are refused. Only with `submit: true` desk then sends `AXConfirm`, or Return when the element lacks it and still has keyboard focus. `perform` validates its name against the element’s current AX actions before running it. The primary `Press` action is omitted from observation text because `click` already invokes it; secondary actions remain listed.
 
 ## App access
 
