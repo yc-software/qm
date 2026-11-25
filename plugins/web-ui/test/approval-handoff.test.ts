@@ -129,7 +129,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
-    appState.me = { user: "owner", personalScope: "personal:owner", org: "test" };
+    appState.me = { user: "owner", org: "test" };
     appState.currentView = "chats";
     sessionsState.list = [row];
     const host = document.querySelector<HTMLElement>("#main")!;

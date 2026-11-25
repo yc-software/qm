@@ -422,6 +422,7 @@ test("attested connectors send one canonical person and never call for an actor 
     canonical: (key) => (["alice@example.com", "U_ALICE", "system:digest"].includes(key) ? "U_ALICE" : undefined),
     aliases: (key) => (key === "U_ALICE" ? ["alice@example.com", "provider:stable-7", "bad\nvalue"] : []),
     userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, {
@@ -536,6 +537,7 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     canonical: (k) => (k === "alice@x.test" ? "internal:alice" : undefined),
     aliases: () => [],
     userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   await users.setConnectorToken(host, "alice@x.test", { accessToken: "rotated-alice" });

@@ -116,6 +116,7 @@ test("a tenanted database builds each tenant's users from that tenant's own link
         ["admin@a.test", "admin"],
         ["five@a.test", "turn"],
         ["pat@a.test", "turn"],
+        ["x", null],
       ],
     );
     assert.deepEqual(
@@ -123,6 +124,7 @@ test("a tenanted database builds each tenant's users from that tenant's own link
       [
         ["mate@b.test", "invite"],
         ["quinn@b.test", "turn"],
+        ["x", null],
       ],
     );
     const [linker] = await owner.q(

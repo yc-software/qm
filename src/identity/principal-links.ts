@@ -3,6 +3,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 import { isSystemActor } from "../types.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import type { UserLink, UserLinkStore } from "./user-store.ts";
 
 interface PrincipalLinkInput {
@@ -43,6 +44,7 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
     byCanonical: new Map<string, UserLink[]>(),
     userOf: new Map<string, string>(),
     primaryOf: new Map<string, string>(),
+    claimed: new Set<string>(),
     refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
   }));
 
@@ -75,6 +77,17 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
     userId(key) {
       const { userOf, primaryOf } = links();
       return userOf.get(key) ?? (primaryOf.has(key) ? key : undefined);
+    },
+    claim(key, userId) {
+      const { userOf, primaryOf, claimed } = links();
+      if (isSystemActor(key) || claimed.has(key)) return;
+      claimed.add(key);
+      userOf.set(key, userId);
+      primaryOf.set(userId, key);
+      void store
+        .ensure(key)
+        .catch(reportFailureAs(`principal links: could not record the user for ${key}`, undefined))
+        .finally(() => claimed.delete(key));
     },
     aliases(key) {
       return (links().byCanonical.get(key) ?? []).map((row) => row.principalId);

@@ -54,6 +54,7 @@ export interface UserActivity {
 
 export interface UserLinkStore {
   links(): Promise<UserLink[]>;
+  ensure(alias: string): Promise<string>;
   link(link: Omit<UserLink, "userId">): Promise<UserLink>;
   unlink(aliasId: string): Promise<UserLink | null>;
 }
@@ -523,12 +524,8 @@ async function linkInTransaction(client: PoolClient, link: Omit<UserLink, "userI
     await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
     await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
+    await movePersonalScope(client, source, scopeId("personal", target));
   }
-  await movePersonalScope(
-    client,
-    current ? (current.user_id as string) : foundingUserId(link.principalId),
-    scopeId("personal", target),
-  );
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
   await q(
     `INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at) VALUES ($1, $2, $3, $4, ${ts("$5")})`,
@@ -681,6 +678,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       );
       return rows[0] ? toRecord(rows[0]) : null;
     },
+    ensure: ensureUser,
     async links() {
       return (await q(LINK_SELECT)).map(toLink);
     },

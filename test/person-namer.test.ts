@@ -12,6 +12,7 @@ test("a trusted sign-in principal is named through its linked email, falling bac
     canonical: () => undefined,
     aliases: (key) => ({ [trusted]: ["founder@company.test"], "oidc:other": ["unlisted@company.test"] })[key] ?? [],
     userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   const app = {

@@ -80,6 +80,7 @@ DECLARE
   found boolean;
 BEGIN
   CREATE TEMP TABLE IF NOT EXISTS personal_scope_tally(tbl text, tenant_id uuid, moved bigint, dropped bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS personal_scope_dropped(tbl text, tenant_id uuid, row_data jsonb) ON COMMIT DROP;
   FOR target IN ${SCOPE_COLUMNS} LOOP
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM %1$I t JOIN personal_scope_moves m ON ${match("t.%2$I")})',
       target.tbl, target.col, ${sameTenant}) INTO found;
@@ -98,6 +99,8 @@ BEGIN
           EXECUTE format('UPDATE %I SET %I = $1 WHERE ctid = $2', target.tbl, target.col) USING hit.to_scope, hit.row_id;
           INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 1, 0);
         EXCEPTION WHEN unique_violation THEN
+          EXECUTE format('INSERT INTO personal_scope_dropped SELECT %1$L, $2, to_jsonb(t) FROM %1$I t WHERE ctid = $1',
+            target.tbl) USING hit.row_id, hit.tenant;
           EXECUTE format('DELETE FROM %I WHERE ctid = $1', target.tbl) USING hit.row_id;
           INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 0, 1);
         END;
@@ -174,25 +177,29 @@ export const PERSONAL_SCOPE_MIGRATIONS: PgMigrationDefinition[] = [
          tenant uuid;
        BEGIN
          CREATE TEMP TABLE personal_scope_moves(tenant_id uuid, alias text, to_scope text) ON COMMIT DROP;
+         CREATE TEMP TABLE IF NOT EXISTS personal_scope_dropped(tbl text, tenant_id uuid, row_data jsonb) ON COMMIT DROP;
          CREATE TEMP TABLE personal_scope_report(scope_table text, scope_tenant uuid, moved_rows bigint, dropped_rows bigint)
            ON COMMIT DROP;
+         CREATE TEMP TABLE personal_scope_unmatched(tenant_id uuid, tbl text, scope text) ON COMMIT DROP;
+         ${UNMATCHED}
+         DELETE FROM personal_scope_unmatched u USING user_links l
+          WHERE l.alias_id = ${ref("u.scope")} AND (u.tenant_id IS NULL OR l.tenant_id = u.tenant_id);
          FOR tenant IN SELECT id FROM tenants LOOP
            PERFORM set_config('qm.tenant_id', tenant::text, true);
+           INSERT INTO users(id, primary_alias)
+             SELECT DISTINCT ${FOUNDING_ID("a.alias")}, a.alias
+               FROM (SELECT ${ref("u.scope")} AS alias FROM personal_scope_unmatched u
+                      WHERE u.tenant_id = tenant OR u.tenant_id IS NULL) a
+              WHERE a.alias <> '' AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = tenant AND l.alias_id = a.alias)
+             ON CONFLICT DO NOTHING;
+           INSERT INTO user_links(alias_id, user_id, evidence, created_at)
+             SELECT u.primary_alias, u.id, 'primary', now() FROM users u
+              WHERE u.tenant_id = tenant
+                AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = tenant AND l.alias_id = u.primary_alias)
+             ON CONFLICT DO NOTHING;
            DELETE FROM personal_scope_moves;
            INSERT INTO personal_scope_moves
              SELECT l.tenant_id, l.alias_id, 'personal:' || l.user_id FROM user_links l WHERE l.tenant_id = tenant;
-           INSERT INTO personal_scope_report SELECT * FROM qm_move_personal_scopes();
-         END LOOP;
-         CREATE TEMP TABLE personal_scope_unmatched(tenant_id uuid, tbl text, scope text) ON COMMIT DROP;
-         ${UNMATCHED}
-         FOR tenant IN SELECT id FROM tenants LOOP
-           PERFORM set_config('qm.tenant_id', tenant::text, true);
-           DELETE FROM personal_scope_moves;
-           INSERT INTO personal_scope_moves
-             SELECT DISTINCT tenant, a.alias, 'personal:' || ${FOUNDING_ID("a.alias")}
-               FROM (SELECT ${ref("u.scope")} AS alias FROM personal_scope_unmatched u
-                      WHERE u.tenant_id = tenant OR u.tenant_id IS NULL) a
-              WHERE a.alias <> '';
            INSERT INTO personal_scope_report SELECT * FROM qm_move_personal_scopes();
          END LOOP;
          RAISE NOTICE 'personal scopes keyed by user id: % rows moved, % duplicate rows dropped, % scopes matched no user',
@@ -207,6 +214,8 @@ export const PERSONAL_SCOPE_MIGRATIONS: PgMigrationDefinition[] = [
                              FROM personal_scope_report WHERE scope_tenant = t.tenant_id GROUP BY scope_table) r WHERE r.n > 0),
                   'dropped', (SELECT coalesce(jsonb_object_agg(r.tbl, r.n), '{}') FROM (SELECT scope_table AS tbl, sum(dropped_rows) AS n
                                FROM personal_scope_report WHERE scope_tenant = t.tenant_id GROUP BY scope_table) r WHERE r.n > 0),
+                  'droppedRows', (SELECT coalesce(jsonb_agg(jsonb_build_object('table', d.tbl, 'row', d.row_data)), '[]')
+                                    FROM personal_scope_dropped d WHERE d.tenant_id = t.tenant_id),
                   'unmatched', (SELECT coalesce(jsonb_agg(jsonb_build_object('scope', u.scope, 'tables', u.tables)
                                                           ORDER BY u.scope), '[]')
                                   FROM (SELECT scope, jsonb_agg(DISTINCT tbl) AS tables FROM personal_scope_unmatched

@@ -164,7 +164,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path === "/me")
       return Response.json({
         user: "tester",
-        personalScope: "personal:tester",
         org: "test",
         permissions: [],
         chatSurfaces: [

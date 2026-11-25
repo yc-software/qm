@@ -63,8 +63,6 @@ test("webFetch redirects a 401 through the same-origin sign-in endpoint", async 
 
   await initializeBrowserErrors({
     user: "test",
-    personalScope: "personal:test",
-    personalScope: "personal:test",
     org: "test",
     browserErrors: { dsn: "https://public@sentry.example.com/1" },
   });
@@ -86,8 +84,6 @@ test("webFetch dispatches the sign-in fallback for an unusable 401 body", async 
 
   await initializeBrowserErrors({
     user: "test",
-    personalScope: "personal:test",
-    personalScope: "personal:test",
     org: "test",
     browserErrors: { dsn: "https://public@sentry.example.com/1" },
   });
@@ -109,8 +105,6 @@ test("webFetch leaves non-401 responses alone", async () => {
 
   await initializeBrowserErrors({
     user: "test",
-    personalScope: "personal:test",
-    personalScope: "personal:test",
     org: "test",
     browserErrors: { dsn: "https://public@sentry.example.com/1" },
   });

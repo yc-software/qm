@@ -328,6 +328,7 @@ test("inbox items reach exactly the active watchers who can administer the loop,
     canonical: (key) => (key === "bob-slack" ? "bob" : undefined),
     aliases: () => [],
     userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   world.owners.set("mine", personalScope("alice"));
