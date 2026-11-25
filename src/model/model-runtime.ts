@@ -58,41 +58,27 @@ export function piUsageToCallUsage(
     totalTokens: u.totalTokens ?? 0,
     costUsd: u.cost?.total ?? 0,
   };
-  const card = model?.cost ? servedTierCard(model, fast, servedTier) : undefined;
-  if (!card) return row;
-  const priced: Usage = {
-    input: row.input,
-    output: row.output,
-    cacheRead: row.cacheRead,
-    cacheWrite: row.cacheWrite,
-    ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
-    totalTokens: row.totalTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  row.costUsd = calculateCost(card, priced).total;
-  return row;
-}
-
-function servedTierCard(
-  model: Model<Api>,
-  fast: boolean | undefined,
-  servedTier: string | undefined,
-): Model<Api> | undefined {
+  if (!model?.cost) return row;
+  const priced = (card: Model<Api>) =>
+    calculateCost(card, {
+      input: row.input,
+      output: row.output,
+      cacheRead: row.cacheRead,
+      cacheWrite: row.cacheWrite,
+      ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
+      totalTokens: row.totalTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    }).total;
   const request = modelRequestOverrides(model.id);
   if (request && servedTier && servedTier !== request.service_tier) {
     const base = resolveModel(request.model);
-    return base?.cost
-      ? ({ ...base, cost: scaleCost(base.cost, servedTierCostMultiplier(base.id, servedTier)) } as Model<Api>)
-      : undefined;
+    const listed = priced(model);
+    if (base?.cost && listed) row.costUsd = (priced(base) * row.costUsd) / listed;
+    return row;
   }
   const servedFast = model.api === "anthropic-messages" && servedTier ? servedTier === "fast" : fast && !servedTier;
-  return servedFast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : undefined;
-}
-
-function servedTierCostMultiplier(modelId: string, servedTier: string): number {
-  if (servedTier === "flex") return 0.5;
-  if (servedTier === "priority" || servedTier === "fast") return modelId === "gpt-5.5" ? 2.5 : 2;
-  return 1;
+  if (servedFast) row.costUsd = priced({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>);
+  return row;
 }
 
 export interface ProviderKeys {

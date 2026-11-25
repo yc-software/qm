@@ -106,16 +106,18 @@ test("an Ultrafast request served on another tier is charged what Pi charges the
         .join("");
       return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
-    const served = await runtime
-      .stream(
-        getRequiredModel("gpt-6-astra"),
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        { transport: "sse", maxRetries: 0 },
-      )
-      .result();
-    const usage = { ...zeroUsage(), input: tokens.input_tokens, output: tokens.output_tokens };
-    const charged = piUsageToCallUsage(usage, getRequiredModel("gpt-6-astra-ultrafast"), false, servedTier)!;
-    assert.ok(served.usage.cost.total > 0);
-    assert.ok(Math.abs(charged.costUsd - served.usage.cost.total) < 1e-9, `${servedTier}: ${charged.costUsd}`);
+    const stream = (id: string) =>
+      runtime
+        .stream(
+          getRequiredModel(id),
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          { transport: "sse", maxRetries: 0 },
+        )
+        .result();
+    const base = await stream("gpt-6-astra");
+    const ultrafast = await stream("gpt-6-astra-ultrafast");
+    const charged = piUsageToCallUsage(ultrafast.usage, getRequiredModel("gpt-6-astra-ultrafast"), false, servedTier)!;
+    assert.ok(base.usage.cost.total > 0);
+    assert.ok(Math.abs(charged.costUsd - base.usage.cost.total) < 1e-9, `${servedTier}: ${charged.costUsd}`);
   }
 });
