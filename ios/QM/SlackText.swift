@@ -43,7 +43,7 @@ enum SlackText {
         out += "**" + String(chars[(index + 1)..<close]) + "**"
         index = close + 1
       } else {
-        out.append(chars[index])
+        out += !code && chars[index] == "*" ? "\\*" : String(chars[index])
         index += 1
       }
     }

@@ -149,7 +149,7 @@ final class ChatTests: XCTestCase {
       "@ada see the plan <3 <not a token")
     XCTAssertEqual(
       SlackText.markdown("&gt; *Our plan:* ship it, 2*3*4 and `*code*` stay"),
-      "> **Our plan:** ship it, 2*3*4 and `*code*` stay")
+      "> **Our plan:** ship it, 2\\*3\\*4 and `*code*` stay")
   }
 
   func testAgentActivityRetainsCurrentCompletedSpawnsAfterTheRunEnds() throws {

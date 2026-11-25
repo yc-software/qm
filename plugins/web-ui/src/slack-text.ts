@@ -84,7 +84,7 @@ function slackBold(text: string): string {
   for (let i = 0; i < text.length; i++) {
     if (text[i] === "`") code = !code;
     const close = !code && text[i] === "*" ? boldClose(text, i) : -1;
-    if (close < 0) out += text[i];
+    if (close < 0) out += !code && text[i] === "*" ? "\\*" : text[i];
     else {
       out += `**${text.slice(i + 1, close)}**`;
       i = close;

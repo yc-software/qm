@@ -11,7 +11,11 @@ test("Slack message bubbles render Slack mrkdwn as Markdown", async () => {
     items: [
       item("UserMessage", { seq: 1, createdAt: 1, text: lines }),
       item("UserMessage", { seq: 2, createdAt: 2, text: "see https://example.com/x?y=1&amp;z=2 ok" }),
-      item("UserMessage", { seq: 3, createdAt: 3, text: "&gt; *Our plan:* ship it <@U1|ada>, `*code*` stays" }),
+      item("UserMessage", {
+        seq: 3,
+        createdAt: 3,
+        text: "&gt; *Our plan:* ship it <@U1|ada>, `*code*` and 2*3*4 stay",
+      }),
     ],
   });
   try {
@@ -28,6 +32,7 @@ test("Slack message bubbles render Slack mrkdwn as Markdown", async () => {
     assert.equal(quote?.querySelector("strong")?.textContent, "Our plan:");
     assert.equal(quote?.querySelector(".slack-mention")?.textContent, "@ada");
     assert.equal(quote?.querySelector("code")?.textContent, "*code*");
+    assert.ok(quote?.textContent?.includes("2*3*4 stay"));
   } finally {
     await h.close();
   }
