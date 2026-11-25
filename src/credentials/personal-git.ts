@@ -5,17 +5,14 @@ interface PersonalGitRemote {
   username: string;
 }
 
-const PERSONAL_GIT_REMOTES: ReadonlyMap<string, PersonalGitRemote> = new Map([
-  ["github", { host: "github.com", username: "x-access-token" }],
-  ["gitlab", { host: "gitlab.com", username: "oauth2" }],
-]);
+const GITHUB: PersonalGitRemote = { host: "github.com", username: "x-access-token" };
 
 export function personalGitRemote(
   credential: Pick<KeychainCredential, "service" | "kind" | "managed" | "fields" | "envKey">,
 ): PersonalGitRemote | undefined {
   if (credential.kind !== "env" || credential.managed || credential.fields?.length || !credential.envKey)
     return undefined;
-  return PERSONAL_GIT_REMOTES.get(credential.service);
+  return credential.service === "github" ? GITHUB : undefined;
 }
 
 export function personalGitBasicCredential(remote: PersonalGitRemote, secret: string): string {
