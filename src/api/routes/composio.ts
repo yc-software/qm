@@ -35,13 +35,6 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
-async function closestToolkit(ctx: ApiCtx, key: string, id: string): Promise<{ items: unknown[] }> {
-  const found = await request(ctx, key, `/toolkits?${new URLSearchParams({ search: id })}`);
-  const items = Array.isArray(found.items) ? found.items : [];
-  const close = items.filter((item) => typeof item?.slug === "string" && item.slug.startsWith(`${id}_`));
-  return { items: close.length === 1 ? close : [] };
-}
-
 export function composioUnavailable(ctx: ApiCtx, status: number): void {
   sendJson(ctx.res, status, {
     error: "composio_unavailable",
@@ -225,9 +218,11 @@ async function catalog(ctx: ApiCtx): Promise<void> {
     let data = NO_COMPOSIO;
     if (access.key && only) {
       data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
-      const served = apps.some((app) => app.toolkit === only);
-      if (!served && Array.isArray(data.items) && data.items.length === 0)
-        data = await closestToolkit(ctx, access.key, only);
+      const missing = !apps.some((app) => app.toolkit === only) && Array.isArray(data.items) && !data.items.length;
+      const found = missing
+        ? await request(ctx, access.key, `/toolkits?${new URLSearchParams({ search: only })}`)
+        : NO_COMPOSIO;
+      if (Array.isArray(found.items) && found.items.length === 1) data = found;
     } else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
