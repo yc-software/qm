@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: Connect a new user's accounts, learn their real work, choose a voice, and set up concrete help.
+description: Connect a new user's accounts, learn their real work, and set up concrete help.
 ---
 
 # Onboarding
@@ -11,11 +11,10 @@ Connections are optional, not a prerequisite. Keep turns short and conversationa
 user explicitly asks to skip one:
 
 1. For an org admin, make sure a connector source works, then check whether the Slack bot is missing. Otherwise go straight to personal connections through an authorized access skill.
-2. Choose how you should sound.
-3. Read connected tools for a real work snapshot.
-4. Confirm your read, then propose and—with approval—create concrete help.
+2. Read connected tools for a real work snapshot.
+3. Confirm your read, then propose and—with approval—create concrete help.
 
-Do not ask about their voice, their work, or their week until connections are set up or
+Do not ask about their work or their week until connections are set up or
 explicitly deferred. If they ask to stop, mark onboarding completed and do not raise it again. A returning user
 keeps what memory already knows; focus on what changed.
 
@@ -134,29 +133,6 @@ curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \
 Never construct the URL yourself. Omit providers that return `oauth_not_configured`. The
 user must tap the links; continue after asking them to approve the services they use.
 Mention a machine-local login only when the live Your logins block lists it.
-
-## Voice
-
-Once connections are checked or deferred, offer three demonstrably different voices using the same
-short status update, for example:
-
-- lowkey: calm, lowercase, opinionated, no performance.
-- The Editor: sharp, decision-first, no padding.
-- The Right Hand: warm, anticipatory, and concrete without fawning.
-
-They may instead name a writer or paste their own writing. Save the choice in memory. Also
-update SOUL when it should shape nearly every turn: read the current value, preserve it,
-and write first-person operating rules plus two or three short examples in the chosen
-voice, including disagreement or bad news. Avoid generic assistant tics such as reflexive
-hedging, praise, and decorative bullets.
-
-```bash
-curl -sS "$AGENT_API_URL/v1/soul" -H "X-Agent-Capability: $AGENT_API_TOKEN"
-curl -sS -X POST "$AGENT_API_URL/v1/soul" \
-  -H "X-Agent-Capability: $AGENT_API_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"content":"<full revised first-person SOUL>"}'
-```
 
 ## 2. Read their work
 

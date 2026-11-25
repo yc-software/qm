@@ -29,7 +29,7 @@ test("missing-bot setup presents available links together, without inventing URL
   assert.doesNotMatch(admin, /walk the admin through.*one step at a time/i);
 });
 
-test("admins set up a connector source before voice or work questions", () => {
+test("admins set up a connector source before work questions", () => {
   assert.match(PROACTIVE_OPENER_PROMPT, /first step is connecting their tools/);
   assert.ok(onboarding.indexOf("Connector source first for admins") < onboarding.indexOf("Slack bot first for admins"));
   assert.match(onboarding, /Never ask for the key or client\s+secrets in chat/);
