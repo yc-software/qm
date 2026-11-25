@@ -646,7 +646,7 @@ function jobComputers(beforeStart?: () => Promise<unknown>) {
   const output = new Map<string, string>();
   const reads: string[] = [];
   const backend: ProcessSandbox = {
-    profile: { backend: "modal", writablePersistence: "resident_disk", processSessions: true },
+    profile: { backend: "modal", processSessions: true },
     async provision(id) {
       return { id, rootDir: "/workspace" };
     },

@@ -59,7 +59,7 @@ describeTwoTenants("monitor, approval, skill and swarm sweeps bind each row's te
     const processes = createPostgresProcessRegistry(db.appDatabaseUrl);
     const ops: Array<[string, string]> = [];
     const sandbox = {
-      profile: { backend: "fake", writablePersistence: "resident_disk", processSessions: true },
+      profile: { backend: "fake", processSessions: true },
       async provision() {
         ops.push(["provision", currentTenant()]);
         return { id: `vm-${currentTenant()}`, rootDir: "/workspace", homeDir: "/root" };

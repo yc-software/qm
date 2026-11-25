@@ -10,7 +10,7 @@ What the PR adds
 - `src/sandbox/agent37-sandbox.ts`, modeled on the smolmachines backend. Provision creates the instance and waits for it to run. Run is our exec endpoint. Teardown with destroy deletes the instance. Files move over the same exec endpoint in base64 chunks, the way the Porter backend does it, because our API has no separate file transfer. Process sessions, home backup, ro layers and blob staging come from the shared exec helpers unchanged.
 - Exec on our side returns within 280 seconds and caps each stream at 512 KiB. Longer commands run detached and are polled; larger output is spooled to disk and read back in chunks, so the agent never sees a truncated result.
 - Auto sleep is on. Agent37 checkpoints an idle computer after five minutes and bills disk alone while it sleeps; a command sent to a sleeping computer wakes it first, and every command counts as activity on the Agent37 side (stamped while it runs), so a long command is never frozen mid-flight. A command sent to a stopped instance (an operator stop, a past-due park) starts it first, then runs; while a sleep checkpoint is still in flight the API answers 409 and the backend retries until it clears.
-- Profile: `writablePersistence: "resident_disk"`, `processSessions: true`, `egressEnforcement: "none"`. Our sandboxes reach the public internet and nothing private, but there is no per-domain allowlist, so the backend declares none rather than pretend.
+- Profile: `processSessions: true`, `egressEnforcement: "none"`. Our sandboxes reach the public internet and nothing private, but there is no per-domain allowlist, so the backend declares none rather than pretend.
 
 What it does not do
 

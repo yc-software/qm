@@ -2,29 +2,20 @@ import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { swallowAs } from "../util/errors.ts";
+import { trimTrailingSlashes } from "../util/text.ts";
 import { makeTar, parseTar } from "./tar.ts";
 import { DISPLACED_DIR_REL } from "../credentials/resident-paths.ts";
-import { proxyExportPrefix } from "./sandbox-env.ts";
-import { BLOB_TRANSFER_AUD, mintCapabilityToken } from "../auth/capability-token.ts";
-import { CAPABILITY_HEADER } from "../api/contract.ts";
 
-import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import {
   hasParentPathSegment,
   type AgentComputerExportArea,
   type AgentComputerExportEntry,
   type AgentComputerExportOptions,
-  type Sandbox,
   type SandboxHandle,
-  type StageOptions,
 } from "./sandbox.ts";
-import { trimTrailingSlashes } from "../util/text.ts";
-import { personalScope } from "../types.ts";
 
 export const tempPathBeside = (absPath: string): string =>
   posix.join(posix.dirname(absPath), `.qm-${randomBytes(8).toString("hex")}`);
-
-const BLOB_TRANSFER_TTL_MS = 2 * 60_000;
 
 function workspaceRel(rel: string): string {
   if (hasParentPathSegment(rel)) throw new Error(`${rel} must stay inside the workspace — no .. path segments`);
@@ -219,112 +210,6 @@ export function createExecExport({
         }
       }
       return entries;
-    },
-  };
-}
-
-interface ExecBlobStagingDeps {
-  label: string;
-  exec(id: string, script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
-  proxyPrefix(handle: SandboxHandle): string;
-  apiBaseUrl: string;
-  capabilityHeader: string;
-  mintToken(grant: { dir: "read" | "write"; id?: string }, forTimeoutSec?: number): Promise<string>;
-  timeoutSec?: number;
-}
-
-interface ExecBlobStaging {
-  stageInAbs(handle: SandboxHandle, abs: string, blobId: string, timeoutSec?: number): Promise<void>;
-  stageOutAbs(handle: SandboxHandle, abs: string, timeoutSec?: number): Promise<string>;
-}
-
-export interface BlobStagingOptions {
-  blobTransfer?: BlobTransferStore;
-  signingSecret?: string;
-  capabilitySecret?: string;
-  apiBaseUrl?: string;
-}
-
-const STAGE_TIMEOUT_SEC = 900;
-
-export function createBackendBlobStaging(
-  label: string,
-  exec: ExecBlobStagingDeps["exec"],
-  opts: BlobStagingOptions,
-): Required<Pick<Sandbox, "stageIn" | "stageOut">> | null {
-  const secret = opts.capabilitySecret ?? opts.signingSecret;
-  if (!opts.blobTransfer || !secret || !opts.apiBaseUrl) return null;
-  const staging = createExecBlobStaging({
-    label,
-    exec,
-    proxyPrefix: proxyExportPrefix,
-    apiBaseUrl: opts.apiBaseUrl,
-    capabilityHeader: CAPABILITY_HEADER,
-    timeoutSec: STAGE_TIMEOUT_SEC,
-    mintToken: (grant, forTimeoutSec) =>
-      mintCapabilityToken(
-        {
-          actorId: `${label}-sandbox`,
-          aud: BLOB_TRANSFER_AUD,
-          scopeId: personalScope(`${label}-sandbox`),
-          blob: grant,
-          exp: Date.now() + (forTimeoutSec ?? STAGE_TIMEOUT_SEC) * 1000 + BLOB_TRANSFER_TTL_MS,
-        },
-        secret,
-      ),
-  });
-  return {
-    async stageIn(handle: SandboxHandle, destRelPath: string, blobId: string, opts2?: StageOptions): Promise<void> {
-      await staging.stageInAbs(handle, posixJoin(handle.rootDir, destRelPath), blobId, opts2?.timeoutSec);
-    },
-    async stageOut(handle: SandboxHandle, srcRelPath: string, opts2?: StageOptions): Promise<string> {
-      return staging.stageOutAbs(handle, posixJoin(handle.rootDir, srcRelPath), opts2?.timeoutSec);
-    },
-  };
-}
-
-function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
-  const { label, exec, proxyPrefix, capabilityHeader, mintToken } = deps;
-  const base = trimTrailingSlashes(deps.apiBaseUrl);
-  const timeoutSec = deps.timeoutSec ?? 300;
-  return {
-    async stageInAbs(handle, abs, blobId, callTimeoutSec): Promise<void> {
-      const effectiveTimeoutSec = callTimeoutSec ?? timeoutSec;
-      const token = await mintToken({ dir: "read", id: blobId }, effectiveTimeoutSec);
-      const tmp = `${tempPathBeside(abs)}.part`;
-      const script =
-        proxyPrefix(handle) +
-        `mkdir -p ${shq(posix.dirname(abs))} && ` +
-        `curl -fsS --connect-timeout 15 -H ${shq(`${capabilityHeader}: ${token}`)} ${shq(`${base}/v1/blobs/${blobId}`)} -o ${shq(tmp)} && ` +
-        `mv -f ${shq(tmp)} ${shq(abs)}`;
-      const r = await exec(handle.id, script, effectiveTimeoutSec);
-      if (r.code !== 0) {
-        await exec(handle.id, `rm -f ${shq(tmp)}`, 30).catch(swallowAs(`${label} stageIn: temp cleanup`, undefined));
-        throw new Error(`${label} stageIn ${abs} failed: ${r.stderr || `curl exit ${r.code}`}`);
-      }
-    },
-
-    async stageOutAbs(handle, abs, callTimeoutSec): Promise<string> {
-      const effectiveTimeoutSec = callTimeoutSec ?? timeoutSec;
-      const token = await mintToken({ dir: "write" }, effectiveTimeoutSec);
-      const script =
-        proxyPrefix(handle) +
-        `sha=$(sha256sum ${shq(abs)} | cut -d' ' -f1) && ` +
-        `curl -fsS --connect-timeout 15 -X POST ${shq(`${base}/v1/blobs`)} ` +
-        `-H ${shq(`${capabilityHeader}: ${token}`)} ` +
-        `-H "x-content-sha256: $sha" ` +
-        `-H "content-type: application/octet-stream" ` +
-        `--upload-file ${shq(abs)}`;
-      const r = await exec(handle.id, script, effectiveTimeoutSec);
-      if (r.code !== 0) throw new Error(`${label} stageOut ${abs} failed: ${r.stderr || `curl exit ${r.code}`}`);
-      let blobId: string | undefined;
-      try {
-        blobId = (JSON.parse(r.stdout) as { blobId?: string }).blobId;
-      } catch {
-        throw new Error(`${label} stageOut ${abs}: unparseable response: ${r.stdout.slice(0, 200)}`);
-      }
-      if (!blobId) throw new Error(`${label} stageOut ${abs}: no blobId in response: ${r.stdout.slice(0, 200)}`);
-      return blobId;
     },
   };
 }

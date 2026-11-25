@@ -88,7 +88,7 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
     sessions,
     runs,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
+    sandbox: { profile: { backend: "fake" } } as Sandbox,
     auditLog,
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),

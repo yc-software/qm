@@ -257,7 +257,6 @@ test("configured resources and the computer's memory size are requested at creat
 
 test("profile advertises resident disk and process sessions", () => {
   assert.equal(sandbox.profile.backend, "agent37");
-  assert.equal(sandbox.profile.writablePersistence, "resident_disk");
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.egressEnforcement, "none");
 });

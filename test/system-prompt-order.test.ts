@@ -73,7 +73,6 @@ function fakeSandbox(): Sandbox {
   return {
     profile: {
       backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
       processSessions: false,
       spec: { os: "Debian 12 (bookworm)", tools: ["git", "jq"], workdir: "/workspace", homeDir: "/root" },
     },

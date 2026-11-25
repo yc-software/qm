@@ -59,7 +59,7 @@ test("ambient reply detection runs on the scope's model, and its failure stays s
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: {
-      profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
+      profile: { backend: "fake", processSessions: false },
     } as Sandbox,
     auditLog,
     errors,

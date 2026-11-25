@@ -7,7 +7,6 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import {
   CapabilityUnsupportedError,
   SandboxProvisionCleanupError,
-  supportsBlobStaging,
   supportsProcessSessions,
   type AgentComputerProfile,
   type AgentComputerSpec,
@@ -16,7 +15,6 @@ import {
   type ProvisionOptions,
   type Sandbox,
   type SandboxHandle,
-  type StageOptions,
   type TeardownOptions,
 } from "./sandbox.ts";
 
@@ -325,16 +323,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           },
         }
       : {}),
-    ...(some(supportsBlobStaging)
+    ...(some((s) => typeof s.importFiles === "function")
       ? {
-          stageIn: (handle: SandboxHandle, dest: string, blobId: string, opts?: StageOptions) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "stageIn", handle.scopeId).stageIn(handle, dest, blobId, opts),
-            ),
-          stageOut: (handle: SandboxHandle, src: string, opts?: StageOptions) =>
-            useHandle(handle, () =>
-              requireCap(forHandle(handle), "stageOut", handle.scopeId).stageOut(handle, src, opts),
-            ),
           importFiles: (handle: SandboxHandle, entries) =>
             useHandle(handle, () =>
               requireCap(forHandle(handle), "importFiles", handle.scopeId).importFiles(handle, entries),

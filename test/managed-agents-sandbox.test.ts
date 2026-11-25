@@ -404,7 +404,6 @@ test("scratch sandboxes are reference counted and never persisted", async () => 
 
 test("the profile advertises provider-managed persistence and parks on teardown", () => {
   assert.equal(sandbox.profile.backend, "do-managed-agents");
-  assert.equal(sandbox.profile.writablePersistence, "provider_managed");
   assert.equal(sandbox.profile.parksOnTeardown, true);
   assert.equal(supportsProcessSessions(sandbox), true);
 });

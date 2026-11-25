@@ -19,13 +19,12 @@ import {
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
   type CredentialPathSpec,
 } from "../credentials/resident-paths.ts";
-import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import type {
@@ -62,10 +61,6 @@ export interface PorterSandboxOptions {
   ttlSec?: number;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
-  blobTransfer?: BlobTransferStore;
-  signingSecret?: string;
-  capabilitySecret?: string;
-  apiBaseUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   advisoryLock: AdvisoryLock;
@@ -238,7 +233,6 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "porter",
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     sizesMemory: true,
@@ -270,8 +264,6 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobStaging = createBackendBlobStaging("porter", (id, script, t) => execRaw(id, script, t), opts);
-
   const execExport = createExecExport({
     label: "porter",
     exec: (id, script, t) => execRaw(id, script, t),
@@ -288,7 +280,6 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;

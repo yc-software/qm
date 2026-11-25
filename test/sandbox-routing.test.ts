@@ -23,7 +23,7 @@ type Fake = Sandbox & { calls: string[]; provisioned: Array<{ owner: string; opt
 function fakeBackend(name: string): Fake {
   const calls: string[] = [];
   const provisioned: Fake["provisioned"] = [];
-  const profile: AgentComputerProfile = { backend: name, writablePersistence: "resident_disk", processSessions: true };
+  const profile: AgentComputerProfile = { backend: name, processSessions: true };
   const s: Partial<Sandbox> & { calls: string[]; provisioned: Fake["provisioned"] } = {
     calls,
     provisioned,

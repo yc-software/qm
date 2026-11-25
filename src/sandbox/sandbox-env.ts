@@ -1,5 +1,3 @@
-import type { SandboxHandle } from "./sandbox.ts";
-import { shq } from "../util/shell.ts";
 export const NONINTERACTIVE_ENV: ReadonlyArray<readonly [string, string]> = [
   ["PAGER", "cat"],
   ["GIT_PAGER", "cat"],
@@ -46,10 +44,4 @@ export function forceThroughProxyEnv(
     GIT_HTTP_PROXY_AUTHMETHOD: "basic",
     NODE_USE_ENV_PROXY: "1",
   };
-}
-
-export function proxyExportPrefix(handle: SandboxHandle): string {
-  const picked = Object.entries(handle.env ?? {}).filter(([key]) => DROPPED_PROXY_ENV.has(key));
-  if (!picked.length) return "";
-  return picked.map(([k, v]) => `export ${k}=${shq(v)}`).join("; ") + "; ";
 }

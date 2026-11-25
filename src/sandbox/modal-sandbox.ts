@@ -11,13 +11,7 @@ import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-se
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
   ephemeralCredLinkPaths,
@@ -82,7 +76,7 @@ export interface StoredModalSandbox extends SnapshotBookkeeping {
   orgId?: string;
 }
 
-export interface ModalSandboxOptions extends BlobStagingOptions {
+export interface ModalSandboxOptions {
   imageFor?: ImageFor;
   client: ModalClient;
   advisoryLock: AdvisoryLock;
@@ -482,7 +476,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   const profile: AgentComputerProfile = {
     backend: "modal",
-    writablePersistence: "provider_managed",
     sizesMemory: true,
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
@@ -539,8 +532,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     defaultHomeDir: HOME_DIR,
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
-
-  const blobStaging = createBackendBlobStaging("modal", (id, script, t) => execRaw(id, script, t), opts);
 
   async function destroyStoredScope(scope: string): Promise<void> {
     const name = sandboxScopeName(await namePrefix(), scope);
@@ -745,7 +736,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
@@ -826,20 +816,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     },
 
     exportFiles: execExport.exportFiles,
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(await namePrefix(), scopeId);
-            scopeByName.set(name, scopeId);
-            const { session } = await ensureSession(scopeId, name);
-            await provisionQueue(scopeId, async () => {
-              await assertHydrated(session);
-              await homeSnapshots.snapshotHome(scopeId, session);
-            });
-          },
-        }
-      : {}),
 
     async restartComputer(scopeId: string, memoryGb?: number): Promise<void> {
       await provisionQueue(scopeId, async () => {

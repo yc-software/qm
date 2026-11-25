@@ -171,7 +171,7 @@ function localDisk() {
   const destroyed: string[] = [];
   const created: string[] = [];
   const backend: Sandbox = {
-    profile: { backend: "local", writablePersistence: "resident_disk", processSessions: false },
+    profile: { backend: "local", processSessions: false },
     async provision(id) {
       const rootDir = join(root, id, "workspace");
       if (!existsSync(rootDir)) created.push(id);

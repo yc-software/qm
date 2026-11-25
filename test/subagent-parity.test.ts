@@ -157,7 +157,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     sessions,
     runs,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
+    sandbox: { profile: { backend: "fake" } } as Sandbox,
     auditLog,
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),

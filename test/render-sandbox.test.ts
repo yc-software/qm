@@ -10,7 +10,6 @@ import {
   type StoredRenderNamespace,
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
-import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { computerVerdict, supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
@@ -35,7 +34,6 @@ function setup(
   const http = options.http ? serveFakeRenderApi(t, fake, options.intercept) : undefined;
   const client = http ? createSdkRenderClient({ apiKey: "render-test-key", workspaceId: "tea-test" }) : fake.client;
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
-  const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
   const store = testMap<StoredRenderSandbox>();
   const scratchStore = testMap<StoredRenderScratch>();
   const cleanupStore = testMap<StoredRenderCleanup>();
@@ -71,7 +69,6 @@ function setup(
       cleanupStore,
       advisoryLock,
       namespaceStore,
-      blobTransfer,
       checkpointIntervalMs,
       onError: (error) => errors.push({ code: error.code, message: error.message }),
     });
@@ -89,7 +86,6 @@ function setup(
     cleanupStore,
     make,
     scope,
-    blobTransfer,
     dir,
     advisoryLock,
     errors,
@@ -301,7 +297,6 @@ test("Render provisions one durable sandbox across two cores and executes in its
   assert.equal(fake.createdFrom.length, 1);
   assert.equal(a.id, b.id);
   assert.equal(first.profile.backend, "render");
-  assert.equal(first.profile.writablePersistence, "provider_managed");
   assert.ok(supportsAgentComputerExport(first));
   assert.ok(supportsProcessSessions(first));
   assert.ok((await store.get(scope))?.checkpoint);
@@ -418,7 +413,6 @@ test(
     const second = await other.provision(scope);
     await other.writeFile(second, "second-turn", "saved");
     await other.teardown(second);
-    await sandbox.persistHomeSnapshot!(scope);
     assert.notEqual((await store.get(scope))!.checkpoint!.id, before.checkpoint!.id);
     assert.equal((await store.get(scope))!.homeDirty, false);
     gate.resolve();
@@ -577,7 +571,7 @@ test("Render disposes a new native checkpoint when its staging record write fail
     return merge(key, patch);
   };
   const sandbox = make();
-  await assert.rejects(sandbox.persistHomeSnapshot!(scope), /pending record outage/);
+  await sandbox.teardown(await sandbox.provision(scope));
   const stored = (await store.get(scope))!;
   assert.equal(stored.recoveryError, "pending record outage");
   assert.equal(stored.checkpoint, undefined);
@@ -908,7 +902,7 @@ test("Render preserves a write that arrives during native snapshot capture", asy
     await release.promise;
     return snapshot;
   });
-  const checkpoint = sandbox.persistHomeSnapshot!(scope);
+  const checkpoint = sandbox.teardown(handle);
   await captured.promise;
   const write = sandbox.writeFile(handle, "after-capture", "retained");
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1103,7 +1097,7 @@ test("Render names sandboxes for the deployment and terminates named sandboxes t
 });
 
 test("Render names sandboxes alike on one database and leaves another database's sandboxes with the same org ID running", async (t) => {
-  const { make, fake, client, scope, advisoryLock, blobTransfer } = setup(t, { http: true });
+  const { make, fake, client, scope, advisoryLock } = setup(t, { http: true });
   await make().provision(scope);
   const other = createRenderSandbox({
     client,
@@ -1113,7 +1107,6 @@ test("Render names sandboxes alike on one database and leaves another database's
     cleanupStore: testMap<StoredRenderCleanup>(),
     advisoryLock,
     namespaceStore: testMap<StoredRenderNamespace>(),
-    blobTransfer,
   });
   await other.provision(scopeId("personal", "other"));
   await make().provision(scopeId("personal", "second"));
@@ -1323,7 +1316,7 @@ test("Render keeps process reads available during a background checkpoint", asyn
     await release.promise;
     return snapshot;
   });
-  const checkpoint = sandbox.persistHomeSnapshot!(scope);
+  const checkpoint = sandbox.teardown(handle);
   await captured.promise;
   const reading = sandbox.listProcesses!(handle);
   try {
@@ -1393,7 +1386,7 @@ test("Render restores its published native snapshot after the database reply is 
     }
     return result;
   });
-  await assert.rejects(sandbox.persistHomeSnapshot!(scope), /checkpoint publication reply lost/);
+  await sandbox.teardown(handle);
   const published = (await store.get(scope))!;
   assert.notEqual(published.checkpoint!.id, before.checkpoint!.id);
   assert.equal(fake.snapshots.has(published.checkpoint!.id), true);

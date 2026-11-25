@@ -5,12 +5,7 @@ import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure, errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
+import { createExecExport, createExecFileOps } from "./exec-file-ops.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -77,7 +72,7 @@ export interface StoredSmolmachinesSandbox extends SnapshotBookkeeping {
   snapshotError?: string;
 }
 
-export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
+export interface SmolmachinesSandboxOptions {
   imageFor?: ImageFor;
   token?: string;
   baseUrl?: string;
@@ -475,7 +470,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
   const profile: AgentComputerProfile = {
     backend: "smolmachines",
     sizesMemory: true,
-    writablePersistence: "resident_disk",
     processSessions: true,
     egressEnforcement: egressProxyHost ? "domain" : "none",
     spec: {
@@ -509,8 +503,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
   });
 
-  const blobStaging = createBackendBlobStaging("smolmachines", (id, script, t) => execRaw(id, script, t), opts);
-
   const execExport = createExecExport({
     label: "smolmachines",
     exec: (id, script, t) => execRaw(id, script, t),
@@ -539,7 +531,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     signalProcess: procSessions.signalProcess,
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
-    ...blobStaging,
     provision(scope, provOpts) {
       if (!provOpts?.scratch) {
         const name = sandboxScopeName(prefix, scope);
@@ -554,20 +545,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     readFileBytes: base.readFileBytes,
     readFile: base.readFile,
     exportFiles: execExport.exportFiles,
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
-            await base.provisionQueue(scopeId, () =>
-              advisoryLock.withLock(lifecycleKey(scopeId), async () => {
-                await initializeMachine(name, scopeId);
-                await snapshotHome(scopeId, name);
-              }),
-            );
-          },
-        }
-      : {}),
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);

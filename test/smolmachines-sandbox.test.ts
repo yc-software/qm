@@ -261,7 +261,6 @@ test("configured resources and the computer's memory size are requested at creat
 
 test("profile advertises resident disk, process sessions, and the documented default shape", () => {
   assert.equal(sandbox.profile.backend, "smolmachines");
-  assert.equal(sandbox.profile.writablePersistence, "resident_disk");
   assert.equal(sandbox.profile.processSessions, true);
   assert.equal(sandbox.profile.spec?.cpus, 4);
   assert.equal(sandbox.profile.spec?.memoryMb, 8192);
@@ -369,17 +368,6 @@ test("a failing snapshot store is recorded in status and a failed hydration neve
   flaky.failReads(false);
   const b = await restarted.provision(scope);
   assert.equal(await restarted.readFile(b, "precious.txt"), "irreplaceable\n");
-});
-
-test("persistHomeSnapshot exists only with a snapshot store and stores the home on demand", async () => {
-  assert.equal(sandbox.persistHomeSnapshot, undefined);
-  assert.equal((await sandbox.computerStatus!(scope)).recovery, undefined);
-  const snapshots = createMemorySnapshotStore();
-  const s = make({ snapshots });
-  const h = await s.provision(scope);
-  await s.writeFile(h, "explicit.txt", "saved\n");
-  await s.persistHomeSnapshot!(scope);
-  assert.ok(await snapshots.open(scope));
 });
 
 test("computerStatus reports a stopped machine as paused without waking it", async () => {

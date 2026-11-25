@@ -373,7 +373,7 @@ test("an app edit chat is shown the app's small text files once, then only the f
     config,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as unknown as Sandbox,
+    sandbox: { profile: { backend: "fake" } } as unknown as Sandbox,
     auditLog: createPostgresAuditLog(testDatabaseUrl()),
     agent: {
       ...mock,
