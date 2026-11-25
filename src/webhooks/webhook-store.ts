@@ -13,7 +13,6 @@ import {
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
-import { DEFAULT_FIRE_RUNNING_STALE_MS } from "../cron/cron-store.ts";
 
 export interface CreateWebhookInput extends CreateTriggerInput {
   title?: string;
@@ -57,7 +56,7 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
   beginFire(fire: WebhookFire): Promise<void>;
   settleFire(fireKey: string): Promise<void>;
-  unsettledFires(now: number): Promise<WebhookFire[]>;
+  unsettledFires(): Promise<WebhookFire[]>;
   claimFireTenants(): Promise<ClaimedRow[]>;
 }
 
@@ -142,12 +141,7 @@ export function createWebhookStore(
     },
     beginFire: (fire) => fires.put(fire.fireKey, fire),
     settleFire: (fireKey) => fires.delete(fireKey),
-    async unsettledFires(now) {
-      const cutoff = now - DEFAULT_FIRE_RUNNING_STALE_MS;
-      const all = await fires.all();
-      await Promise.all(all.filter((f) => f.receivedAt < cutoff).map((f) => fires.delete(f.fireKey)));
-      return all.filter((f) => f.receivedAt >= cutoff).sort((a, b) => a.receivedAt - b.receivedAt);
-    },
+    unsettledFires: async () => (await fires.all()).sort((a, b) => a.receivedAt - b.receivedAt),
     claimFireTenants: () => fires.claimTenants(),
     async recordFire(id, info) {
       await backing.merge(id, {

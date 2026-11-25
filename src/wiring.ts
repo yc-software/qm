@@ -2916,6 +2916,7 @@ export function buildApp(
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
+    advisoryLock,
     deliveries,
     idempotency,
     identity,

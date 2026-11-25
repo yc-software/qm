@@ -5,7 +5,8 @@ import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
-import { redriveHandedOffFires } from "../triggers/redrive.ts";
+import { DEFAULT_FIRE_RUNNING_STALE_MS, redriveHandedOffFires } from "../triggers/redrive.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 
 export type DeliverResult =
@@ -18,6 +19,7 @@ export interface WebhookReceiver {
 
 export interface WebhookReceiverDeps extends TriggerDeps {
   webhooks: WebhookStore;
+  advisoryLock: AdvisoryLock;
 }
 
 const MAX_EVENT_CHARS = 16_000;
@@ -57,6 +59,13 @@ function renderEvent(parsed: unknown, rawBody: string): string {
   return kept.length < pretty.length ? `${kept}\n…[truncated]` : kept;
 }
 
+function dropReason(wh: Webhook | null, fire: WebhookFire, now: number): string | undefined {
+  if (!wh) return "its webhook was deleted";
+  if (!wh.enabled) return "its webhook is disabled";
+  if (fire.receivedAt < now - DEFAULT_FIRE_RUNNING_STALE_MS) return "it stayed unfinished for over 24 hours";
+  return undefined;
+}
+
 function wakeInput(wh: Webhook, deliveryId: string, payload: string, at: number): string {
   return buildWebhookWakeEnvelope({
     webhookId: wh.id,
@@ -78,8 +87,6 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
-
-  const running = new Set<string>();
 
   return {
     async deliver(id, req) {
@@ -111,25 +118,33 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       const receivedAt = Date.now();
       await deps.webhooks.recordEvent(wh.id, { deliveryId, receivedAt, payload });
 
-      await startFire(wh, { fireKey, webhookId: wh.id, deliveryId, receivedAt, payload });
+      const fire = { fireKey, webhookId: wh.id, deliveryId, receivedAt, payload };
+      await deps.webhooks.beginFire(fire);
+      startFire(wh, fire);
       return { status: 202 };
     },
 
     async redrive(now) {
       await claimThenBind(deps.webhooks.claimFireTenants, async () => {
         await redriveHandedOffFires(
-          (await deps.webhooks.unsettledFires(now)).map((fire) => ({ ...fire, firedAt: fire.receivedAt })),
+          (await deps.webhooks.unsettledFires()).map((fire) => ({ ...fire, firedAt: fire.receivedAt })),
           {
             now,
             idempotency: deps.idempotency,
             refire: async (fire) => {
-              if (running.has(fire.fireKey)) return;
               const wh = await deps.webhooks.get(fire.webhookId);
-              if (!wh || !wh.enabled) {
+              const dropped = dropReason(wh, fire, now);
+              if (!wh || dropped) {
                 await deps.webhooks.settleFire(fire.fireKey);
+                console.warn(`[webhook] dropped handed-off fire ${fire.fireKey}: ${dropped}`);
+                if (wh)
+                  await deps.webhooks.recordFire(wh.id, {
+                    at: now,
+                    error: `delivery ${fire.deliveryId} was cut off by a restart and not re-driven because ${dropped}`,
+                  });
                 return;
               }
-              await startFire(wh, fire);
+              startFire(wh, fire);
             },
           },
         );
@@ -137,26 +152,28 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     },
   };
 
-  async function startFire(wh: Webhook, fire: WebhookFire): Promise<void> {
+  function startFire(wh: Webhook, fire: WebhookFire): void {
     const { fireKey, deliveryId } = fire;
-    await deps.webhooks.beginFire(fire);
-    running.add(fireKey);
     const settle = () =>
       deps.webhooks.settleFire(fireKey).catch(reportFailureAs("webhook: settle fire", undefined, `webhook=${wh.id}`));
-    void runTrigger(triggerDeps, {
-      owner: wh.owner,
-      ownerScopeId: wh.ownerScopeId,
-      input: wakeInput(wh, deliveryId, fire.payload, fire.receivedAt),
-      securityScreenData: fire.payload,
-      fireKey,
-      surface: "webhook",
-      sourceId: wh.id,
-      redrivesHandOff: true,
-      ...(wh.title ? { title: wh.title } : {}),
-      ...(wh.destination ? { destination: wh.destination } : {}),
-      errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
-    })
+    void deps.advisoryLock
+      .tryWithLock(`webhook-fire:${fireKey}`, () =>
+        runTrigger(triggerDeps, {
+          owner: wh.owner,
+          ownerScopeId: wh.ownerScopeId,
+          input: wakeInput(wh, deliveryId, fire.payload, fire.receivedAt),
+          securityScreenData: fire.payload,
+          fireKey,
+          surface: "webhook",
+          sourceId: wh.id,
+          redrivesHandOff: true,
+          ...(wh.title ? { title: wh.title } : {}),
+          ...(wh.destination ? { destination: wh.destination } : {}),
+          errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
+        }),
+      )
       .then(async (outcome) => {
+        if (!outcome) return;
         if (outcome.ran || outcome.authzFailed || (await deps.idempotency.committed(fireKey))) await settle();
         if (outcome.authzFailed) {
           await deps.webhooks.setEnabled(wh.id, false);
@@ -171,7 +188,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       })
       .catch(async (e: unknown) => {
         if (e instanceof TransientTurnFailure) {
-          console.warn(`[webhook] ${fireKey} handed off at shutdown; it is re-driven after restart`);
+          console.warn(`[webhook] ${fireKey} handed off for re-drive after restart: ${e.message}`);
           return;
         }
         await settle();
@@ -180,7 +197,6 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
           .recordFire(wh.id, { at: Date.now(), error: msg })
           .catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
         reportFailure("webhook: fire", e, `webhook=${wh.id}`);
-      })
-      .finally(() => running.delete(fireKey));
+      });
   }
 }

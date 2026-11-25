@@ -7,6 +7,8 @@ export interface HandedOffFire {
 
 export const REDRIVE_MIN_AGE_MS = 60_000;
 
+export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
+
 export async function redriveHandedOffFires<F extends HandedOffFire>(
   fires: Iterable<F>,
   opts: {
