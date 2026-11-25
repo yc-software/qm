@@ -422,8 +422,7 @@ app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift",
   Ids in web content, rows and cells get a real click; other ids use the accessibility press action.
   A real click on an id scrolls it into view first and fails if it stays offscreen or something covers it.
   While a menu is open, click its items by id or press Escape; other clicks and pointer actions fail.
-  Real clicks (pixel targets, and ids in web content, rows and cells) and keyboard input (pressKey, typeText, paste)
-  can bring the target window in front of the person's work.
+  Real clicks and keyboard input (pressKey, typeText, paste) can bring the target window in front of the person's work.
   If you use the target app yourself, actions on it wait for a quiet moment and then fail so it can be observed again.
 app.drag([x, y], [x, y], {expect}) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels}, {expect})
