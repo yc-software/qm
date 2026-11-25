@@ -290,8 +290,8 @@ export function createMessagingMethods(
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
     },
-    pendingDeliveries(type, claimMs) {
-      return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
+    pendingDeliveries(type) {
+      return deps.deliveries.pending(type);
     },
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);

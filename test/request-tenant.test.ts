@@ -122,12 +122,12 @@ test("an install with one tenant serves requests bound to it, and a server start
     const single = await serve(databaseUrl);
     try {
       assert.equal(await readBootTenant(databaseUrl), TEST_TENANT);
-      assert.notEqual(await single.get("/v1/deliveries"), 401);
+      assert.notEqual(await single.get("/v1/directory/meta"), 401);
       await db.query("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()]);
       assert.equal(await readBootTenant(databaseUrl), undefined);
       const multi = await serve(databaseUrl);
       try {
-        assert.equal(await multi.get("/v1/deliveries"), 401);
+        assert.equal(await multi.get("/v1/directory/meta"), 401);
         assert.equal(await multi.get("/healthz"), 200);
         assert.equal(await multi.get("/readyz"), 200);
       } finally {
