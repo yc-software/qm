@@ -590,6 +590,7 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
 
   const second = await built.app.turn(dm("!write notes.md strict-again"));
   assert.equal(second.status, "pending_approval", "an allow-once grant covers exactly one call");
+  assert.notEqual(second.pendingApprovals![0]!.requestId, pending!.requestId, "a later card gets its own id");
   const sessionApproved = await built.app.turn(
     dm("!write notes.md strict-again", {
       approval: { requestId: second.pendingApprovals![0]!.requestId, approved: true, scope: "session" },
@@ -687,6 +688,7 @@ test("'allow once' authorizes exactly one execution — a sibling approval for t
   const stillPending = second.pendingApprovals?.[0];
   assert.ok(stillPending, "the second same-command invocation must remain pending, not be auto-approved");
   assert.equal(stillPending!.command, command);
+  assert.notEqual(stillPending!.requestId, pending.requestId, "the sibling's card gets its own id");
 });
 
 test("'allow for session' approves every same-command invocation in the same turn", async () => {

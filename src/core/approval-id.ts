@@ -1,8 +1,13 @@
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { hashId } from "../util/crypto.ts";
 
-export function commandApprovalId(sessionId: string, command: string, approvalKey?: string): string {
-  return hashId(approvalKey ? [sessionId, command, approvalKey] : [sessionId, command]);
+export function commandApprovalId(
+  sessionId: string,
+  runId: string | undefined,
+  command: string,
+  approvalKey?: string,
+): string {
+  return hashId([sessionId, runId ?? "", command, approvalKey ?? ""]);
 }
 
 export function inputApprovalId(sessionId: string, request: unknown): string {
