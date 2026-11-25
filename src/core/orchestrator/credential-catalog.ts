@@ -14,6 +14,7 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
+import { isPersonalCredentialHandle, personalGitRemote } from "../../credentials/personal-git.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
@@ -172,6 +173,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
 export async function registerKeychainCredentials(
   catalog: CredentialCatalog,
   addCredential: AddCredential,
+  brokerToken?: () => Promise<string>,
 ): Promise<void> {
   const {
     deps,
@@ -209,16 +211,19 @@ export async function registerKeychainCredentials(
   if (ownCredentialsAllowed) {
     for (const credential of await keychain.listByOwner(actor.id)) {
       if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+      const gitBroker = personalGitRemote(credential) ? brokerToken : undefined;
       addCredential(
         {
           handle: credentialHandle(credential),
           ...(credential.kind === "file" ? { scratchOnly: true } : {}),
           resolve: async () => {
             await authorizeOwnerCredentials();
-            return resolvedCredential(
+            const resolved = resolvedCredential(
               await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
               true,
             );
+            if (!gitBroker) return resolved;
+            return { ...resolved, env: [...resolved.env, { key: "AGENT_CREDENTIAL_TOKEN", value: await gitBroker() }] };
           },
         },
         credential.service,
@@ -281,10 +286,11 @@ export async function registerServiceCredentials(
   addCredential: AddCredential,
   requestedHandles: readonly string[],
   current?: { records: PublicServiceCredential[]; granted: Set<string> },
-): Promise<void> {
+): Promise<(() => Promise<string>) | undefined> {
   const {
     deps,
     input,
+    actor,
     conversation,
     external,
     strictReadOnly,
@@ -293,9 +299,11 @@ export async function registerServiceCredentials(
     serviceAllowed,
     grantedServiceCredSlugs,
     authorizeServiceCredential,
+    ownCredentialsAllowed,
+    authorizeOwnerCredentials,
   } = catalog;
   const { scopeAttestation, sandboxTokenExpiry } = capability;
-  if (strictReadOnly || !deps.serviceCreds) return;
+  if (strictReadOnly || !deps.serviceCreds) return undefined;
   const records =
     current?.records ??
     (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
@@ -309,6 +317,13 @@ export async function registerServiceCredentials(
     .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
     .map((record) => record.slug)
     .sort();
+  const personalGitHandles = async (): Promise<string[]> => {
+    const requested = requestedHandles.filter(isPersonalCredentialHandle);
+    if (external || !ownCredentialsAllowed || !deps.keychain || !requested.length) return [];
+    return (await deps.keychain.listByOwner(actor.id))
+      .filter((credential) => personalGitRemote(credential) && requested.includes(credentialHandle(credential)))
+      .map(credentialHandle);
+  };
   let brokerToken: Promise<string> | undefined;
   const resolveBrokerToken = (): Promise<string> =>
     (brokerToken ??= (async () => {
@@ -320,6 +335,8 @@ export async function registerServiceCredentials(
           throw new Error(`Service credential is no longer available: ${slug}`);
         }
       }
+      const personalGit = await personalGitHandles();
+      if (personalGit.length) await authorizeOwnerCredentials();
       return mintCapabilityToken(
         {
           ...scopeAttestation,
@@ -332,7 +349,7 @@ export async function registerServiceCredentials(
                 threadRef: conversation.threadRef,
               }
             : {}),
-          credentials: brokerSlugs,
+          credentials: [...brokerSlugs, ...personalGit].sort(),
           exp: sandboxTokenExpiry,
         },
         (deps.capabilitySecret ?? deps.signingSecret)!,
@@ -377,6 +394,7 @@ export async function registerServiceCredentials(
       );
     }
   }
+  return deps.signingSecret && deps.apiBaseUrl ? resolveBrokerToken : undefined;
 }
 
 export function registerBrokeredTools(catalog: CredentialCatalog): void {

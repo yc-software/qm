@@ -1,9 +1,25 @@
 import { orgId as configOrgId } from "../config.ts";
 import { Readable } from "node:stream";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { scopeId as makeScopeId } from "../types.ts";
-import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
-import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
+import { personalScope, scopeId as makeScopeId } from "../types.ts";
+import {
+  credentialHandle,
+  type DecryptedServiceCredential,
+  type Keychain,
+  isValidCredentialSlug,
+  isComposioHost,
+} from "../credentials/keychain.ts";
+import {
+  isPersonalCredentialHandle,
+  personalGitBasicCredential,
+  personalGitRemote,
+} from "../credentials/personal-git.ts";
+import {
+  brokerPathAllowed,
+  brokerRequestHeaders,
+  grantedCredential,
+  type CredentialGrant,
+} from "./credential-broker.ts";
 import { sendJson } from "./http.ts";
 import { relayStream } from "../../plugins/chassis/src/http.ts";
 import { tenantOf, type BaseCtx } from "./routes/route.ts";
@@ -61,7 +77,7 @@ function parseBrokerPath(pathname: string): { slug: string; upstreamPath: string
   } catch {
     return null;
   }
-  if (!isValidCredentialSlug(slug)) return null;
+  if (!isValidCredentialSlug(slug) && !isPersonalCredentialHandle(slug)) return null;
   const upstreamPath = `/${rest.slice(slash + 1)}`;
   if (upstreamPath === "/" || upstreamPath.includes("\0")) return null;
   return { slug, upstreamPath };
@@ -112,6 +128,58 @@ function sendDenied(
   sendJson(ctx.res, status, { error: code, message });
 }
 
+const personalUnavailable = (host = ""): CredentialGrant => ({
+  status: 404,
+  code: "credential_unavailable",
+  message: "credential not found or disabled",
+  host,
+});
+
+async function grantedPersonalGitCredential(
+  claims: CapabilityClaims,
+  handle: string,
+  keychain: Keychain | undefined,
+): Promise<CredentialGrant> {
+  if (!Array.isArray(claims.credentials) || !claims.credentials.includes(handle))
+    return { status: 403, code: "not_entitled", message: "this session is not entitled to that credential", host: "" };
+  if (claims.deployment)
+    return {
+      status: 403,
+      code: "not_available_to_deployments",
+      message: "personal credentials are not available to published apps",
+      host: "",
+    };
+  if (!keychain) return personalUnavailable();
+  const credential = (await keychain.listByOwner(claims.actorId)).find((c) => credentialHandle(c) === handle);
+  const remote = credential && personalGitRemote(credential);
+  if (!credential || !remote) return personalUnavailable();
+  let secret: string | undefined;
+  try {
+    const materialized = await keychain.materializeOwnById(
+      claims.actorId,
+      credential.id,
+      personalScope(claims.actorId),
+    );
+    if (materialized.kind === "env") secret = materialized.env.find((entry) => entry.key === credential.envKey)?.value;
+  } catch {
+    return personalUnavailable(remote.host);
+  }
+  if (!secret) return personalUnavailable(remote.host);
+  return {
+    rec: {
+      slug: handle,
+      name: credential.service,
+      secret: personalGitBasicCredential(remote, secret),
+      delivery: "broker",
+      host: remote.host,
+      injection: { scheme: "Basic " },
+      allowedMethods: ["GET", "POST"],
+      deployments: false,
+      enabled: true,
+    },
+  };
+}
+
 function gitUrlFor(rec: DecryptedServiceCredential, upstreamPath: string, search: string): URL {
   const upstream = new URL(`https://${rec.host}${upstreamPath}`);
   upstream.search = search;
@@ -126,11 +194,16 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   if (method !== "GET" && method !== "POST") {
     return sendJson(ctx.res, 405, { error: "method_not_allowed", message: "git smart HTTP supports GET and POST" });
   }
-  if (!ctx.deps.serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
+  const personal = isPersonalCredentialHandle(slug);
+  const serviceCreds = ctx.deps.serviceCreds;
+  if (!personal && !serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
 
   const claims = ctx.capability;
   if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const grant = await grantedCredential(claims, slug, ctx.deps.serviceCreds, makeScopeId("org", configOrgId()));
+  const grant =
+    personal || !serviceCreds
+      ? await grantedPersonalGitCredential(claims, slug, ctx.deps.keychain)
+      : await grantedCredential(claims, slug, serviceCreds, makeScopeId("org", configOrgId()));
   if (!grant.rec) return sendDenied(ctx, claims, grant.status, grant.code, grant.message, slug, grant.host);
   const { rec } = grant;
   const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>
