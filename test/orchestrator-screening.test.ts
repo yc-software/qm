@@ -850,6 +850,27 @@ for (const [card, securityPosture, text] of [
   });
 }
 
+test("allowing held input once survives a tool approval later in the same turn and still screens file names", async () => {
+  const built = freshApp({ securityPosture: "strict" }, fixtureScreen());
+  const file = async (name: string) => ({
+    name,
+    mimetype: "text/plain",
+    ...(await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"))),
+  });
+  const request = dm("!read notes", {
+    attachments: [await file("notes.txt"), await file("SCREENING_FIXTURE_BLOCK.txt")],
+  });
+  const allow = (requestId: string) => built.app.turn({ ...request, approval: { requestId, approved: true } });
+  const tool = (await allow((await built.app.turn(request)).pendingApprovals![0]!.requestId)).pendingApprovals![0]!;
+  assert.equal(tool.command, "read");
+  const resumed = await allow(tool.requestId);
+  assert.equal(resumed.status, "ok");
+  assert.equal(resumed.pendingApprovals?.length ?? 0, 0);
+  const last = (await built.sessions.listLlmRequests(resumed.sessionId!)).findLast((rec) => rec.model === "mock");
+  assert.match(JSON.stringify(last), /shared notes\.txt \(Files ID/);
+  assert.doesNotMatch(JSON.stringify(last), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
+});
+
 for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {
     const built = freshApp(

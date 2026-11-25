@@ -13,13 +13,13 @@ import type {
   TurnResult,
 } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
-import type { SessionWriter } from "../../sessions/session-store.ts";
+import type { SessionStore, SessionWriter } from "../../sessions/session-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
-import { approvalCardId, approvedCallId } from "../approval-id.ts";
+import { approvalCardId, approvedCallId, inputApprovalId } from "../approval-id.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -223,6 +223,24 @@ export function approvedCallsOnEarlierAttempt(items: readonly Item[], actorId: s
     decided: new Set(decisions.keys()),
     unstarted: [...decisions.values()].filter(({ call }) => !started.has(call.requestId)),
   };
+}
+
+export async function heldInputAllowedInPausedTurn(
+  sessions: Pick<SessionStore, "getItems">,
+  sessionId: string,
+  input: OrchestratorInput,
+  actorId: string,
+): Promise<boolean> {
+  const [latest] = await sessions.getItems(sessionId, { messagesOnly: true, limit: 1 });
+  if (!latest?.turnId) return false;
+  const holdId = inputApprovalId(sessionId, replayableRequest(input));
+  return (await sessions.getItems(sessionId, { turnId: latest.turnId })).some(
+    (item) =>
+      item.kind === "ElicitationResponse" &&
+      item.elicitId === holdId &&
+      item.approved === true &&
+      samePerson(item.author ?? undefined, actorId),
+  );
 }
 
 export function approvedCallRunning(

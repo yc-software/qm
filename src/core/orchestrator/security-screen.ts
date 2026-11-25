@@ -711,8 +711,8 @@ export function createInboundFileScreen(turn: Parameters<typeof createDocumentSc
     securityPolicy.screening === "off"
       ? undefined
       : async ({ content, name, mimetype, bytes }) => {
-          if (released.size && released.has(contentKey(bytes))) return { decision: "auto" };
-          const payload = JSON.stringify({ name, mimetype, content });
+          const classified = released.size > 0 && released.has(contentKey(bytes));
+          const payload = JSON.stringify(classified ? { name, mimetype } : { name, mimetype, content });
           let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
           if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
             verdict = await screenChunks(

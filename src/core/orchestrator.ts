@@ -104,6 +104,7 @@ import {
   approvalView,
   createApprovalDecisions,
   createApprovalLedger,
+  heldInputAllowedInPausedTurn,
   newApprovalRecord,
   resolveLiveApproval,
   withdrawCallApprovals,
@@ -704,7 +705,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           canonicalJson(screenedFields(input, homeChannel?.channelName));
       const approvalReplaysOwnRequest =
         !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
-      const replaysHeldInput = approvalReplaysOwnRequest && approvalRecord?.kind === "input";
+      const replaysHeldInput =
+        approvalReplaysOwnRequest &&
+        (approvalRecord?.kind === "input" ||
+          (input.approval?.approved === true &&
+            (await heldInputAllowedInPausedTurn(deps.sessions, approvalSession.id, input, actor.id))));
       const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
