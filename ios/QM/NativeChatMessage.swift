@@ -147,7 +147,7 @@ struct NativeChatMessageView: View {
   }
 
   private func approvalLabel(approved: Bool, scope: String?) -> String {
-    guard approved else { return "Approval denied" }
+    guard approved else { return "Declined" }
     switch scope ?? "once" {
     case "once": return "Approved once"
     case "session": return "Approved for this session"

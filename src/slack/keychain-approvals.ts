@@ -45,7 +45,7 @@ export function keychainApprovalMessage(
       elements: [
         {
           type: "mrkdwn",
-          text: "Forwarded copy? Click the original message's timestamp above to approve or deny. Buttons only work on the original message.",
+          text: "Forwarded copy? Click the original message's timestamp above to approve or decline. Buttons only work on the original message.",
         },
       ],
     });

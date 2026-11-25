@@ -155,7 +155,7 @@ function approvalDecisionLine(
   const by = record.by ? ` by <@${record.by}>` : "";
   if (record.state === "pending")
     return record.decision === "deny"
-      ? `:hourglass_flowing_sand: Denying · ${subject}…`
+      ? `:hourglass_flowing_sand: Declining · ${subject}…`
       : `:hourglass_flowing_sand: ${APPROVAL_DECISION_LABEL[record.decision]}${by} · ${subject} — running…`;
   const icon = record.decision === "deny" ? "" : ":white_check_mark: ";
   return `${icon}${APPROVAL_DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;

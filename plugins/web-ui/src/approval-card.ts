@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { ChevronDown, ChevronRight, X } from "lucide";
+import { Check, ChevronDown, ChevronRight, Clock3, X } from "lucide";
+import { animateDetailsToggle } from "./details-motion";
 import { icon } from "./icons";
 import type { ApprovalDecision, PendingApproval } from "./core-bridge";
 import {
@@ -9,10 +10,8 @@ import {
   approvalHeading,
   argView,
   realApprovalReason,
-  wordDiff,
+  toolWords,
   type ApprovalCall,
-  type BatchRow,
-  type Segment,
   type ArgField,
   type ArgNode,
   type ArgView,
@@ -29,19 +28,14 @@ export interface ApprovalCardOptions {
 
 const ROW_LIMIT = 6;
 
-function segmentsView(segments: Segment[]): TemplateResult[] {
-  return segments.map((seg) => (seg.changed ? html`<mark class="ac-diff">${seg.text}</mark>` : html`${seg.text}`));
-}
-
-function nodeView(node: ArgNode, segments?: Segment[]): TemplateResult {
-  const body = segments ? segmentsView(segments) : node.kind === "text" || node.kind === "scalar" ? node.text : "";
+function nodeView(node: ArgNode): TemplateResult {
   switch (node.kind) {
     case "scalar":
       return html`<span class="ac-value ${node.literal ? "literal" : ""} ${node.ident ? "ident" : ""}" dir="auto"
-        >${body}</span
+        >${node.text}</span
       >`;
     case "text":
-      return html`<div class="ac-text" dir="auto" tabindex="0">${body}</div>`;
+      return html`<div class="ac-text" dir="auto" tabindex="0">${node.text}</div>`;
     case "record":
       return node.inline
         ? html`<div class="ac-inline-record">${inlineView(node.view)}</div>`
@@ -59,7 +53,7 @@ function fieldLabel(f: ArgField): TemplateResult {
   </dt>`;
 }
 
-export function argsView(view: ArgView, diffs?: Map<string, Segment[]>): TemplateResult | typeof nothing {
+export function argsView(view: ArgView): TemplateResult | typeof nothing {
   if (!view.fields.length && !view.empty.length) return nothing;
   return html`${
     view.fields.length
@@ -68,7 +62,7 @@ export function argsView(view: ArgView, diffs?: Map<string, Segment[]>): Templat
             (f) =>
               html`<div class="ac-row ac-k-${f.node.kind}">
                 ${fieldLabel(f)}
-                <dd>${nodeView(f.node, diffs?.get(f.full))}</dd>
+                <dd>${nodeView(f.node)}</dd>
               </div>`,
           )}
         </dl>`
@@ -175,48 +169,21 @@ const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const WHEN = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } as const;
 
 function previewOf(view: ArgView): string {
-  const scalars = view.fields.filter((f) => f.node.kind === "scalar" && !f.node.literal);
-  const words = scalars.filter((f) => f.node.kind === "scalar" && !f.node.ident);
-  return (words.length ? words : scalars)
+  const shown = view.fields.filter((f) => f.node.kind === "text" || (f.node.kind === "scalar" && !f.node.literal));
+  const words = shown.filter((f) => !(f.node.kind === "scalar" && f.node.ident));
+  return (words.length ? words : shown)
     .map((f) => {
-      const text = textOf(f.node)!;
+      const text = textOf(f.node)!.replace(/\s+/g, " ").trim().slice(0, 240);
       return ISO_TIME.test(text) ? new Date(text).toLocaleString(undefined, WHEN) : text;
     })
     .join(" · ");
 }
 
-type Template = { field: string; segments: Segment[] };
-
-function templatesOf(rows: BatchRow[]): Template[] {
-  const [first, second] = rows;
-  if (!first || !second) return [];
-  return first.view.fields.flatMap((f): Template[] => {
-    const mine = textOf(f.node);
-    const theirs = second.view.fields.find((g) => g.full === f.full);
-    const ref = theirs ? textOf(theirs.node) : null;
-    if (mine === null || ref === null || mine.split(/\s+/).length < 6) return [];
-    const segments = wordDiff(mine, ref);
-    const kept = segments.filter((s) => !s.changed).reduce((n, s) => n + s.text.trim().length, 0);
-    return kept >= mine.replace(/\s+/g, "").length * 0.6 ? [{ field: f.full, segments }] : [];
-  });
-}
-
-function slotsOf(rows: BatchRow[], i: number, field: string): string[] {
-  const text = (r: BatchRow | undefined) => {
-    const f = r?.view.fields.find((g) => g.full === field);
-    return f ? (textOf(f.node) ?? "") : "";
-  };
-  return wordDiff(text(rows[i]), text(rows[i === 0 ? 1 : 0]))
-    .filter((s) => s.changed)
-    .map((s) => s.text);
-}
-
 interface Row {
   approval: PendingApproval;
   heading: string;
-  line: TemplateResult;
+  preview: string;
   tool?: string;
-  body?: () => TemplateResult;
 }
 
 function dropButton(row: Row, o: ApprovalCardOptions): TemplateResult {
@@ -233,27 +200,24 @@ function dropButton(row: Row, o: ApprovalCardOptions): TemplateResult {
   </button>`;
 }
 
-function rowView(row: Row, i: number, o: ApprovalCardOptions, extra: boolean): TemplateResult {
-  const index = html`<span class="ac-index">${i + 1}</span>`;
-  const cls = `ac-item ${extra ? "ac-extra" : ""}`;
-  if (!row.body)
-    return html`<li class=${cls} title=${row.heading}>
-      <div class="ac-flat">${index}<span class="ac-vals" dir="auto">${row.line}</span></div>
-      ${dropButton(row, o)}
-    </li>`;
-  return html`<li class=${cls}>
+function rowView(row: Row, i: number, o: ApprovalCardOptions, extra: boolean, titled: boolean): TemplateResult {
+  return html`<li class="ac-item ${extra ? "ac-extra" : ""} ${titled ? "" : "ac-untitled"}">
     <details>
       <summary>
-        ${index}${icon(ChevronRight, 14)}
+        <span class="ac-index">${i + 1}</span>${icon(ChevronRight, 14)}
         <span class="ac-summary">
-          <span class="ac-summary-top"
-            ><span class="ac-item-title" dir="auto">${row.heading}</span
-            >${row.tool ? html`<span class="ac-tool">${row.tool}</span>` : nothing}</span
-          >
-          <span class="ac-preview" dir="auto">${row.line}</span>
+          ${
+            titled
+              ? html`<span class="ac-summary-top"
+                  ><span class="ac-item-title" dir="auto">${row.heading}</span
+                  >${row.tool ? html`<span class="ac-tool">${row.tool}</span>` : nothing}</span
+                >`
+              : nothing
+          }
+          <span class="ac-preview" dir="auto">${row.preview}</span>
         </span>
       </summary>
-      <div class="ac-item-body">${row.body()}</div>
+      <div class="ac-item-body">${approvalBody(row.approval)}</div>
     </details>
     ${dropButton(row, o)}
   </li>`;
@@ -265,11 +229,12 @@ function showAll(e: Event): void {
 
 function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
   const cut = rows.length > ROW_LIMIT ? ROW_LIMIT - 1 : rows.length;
+  const titled = new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
   return html`<ol class="ac-items">
     ${repeat(
       rows,
       (r) => r.approval.requestId,
-      (r, i) => rowView(r, i, o, i >= cut),
+      (r, i) => rowView(r, i, o, i >= cut, titled),
     )}
     ${
       cut < rows.length
@@ -283,59 +248,24 @@ function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
 
 function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): TemplateResult {
   const batch = approvalBatch(approvals);
-  const eyebrow = `${approvals.length} calls need your approval`;
-  if (!batch) {
-    const rows = approvals.map((a): Row => {
-      const call = approvalCall(a);
-      return {
-        approval: a,
-        heading: approvalHeading(a, call),
-        tool: call?.tool,
-        line: html`${call ? previewOf(argView(call.args)) : a.command}`,
-        body: () => approvalBody(a),
-      };
-    });
-    return card(o, "ac-batch", eyebrow, null, rowsView(rows, o), approvals.length);
-  }
-  const templates = templatesOf(batch.rows);
-  const templated = new Set(templates.map((t) => t.field));
-  const rows = batch.rows.map((row, i): Row => {
-    const own = row.view.fields.filter((f) => !templated.has(f.full));
-    const flat = own.every((f) => f.node.kind === "scalar");
-    const view = { fields: own, empty: row.view.empty };
+  const rows = approvals.map((a, i): Row => {
+    const call = approvalCall(a);
+    const own = batch ? previewOf(batch.differing[i]!) : "";
     return {
-      approval: row.approval,
-      heading: row.heading,
-      line: html`${templates.map((t) =>
-        slotsOf(batch.rows, i, t.field).map(
-          (s) => html`<span class="ac-cell"><mark class="ac-diff">${s}</mark></span>`,
-        ),
-      )}${own.map((f) => nodeView(f.node))}`,
-      ...(flat && templates.length ? {} : { body: () => html`${argsView(view)}` }),
+      approval: a,
+      heading: approvalHeading(a, call),
+      preview: own || (call ? previewOf(argView(call.args)) : a.command),
+      ...(batch || !call ? {} : { tool: call.tool }),
     };
   });
-  const shared = batch.shared;
-  const scalars = { fields: shared.fields.filter((f) => f.node.kind === "scalar"), empty: [] };
-  const rest = { fields: shared.fields.filter((f) => f.node.kind !== "scalar"), empty: shared.empty };
-  const first = batch.rows[0]!.view;
-  const message = { fields: first.fields.filter((f) => templated.has(f.full)), empty: [] };
-  const diffs = new Map(templates.map((t) => [t.field, t.segments]));
+  const purpose = approvals[0]!.purpose?.trim();
+  const common = purpose && rows.every((r) => r.heading === purpose) ? purpose : null;
   return card(
     o,
     "ac-batch",
-    eyebrow,
-    batch.call,
-    html`${
-      shared.fields.length || shared.empty.length || templates.length
-        ? html`<div class="ac-shared">
-            <span class="ac-caption"
-              >${templates.length ? "Same for each, except the highlighted words" : "Same for each"}</span
-            >
-            ${inlineView(scalars)} ${argsView(rest)} ${argsView(message, diffs)}
-          </div>`
-        : nothing
-    }
-    ${rowsView(rows, o)}`,
+    `${approvals.length} calls need your approval`,
+    batch?.call ?? null,
+    html`${common ? html`<h3 class="ac-title" dir="auto">${common}</h3>` : nothing}${rowsView(rows, o)}`,
     approvals.length,
   );
 }
@@ -356,4 +286,49 @@ export function approvalReceipt(r: ApprovalReceipt): TemplateResult {
     <span class="ac-receipt-verdict">${r.verdict === "approved" ? "Approved" : "Declined"}</span>
     <span class="ac-receipt-text" dir="auto">${r.text}</span>
   </div>`;
+}
+
+export interface ApprovalRecord {
+  approved: boolean;
+  command: string;
+  requestId?: string;
+  scope?: string;
+  declined?: string;
+  purpose?: string;
+  call?: { tool: string; input: Record<string, unknown> };
+}
+
+const APPROVED_LABEL: Record<string, string> = {
+  once: "Approved",
+  session: "Approved for this session",
+  always: "Always approved",
+};
+
+export function approvalRecord(d: ApprovalRecord): TemplateResult {
+  const a: PendingApproval = {
+    requestId: d.requestId ?? "",
+    command: d.command,
+    ...(d.purpose ? { purpose: d.purpose } : {}),
+    ...(d.call ? { call: d.call } : {}),
+  };
+  const call = approvalCall(a);
+  const expired = d.declined === "expired";
+  let verdict = expired ? "Expired" : "Declined";
+  if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
+  let what = d.command.split("\n")[0]!.slice(0, 240);
+  if (a.purpose?.trim()) what = a.purpose.trim();
+  else if (call) what = [toolWords(call), previewOf(argView(call.args))].filter(Boolean).join(" · ");
+  let mark = X;
+  if (d.approved) mark = Check;
+  else if (expired) mark = Clock3;
+  return html`<details class="tool-row tool-expandable approval-record ${d.approved ? "approved" : ""}">
+    <summary class="tool-summary" @click=${animateDetailsToggle}>
+      <span class="tool-icon">${icon(mark, 14)}</span>
+      <span class="tool-label" title=${`${verdict}: ${what}`}
+        >${verdict} <span class="tool-detail" dir="auto">${what}</span></span
+      >
+      <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+    </summary>
+    <div class="tool-disclosure approval-record-detail">${approvalBody(a)}</div>
+  </details>`;
 }

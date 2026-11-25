@@ -112,7 +112,8 @@ export function createKeychainApprovals(deps: {
       let resolved: KeychainAsk;
       let grant: KeychainGrant | undefined;
       try {
-        if (decision === "deny") resolved = await keychain.declineAsk({ askId: id, ownerId: actor.id, note: "Denied" });
+        if (decision === "deny")
+          resolved = await keychain.declineAsk({ askId: id, ownerId: actor.id, note: "Declined" });
         else
           ({ ask: resolved, grant } = await keychain.approveAsk({
             askId: id,

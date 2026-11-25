@@ -10,7 +10,7 @@ export type KeychainActionId = (typeof KEYCHAIN_ACTION_IDS)[number];
 
 export const APPROVAL_EXPIRED =
   "That approval request expired or was withdrawn — let me know when you want to try again.";
-export const APPROVAL_REQUESTER_ONLY = "Only the person who requested this command can approve or deny it.";
+export const APPROVAL_REQUESTER_ONLY = "Only the person who requested this command can approve or decline it.";
 export const AWAITING_APPROVAL = "This conversation is waiting on a pending approval.";
 
 export interface PendingApproval {
@@ -41,7 +41,10 @@ export function approvalButtons(p: Pick<PendingApproval, "requestId" | "grantMod
       ? []
       : [{ actionId: "hilo_allow_always", value: p.requestId, label: "Allow always" }]),
   ];
-  return [...(reviewable ? allow : []), { actionId: "hilo_deny", value: p.requestId, label: "Deny", style: "danger" }];
+  return [
+    ...(reviewable ? allow : []),
+    { actionId: "hilo_deny", value: p.requestId, label: "Decline", style: "danger" },
+  ];
 }
 
 type ReplayedFields = "async" | "idempotencyKey" | "redeliveryKey" | "approval";
@@ -74,7 +77,7 @@ export interface ApprovalDecisionRecord {
 }
 
 export const APPROVAL_DECISION_LABEL: Record<ApprovalDecision, string> = {
-  deny: "Denied",
+  deny: "Declined",
   once: "Allowed once",
   session: "Allowed for this conversation",
   always: "Allowed always",
@@ -120,7 +123,7 @@ export function keychainButtons(ask: { id: string; requestedMode?: "once" | "sta
   return [
     { ...first!, style: "primary" },
     second!,
-    { actionId: "keychain_deny", value: ask.id, label: "Deny", style: "danger" },
+    { actionId: "keychain_deny", value: ask.id, label: "Decline", style: "danger" },
   ];
 }
 
@@ -144,6 +147,6 @@ export function keychainCardWording(view: KeychainApprovalView): {
   const duration = pending ? ` (${ask.requestedMode === "once" ? "one-time access" : standing})` : "";
   let status = "This request expired.";
   if (ask.status === "approved") status = `Approved — ${view.mode === "standing" ? standing : "one-time access"}.`;
-  if (ask.status === "declined") status = "Denied.";
+  if (ask.status === "declined") status = "Declined.";
   return { pending, duration, status };
 }

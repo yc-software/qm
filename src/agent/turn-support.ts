@@ -267,5 +267,5 @@ export function approvedCallSteerNote(
 }
 
 export function deniedCallSteerNote(outcome: { summary: string; approver: string }): string {
-  return `[system] ${outcome.approver} denied the pending call ${outcome.summary}, so it did not run. Do not retry it unless they ask again.`;
+  return `[system] ${outcome.approver} declined the pending call ${outcome.summary}, so it did not run. Do not retry it unless they ask again.`;
 }

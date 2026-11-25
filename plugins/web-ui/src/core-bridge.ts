@@ -1707,7 +1707,7 @@ function applyRun(
   }
   if (approvalDenied) {
     (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(stream, partial, st, "Denied.");
+    finish(stream, partial, st, "Declined.");
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
@@ -2099,12 +2099,15 @@ export interface HistoryApprovalDecision {
   command: string;
   scope?: string;
   declined?: string;
+  purpose?: string;
+  call?: { tool: string; input: Record<string, unknown> };
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope, declined } = item.body;
+  const { command, scope, declined, purpose } = item.body;
+  const call = item.body.call as { tool?: unknown; input?: unknown } | undefined;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
     role: "approval-decision",
@@ -2114,6 +2117,10 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     requestId: item.elicitId,
     ...(typeof scope === "string" ? { scope } : {}),
     ...(typeof declined === "string" ? { declined } : {}),
+    ...(typeof purpose === "string" ? { purpose } : {}),
+    ...(typeof call?.tool === "string" && call.input && typeof call.input === "object" && !Array.isArray(call.input)
+      ? { call: { tool: call.tool, input: call.input as Record<string, unknown> } }
+      : {}),
     timestamp: item.createdAt,
   };
 }

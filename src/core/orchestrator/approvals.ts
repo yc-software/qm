@@ -329,6 +329,7 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         author,
         body: {
           command: record.command,
+          ...(record.purpose ? { purpose: record.purpose } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
@@ -462,7 +463,7 @@ async function decideApproval(
     return {
       status: "refused",
       sessionId: session.id,
-      reason: "only the person who requested this command can approve or deny it",
+      reason: "only the person who requested this command can approve or decline it",
     };
   }
   if (!approval.approved) {
@@ -476,7 +477,7 @@ async function decideApproval(
         deps.sessions.append(writer, {
           kind: "UserMessage",
           hidden: true,
-          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
+          text: `The requesting human declined this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
         }),
       );
     audit({
@@ -488,7 +489,7 @@ async function decideApproval(
     return {
       status: "refused",
       sessionId: session.id,
-      reason: `approval denied for ${p.command}`,
+      reason: `approval declined for ${p.command}`,
       refusalKind: "approval_denied",
     };
   }
@@ -511,11 +512,11 @@ async function approveDecision(
     p.approvalKey?.startsWith("security-screen-release:") === true || p.approvalKey?.startsWith("quarantine:") === true;
   const recordDisallowsScope = scope !== "once" && (quarantineRelease || p.grantModes?.[scope] === false);
   if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
-    let reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
+    let reason = `the "${scope}" approval option is disabled by an admin here — approve once or decline`;
     if (recordDisallowsScope && resolution.approvalGrantModes[scope]) {
       reason = quarantineRelease
-        ? `quarantined content can only be released once — approve once or deny`
-        : `this approval does not allow the "${scope}" option — approve once or deny`;
+        ? `quarantined content can only be released once — approve once or decline`
+        : `this approval does not allow the "${scope}" option — approve once or decline`;
     }
     audit({
       action: `command_approval.${scope}`,

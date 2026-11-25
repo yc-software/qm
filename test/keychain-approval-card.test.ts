@@ -155,7 +155,7 @@ test("the card links the conversation inline and omits command-policy fields", a
     [
       ["Allow", "keychain_allow_always", "primary"],
       ["Allow once", "keychain_allow_once", undefined],
-      ["Deny", "keychain_deny", "danger"],
+      ["Decline", "keychain_deny", "danger"],
     ],
   );
   assert.doesNotMatch(wire, /Why:/);

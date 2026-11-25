@@ -2158,13 +2158,21 @@ a.chat-row-open {
   text-align: center;
   padding: 2px 10px;
 }
-.approval-decision {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  text-align: left;
+.approval-record-row {
+  display: block;
+}
+.approval-record-row:has(+ .approval-record-row) {
+  padding-bottom: 0;
+}
+.approval-record.approved > summary > .tool-icon {
+  color: color-mix(in srgb, var(--success) 75%, var(--muted-foreground));
+}
+.approval-record-detail {
+  font-size: var(--font-13);
+  line-height: 1.5;
+}
+.approval-record-detail .ac-text {
+  font-size: var(--font-13);
 }
 .system-note-text {
   font-style: italic;
@@ -14547,12 +14555,15 @@ button:disabled .qm-switch {
   min-height: 36px;
   padding-top: 9px;
 }
-.ac-card {
+.ac-card,
+.approval-record {
   --ac-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --ac-tint: color-mix(in srgb, var(--foreground) 4.5%, var(--background));
   --ac-soft: color-mix(in srgb, var(--foreground) 66%, var(--background));
   --ac-quiet: color-mix(in srgb, var(--foreground) 84%, var(--background));
   --ac-rule: color-mix(in srgb, var(--border) 80%, transparent);
+}
+.ac-card {
   display: block;
   min-width: 0;
   color: var(--foreground);
@@ -14685,15 +14696,6 @@ button:disabled .qm-switch {
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.ac-diff {
-  margin: 0 -3px;
-  padding: 1px 3px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--cta) 26%, transparent);
-  color: var(--foreground);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}
 .ac-empty,
 .ac-note {
   margin-top: 8px;
@@ -14716,8 +14718,7 @@ button:disabled .qm-switch {
   border-radius: 10px;
   background: var(--ac-tint);
 }
-.ac-inline-record,
-.ac-shared {
+.ac-inline-record {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -14784,21 +14785,8 @@ button:disabled .qm-switch {
 .ac-approve:hover:not(:disabled) {
   background: var(--cta-hover);
 }
-.ac-shared {
-  margin-top: 6px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--ac-rule);
-  font-size: var(--font-12-5);
-}
-.ac-shared > :is(.ac-fields, .ac-empty, .ac-caption) {
-  flex-basis: 100%;
-}
-.ac-caption,
 .ac-pair-key {
   color: var(--ac-soft);
-}
-.ac-caption {
-  font-weight: 500;
 }
 .ac-pair {
   display: inline-flex;
@@ -14833,7 +14821,6 @@ button:disabled .qm-switch {
   border-top: 0;
 }
 .ac-item summary,
-.ac-flat,
 .ac-more button {
   display: flex;
   align-items: baseline;
@@ -14860,23 +14847,13 @@ button:disabled .qm-switch {
   font-variant-numeric: tabular-nums;
   color: var(--ac-soft);
 }
-.ac-flat {
-  cursor: default;
-}
-.ac-vals,
+
 .ac-summary-top {
   display: flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
   overflow: hidden;
-}
-.ac-cell {
-  flex: none;
-  min-width: 7.5em;
-}
-.ac-vals > .ac-value {
-  color: var(--ac-soft);
 }
 .ac-summary {
   display: grid;
@@ -14920,6 +14897,13 @@ button:disabled .qm-switch {
 }
 .ac-item details[open] .ac-preview {
   display: none;
+}
+.ac-untitled .ac-preview {
+  color: var(--ac-quiet);
+}
+.ac-untitled details[open] .ac-preview {
+  display: block;
+  color: var(--ac-soft);
 }
 .ac-item-body {
   padding: 2px 0 12px 24px;

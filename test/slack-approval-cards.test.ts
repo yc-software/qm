@@ -19,7 +19,7 @@ test("approvalMessage builds Block Kit buttons for all approval choices", () => 
       ["Allow once", "hilo_allow_once", "req-1"],
       ["Allow session", "hilo_allow_session", "req-1"],
       ["Allow always", "hilo_allow_always", "req-1"],
-      ["Deny", "hilo_deny", "req-1"],
+      ["Decline", "hilo_deny", "req-1"],
     ],
   );
 });
@@ -394,7 +394,7 @@ test("the decision card names who decided and what, with the arguments in a cont
   const line: string = (denied.blocks[0] as any).text.text;
   assert.equal(
     line,
-    `Denied by <@U2> · tools · \`calendar_create_event\` · <!date^${at / 1000}^{date_short_pretty} at {time}|2026-10-25T23:03:23.000Z>`,
+    `Declined by <@U2> · tools · \`calendar_create_event\` · <!date^${at / 1000}^{date_short_pretty} at {time}|2026-10-25T23:03:23.000Z>`,
   );
   const context = denied.blocks[1] as any;
   assert.equal(context.type, "context");
@@ -413,7 +413,7 @@ test("the decision card names who decided and what, with the arguments in a cont
     /^:hourglass_flowing_sand: Allowed once by <@U2> · tools · `calendar_create_event` — running…$/,
   );
   const denying = approvalDecisionMessage(catalogCall, { decision: "deny", by: "U2", at, state: "pending" });
-  assert.match((denying.blocks[0] as any).text.text, /^:hourglass_flowing_sand: Denying · tools/);
+  assert.match((denying.blocks[0] as any).text.text, /^:hourglass_flowing_sand: Declining · tools/);
 
   const shell = approvalDecisionMessage(
     { command: "rm -rf build", summary: "Deletes build." },

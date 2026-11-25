@@ -138,7 +138,7 @@ import {
   switchedDefault,
 } from "./core-bridge";
 import { approvalCall, approvalHeading, realApprovalReason } from "./approval-call";
-import { approvalBody } from "./approval-card";
+import { approvalBody, approvalRecord } from "./approval-card";
 import {
   buildTimeline,
   rowArgs,
@@ -2206,24 +2206,12 @@ export function createChatSurface(
       `;
     }
     if (role === "approval-decision") {
-      const decision = message as unknown as HistoryApprovalDecision;
-      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
-      if (decision.approved) {
-        const labels: Record<string, string> = {
-          once: "Approved once",
-          session: "Approved for this session",
-          always: "Approved always",
-        };
-        label = labels[decision.scope ?? "once"] ?? "Approved";
-      }
       return html`<article
-        class="message-row system-note-row"
+        class="message-row approval-record-row"
         data-index=${index}
         data-entry-seqs=${messageEntrySeqs(message).join(" ")}
       >
-        <div class="system-note approval-decision">
-          ${label}<code class="approval-cmd approval-cmd-full">${decision.command}</code>
-        </div>
+        ${approvalRecord(message as unknown as HistoryApprovalDecision)}
       </article>`;
     }
     if (role === "system-note") {

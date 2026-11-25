@@ -173,16 +173,9 @@ function rebuild(entries: Leaf[]): Record<string, unknown> {
 const pathKey = (path: string[]): string => JSON.stringify(path);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-export interface BatchRow {
-  approval: PendingApproval;
-  heading: string;
-  view: ArgView;
-}
-
 export interface ApprovalBatch {
   call: ApprovalCall;
-  shared: ArgView;
-  rows: BatchRow[];
+  differing: ArgView[];
 }
 
 export function approvalBatch(approvals: PendingApproval[]): ApprovalBatch | null {
@@ -192,69 +185,18 @@ export function approvalBatch(approvals: PendingApproval[]): ApprovalBatch | nul
   if (!first || calls.some((c) => !c || c.tool !== first.tool || c.via !== first.via)) return null;
   const flat = calls.map((c) => leaves(c!.args));
   const byPath = flat.map((list) => new Map(list.map((leaf) => [pathKey(leaf.path), leaf.value])));
-  const allPaths = new Map<string, string[]>();
-  for (const list of flat) for (const leaf of list) allPaths.set(pathKey(leaf.path), leaf.path);
-  const shared: Leaf[] = [];
+  const allPaths = new Set(flat.flatMap((list) => list.map((leaf) => pathKey(leaf.path))));
   const differing = new Set<string>();
-  for (const [key, path] of allPaths) {
-    const present = byPath.every((m) => m.has(key));
+  for (const key of allPaths.keys()) {
     const value = byPath[0]!.get(key);
-    if (present && byPath.every((m) => same(m.get(key), value))) shared.push({ path, value });
-    else differing.add(key);
+    if (!byPath.every((m) => m.has(key) && same(m.get(key), value))) differing.add(key);
   }
   return {
     call: first,
-    shared: argView(rebuild(shared)),
-    rows: approvals.map((approval, i) => ({
-      approval,
-      heading: approvalHeading(approval, calls[i]!),
-      view: argView(rebuild(flat[i]!.filter((leaf) => differing.has(pathKey(leaf.path))))),
-    })),
+    differing: flat.map((list) => argView(rebuild(list.filter((leaf) => differing.has(pathKey(leaf.path)))))),
   };
 }
 
 export function realApprovalReason(reason: string | undefined): string | undefined {
   return reason && reason !== BOILERPLATE_APPROVAL_REASON ? reason : undefined;
-}
-
-export interface Segment {
-  text: string;
-  changed: boolean;
-}
-
-export function wordDiff(text: string, against: string): Segment[] {
-  const tokens = (t: string): string[] => t.split(/(\s+|[.,;:!?()"“”‘’—–-])/).filter(Boolean);
-  const a = tokens(text);
-  const b = tokens(against);
-  if (a.length * b.length > 200_000) return [{ text, changed: false }];
-  const lcs: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
-  const out: Segment[] = [];
-  const push = (t: string, changed: boolean): void => {
-    const last = out[out.length - 1];
-    if (last && last.changed === changed) last.text += t;
-    else out.push({ text: t, changed });
-  };
-  let i = 0;
-  let j = 0;
-  while (i < a.length) {
-    const token = a[i]!;
-    if (j < b.length && token === b[j]) {
-      push(token, false);
-      i++;
-      j++;
-    } else if (j < b.length && lcs[i]![j + 1]! >= lcs[i + 1]![j]!) j++;
-    else {
-      push(token, !/^\s*$/.test(token));
-      i++;
-    }
-  }
-  for (let k = out.length - 2; k > 0; k--)
-    if (!out[k]!.changed && /^\s+$/.test(out[k]!.text) && out[k - 1]!.changed && out[k + 1]!.changed) {
-      out[k - 1]!.text += out[k]!.text + out[k + 1]!.text;
-      out.splice(k, 2);
-    }
-  return out;
 }

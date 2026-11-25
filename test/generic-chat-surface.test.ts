@@ -1075,7 +1075,7 @@ test("a pending approval arrives as a card with buttons that only the person who
         ["Allow once", "primary", ["5"]],
         ["Allow session", "default", ["5"]],
         ["Allow always", "default", ["5"]],
-        ["Deny", "danger", ["5"]],
+        ["Decline", "danger", ["5"]],
       ],
     );
     const click = (eventId: string, user: Record<string, string>) =>
@@ -1094,7 +1094,7 @@ test("a pending approval arrives as a card with buttons that only the person who
     assert.equal((card()!.actions as ShownAction[]).length, 4);
     await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
     const settled = genericChat.shown().find((m) => m.id === posted.id)!;
-    assert.deepEqual([settled.body, settled.actions], ["Denied by Ada Lovelace · `git push`", []]);
+    assert.deepEqual([settled.body, settled.actions], ["Declined by Ada Lovelace · `git push`", []]);
     await settle(async () => {
       const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
       const items = session ? await built.sessions.getItems(session.id) : [];
@@ -1150,7 +1150,7 @@ test("a credential request is a card its owner decides from the chat, and a deci
       [
         ["Allow once", ["5"]],
         ["Allow", ["5"]],
-        ["Deny", ["5"]],
+        ["Decline", ["5"]],
       ],
     );
     const actor = { externalId: "ada@example.com" };
