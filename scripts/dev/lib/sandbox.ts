@@ -1,11 +1,13 @@
-import { existsSync, openSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { run } from "./proc.ts";
+import { dirname, join } from "node:path";
+import { freePort, run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
-import { bestEffortValue, sleep } from "./util.ts";
+import { errMessage, sleep } from "./util.ts";
 import type { DevSandboxBackend, DevSandboxChoice } from "./types.ts";
+import type { SandboxResource } from "../../../src/sandbox/sandbox-resources.ts";
 
 export interface SandboxResolution {
   backend: DevSandboxBackend;
@@ -292,35 +294,69 @@ export async function resolveSandbox(opts: {
   return { backend: "sprites", env, detail: "Fly Sprites (api.sprites.dev)", publicApiUrl, warnings };
 }
 
+async function cloudflaredBin(log: (msg: string) => void): Promise<string | null> {
+  if ((await run("cloudflared", ["--version"], { timeoutMs: 15_000 })).code === 0) return "cloudflared";
+  const arch = { x64: "amd64", arm64: "arm64" }[process.arch as string];
+  if (process.platform !== "linux" || !arch) return null;
+  const bin = join(homedir(), ".cache/qm-dev", `cloudflared-${arch}`);
+  if (!existsSync(bin)) {
+    log(`fetching cloudflared into ${bin} for the agent self-API tunnel...`);
+    const res = await fetch(
+      `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}`,
+    );
+    if (!res.ok) {
+      log(`cloudflared download failed: HTTP ${res.status} -- no agent self-API tunnel`);
+      return null;
+    }
+    mkdirSync(dirname(bin), { recursive: true });
+    writeFileSync(`${bin}.tmp`, Buffer.from(await res.arrayBuffer()), { mode: 0o755 });
+    renameSync(`${bin}.tmp`, bin);
+  }
+  return bin;
+}
+
 export async function startQuickTunnel(
   corePort: number,
   lock: string,
   log: (msg: string) => void,
 ): Promise<{ pid: number; url: string | null } | null> {
-  if ((await run("cloudflared", ["--version"], { timeoutMs: 15_000 })).code !== 0) return null;
-  const logPath = join(lock, "tunnel.log");
-  const fd = openSync(logPath, "a");
-  const logStart = statSync(logPath).size;
-  const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${corePort}`, "--no-autoupdate"], {
-    detached: true,
-    stdio: ["ignore", fd, fd],
-  });
+  const cloudflared = await cloudflaredBin(log);
+  if (!cloudflared) return null;
+  const fd = openSync(join(lock, "tunnel.log"), "a");
+  const metrics = `127.0.0.1:${await freePort()}`;
+  const child = spawn(
+    cloudflared,
+    ["tunnel", "--url", `http://localhost:${corePort}`, "--no-autoupdate", "--metrics", metrics],
+    { detached: true, stdio: ["ignore", fd, fd] },
+  );
   child.unref();
   if (!child.pid) return null;
-  for (let i = 0; i < 20; i++) {
-    const url = bestEffortValue(
-      () =>
-        readFileSync(logPath)
-          .subarray(logStart)
-          .toString("utf8")
-          .match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? "",
-    );
-    if (url) {
+  let lastError = "";
+  while (child.exitCode === null) {
+    const tunnel = await fetch(`http://${metrics}/quicktunnel`)
+      .then((res) =>
+        res.ok
+          ? (res.json() as Promise<{ hostname?: string }>)
+          : { hostname: "", error: `/quicktunnel answered HTTP ${res.status}` },
+      )
+      .catch((err: unknown) => ({ hostname: "", error: errMessage(err) }));
+    lastError = "error" in tunnel ? tunnel.error : "";
+    if (
+      tunnel.hostname &&
+      (await fetch(`http://${metrics}/ready`).then(
+        (res) => res.ok,
+        () => false,
+      ))
+    ) {
+      const url = `https://${tunnel.hostname}`;
       log(`agent self-API tunnel: ${url} -> :${corePort} (lets the sandbox reach this core for crons/sends)`);
       return { pid: child.pid, url };
     }
     await sleep(1000);
   }
+  log(
+    `cloudflared quick tunnel exited ${child.exitCode} without reporting a hostname${lastError ? ` (last metrics error: ${lastError})` : ""}; see ${join(lock, "tunnel.log")}`,
+  );
   return { pid: child.pid, url: null };
 }
 
@@ -348,4 +384,51 @@ export async function destroyLocalDevSandboxes(log: (msg: string) => void): Prom
   if (!ids.length) return;
   log(`sandbox: removing ${ids.length} parked local dev sandbox container(s) (volumes kept; running boxes untouched)`);
   await run("docker", ["rm", "-f", ...ids], { timeoutMs: 60_000 });
+}
+
+export async function destroyDevSprites(
+  env: Record<string, string>,
+  databaseUrl: string,
+): Promise<{ deleted: number; failures: string[] }> {
+  const [
+    { createSpritesSandbox },
+    { sandboxSettings },
+    { createPostgresMapFactory },
+    { createPostgresAdvisoryLock },
+    boot,
+  ] = await Promise.all([
+    import("../../../src/sandbox/sprites-sandbox.ts"),
+    import("../../../src/sandbox/sandbox-settings.ts"),
+    import("../../../src/persistence/durable-map.ts"),
+    import("../../../src/persistence/advisory-lock.ts"),
+    import("../../../src/tenants/boot.ts"),
+  ]);
+  const tenant = await boot.bindBootTenant(() => boot.readBootTenant(databaseUrl));
+  const maps = createPostgresMapFactory(databaseUrl);
+  try {
+    return await boot.inBootTenant(tenant, async () => {
+      const { snapshotS3Bucket: _, ...settings } = sandboxSettings(env).spritesSandbox;
+      const sprites = createSpritesSandbox({
+        ...settings,
+        initializationStore: maps.map("sprites_initialization"),
+        advisoryLock: createPostgresAdvisoryLock(maps.pool),
+      });
+      const scopes = (await maps.map<SandboxResource>("sandbox_resources").all())
+        .filter(
+          (resource) => resource.backend === "sprites" && (resource.state !== "retired" || resource.cleanupPending),
+        )
+        .map((resource) => resource.backingScopeId);
+      const results = await Promise.allSettled(scopes.map((scope) => sprites.destroyScope!(scope)));
+      return {
+        deleted: results.filter((result) => result.status === "fulfilled").length,
+        failures: results.flatMap((result, i) =>
+          result.status === "rejected"
+            ? [`could not delete the sprite for ${scopes[i]}: ${errMessage(result.reason)}`]
+            : [],
+        ),
+      };
+    });
+  } finally {
+    await maps.pool.close();
+  }
 }

@@ -23,7 +23,14 @@ bash scripts/dev-instance.sh doctor
 bash scripts/dev-instance.sh canary
 bash scripts/dev-instance.sh restart [child]
 bash scripts/dev-instance.sh logs [child] [-f]
+bash scripts/dev-instance.sh smoke
 ```
+
+On a fresh Linux machine `up` fetches the Node release in `.node-version` when the installed
+one is older, and installs native Postgres 16 + pgvector with `apt-get` when Docker is
+unavailable. `smoke` sends two
+real web turns through the portal: a plain reply, and an `execute` command whose sandbox
+calls core's self-API back.
 
 `npm run dev-instance`, `npm run dev-instance:status`, `npm run dev-instance:down`, and
 `npm run dev-instance:doctor` are equivalent. The Codex-visible skill copy lives at
@@ -85,7 +92,10 @@ missing or stale). Use local Docker unless you are specifically testing the clou
 For prod-parity QA, pass `--sandbox <backend>` to run against your deployment's real
 sandbox provider instead. That path validates the provider credential and opens a tunnel
 so the remote sandbox can call back to your local core, so it needs whatever that provider
-requires; the local backend needs nothing but Docker.
+requires; the local backend needs nothing but Docker. With `--sandbox sprites`, `down`
+deletes the Sprites recorded in the database the launcher provisioned; with a
+`DATABASE_URL` from the shell, `dev.env` or `.env` it leaves them, since other instances may
+share that database.
 
 ## Slack reach: your apps vs a teammate's
 
@@ -143,16 +153,18 @@ The dev instance should exercise the real system:
 - real LLM: needs a model credential. An Anthropic key (or a Claude subscription token in
   `ANTHROPIC_API_KEY`) serves Claude models and an OpenAI key serves GPT models; deployed
   production processes may instead use a keychain credential (`CODEX_AUTH_CREDENTIAL` /
-  `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.
+  `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain. A model
+  gateway (`MODEL_GATEWAY_URL`, `MODEL_GATEWAY_API_KEY`, `MODEL_GATEWAY_API_KEY_HEADER`)
+  needs no provider key.
 - real durability: uses `DATABASE_URL` when supplied; otherwise starts/reuses a local
-  Docker Postgres container
+  Docker Postgres container, or native Postgres 16 when Docker is unavailable
 - production data is never copied into a dev instance
 - captured model context: request capture is on unless overridden, so you can read back what the model was actually sent
 - fast local edits: runs Node surfaces with `--watch`; the web UI bundle is built on
-  `up` and served as a release, so rebuild with `dev up` after front-end edits
+  `up` when its sources changed and served as a release, so rebuild with `dev up` after front-end edits
 - stale pool recovery: `status` shows each deploy's start time and age; if all pool
   apps are taken, `up` reclaims a slot not started today or older than 4 hours
-- local admin seed: for a self-provisioned local DB, empty `admin_grants` are seeded
+- local admin seed: for any database, empty `admin_grants` are seeded
   from `DEV_INSTANCE_ADMIN_PRINCIPAL` or the local OS user; explicit `ADMIN_GRANTS`
   still wins
 - local portal auth: the launcher sets a localhost-only portal auth bypass, signing in
