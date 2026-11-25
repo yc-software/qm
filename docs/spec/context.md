@@ -192,7 +192,7 @@ A JSON object `{ "providers": [...], "routes": [...] }`. The provider id `defaul
 | `failOpen`  | Default true for external providers, false for `default`. When false, a failure of this provider fails the whole recall or search for the scopes it serves.                                |
 | `label`     | Shown in the recall heading.                                                                                                                                                               |
 
-A `memorable` provider runs its CLI with an allow-listed environment: `inject` on recall, and on automatic capture `record` with a tool-call trace of the session, secret values masked. It takes no explicit writes.
+A `memorable` provider runs its CLI with an allow-listed environment (`BASE_ENV_ALLOWLIST` in `src/memory/memorable/config.ts`): `inject` on recall, and on automatic capture `record` with a tool-call trace of the session, secret values masked. It takes no explicit writes.
 
 Routes run in this order: the env routes (or, with no env variable, one notebook route for every scope kind with automatic capture), then registry bindings. Only a conversation's own writes reach a provider other than the notebook: the `memory` tool's add, `POST /v1/memory/facts`, and post-turn capture. Admin writes, a member's own edits through `/v1/memory`, onboarding status and writes into another scope's notebook change the notebook alone.
 

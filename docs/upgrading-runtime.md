@@ -87,3 +87,15 @@ Older binaries do not display cron history written only to the new journal; thos
 records remain stored in `cron_fires`. Validate both old and new readers against the
 candidate database before promotion, and retain a database recovery point for any
 rollback that requires restoring data as well as code.
+
+## App connections (Composio) moving behind core
+
+App connections now run through core's `/v1/composio` API, and the project key no longer reaches a computer.
+
+A source or image pin must adopt this change before behavior changes. Existing credential records, grants, canonical user IDs, and connected accounts are preserved; upgrading alone does not disconnect users or rotate keys.
+
+1. Inventory project use across deployments and identify any personal credentials, generic broker records, custom skills, scripts, or scheduled jobs that directly call the SDK. Connections created under ad hoc user IDs require explicit reconciliation or reconnection; QM never guesses another account owner.
+2. Update custom callers to the authenticated `/v1/composio` API. Standard seed-managed skills update through normal startup seeding. User-authored or deployment-layer overrides are not silently overwritten and must be updated separately. SDK scripts that expect a sandbox `COMPOSIO_API_KEY` stop working after upgrade.
+3. Deploy the same version to all core/worker instances that share the key and drain old runs. During a rolling mixed-version deployment, old workers can still deliver the old key.
+4. Rotate the Composio project API key and update its existing QM credential records after old workers are retired. Keep the same project so connected accounts and user IDs remain valid. Coordinate every deployment sharing the key. Historical sandbox files, snapshots, environment captures and scripts may retain old copies; blocking new materialization cannot revoke them. Rebuild or clean affected sandboxes as appropriate; rotation invalidates old key copies.
+5. Configure and test callback verification only after deciding project routing. Existing connections do not need new OAuth consent merely because verification is enabled. Verify one new connection and one read-only operation, plus affected scheduled jobs and shared conversations.

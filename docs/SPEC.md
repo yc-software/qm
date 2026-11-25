@@ -32,10 +32,9 @@ Changes that help one shape and break another:
 
 - **A value read only from env, or state keyed by org or by process,** works for one organization and is wrong with many tenants. Key it by tenant; see [storage](./spec/storage.md).
 - **An opt-in flag** helps only the deployment whose operator knows to set it ([qm#1208](https://github.com/yc-software/qm/pull/1208)), and a new required setting or secret breaks every deployment whose operator has not set it, at their next upgrade.
-- **A flow that assumes an optional integration** fails where it is off. The next section lists them.
-- **A fix proved on one sandbox or deploy provider** ships untested on the providers other deployments use (see Provider drift and Prod-like QA below).
+- **A flow that assumes an optional integration** fails where it is off; see [Core and optional](#core-and-optional).
 - **State in process memory, or a migration that needs old and new code never to overlap,** survives one core on one Docker host and fails elsewhere: the `aws` and `fly` targets roll out blue-green in every shape, so two builds serve at once during any rollout.
-- **One organization's names, defaults or workflow in generic code** (see Over-indexing on YC and YC info leaking into public qm below).
+- **A fix proved on one sandbox or deploy provider, or one organization's names and defaults in generic code,** ships wrong to every other deployment (see Provider drift, Prod-like QA, Over-indexing on YC and YC info leaking into public qm below).
 
 A downstream deployment repository pins a release or a commit of this repository and adds a deployment directory: settings, and optionally its own plugins, sandbox tools and skills. This repository never sees those, so the deployment directory contract in [deployments](./spec/deployments.md) is the whole interface between the two. A change core needs for one deployment lands here first, in generic form; the deployment then moves its pin.
 
@@ -43,23 +42,7 @@ A downstream deployment repository pins a release or a commit of this repository
 
 Every deployment has: one core process (API, turn workers, scheduler and the web front door), Postgres with the tenancy schema (a single-organization install is one tenant), the Pi harness, one default sandbox backend, the web UI, and the seeded skills. A model credential is not on that list: core boots without one unless `MODEL_PROVIDER` is set, and turns are refused until an admin adds a key. `src/deployment/secret-schema.ts` is the code's own list of what is always required and what is required only once a feature is selected.
 
-Everything below is off, or absent, until a deployment configures it. Code must work without it, and its routes, tools and seeded skills usually ship in every build regardless, so finding one in the source says nothing about whether a deployment has it. The setting that turns each on, its default and what happens without it are in the "Optional and per-deployment" table of the area spec named.
-
-- [surfaces](./spec/surfaces.md): Slack; a generic chat host.
-- [credentials](./spec/credentials.md): app connections through Composio; native OAuth connectors; MCP servers; brokered deployment keys.
-- [models](./spec/models.md): a model gateway; subscription logins; custom providers; personal model accounts. A model id that exists on one deployment is absent on another.
-- [sandboxes](./spec/sandboxes.md): every backend beyond the one default.
-- [security](./spec/security.md): the egress proxy; content screening.
-- [artifacts](./spec/artifacts.md): app publishing beyond one Docker host; app hostnames.
-- [storage](./spec/storage.md): S3 object storage in place of local disk; more than one tenant.
-- [context](./spec/context.md): external memory providers; skill packs; personas.
-- [scopes](./spec/scopes.md): an external sign-in provider in place of the built-in email broker; self-serve workspaces.
-- [deployments](./spec/deployments.md): the deployment layer (a deployment's own plugins, sandbox tools and skills); feature flags, which all start off.
-- [web-clients](./spec/web-clients.md): the desktop and iOS apps.
-
-App connections are the example to remember: no setting switches them, they are on only where a Composio key is stored, and their routes and seeded skill ship in every build regardless.
-
-Swarms and suggested activities are the reverse: on by default, and a deployment can turn them off (`SWARMS_ENABLED`, `SUGGESTED_ACTIVITIES_ENABLED`).
+Everything in the last column of the table under [Area specs](#area-specs) is off, or absent, until a deployment configures it. Code must work without it, and its routes, tools and seeded skills usually ship in every build regardless, so finding one in the source says nothing about whether a deployment has it. App connections are the example to remember: no setting switches them, and they are on only where a Composio key is stored. A model id that exists on one deployment is absent on another. Swarms and suggested activities are the reverse: on by default, and a deployment can turn them off (`SWARMS_ENABLED`, `SUGGESTED_ACTIVITIES_ENABLED`). Each area spec's "Optional and per-deployment" table gives the setting, its default and what happens without it.
 
 ## Subsystems, most central first
 
@@ -87,22 +70,22 @@ Swarms and suggested activities are the reverse: on by default, and a deployment
 
 Each area has its own spec under `docs/spec/`, written as a tour: the area in one paragraph, one example traced through the real files, the nouns, the parts, what is optional, and where the complexity lives. Read the one your change touches before writing code; [turns](./spec/turns.md) traces one message end to end and is the place to start.
 
-| Area                                         | Code                                                                                   | Covers                                                                    |
-| -------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [turns](./spec/turns.md)                     | `src/api/app-turn.ts`, `src/runs`, `src/core`, `src/agent`, `src/sessions`, `src/wake` | intake, the run queue, the orchestrator, the Pi loop, tools, the item log |
-| [delegation](./spec/delegation.md)           | `src/sessions/session-syscalls.ts`, `src/sessions/subagent-mail.ts`, `src/swarms`      | subagents, messages between conversations, swarms                         |
-| [models](./spec/models.md)                   | `src/model`, `src/agent/runtime-*.ts`                                                  | the model catalog, runtimes, model routes, spend                          |
-| [scopes](./spec/scopes.md)                   | `src/identity`, `src/directory`, `src/acl`, `src/resolution`, `plugins/portal`         | sign-in, principals, scopes, grants, admin roles                          |
-| [sandboxes](./spec/sandboxes.md)             | `src/sandbox`, `src/processes`                                                         | the sandbox contract, providers, background jobs                          |
-| [credentials](./spec/credentials.md)         | `src/credentials`, `src/connectors`, `src/mcp`                                         | keychain, brokers, capability tokens, OAuth connectors, MCP, Composio     |
-| [context](./spec/context.md)                 | `src/memory`, `src/skills`, `src/personas`, `skills-seed`                              | system prompt, guidance, memory, skills, personas                         |
-| [background-work](./spec/background-work.md) | `src/cron`, `src/triggers`, `src/webhooks`, `src/monitors`, `src/loops`                | crons, webhooks, job watches, loops, whose authority a fire carries       |
-| [surfaces](./spec/surfaces.md)               | `src/surfaces`, `src/slack`, `src/delivery`, `src/surface-cache`                       | the surface contract, Slack, generic chat, delivery                       |
-| [web-clients](./spec/web-clients.md)         | `src/web`, `plugins/web-ui`, `desktop`, `ios`                                          | the front door, web UI releases, the browser app, desktop and iOS         |
-| [artifacts](./spec/artifacts.md)             | `src/deploy`, `src/files`, `src/search`                                                | published apps, files, sharing                                            |
-| [storage](./spec/storage.md)                 | `src/persistence`, `src/tenants`                                                       | Postgres, tenancy, migrations, object storage                             |
-| [security](./spec/security.md)               | `src/security`, `src/policy`, `src/decisions`, `src/audit`, `deploy/egress-proxy`      | postures, approvals, command policy, screening, the egress proxy, audit   |
-| [deployments](./spec/deployments.md)         | `cli`, `src/deployment`, `deploy`, `src/config.ts`, `.github/workflows`                | the deployment directory, the CLI, releases, CI                           |
+| Area                                         | Code                                                                                   | Covers                                                                    | Off until a deployment configures it                                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [turns](./spec/turns.md)                     | `src/api/app-turn.ts`, `src/runs`, `src/core`, `src/agent`, `src/sessions`, `src/wake` | intake, the run queue, the orchestrator, the Pi loop, tools, the item log |                                                                                                                 |
+| [delegation](./spec/delegation.md)           | `src/sessions/session-syscalls.ts`, `src/sessions/subagent-mail.ts`, `src/swarms`      | subagents, messages between conversations, swarms                         |                                                                                                                 |
+| [models](./spec/models.md)                   | `src/model`, `src/agent/runtime-*.ts`                                                  | the model catalog, runtimes, model routes, spend                          | a model gateway; subscription logins; custom providers; personal model accounts                                 |
+| [scopes](./spec/scopes.md)                   | `src/identity`, `src/directory`, `src/acl`, `src/resolution`, `plugins/portal`         | sign-in, principals, scopes, grants, admin roles                          | an external sign-in provider in place of the built-in email broker; self-serve workspaces                       |
+| [sandboxes](./spec/sandboxes.md)             | `src/sandbox`, `src/processes`                                                         | the sandbox contract, providers, background jobs                          | every backend beyond the one default                                                                            |
+| [credentials](./spec/credentials.md)         | `src/credentials`, `src/connectors`, `src/mcp`                                         | keychain, brokers, capability tokens, OAuth connectors, MCP, Composio     | app connections through Composio; native OAuth connectors; MCP servers; brokered deployment keys                |
+| [context](./spec/context.md)                 | `src/memory`, `src/skills`, `src/personas`, `skills-seed`                              | system prompt, guidance, memory, skills, personas                         | external memory providers; skill packs; personas                                                                |
+| [background-work](./spec/background-work.md) | `src/cron`, `src/triggers`, `src/webhooks`, `src/monitors`, `src/loops`                | crons, webhooks, job watches, loops, whose authority a fire carries       | inbox and loops; Gmail push                                                                                     |
+| [surfaces](./spec/surfaces.md)               | `src/surfaces`, `src/slack`, `src/delivery`, `src/surface-cache`                       | the surface contract, Slack, generic chat, delivery                       | Slack; a generic chat host                                                                                      |
+| [web-clients](./spec/web-clients.md)         | `src/web`, `plugins/web-ui`, `desktop`, `ios`                                          | the front door, web UI releases, the browser app, desktop and iOS         | the desktop and iOS apps                                                                                        |
+| [artifacts](./spec/artifacts.md)             | `src/deploy`, `src/files`, `src/search`                                                | published apps, files, sharing                                            | app publishing beyond one Docker host; app hostnames                                                            |
+| [storage](./spec/storage.md)                 | `src/persistence`, `src/tenants`                                                       | Postgres, tenancy, migrations, object storage                             | S3 object storage in place of local disk; more than one tenant                                                  |
+| [security](./spec/security.md)               | `src/security`, `src/policy`, `src/decisions`, `src/audit`, `deploy/egress-proxy`      | postures, approvals, command policy, screening, the egress proxy, audit   | the egress proxy; content screening                                                                             |
+| [deployments](./spec/deployments.md)         | `cli`, `src/deployment`, `deploy`, `src/config.ts`, `.github/workflows`                | the deployment directory, the CLI, releases, CI                           | the deployment layer (a deployment's own plugins, sandbox tools and skills); feature flags, which all start off |
 
 `src/api` is the HTTP face of every area, and `src/wiring.ts` is the composition root that builds them all; neither is an area of its own.
 
