@@ -306,7 +306,6 @@ export interface App {
     viewer?: string,
   ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
-  stopThread(threadRef: string, opts?: { tree?: boolean }): Promise<boolean>;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;

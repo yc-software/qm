@@ -147,69 +147,6 @@ test("a correctly signed PUT replaces the layer and a signed GET reads it back",
   }
 });
 
-test("GET distinguishes a poisoned stored revision from the prior durable revision still live", async (t) => {
-  const first = JSON.stringify({
-    contract: 1,
-    tools: [{ path: "tools/acme/tool.json", content: JSON.stringify({ id: "acme", advertise: "acme v1" }) }],
-    skills: [],
-  });
-  const poisoned = JSON.stringify({
-    contract: 1,
-    tools: [{ path: "tools/acme/tool.json", content: JSON.stringify({ id: "acme", advertise: "acme v2" }) }],
-    skills: [
-      { path: "skills/broken/SKILL.md", content: "---\nname: broken\ndescription: Broken.\n---\nRun broken.\n" },
-    ],
-  });
-  const srv = start();
-  t.mock.method(console, "error", () => undefined);
-  try {
-    const initialPut = await fetch(`${srv.base}${PATH}`, { method: "PUT", headers: signed("PUT", first), body: first });
-    assert.equal(initialPut.status, 200);
-    const initialHash = ((await initialPut.json()) as { contentHash: string }).contentHash;
-
-    t.mock.method(srv.skills, "create", async () => {
-      throw new Error("poisoned skill store");
-    });
-    const failedPut = await fetch(`${srv.base}${PATH}`, {
-      method: "PUT",
-      headers: signed("PUT", poisoned),
-      body: poisoned,
-    });
-    assert.equal(failedPut.status, 202, "a persisted revision is reported as accepted but degraded");
-    const failedBody = (await failedPut.json()) as { ok: boolean; status: string; message: string };
-    assert.equal(failedBody.ok, true);
-    assert.equal(failedBody.status, "degraded");
-    assert.match(failedBody.message, /poisoned skill store/);
-    const audits = await srv.auditLog.events(testTenant);
-    assert.equal(
-      audits.filter((event) => event.action === "deployment_layer.updated").length,
-      2,
-      "both persisted revisions are audited",
-    );
-
-    const get = await fetch(`${srv.base}${PATH}`, { headers: signed("GET", "") });
-    assert.equal(get.status, 200);
-    const body = (await get.json()) as {
-      contentHash: string;
-      status: string;
-      runtimeContentHash: string | null;
-      source: string;
-      resolved: { advertisedTools: string[] };
-    };
-    assert.notEqual(body.contentHash, initialHash, "the desired stored revision remains observable");
-    assert.equal(body.status, "degraded");
-    assert.equal(body.runtimeContentHash, initialHash);
-    assert.equal(body.source, "durable");
-    assert.deepEqual(
-      body.resolved.advertisedTools,
-      ["acme v1"],
-      "GET reports the prior revision this instance still serves",
-    );
-  } finally {
-    await srv.close();
-  }
-});
-
 test("a bad signature and a stale timestamp are both rejected 401", async () => {
   const srv = start();
   try {

@@ -53,7 +53,7 @@ export function destinations(): Destination[] {
     to("memory", Brain, "Memory", "What QM remembers about your work"),
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
-  if (personasState.enabled) list.push(to("personas", Bot, "Personas", "Reusable roles you can chat with"));
+  if (personasState.enabled) list.push(to("personas", Bot, "Bots", "Reusable roles you can chat with"));
   if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
   if (can("admin") || can("owner")) {
     list.push({
@@ -67,14 +67,16 @@ export function destinations(): Destination[] {
   return list;
 }
 
-const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "apps"]);
+const SIDEBAR_VIEWS: readonly View[] = ["personas", "apps"];
 
 type SidebarDestination = Destination & { view: View };
 
-const inSidebar = (d: Destination): d is SidebarDestination => d.view !== null && SIDEBAR_VIEWS.has(d.view);
+const inSidebar = (d: Destination): d is SidebarDestination => d.view !== null && SIDEBAR_VIEWS.includes(d.view);
 
 export function sidebarDestinations(): SidebarDestination[] {
-  return destinations().filter(inSidebar);
+  return destinations()
+    .filter(inSidebar)
+    .sort((a, b) => SIDEBAR_VIEWS.indexOf(a.view) - SIDEBAR_VIEWS.indexOf(b.view));
 }
 
 function browseDestinations(): Destination[] {

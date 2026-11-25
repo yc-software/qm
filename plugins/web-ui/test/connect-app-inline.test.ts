@@ -31,7 +31,8 @@ test("a card for one app shows only that app and marks it connected after a veri
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
     });
-    document.querySelector(".message-stack")!.append(other, scoped, twin);
+    const g = Object.assign(document.createElement("qm-onboarding-welcome"), { widget: "apps", toolkit: "granola" });
+    document.querySelector(".message-stack")!.append(other, scoped, twin, g);
     for (let i = 0; i < 100 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -43,6 +44,7 @@ test("a card for one app shows only that app and marks it connected after a veri
     );
     assert.equal(scoped.querySelector('input[type="search"]'), null);
     assert.equal(scoped.querySelector(".connection-picker"), null);
+    assert.equal(g.querySelector(".connection-card strong")?.textContent, "Granola MCP");
     assert.ok(other.querySelector(".connection-picker"), "an app the catalog does not have falls back to the picker");
   } finally {
     await h.close();

@@ -65,7 +65,6 @@ export async function startQm(
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
   const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
-  if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -112,7 +111,6 @@ export async function startQm(
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
     await built.deploymentLayerReady;
-    built.deploymentLayerRefresh.start();
   });
   server.listen(config.port);
   await once(server, "listening");
@@ -296,7 +294,6 @@ export async function startQm(
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-      built.deploymentLayerRefresh.stop();
       await built.runtime.stop({
         fatal,
         beforeClose: async () => {
