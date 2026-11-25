@@ -142,7 +142,9 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
             .fixedSize(horizontal: false, vertical: dictation.busy)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            .onGeometryChange(for: CGFloat.self) {
+              $0.size.height
+            } action: { height in
               if dictation.busy {
                 dictationLift = max(0, height - restingBarHeight)
                 expectedDictationLift = dictationLift
