@@ -9,7 +9,6 @@ import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
-import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
 import { welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
@@ -1474,37 +1473,6 @@ export function createChatSurface(
     setPins(page.pins ?? []);
   }
 
-  let startingIdeas = false;
-
-  function ideasUnavailable(): boolean {
-    return (
-      startingIdeas ||
-      !chatState.agent ||
-      chatState.agent.state.isStreaming ||
-      Boolean(chatState.pendingSend) ||
-      Boolean(ctx.composer.state.draft) ||
-      Boolean(ctx.composer.state.attachments.length) ||
-      ctx.composer.state.processingFiles
-    );
-  }
-
-  async function showWelcomeIdeas(): Promise<void> {
-    if (ideasUnavailable()) return;
-    startingIdeas = true;
-    const threadRef = `web:${appState.me!.user}:ideas:${crypto.randomUUID()}`;
-    mountContinuable(threadRef, null, null, []);
-    const agent = chatState.agent;
-    try {
-      if (agent) {
-        await ctx.composer.refreshRuntimeSelection(null, agent);
-        await ctx.composer.sendSuggestedPrompt(welcomeIdeasPrompt, agent);
-      }
-    } finally {
-      startingIdeas = false;
-      if (agent && agent === chatState.agent) drawActiveChat(agent);
-    }
-  }
-
   function welcomeGreeting(animate = true): TemplateResult {
     return html`
       <article class="message-row assistant-row welcome-greeting">
@@ -1512,9 +1480,7 @@ export function createChatSurface(
           <qm-onboarding-welcome
             .me=${appState.me}
             .animateWelcome=${animate}
-            .onMoreIdeas=${showWelcomeIdeas}
             .onIdea=${(prompt: string) => chatState.agent && ctx.composer.fillSuggestedPrompt(prompt, chatState.agent)}
-            .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
           ></qm-onboarding-welcome>
         </div>

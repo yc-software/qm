@@ -41,8 +41,7 @@ export function welcomeLayout(view: {
   const { me, threadRef, empty } = view;
   const first = Boolean(me && isWelcomeConversation(view.sessions, me.user, threadRef, view.scopeId));
   const seeded = Boolean(me?.welcome) && empty && (first || Boolean(threadRef?.startsWith(`web:${me?.user}:welcome:`)));
-  const standard = me && hasWelcomeScreen(me) ? first : view.isNewUser && empty;
-  const show = me?.welcome ? seeded : standard;
+  const show = me?.welcome ? seeded : view.isNewUser && empty;
   return {
     show,
     hideSuggestions: (view.isNewUser && hasWelcomeScreen(me)) || seeded,

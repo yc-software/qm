@@ -1,6 +1,7 @@
 import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
+import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
@@ -52,6 +53,13 @@ interface HarnessOptions {
   returnReplaces?: string;
   openNewChat?: boolean;
 }
+
+export const welcomeSeeds: ActivitySeeds = {
+  activities: [
+    { id: "research", title: "Research a customer", prompt: "Research our biggest customer.", icon: "search" },
+  ],
+  apps: {},
+};
 
 export const SESSION = {
   id: "sess-deep",
@@ -162,7 +170,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
           { kind: "slack", label: "Slack" },
           { kind: "partner-chat", label: "Community chat" },
         ],
-        ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
+        ...(opts.welcome ? { welcome: welcomeSeeds } : {}),
       });
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
