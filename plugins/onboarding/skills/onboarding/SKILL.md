@@ -74,7 +74,8 @@ before mentioning Slack bot setup. If their role is unclear, use
 - Confirmed missing bot: offer the setup early. In web chat, when `installAvailable` is
   true, write one short line and `::add-to-slack{}` as its own paragraph, outside code
   fences and quotations; the card carries the install action, so do not also link
-  `installUrl`. Otherwise give the available steps and links together as described in
+  `installUrl`. In that line, tell them to pick their own company's workspace, not a
+  shared community or accelerator workspace they also belong to. Otherwise give the available steps and links together as described in
   the admin skill. Do not make the admin ask for each step.
 - Disabled or deferred setup: skip silently. A failed or unavailable status read is
   unknown, not missing; continue onboarding without advertising setup or claiming it
