@@ -6,8 +6,8 @@ import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId, ty
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
 
-export const SHARED_SKILL_TRIGGER_REFUSAL =
-  "a skill in a shared scope can only be changed by a person, not an automated trigger";
+export const SHARED_SKILL_REFUSAL =
+  "a skill in a shared scope can only be changed on a turn that carries a person's authority";
 
 export function isMultiMemberSkillScope(scope: ScopeId): boolean {
   return isSharedScope(scope) || parseScopeId(scope).kind === "team";
@@ -27,20 +27,17 @@ export function authorPublishesSkill(scope: ScopeId): boolean {
   return kind !== null && AUTHOR_PUBLISHED_SKILL_KINDS[kind];
 }
 
-export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {
-  return isMultiMemberSkillScope(homeScope) && !liveActor;
+export interface SkillEditor {
+  personAuthority?: boolean;
+  botActor?: boolean;
 }
 
-export function livePersonCapability(
-  c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean } | undefined,
-): boolean {
-  return c?.botActor !== true && (c?.liveAuthor === true || c?.liveActor === true);
+export function sharedSkillRefused(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
+  return isMultiMemberSkillScope(homeScope) && !carriesPersonAuthority(editor);
 }
 
-export function personAtKeyboard(
-  c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
-): boolean {
-  return livePersonCapability(c) && c?.triggered !== true;
+export function carriesPersonAuthority(c: { personAuthority?: boolean; botActor?: boolean } | undefined): boolean {
+  return c?.botActor !== true && c?.personAuthority === true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
@@ -152,7 +149,13 @@ export type ShareArtifactResult =
     }
   | {
       ok: false;
-      code: "bad_request" | "recipient_not_found" | "ambiguous_recipient" | "share_failed" | DeployAccessErrorCode;
+      code:
+        | "bad_request"
+        | "recipient_not_found"
+        | "ambiguous_recipient"
+        | "share_failed"
+        | "approval_required"
+        | DeployAccessErrorCode;
       message: string;
       candidates?: Array<{ id: string; label: string }>;
     };

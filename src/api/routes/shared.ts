@@ -1,18 +1,19 @@
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
 import type { AdminRole } from "../../admin/admin-grant-store.ts";
-import { parseScopeId, scopeId, type Principal, type ScopeId } from "../../types.ts";
+import { parseScopeId, scopeId, type Principal } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
-import { canonicalPerson, ownPrivateConversation, samePerson } from "../../directory/person.ts";
+import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
+import { selfReadAudience, type SelfReadAudience } from "../../auth/self-read-audience.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -45,52 +46,6 @@ export function audit(
   ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
 }
 
-export async function runIsActive(ctx: Pick<ApiCtx, "deps" | "capability">): Promise<boolean> {
-  const cap = ctx.capability;
-  if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  return (
-    !!run &&
-    run.status === "running" &&
-    !!cap.runLeaseToken &&
-    run.leaseToken === cap.runLeaseToken &&
-    run.attempts === cap.runAttempt &&
-    run.sessionId === cap.threadRef &&
-    samePerson(run.request.actor.id, cap.actorId) &&
-    (run.leaseExpiresAt ?? 0) > Date.now()
-  );
-}
-
-export async function activeRun(ctx: ApiCtx): Promise<boolean> {
-  if (await runIsActive(ctx)) return true;
-  sendJson(ctx.res, 403, {
-    error: "inactive_run",
-    message:
-      "This call needs the current token of a running turn: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses this access; make the call from a foreground command while the turn is running.",
-  });
-  return false;
-}
-
-export type SelfReadAudience = { inOwnPrivate: boolean; roomScope?: ScopeId };
-
-export function selfReadAudience(
-  capability: CapabilityClaims | null | undefined,
-  principalId: string,
-): SelfReadAudience {
-  if (!capability) return { inOwnPrivate: true };
-  const audience =
-    capability.audienceScopeId ??
-    capability.destination?.audienceScopeId ??
-    (capability.triggered === true ? undefined : capability.scopeId);
-  if (ownPrivateConversation(principalId, capability.scopeId, audience)) {
-    return { inOwnPrivate: true };
-  }
-  return {
-    inOwnPrivate: false,
-    roomScope: audience && parseScopeId(audience).kind !== "personal" ? audience : undefined,
-  };
-}
-
 export function resolveSelfRead(
   ctx: ApiCtx,
   opts?: { allowBot?: boolean; botMessage?: string; privateOnlyMessage?: string },
@@ -113,8 +68,8 @@ export function resolveSelfRead(
   return { principalId, ...audience };
 }
 
-export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+export function requirePersonAuthority(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
+  if (!ctx.capability || carriesPersonAuthority(ctx.capability)) return true;
   refuseWithoutPerson(ctx.res);
   return false;
 }
@@ -143,6 +98,11 @@ export async function adminStanding(
 
 export interface AuthorizedAdmin extends Principal {
   role: AdminRole;
+}
+
+export async function isOrgAdmin(ctx: Pick<ApiCtx, "deps" | "tenant">, principalId: string): Promise<boolean> {
+  const standing = await adminStanding(ctx.deps, tenantOf(ctx), principalId);
+  return standing === "org_admin" || standing === "owner";
 }
 
 export async function authorizeAdmin(
@@ -206,12 +166,12 @@ export async function verifiedConversationSpeaker(
   if (ctx.capability?.runId) {
     const own = await runs.get(ctx.capability.runId);
     if (!own || own.sessionId !== threadRef || isTerminal(own.status)) {
-      return { error: "no live turn to verify the speaker against" };
+      return { error: "no turn in flight to verify the speaker against" };
     }
     turnRuns = [own];
   } else {
     turnRuns = await runs.inFlightForThread(threadRef);
-    if (!turnRuns.length) return { error: "no live turn to verify the speaker against" };
+    if (!turnRuns.length) return { error: "no turn in flight to verify the speaker against" };
   }
   const spoke = turnRuns.map((run) => run.request.actor.id);
   for (const run of turnRuns) {

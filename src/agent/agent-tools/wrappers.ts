@@ -124,7 +124,7 @@ function keyedApprovalBlockedText(reason: string, callKey: string): string {
   );
 }
 
-function approvalCallText(label: string, params: unknown): string {
+export function approvalCallText(label: string, params: unknown): string {
   return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
 }
 

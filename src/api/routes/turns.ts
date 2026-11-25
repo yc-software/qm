@@ -1,5 +1,5 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
-import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } from "../../types.ts";
+import type { ClientToolDeclaration, SurfaceBriefing, TurnRequest } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { isTerminal } from "../../runs/run-store.ts";
@@ -81,7 +81,9 @@ const surfaceBriefingSchema = z.object({
   instructions: z.string().max(8_000).optional(),
 });
 
-const clientResultSchema = z.object({
+export const CLIENT_RESULT_MAX_BODY_BYTES = 6_000_000;
+
+export const clientResultSchema = z.object({
   callId: z.string().min(1).max(256),
   result: z.object({
     content: z.string(),
@@ -99,15 +101,9 @@ const clientResultSchema = z.object({
   }),
 });
 
-function zodMessage(field: string, error: z.ZodError): string {
+export function zodMessage(field: string, error: z.ZodError): string {
   const issue = error.issues[0]!;
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
-}
-
-function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
-  if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ownerFire: _fireOnly, ...safe } = origin;
-  return safe;
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
@@ -121,7 +117,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   } = body;
   if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
-  const origin = publicOrigin(safeBody.origin);
   const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
   if (!z.enum(["steer", "queue"]).optional().safeParse(rest.midTurn).success)
     return { error: "midTurn must be steer or queue" };
@@ -147,7 +142,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
       ...rest,
       ...(rest.gatewayContext ? { gatewayContext: callerGateway } : {}),
       ...(conversationHeader ? { conversationHeader } : {}),
-      ...(origin ? { origin } : {}),
       ...(clientTools?.length ? { clientTools } : {}),
     },
   };
@@ -200,9 +194,6 @@ export async function postRunSignal(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
   }
   if (kind === "client_result") {
-    const run = await ctx.deps.runs?.get(id);
-    if (run?.request.desktopClientId && (!isObj(body) || body.desktopClientId !== run.request.desktopClientId))
-      return sendJson(res, 403, { error: "wrong_desktop_client" });
     const parsed = clientResultSchema.safeParse(body);
     if (!parsed.success)
       return sendJson(res, 400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
@@ -333,7 +324,13 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: postRunDeliveryState,
   },
-  { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/signal",
+    auth: "source",
+    maxBodyBytes: CLIENT_RESULT_MAX_BODY_BYTES,
+    handle: postRunSignal,
+  },
   {
     method: "PATCH",
     path: "/v1/runs/:id/input",

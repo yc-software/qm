@@ -494,6 +494,8 @@ struct ChatView: View {
     let visible = inheritedExpanded ? inherited + current : current
     let sections = NativeChatTranscriptSection.grouped(
       visible, activeRunID: model.activeRunID, status: model.workStatus)
+    let slack =
+      model.conversation.surface == "slack" ? NativeSlackThreadLayout(messages) : nil
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
@@ -558,7 +560,7 @@ struct ChatView: View {
                 },
                 onInspect: { followsLatest = false })
             } else if let item = section.items.first {
-              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable, slack: slack)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -588,7 +590,8 @@ struct ChatView: View {
   }
 
   @ViewBuilder private func timelineRow(
-    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>
+    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>,
+    slack: NativeSlackThreadLayout?
   ) -> some View {
     switch item.content {
     case .message(let message):
@@ -600,7 +603,14 @@ struct ChatView: View {
           ? { Task { await fork(from: message.id) } } : nil,
         onAskAbout: !model.conversation.isSubagent && model.conversation.localOnly != true
           ? { message in Task { await askAbout(message) } } : nil,
-        forking: forkingMessageID == message.id, streaming: item.streaming
+        forking: forkingMessageID == message.id, streaming: item.streaming,
+        slack: slack.flatMap { slack in
+          NativeSlackThreadLayout.shows(message)
+            ? NativeSlackRowStyle(
+              continued: slack.continued.contains(message.id),
+              appIconURL: identity?.slackAppIconUrl.flatMap(URL.init(string:)))
+            : nil
+        }
       )
       .accessibilityIdentifier(item.streaming ? "streamingResponse" : "message-\(item.id)")
     case .work, .reasoning:

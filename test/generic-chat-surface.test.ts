@@ -23,7 +23,7 @@ import { NON_WEB_PATHS } from "../src/surfaces/contract.ts";
 import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
-import { signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
+import { genericChatAccount, signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -115,6 +115,7 @@ function event(
     bot?: boolean;
     appPost?: boolean;
     protocol?: 2;
+    participation?: "always";
   } = {},
 ) {
   return {
@@ -126,6 +127,7 @@ function event(
       id: "88",
       kind: "group",
       name: "Launch crew",
+      ...(overrides.participation ? { participation: overrides.participation } : {}),
       members: [
         { id: "5", email: "ada@example.com", name: "Ada Lovelace" },
         { id: "6", email: "grace@example.com", name: "Grace Hopper" },
@@ -202,11 +204,17 @@ function onBothProtocols(name: string, run: (version: { protocol?: 2 }) => Promi
   test(`${name}, on protocol 2 as well`, () => run({ protocol: 2 }));
 }
 
-const MENTIONED = "an @-mention starts a turn whose reply lands in the chat once, even when the event is redelivered";
+const MENTIONED =
+  "an @-mention, or any message in an always-participating chat, starts a turn whose reply lands in the chat once, even when the event is redelivered";
 onBothProtocols(MENTIONED, async (version) => {
+  for (const addressing of [{ mentions: true }, { participation: "always" as const }])
+    await addressed(addressing, version);
+});
+
+async function addressed(addressing: { mentions?: boolean; participation?: "always" }, version: { protocol?: 2 }) {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
-    const mention = event({ body: "!post on it", mentions: true, eventId: "ev-m", messageId: "1002", ...version });
+    const mention = event({ body: "!post on it", eventId: "ev-m", messageId: "1002", ...addressing, ...version });
     assert.equal((await deliver(mention)).status, 200);
     assert.equal((await deliver(mention)).status, 200);
     await settle(async () => genericChat.shown().some((m) => m.body === "on it"));
@@ -221,7 +229,7 @@ onBothProtocols(MENTIONED, async (version) => {
   } finally {
     await genericChat.close();
   }
-});
+}
 
 test("unmentioned chatter goes to the ambient judge, whose worker posts into the chat", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
@@ -1058,54 +1066,62 @@ interface ShownAction {
   user_ids?: string[];
 }
 
-test("a pending approval arrives as a card with buttons that only the person who asked can settle", async () => {
-  const { built, genericChat, deliver } = await genericChatApp();
-  try {
-    const ask = { body: "!paused-approval git push", mentions: true, eventId: "ev-ask", messageId: "1002" };
-    await deliver(event({ ...ask, protocol: 2 }));
-    const card = () => genericChat.shown().find((m) => String(m.body).includes("git push") && Array.isArray(m.actions));
-    await settle(async () => card() !== undefined);
-    const posted = card()!;
-    const actions = posted.actions as ShownAction[];
-    assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
-    assert.equal(posted.thread_id, "1002");
-    assert.deepEqual(
-      actions.map((a) => [a.label, a.style, a.user_ids]),
-      [
-        ["Allow once", "primary", ["5"]],
-        ["Allow session", "default", ["5"]],
-        ["Allow always", "default", ["5"]],
-        ["Decline", "danger", ["5"]],
-      ],
-    );
-    const click = (eventId: string, user: Record<string, string>) =>
-      deliver({
-        ...event({ bot: true, appPost: true, messageId: posted.id, thread: "1002", eventId }),
-        protocol: 2,
-        type: "action.invoked",
-        action: { id: actions.at(-1)!.id, user },
+for (const origin of [undefined, "https://one.dev.example.test", "https://two.dev.example.test"])
+  test(`only the requester settles an approval card (${origin ?? "originless"})`, async () => {
+    const { built, genericChat, deliver: send } = await genericChatApp();
+    const deliver = (body: Record<string, unknown>) => send({ ...body, origin });
+    const account = origin ? genericChatAccount("7001", origin) : "7001";
+    const actionNamespace = origin ? `${account}:` : "";
+    try {
+      const ask = { body: "!paused-approval git push", mentions: true, eventId: "ev-ask", messageId: "1002" };
+      await deliver(event({ ...ask, protocol: 2 }));
+      const card = () =>
+        genericChat.shown().find((m) => String(m.body).includes("git push") && Array.isArray(m.actions));
+      await settle(async () => card() !== undefined);
+      const posted = card()!;
+      const actions = posted.actions as ShownAction[];
+      assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
+      assert.equal(posted.thread_id, "1002");
+      assert.deepEqual(
+        actions.map((a) => [a.label, a.style, a.user_ids]),
+        [
+          ["Allow once", "primary", ["5"]],
+          ["Allow session", "default", ["5"]],
+          ["Allow always", "default", ["5"]],
+          ["Decline", "danger", ["5"]],
+        ],
+      );
+      const click = (eventId: string, user: Record<string, string>) =>
+        deliver({
+          ...event({ bot: true, appPost: true, messageId: posted.id, thread: "1002", eventId }),
+          protocol: 2,
+          type: "action.invoked",
+          action: { id: actions.at(-1)!.id, user },
+        });
+      assert.equal(
+        (await click("ev-click-1", { id: "77", email: "eve@example.com" })).body.ignored,
+        "unvouched_participants",
+      );
+      await click("ev-click-2", { id: "6", email: "grace@example.com", name: "Grace Hopper" });
+      assert.ok(genericChat.shown().some((m) => m.to === "6" && /Only the person who requested/.test(String(m.body))));
+      assert.equal(genericChat.received.at(-1)?.body.client_message_id, `action:${actionNamespace}ev-click-2`);
+      assert.equal((card()!.actions as ShownAction[]).length, 4);
+      await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
+      const [denial] = await built.runs.list({ threadRef: `partner-chat:${account}:group:88:1002` });
+      assert.ok(denial?.dedupKey?.startsWith(`partner-chat:action:${actionNamespace}ev-click-3:approval:`));
+      const settled = genericChat.shown().find((m) => m.id === posted.id)!;
+      assert.deepEqual([settled.body, settled.actions], ["Declined by Ada Lovelace · `git push`", []]);
+      await settle(async () => {
+        const session = await built.sessions.getByThread(`partner-chat:${account}:group:88:1002`);
+        const items = session ? await built.sessions.getItems(session.id) : [];
+        return items.some((i) => /declined this pending operation/.test((i as { text?: string }).text ?? ""));
       });
-    assert.equal(
-      (await click("ev-click-1", { id: "77", email: "eve@example.com" })).body.ignored,
-      "unvouched_participants",
-    );
-    await click("ev-click-2", { id: "6", email: "grace@example.com", name: "Grace Hopper" });
-    assert.ok(genericChat.shown().some((m) => m.to === "6" && /Only the person who requested/.test(String(m.body))));
-    assert.equal((card()!.actions as ShownAction[]).length, 4);
-    await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
-    const settled = genericChat.shown().find((m) => m.id === posted.id)!;
-    assert.deepEqual([settled.body, settled.actions], ["Declined by Ada Lovelace · `git push`", []]);
-    await settle(async () => {
-      const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
-      const items = session ? await built.sessions.getItems(session.id) : [];
-      return items.some((i) => /declined this pending operation/.test((i as { text?: string }).text ?? ""));
-    });
-    await new Promise((r) => setTimeout(r, 1_000));
-    assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
-  } finally {
-    await genericChat.close();
-  }
-});
+      await new Promise((r) => setTimeout(r, 1_000));
+      assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
+    } finally {
+      await genericChat.close();
+    }
+  });
 
 test("a credential request is a card its owner decides from the chat, and a decision made elsewhere clears the posted card", async () => {
   const genericChat = await fakeGenericChat();

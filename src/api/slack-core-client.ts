@@ -7,7 +7,14 @@ import {
   type SlackSessionStatus,
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
+import {
+  createSlackThinkingStream,
+  type SlackThinkingStream,
+  type SlackThinkingStreamRecord,
+} from "../slack/thinking-stream.ts";
+import type { RunActivityStore } from "../runs/run-activity-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -82,6 +89,11 @@ export interface SlackCoreClient {
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
+  thinkingStream?: SlackThinkingStream;
+  subscribeSessionStates?(listener: (event: SessionStateEvent) => void): () => void;
+  subscribeRunActivity?(runId: string, onActivity: () => void): () => void;
+  stopSlackThread?(threadRef: string): Promise<boolean>;
+  renameSlackThread?(threadRef: string, title: string): Promise<boolean>;
   externalSlackParticipants(): Promise<boolean>;
   invitedExternal(email: string): boolean;
   ackEmojiOverride(): Promise<string[] | null>;
@@ -148,8 +160,10 @@ export interface SlackCoreClientDeps {
   keychainApprovals?: KeychainApprovals;
   taskAcknowledgements?: DurableMap<TaskAckState>;
   sessionStatus?: DurableMap<SlackSessionStatusState>;
+  thinkingStream?: DurableMap<SlackThinkingStreamRecord>;
+  runActivity?: Pick<RunActivityStore, "list">;
+  sessions?: Pick<SessionStore, "get" | "getByThread" | "updateTitle">;
   statusActivity?: SlackStatusActivity;
-  featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -188,16 +202,38 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           }),
         }
       : {}),
-    ...(deps.sessionStatus && deps.featureFlags
+    ...(deps.sessionStatus
       ? {
-          sessionStatus: createSlackSessionStatus(
-            deps.sessionStatus,
-            lease,
-            deps.runs,
-            deps.featureFlags,
-            Date.now,
-            deps.statusActivity,
-          ),
+          sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, Date.now, deps.statusActivity),
+        }
+      : {}),
+    ...(deps.thinkingStream && deps.runActivity
+      ? {
+          thinkingStream: createSlackThinkingStream(deps.thinkingStream, lease, deps.runs, deps.runActivity, {
+            ...(deps.statusActivity?.work ? { work: deps.statusActivity.work } : {}),
+            reportEditRef: (runId, editRef) => deps.app.setRunDeliveryState(runId, { editRef }).then(() => undefined),
+            hasSurfacePosted: (runId) => deps.turnStream.surfacePosted(runId),
+            ...(deps.sessions
+              ? {
+                  getSessionTitle: async (sessionId) =>
+                    ((await deps.sessions!.getByThread(sessionId)) ?? (await deps.sessions!.get(sessionId)))?.title ??
+                    undefined,
+                }
+              : {}),
+          }),
+        }
+      : {}),
+    subscribeSessionStates: (listener) => deps.app.subscribeSessionStates(listener),
+    subscribeRunActivity: (runId, onActivity) => deps.turnStream.subscribe(runId, { onActivity }),
+    stopSlackThread: (threadRef) => deps.app.stopThread(threadRef, { tree: true }),
+    ...(deps.sessions
+      ? {
+          renameSlackThread: async (threadRef, title) => {
+            const session = await deps.sessions!.getByThread(threadRef);
+            if (!session) return false;
+            await deps.sessions!.updateTitle(session.id, title);
+            return true;
+          },
         }
       : {}),
     async externalSlackParticipants() {

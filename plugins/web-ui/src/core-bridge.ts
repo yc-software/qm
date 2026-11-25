@@ -1,4 +1,4 @@
-import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { desktopTurnId, webClientSurface } from "./desktop-computer.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
@@ -996,14 +996,6 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     const msg = details?.message ?? details?.reason ?? details?.error ?? `HTTP ${r.status}`;
     throw new ApiError(msg, r.status, body);
   }
-  if (path === "/api/turn" && typeof init?.body === "string") {
-    const request = JSON.parse(init.body) as { desktopClientId?: string };
-    const response = body as { runId?: string } | null;
-    if (request.desktopClientId && response?.runId)
-      void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
-        reportHandledError("desktop-computer", error),
-      );
-  }
   return body as T;
 }
 
@@ -1204,9 +1196,12 @@ export interface LocatedRun {
   run: RunPoll;
 }
 
-export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
+export type ApprovalSubmission =
+  { status: "gone" } | { status: "settled" } | { status: "queued" } | { status: "resumed"; runId: string };
+
+export async function resolveApproval(decision: ApprovalDecision): Promise<ApprovalSubmission> {
   if (decision.requestId.startsWith("keychain:")) {
-    if (resolvedCredentialApprovals.has(decision.requestId)) return "";
+    if (resolvedCredentialApprovals.has(decision.requestId)) return { status: "settled" };
     const id = decision.requestId.slice("keychain:".length);
     let choice = "deny";
     if (decision.approved) choice = decision.scope === "always" ? "standing" : "once";
@@ -1217,9 +1212,9 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     if (!["approved", "declined", "expired"].includes(result.ask?.status))
       throw new Error("The credential request is still pending. Please try again.");
     resolvedCredentialApprovals.add(decision.requestId);
-    return "";
+    return { status: "settled" };
   }
-  const submit = await api<{ runId?: string; steered?: boolean }>(
+  const submit = await api<{ status?: string; runId?: string; steered?: boolean }>(
     `/api/approvals/${encodeURIComponent(decision.requestId)}`,
     {
       method: "POST",
@@ -1229,10 +1224,11 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   });
-  if (!submit) return null;
+  if (!submit) return { status: "gone" };
+  if (!submit.runId && submit.status === "queued") return { status: "queued" };
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   if (submit.steered) decidedDuringRunApprovals.add(decision.requestId);
-  return submit.runId;
+  return { status: "resumed", runId: submit.runId };
 }
 
 export async function runApprovalTurn(

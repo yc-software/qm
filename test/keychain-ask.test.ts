@@ -150,7 +150,7 @@ test("a bot task's declined request survives pruning beside a newer person reque
     requesterThreadRef: "ch:C1-t1",
     purpose: "deploy the release",
   };
-  const bot = { ...base, requesterId: "U_RELEASEBOT", botActor: true, triggered: true };
+  const bot = { ...base, requesterId: "U_RELEASEBOT", botActor: true };
   const { ask } = await k.createAsk(bot);
   await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
   await k.createAsk({ ...base, requesterId: "U_BOB" });
@@ -171,7 +171,6 @@ test("personal cron asks deduplicate recurring fires without combining jobs or r
     requesterId: "U_ALICE",
     requesterScopeId: "personal:U_ALICE" as const,
     purpose: "first task",
-    triggered: true,
   };
   const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
   const second = await k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:one", purpose: "second task" });
@@ -410,7 +409,7 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
   assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
 });
 
-test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
+test("runTrigger marks every trigger-fired turn as an automation", async () => {
   let seen: TurnRequest | undefined;
   const outcome = await runTrigger(
     {
@@ -1036,7 +1035,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
-    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { liveActor: true });
+    const owner = await capFor("U_ALICE", "channel:C_INFRA", { internalAudience: true, personAuthority: true });
     const registered = keychainRoutes.flatMap((r) => ("path" in r ? [`${r.method} ${r.path}`] : []));
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
@@ -1046,13 +1045,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ["/v1/keychain/grants", { ask: "anything", mode: "once", purpose: "x" }],
       ["/v1/keychain/asks/anything/decline", {}],
     ] as const) {
-      const res = await post(path, body, liveOwner);
+      const res = await post(path, body, owner);
       assert.equal(res.status, 404, path);
     }
     const send = await post(
       "/v1/keychain/asks",
       { credential: gh.id, purpose: "p" },
-      await capFor("U_BOB", "channel:C_INFRA", { triggered: true }),
+      await capFor("U_BOB", "channel:C_INFRA"),
     );
     assert.equal(send.status, 200, "background requests may ask but cannot approve");
   });
@@ -1091,7 +1090,6 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         });
         const threadRef = `cron:${cron.id}:fire:first`;
         const token = await capFor(requesterId, scope, {
-          triggered: true,
           threadRef,
           ...(scopeVersion ? { scopeVersion } : {}),
         });
@@ -1175,7 +1173,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
           await post(
             "/v1/keychain/asks",
             { credential: credentialId, purpose: "denied check" },
-            await capFor(actor, scope, { triggered: true }),
+            await capFor(actor, scope),
           )
         ).status,
         403,
@@ -1186,7 +1184,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.ok(project);
     await built.app.addProjectMember(project.id, "U_BOB", "U_ALICE");
     const scopeVersion = await built.projects.version(project.scopeId.slice("group:".length));
-    const stale = await capFor("U_BOB", project.scopeId, { triggered: true, scopeVersion });
+    const stale = await capFor("U_BOB", project.scopeId, { scopeVersion });
     await built.app.removeProjectMember(project.id, "U_BOB", "U_ALICE");
     assert.equal(
       (await post("/v1/keychain/asks", { credential: credential.id, purpose: "stale check" }, stale)).status,
@@ -1198,13 +1196,13 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     it(`personal scheduled request waits for approval, resumes its original thread, and respects ${mode} grants`, async () => {
       const threadRef = `dm:U_ALICE-cron-${mode}`;
       const personal = scopeId("personal", "U_ALICE");
-      const token = await capFor("U_ALICE", personal, { triggered: true, threadRef });
-      const live = await capFor("U_ALICE", personal, liveRunClaims("U_ALICE"));
+      const token = await capFor("U_ALICE", personal, { threadRef });
+      const ownerCap = await capFor("U_ALICE", personal, liveRunClaims("U_ALICE"));
       const { credential } = (await (
         await post(
           "/v1/keychain/credentials",
           { service: `cron-${mode}`, secret: "dummy-cron-value", envKey: "CRON_QA_TOKEN" },
-          live,
+          ownerCap,
         )
       ).json()) as any;
       const seed = await built.app.turn({
@@ -1261,19 +1259,19 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       if (mode === "once") assert.ok(after.usedAt !== undefined);
       assert.equal(after.expiresAt, approved.grant.expiresAt);
       if (mode === "standing") {
-        assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, live)).status, 200);
+        assert.equal((await post(`/v1/keychain/grants/${approved.grant.id}/revoke`, {}, ownerCap)).status, 200);
       }
     });
   }
 
   it("a scheduled personal request can be declined without granting access", async () => {
-    const live = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
-    const token = await capFor("U_ALICE", "personal:U_ALICE", { triggered: true });
+    const ownerCap = await capFor("U_ALICE", "personal:U_ALICE", { internalAudience: true, personAuthority: true });
+    const token = await capFor("U_ALICE", "personal:U_ALICE");
     const { credential } = (await (
       await post(
         "/v1/keychain/credentials",
         { service: "cron-decline", secret: "dummy", envKey: "CRON_QA_TOKEN" },
-        live,
+        ownerCap,
       )
     ).json()) as any;
     const { ask } = (await (
@@ -1287,7 +1285,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         await post(
           "/v1/keychain/asks",
           { credential: credential.id, purpose: "wrong scope" },
-          await capFor("U_ALICE", "personal:U_BOB", { triggered: true }),
+          await capFor("U_ALICE", "personal:U_BOB"),
         )
       ).status,
       403,
@@ -1327,7 +1325,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
 });
 
-test("turn e2e: trigger-fired turns mint `triggered` into the capability token; threadRef is carried", async () => {
+test("turn e2e: a person's typed turn and their fire carry person authority, an unproven delegation does not; threadRef is carried", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "kc-claims-")),
@@ -1347,28 +1345,38 @@ test("turn e2e: trigger-fired turns mint `triggered` into the capability token; 
 
   await selectDefaultSandbox(built, "U_ALICE", "channel:C9");
   let mark = fakeSprites.execScripts().length;
-  const turn = (triggered: boolean): TurnRequest =>
+  const turn = (fire: boolean): TurnRequest =>
     ({
-      surface: triggered ? "keychain-ask" : "slack",
+      surface: fire ? "keychain-ask" : "slack",
       actor: { externalId: "U_ALICE" },
-      conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C9-t",
+        channelRef: "C9",
+        audience: [{ externalId: "U_ALICE" }],
+        publishMembers: [{ externalId: "U_ALICE" }],
+      },
       text: "!run true",
-      ...(triggered ? { origin: { kind: "automation" } } : {}),
+      origin: fire ? { kind: "automation" } : { kind: "human" },
     }) as TurnRequest;
 
   assert.equal((await built.app.turn(turn(false))).status, "ok");
   const human = extractToken(mark);
   assert.ok(human, "the turn exported a capability token into the sandbox");
-  assert.equal(human!.triggered, undefined, "a surface-authenticated human turn carries no triggered claim");
+  assert.equal(human!.personAuthority, true, "a surface-authenticated typed turn carries the person's authority");
   assert.equal(human!.threadRef, "ch:C9-t", "the token carries the conversation threadRef for ask continuity");
 
   mark = fakeSprites.execScripts().length;
   assert.equal((await built.app.turn(turn(true))).status, "ok");
   const fired = extractToken(mark);
   assert.ok(fired);
-  assert.equal(fired!.triggered, true, "a trigger-fired turn's token says so — consent routes refuse it");
+  assert.equal(fired!.personAuthority, true, "a person's fire carries the owner's authority");
   mark = fakeSprites.execScripts().length;
   const unproven = { ...turn(false), spawned: true, sessionSenderId: "gone", delegatingRunId: "gone" } as TurnRequest;
   assert.equal((await built.app.turn(unproven)).status, "ok");
-  assert.equal(extractToken(mark)!.triggered, true, "a session turn whose delegation can't be proven runs unattended");
+  assert.equal(
+    extractToken(mark)!.personAuthority,
+    undefined,
+    "a session turn whose delegation can't be proven carries no authority",
+  );
 });

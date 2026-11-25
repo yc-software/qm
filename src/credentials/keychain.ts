@@ -1699,7 +1699,7 @@ export function renderAskNotice(
 export interface KeychainManifestInput {
   scopeId: ScopeId;
   conversationKind: "dm" | "channel" | "group";
-  openSpeakerKeychain?: boolean;
+  openOwnerKeychain?: boolean;
   actorId: string;
   members: Array<{ id: string; displayName?: string }>;
   entriesByOwner: Map<string, KeychainCredentialMeta[]>;

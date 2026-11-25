@@ -45,7 +45,7 @@ async function syscallsRig() {
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
-  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", undefined, {
+  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", {
     context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", actor, conversation }),
   });
   await sessions.addParticipant(room.id, actor.id);

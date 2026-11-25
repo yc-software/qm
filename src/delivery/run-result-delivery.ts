@@ -41,7 +41,10 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const surfaceOrigin = run.request.surfaceOrigin;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
-  const autoDest = run.request.approval?.approved === true ? automationDestination(run.request) : undefined;
+  const autoDest =
+    run.request.approval?.approved === true && !(origin.kind === "automation" && origin.fire)
+      ? automationDestination(run.request)
+      : undefined;
   if (!autoDest && (!target || !surface)) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";

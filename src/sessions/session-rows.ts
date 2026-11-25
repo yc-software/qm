@@ -24,7 +24,6 @@ export function rowToSession(r: Record<string, unknown>): Session {
     scopeId: r.scope_id as ScopeId,
     threadRef: r.thread_ref as string,
     ...(r.surface != null ? { surface: r.surface as string } : {}),
-    ...(r.client_tools ? { clientTools: r.client_tools as Session["clientTools"] } : {}),
     createdAt: Number(r.created_at),
     ...(r.title != null ? { title: r.title as string } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),

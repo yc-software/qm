@@ -360,6 +360,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async callMcpTool() {
       return "";
     },
+    async lookupBrain() {
+      return "";
+    },
     async mcpToolNeedsApproval() {
       return false;
     },
@@ -2112,7 +2115,7 @@ test("cron note rejects arguments exceeding the advertised cap before dispatch",
 test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
   const got = textOut(await call(tool("cron"), { action: "get", id: "cron-1" }));
-  assert.ok(got.includes("Gmail digest") && got.includes("authority: none"), got);
+  assert.ok(got.includes("Gmail digest") && got.includes("bot-made"), got);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
   assert.match(
     textOut(await call(tool("cron"), { action: "patch", id: "cron-1", title: "renamed" })),

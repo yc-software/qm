@@ -1,7 +1,7 @@
 import { disclosedMemory } from "../../memory/disclosure.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
 import { parseScopeId, personalScope, type Principal } from "../../types.ts";
-import { livePersonCapability } from "../artifact-share.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import type { ApiCtx } from "./route.ts";
 import { orgScope } from "./shared.ts";
 
@@ -27,7 +27,7 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
     targetScope,
     nativeScopes,
     audience: targetScope === personalScope(id) ? [actor] : (ctx.capability?.members ?? []),
-    open: !ctx.capability || livePersonCapability(ctx.capability),
+    open: !ctx.capability || carriesPersonAuthority(ctx.capability),
     ...(ctx.capability?.memory?.notebookOnly ? { notebookOnly: true } : {}),
     config: ctx.deps.config,
     isCurrentSharedScopeMember: (person, scope) => ctx.app.isCurrentSharedScopeMember(person, scope),

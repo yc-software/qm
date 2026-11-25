@@ -1858,7 +1858,6 @@ a.chat-row-open {
   font-size: var(--font-13);
 }
 .pinned-item-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .pinned-item-preview {
@@ -1866,6 +1865,45 @@ a.chat-row-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown > div {
+  display: inline;
+  color: inherit;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown :is(p, ul, ol, li, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown :is(p, li) + :is(p, li) {
+  margin-inline-start: 0.4em;
+}
+:is(.pinned-strip-peek, .pinned-item-preview) qm-markdown br {
+  display: none;
+}
+.pinned-item-text qm-markdown > div {
+  color: inherit;
+}
+.pinned-item-text qm-markdown > div > :first-child {
+  margin-top: 0;
+}
+.pinned-item-text qm-markdown > div > :last-child {
+  margin-bottom: 0;
+}
+.pinned-item-text qm-markdown :is(p, ul, ol, blockquote, pre, h1, h2, h3, h4, h5, h6) {
+  margin-block: 0.25em;
+}
+.pinned-item-text qm-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  font-weight: 600;
 }
 .pinned-strip a {
   color: var(--primary);
@@ -3104,7 +3142,8 @@ qm-markdown .tok-in {
 }
 .work[open] > summary > .activity-chevron,
 .work-fold[open] > summary > .activity-chevron,
-.tool-expandable[open] > summary > .activity-chevron {
+.tool-expandable[open] > summary > .activity-chevron,
+.reply-versions-toggle[aria-expanded="true"] > .activity-chevron {
   transform: rotate(90deg);
 }
 .work-fold > summary > .activity-chevron,
@@ -3233,10 +3272,36 @@ qm-markdown .tok-in {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.reply-versions[open] {
-  margin-bottom: 8px;
+.message-meta.has-versions {
+  opacity: 1;
+  pointer-events: auto;
 }
-.reply-versions :is(.text-foreground, th, td) {
+@media (hover: hover) {
+  .message-row:not(:hover) .message-meta.has-versions:not(:focus-within) > .msg-copy {
+    opacity: 0;
+  }
+}
+.reply-versions-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reply-versions-toggle:hover {
+  text-decoration: underline;
+}
+.reply-versions-list {
+  margin-top: calc(var(--meta-lane) + 4px);
+  opacity: 0.8;
+}
+.reply-versions-list :is(.text-foreground, th, td) {
   color: inherit;
 }
 .reply-version-time {
@@ -3524,7 +3589,7 @@ qm-markdown .tok-in {
   min-width: 0;
   anchor-scope: --qm-composer;
 }
-.chat-bottom-dock .composer-wrap {
+.chat-bottom-dock :is(.composer-wrap, .slack-reply-pill) {
   anchor-name: --qm-composer;
 }
 .scroll-bottom-btn {
@@ -4187,7 +4252,8 @@ qm-markdown .tok-in {
 }
 
 .assistant-body :is(markdown-block, qm-markdown).markdown-content :not(pre) > code,
-.user-bubble :is(markdown-block, qm-markdown).markdown-content :not(pre) > code {
+.user-bubble :is(markdown-block, qm-markdown).markdown-content :not(pre) > code,
+.pinned-strip :is(markdown-block, qm-markdown).markdown-content :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
   padding: 1px 5px;
@@ -4498,6 +4564,28 @@ qm-draft .draft-card-body {
   flex: 0 0 auto;
   color: var(--muted-foreground);
 }
+.emoji-completion,
+.mention-completion {
+  width: min(300px, calc(100vw - 36px));
+}
+:is(.emoji-completion, .mention-completion) .slash-option {
+  gap: 9px;
+  padding: 5px 8px;
+}
+:is(.emoji-completion, .mention-completion) .slash-icon {
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+.mention-completion .slash-icon .inbox-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 10px;
+}
 .slash-name {
   flex: 0 0 auto;
   max-width: 40%;
@@ -4673,6 +4761,9 @@ summary.stopped-head:focus-visible {
   --content-w: 696px;
   --composer-inset: 0px;
 }
+.slack-thread-chat .custom-chat-shell {
+  --slack-font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
+}
 .slack-thread-chat .chat-scroll {
   scrollbar-gutter: stable both-edges;
 }
@@ -4757,10 +4848,35 @@ summary.stopped-head:focus-visible {
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row).continued-row {
   margin-top: -14px;
 }
-.slack-thread-chat .message-stack > .user-row > .message-meta {
-  left: 48px;
-  right: auto;
-  padding: 0;
+@media (hover: hover) {
+  .slack-thread-chat .message-stack > :is(.user-row, .assistant-row):hover {
+    border-radius: 6px;
+    background: var(--inbox-row-hover);
+    box-shadow: 0 0 0 6px var(--inbox-row-hover);
+  }
+  .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) > .message-meta,
+  .slack-thread-chat .message-stack > .assistant-row > .assistant-body .message-meta {
+    top: -14px;
+    right: 4px;
+    bottom: auto;
+    left: auto;
+    z-index: 6;
+    margin: 0;
+    padding: 0 3px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  }
+}
+@media (hover: none) {
+  .slack-thread-chat .message-stack > .user-row > .message-meta,
+  .slack-thread-chat .message-stack > .assistant-row > .assistant-body .message-meta {
+    left: 48px;
+    right: auto;
+    margin: 0;
+    padding: 0;
+  }
 }
 .slack-thread-chat .message-stack > .sending-row {
   opacity: 0.5;
@@ -4772,7 +4888,7 @@ summary.stopped-head:focus-visible {
   min-height: 0;
   margin: 0 0 3px;
   color: var(--foreground);
-  font-size: var(--chat-font-size);
+  font-size: var(--slack-font-size);
   font-weight: 650;
   line-height: 1.25;
 }
@@ -4787,7 +4903,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-thread-chat .speaker-label > .speaker-time {
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.8);
+  font-size: calc(var(--slack-font-size) * 0.8);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
@@ -4799,7 +4915,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) :is(.user-bubble, .assistant-body) {
   color: color-mix(in srgb, var(--foreground) 86%, var(--muted-foreground));
-  font-size: var(--chat-font-size);
+  font-size: var(--slack-font-size);
   line-height: 1.55;
 }
 .slack-app-tag {
@@ -4809,7 +4925,7 @@ summary.stopped-head:focus-visible {
   border-radius: 3px;
   background: var(--secondary);
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.64);
+  font-size: calc(var(--slack-font-size) * 0.64);
   font-weight: 700;
   letter-spacing: 0.05em;
 }
@@ -4832,7 +4948,7 @@ summary.stopped-head:focus-visible {
 }
 .slack-reaction b {
   color: var(--muted-foreground);
-  font-size: calc(var(--chat-font-size) * 0.77);
+  font-size: calc(var(--slack-font-size) * 0.77);
   font-weight: 600;
 }
 .slack-forward {
@@ -12057,6 +12173,19 @@ h3.ambient-field-label {
 }
 .top-banner.dev {
   background: var(--dev-accent);
+}
+.top-banner.notify {
+  background: color-mix(in oklch, var(--background), black 6%);
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.top-banner.notify .top-banner-action {
+  color: var(--foreground);
+  background: var(--secondary);
+  border-color: var(--border);
+}
+.top-banner.notify .top-banner-action:hover {
+  background: var(--accent);
 }
 .top-banner b {
   font-weight: 700;

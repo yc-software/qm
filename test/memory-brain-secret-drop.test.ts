@@ -237,10 +237,6 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(extra.status, 400);
   assert.match(extra.text, /only purpose, not service, envKey/);
   assert.equal((await mint("admin-alice", { memoryBrain: "nope", purpose: "p" })).status, 404);
-  assert.equal(
-    (await mint("admin-alice", brainDrop, scopeId("personal", "admin-alice"), { triggered: true })).status,
-    403,
-  );
 
   const beforeMove = await mint("admin-alice", brainDrop);
   await built.memoryRegistry.update((record) =>
@@ -317,8 +313,7 @@ test("a member connects their own brain from chat and sets its secret through th
   const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
   const id = memberBrainId("U-member");
   assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
-  assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
-  assert.equal((await self("U-member", "PUT", own, { liveActor: false })).status, 403);
+  assert.equal((await self("U-member", "PUT", own, { personAuthority: false })).status, 403);
 
   const put = await self("U-member", "PUT", own);
   assert.equal(put.status, 200);

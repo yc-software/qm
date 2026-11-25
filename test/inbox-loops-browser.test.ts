@@ -84,7 +84,8 @@ test("agents keep using loops through their capability without the person flag",
       actorId: "hal",
       scopeId: scopeId("personal", "hal"),
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -93,7 +94,7 @@ test("agents keep using loops through their capability without the person flag",
   assert.equal(response.status, 200, await response.clone().text());
 });
 
-test("loop grants and decisions need the person's own session or running turn", async () => {
+test("loop grants and decisions refuse an impersonating admin and a token with no run to carry a card", async () => {
   await flag("fay", true);
   const loopId = await firstInboxLoop("fay");
   const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "fay")}`;
@@ -111,13 +112,14 @@ test("loop grants and decisions need the person's own session or running turn", 
       path,
     );
   }
-  const ended = await mintCapabilityToken(
+  const unbound = await mintCapabilityToken(
     {
       actorId: "fay",
       scopeId: scopeId("personal", "fay"),
       aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      runId: "run-that-ended",
+      internalAudience: true,
+      personAuthority: true,
+      runId: "run-not-stored",
       runLeaseToken: "lease",
       runAttempt: 1,
       threadRef: "dm:fay",
@@ -125,17 +127,15 @@ test("loop grants and decisions need the person's own session or running turn", 
     },
     SECRET,
   );
-  const asEnded = (path: string, body: unknown) =>
+  const asUnbound = (path: string, body: unknown) =>
     fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "x-agent-capability": ended, "content-type": "application/json" },
+      headers: { "x-agent-capability": unbound, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-  const late = await asEnded(`/v1/loops/${loopId}/grants`, { shipAction: "send" });
-  assert.deepEqual([late.status, ((await late.json()) as { error: string }).error], [403, "human_required"]);
+  const grant = await asUnbound(`/v1/loops/${loopId}/grants`, { shipAction: "send" });
+  assert.deepEqual([grant.status, ((await grant.json()) as { error: string }).error], [403, "approval_unavailable"]);
   assert.deepEqual(await built.loops.grants.byLoop(loopId), []);
-  const made = await asEnded("/v1/loops", { name: "Late", playbook: "Review.", successCondition: "Reviewed." });
-  assert.equal(((await made.json()) as { loop: { taskAuthor?: string } }).loop.taskAuthor, "automation");
 });
 
 test("an inbox item image is served only as a sandboxed, non-sniffable image", async () => {

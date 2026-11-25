@@ -139,7 +139,6 @@ export interface SpawnMeta {
 }
 
 export interface Session {
-  clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;
   scopeId: ScopeId;
@@ -216,6 +215,7 @@ export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
+  webHome?: true;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -358,8 +358,7 @@ export type TurnOrigin =
       kind: "automation";
       screenData?: string;
       destination?: Destination;
-      useOwnerKeychain?: boolean;
-      ownerFire?: true;
+      fire?: true;
     }
   | { kind: "direct" };
 
@@ -405,6 +404,7 @@ export interface TurnRequest {
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
   cronScript?: import("./triggers/types.ts").CronScript;
+  cronScriptTrial?: boolean;
   infrequentCron?: boolean;
   personaId?: string;
   botActor?: boolean;
@@ -488,6 +488,7 @@ export interface PendingApprovalRecord {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
+  cardTo?: string;
 }
 
 type ApprovalScope = "once" | "session" | "always";

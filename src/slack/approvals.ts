@@ -417,7 +417,7 @@ export function createApprovals(deps: {
         return;
       }
 
-      if (result.status === "silent") {
+      if (result.status === "silent" || result.status === "queued") {
         await updateCard(decisionCard());
         return;
       }

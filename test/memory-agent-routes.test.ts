@@ -245,8 +245,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     );
     assert.equal(edited.status, 200);
     const ended = { "x-agent-capability": await capFor("A1", admin, { ...liveRunClaims("A1"), runId: "ended-run" }) };
-    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 403);
-    assert.match(await built.memory.read(ORG), /org notebook curated/);
+    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 200);
+    assert.doesNotMatch(await built.memory.read(ORG), /org notebook curated/);
   });
 
   it('without scope:"org", an admin token still writes the turn\'s own notebook', async () => {
@@ -297,7 +297,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       "x-agent-capability": await capFor(
         who,
         { write: scopeId("personal", who), read: [] },
-        { ...liveRunClaims(who), liveActor: true },
+        { ...liveRunClaims(who), internalAudience: true, personAuthority: true },
       ),
     });
     const body = { facts: ["persona note"], scope: `persona:${pid}` };

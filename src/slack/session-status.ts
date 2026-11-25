@@ -1,11 +1,10 @@
+import { buildPlanBlock, type PlanTaskSnapshot } from "./step-labels.ts";
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
-import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -35,7 +34,6 @@ export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
   runs: Pick<RunStore, "get">,
-  flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
@@ -43,6 +41,7 @@ export function createSlackSessionStatus(
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();
   const key = (account: string, channel: string, threadTs: string) => JSON.stringify([account, channel, threadTs]);
+
   async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
     await queue(id, async () => {
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -53,10 +52,7 @@ export function createSlackSessionStatus(
           });
           const writer = randomUUID();
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
-          const scope = anchor && conversationScope(anchor.request.conversation, anchor.request.actor.id);
-          const optedIn = !!scope && (await flags.enabled("slack_loading_indicator", scope));
-          if (next && (!optedIn || !anchor?.deliveryState?.replying || anchor.request.privateSessionMessage))
-            return true;
+          if (next && (!anchor?.deliveryState?.replying || anchor.request.privateSessionMessage)) return true;
           if (leaseLost) return true;
           if (next) await store.putIfAbsent(id, { ...next, writer });
           if (leaseLost) {
@@ -65,17 +61,17 @@ export function createSlackSessionStatus(
           }
           const current = await store.get(id);
           if (!current || leaseLost) return true;
-          const work = optedIn && anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
+          const work = anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
           if (work?.delivering) return true;
+          const deferredToThinkingStream = !!work?.running;
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
           const followUrl = work?.sessionId ? conversationWebUrl(activity.publicWebUrl, work.sessionId) : undefined;
-          const { blocks, headline } = renderCard(work, { cardId, elapsed, followUrl });
-          const ongoing = !!work?.busy;
+          const { blocks, headline } = renderWaitingPlan(work, { cardId, elapsed, followUrl });
+          const ongoing = !!work?.busy && !deferredToThinkingStream;
           const content = JSON.stringify(blocks);
-          const post =
-            current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
+          const post = current.cardContent !== content && (!!current.cardTs || ongoing);
           if (!next && ongoing && !post && current.startedAt && current.cardId) return true;
           let state = await update(id, (row) =>
             leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
@@ -109,7 +105,8 @@ export function createSlackSessionStatus(
             }
             if (!ongoing) {
               if (state.cardTs) await client.apiCall("chat.delete", { channel: state.channel, ts: state.cardTs });
-              await deleteIf(id, (row) => !leaseLost && row.writer === writer);
+              if (!deferredToThinkingStream) await deleteIf(id, (row) => !leaseLost && row.writer === writer);
+              else await persist({ cardTs: undefined, cardContent: undefined });
             }
           } catch (error) {
             const code = (error as { data?: { error?: string } }).data?.error;
@@ -139,6 +136,7 @@ export function createSlackSessionStatus(
       throw new Error("Slack session status lock timed out");
     });
   }
+
   return {
     async start(client: StatusClient, account: string, runId: string, channel: string, threadTs?: string) {
       if (!threadTs) return;
@@ -160,7 +158,6 @@ export function createSlackSessionStatus(
   };
 }
 
-const SHOW_AFTER_MS = 30_000;
 const BACKGROUND_STEP = { watch: "Watching for updates", job: "Background job" } as const;
 
 function stillWorking(step: string): string {
@@ -184,35 +181,36 @@ function headlineOf(work: SessionWork | undefined): [string, string] {
   return ["", ""];
 }
 
-function renderCard(
+function renderWaitingPlan(
   work: SessionWork | undefined,
-  card: { cardId: string; elapsed: number; followUrl?: string | undefined },
-) {
-  const [title, phrase] = headlineOf(work);
-  const details = richText(phrase, card.elapsed >= 60_000 ? ` · ${minutes(card.elapsed)}` : "", card.followUrl);
-  const blocks: Record<string, unknown>[] = [
-    {
-      type: "task_card",
-      task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
-      title,
+  opts: { cardId: string; elapsed: number; followUrl?: string },
+): { blocks: Record<string, unknown>[]; headline: string } {
+  const [headline] = headlineOf(work);
+  const tasks: PlanTaskSnapshot[] = [];
+  for (const branch of work?.branches ?? []) {
+    tasks.push({
+      taskId: `${SLACK_STATUS_TASK_PREFIX}branch:${branch.id}`,
+      title: branch.step ? `${branch.title}: ${branch.step}` : branch.title,
       status: "in_progress",
-      ...(details ? { details } : {}),
-    },
+    });
+  }
+  if (tasks.length === 0) {
+    tasks.push({
+      taskId: `${SLACK_STATUS_TASK_PREFIX}wait:${opts.cardId}`,
+      title: headline,
+      status: "in_progress",
+    });
+  }
+  const blocks: Record<string, unknown>[] = [
+    buildPlanBlock(headline, tasks, `${SLACK_STATUS_TASK_PREFIX}waitplan:${opts.cardId}`),
   ];
-  return { blocks, headline: title };
-}
-
-function minutes(ms: number): string {
-  const total = Math.floor(ms / 60_000);
-  return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
-}
-
-function richText(phrase: string, elapsed: string, url?: string) {
-  if (!phrase) return undefined;
-  const elements = url
-    ? [{ type: "link", url, text: "Open in QM" }, ...(elapsed ? [{ type: "text", text: elapsed }] : [])]
-    : [{ type: "text", text: `${phrase}${elapsed}` }];
-  return { type: "rich_text", elements: [{ type: "rich_text_section", elements }] };
+  if (opts.followUrl) {
+    blocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `<${opts.followUrl}|Open in QM>` }],
+    });
+  }
+  return { blocks, headline };
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;

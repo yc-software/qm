@@ -36,13 +36,12 @@ async function fixture() {
     audience: [{ id: "alice", type: "internal" }],
     acl,
     targetScope: "personal:alice",
-    origin: { kind: "human" },
-    trustedLiveHuman: true,
+    personAuthority: true,
     sessions: { listByParticipant: async () => [{ scopeId: "channel:eng", createdAt: 1 }] as Session[] },
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
     config,
     resolution,
-    memoryPolicy: { recall: "visible", capture: "writable" },
+    memoryPolicy: { recall: "visible", capture: "writable", card: "on" },
     useMemory: true,
     botActor: false,
     ownScopeBotWork: false,
@@ -113,7 +112,7 @@ for (const mode of [
   "source-veto",
   "removed",
   "speaker-switch",
-  "automation",
+  "no-authority",
   "memory-off",
   "memory-writable",
   "memory-skip",
@@ -124,7 +123,7 @@ for (const mode of [
     if (mode === "source-veto") await config.setSharingPosture("channel:eng", "isolated");
     if (mode === "removed") removeMember();
     if (mode === "speaker-switch") input.actor = { id: "bob", type: "internal" };
-    if (mode === "automation") input.trustedLiveHuman = false;
+    if (mode === "no-authority") input.personAuthority = false;
     if (mode === "memory-off") input.memoryPolicy.recall = "off";
     if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
     if (mode === "memory-skip") input.useMemory = false;

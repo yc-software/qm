@@ -19,6 +19,7 @@ import type {
   StopScope,
   TurnOrigin,
 } from "../types.ts";
+import { isSystemActor } from "../types.ts";
 import { childIsolation } from "./child-isolation.ts";
 import { sessionVisibleTo } from "./session-rows.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
@@ -61,21 +62,21 @@ export function requiresDelegation(
   );
 }
 
-export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActor">): boolean {
-  return request.origin.kind === "automation" && request.origin.ownerFire === true && !request.botActor;
+export function isPersonFire(request: Pick<OrchestratorInput, "origin" | "botActor" | "actor" | "swarm">): boolean {
+  return (
+    request.origin.kind === "automation" && !request.botActor && !request.swarm && !isSystemActor(request.actor.id)
+  );
 }
 
 export async function delegatedAuthorization(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
+): Promise<{ origin: OrchestratorInput["origin"] } | undefined> {
   const seen = new Set<string>();
-  const startedAt = request.runStartedAt ?? Date.now();
-  let attended = true;
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
-      (current.origin.kind === "automation" && !isOwnerFire(current)) ||
+      (current.origin.kind === "automation" && !isPersonFire(current)) ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||
@@ -103,7 +104,6 @@ export async function delegatedAuthorization(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
-    attended &&= source.finishedAt === null || source.finishedAt > startedAt;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
@@ -127,10 +127,10 @@ export async function delegatedAuthorization(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
-        isOwnerFire(parent) ||
+        isPersonFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return { origin: parent.origin, attended };
+      return { origin: parent.origin };
     current = parent;
   }
 }
@@ -307,7 +307,6 @@ export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
-  liveTurn?: boolean;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -1236,12 +1235,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
           const refusal = sidebarRefusal();
           if (refusal) return { ok: false, message: refusal };
-          const verb = input.fork ? "fork" : "new";
-          if (binding.liveTurn !== true)
-            return {
-              ok: false,
-              message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
-            };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
           if (binding.request.botActor)
             return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };

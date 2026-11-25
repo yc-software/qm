@@ -80,7 +80,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const policy = await deps.channelPolicy?.get(container);
     const cursorKey = `${orgIdOf()}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
-    const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
     const unclaimed = all.filter((m) => !m.self && !m.ambientClaimed);
     const ledger = new Map<string, BotPolicy>();
@@ -100,6 +99,19 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         });
       if (held) return { act: false };
     }
+    const judging = scheduled || pending.length > 0;
+    const watchReason =
+      (policy?.orders ?? "").trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
+    let ambientOffReason: string | null = null;
+    if (judging && (await deps.config?.getOrgAmbientDurable()) === false) {
+      ambientOffReason = "ambient is switched off org-wide";
+    } else if (policy?.ambientEnabled === false) {
+      ambientOffReason = "ambient is switched off for this channel";
+    } else if (policy?.ambientEnabled === undefined && !watchReason) {
+      ambientOffReason =
+        "ambient defaults off — no standing orders or action-bot triggers here, so only @mentions engage";
+    }
+    const state = judging && !ambientOffReason ? await deps.surfaceCache.containerState(container, { surface }) : null;
     const won = new Set(
       await deps.surfaceCache.claimForAmbient(
         container,
@@ -111,25 +123,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
     const delta = pending.filter((m) => won.has(m.ts));
     if (deps.ambientCursors && rawDelta.length)
       await deps.ambientCursors
-        .put(cursorKey, {
-          lastJudgedTs: rawDelta.reduce((max, m) => (m.ts > max ? m.ts : max), after ?? ""),
-          lastJudgedAt: Date.now(),
-        })
+        .put(cursorKey, { lastJudgedAt: Date.now() })
         .catch(swallowAs("ambient: cursor write", undefined));
     if (!delta.length && !scheduled) return { act: false };
     const tsFrom = delta.reduce((min, m) => (min === "" || m.ts < min ? m.ts : min), "");
     const tsTo = delta.reduce((max, m) => (m.ts > max ? m.ts : max), "");
-    const watchReason =
-      (policy?.orders ?? "").trim().length > 0 || Object.values(policy?.bots ?? {}).some((b) => b.mode === "action");
-    let ambientOffReason: string | null = null;
-    if ((await deps.config?.getOrgAmbientDurable()) === false) {
-      ambientOffReason = "ambient is switched off org-wide";
-    } else if (policy?.ambientEnabled === false) {
-      ambientOffReason = "ambient is switched off for this channel";
-    } else if (policy?.ambientEnabled === undefined && !watchReason) {
-      ambientOffReason =
-        "ambient defaults off — no standing orders or action-bot triggers here, so only @mentions engage";
-    }
     if (ambientOffReason) {
       recordJudgment({
         surface,
@@ -168,7 +166,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length || scheduled) {
-      const state = await deps.surfaceCache.containerState(container, { surface });
       const containerScope = scopeId(state?.kind === "group" ? "group" : "channel", container);
       const judgeBatch: AmbientBatch = {
         container,

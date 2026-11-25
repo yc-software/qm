@@ -126,7 +126,12 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
             true,
           );
         }
-        return actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
+        try {
+          return await actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
+        } catch (e) {
+          if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, { tool: name });
+          throw e;
+        }
       },
     });
   }

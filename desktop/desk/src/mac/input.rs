@@ -30,7 +30,9 @@ fn has_role(e: &El, roles: &[&str]) -> bool {
 
 fn describe(e: &El) -> String {
     let role = str_attr(e, "AXRole").unwrap_or_default();
-    let name = str_attr(e, "AXTitle").or_else(|| str_attr(e, "AXDescription")).or_else(|| str_attr(e, "AXValue"));
+    let name = str_attr(e, "AXTitle")
+        .or_else(|| str_attr(e, "AXDescription"))
+        .or_else(|| (!secure_element(e)).then(|| str_attr(e, "AXValue")).flatten());
     match name {
         Some(n) => format!("{} \"{}\"", role.trim_start_matches("AX"), clip(&n, 40)),
         None => role.trim_start_matches("AX").to_string(),
@@ -309,7 +311,8 @@ fn menu_attribute_type(name: &str, expected: &str) -> Failure {
 pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
     active()?;
     let kids = |e: &El| attr(e, "AXChildren").map(list).unwrap_or_default();
-    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
+    let size = |e: &El| frame(e).map(|f| (f.w, f.h));
+    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]) && menu_shown(bool_attr(c, "AXHidden"), bool_attr(c, "AXExpanded"), size(c)))
         || attr(ax, "AXMenuBar").is_some_and(|bar| kids(&bar).iter().any(|item| bool_attr(item, "AXSelected") == Some(true)))
     {
         return Ok(true);
@@ -317,6 +320,9 @@ pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
     popup_menu_open(
         popups,
         |popup| {
+            if bool_attr(popup, "AXExpanded") == Some(false) {
+                return Ok(vec![]);
+            }
             let value = menu_attribute(popup, "AXChildren")?;
             if value.downcast::<CFArray>().is_none() {
                 return Err(menu_attribute_type("AXChildren", "an array"));
@@ -330,9 +336,13 @@ pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
             }
             let hidden =
                 menu_attribute(child, "AXHidden")?.downcast::<CFBoolean>().ok_or_else(|| menu_attribute_type("AXHidden", "a boolean"))?;
-            Ok(!bool::from(hidden))
+            Ok(menu_shown(Some(bool::from(hidden)), None, size(child)))
         },
     )
+}
+
+fn menu_shown(hidden: Option<bool>, expanded: Option<bool>, size: Option<(f64, f64)>) -> bool {
+    hidden != Some(true) && expanded != Some(false) && size.is_none_or(|(w, h)| w > 0.0 && h > 0.0)
 }
 
 pub(super) const MENU_OPEN: &str =
@@ -513,6 +523,12 @@ pub(super) fn set_value(
     submit: Option<bool>,
     focus: impl FnOnce() -> Result<(), Failure>,
 ) -> Result<(), Failure> {
+    if secure_element(e) {
+        return Err(fail(
+            ErrorCode::ActionFailed,
+            format!("element {index} is a password field; setValue never reads password fields, so it cannot verify them. Click it and use typeText"),
+        ));
+    }
     if !settable(e, "AXValue") {
         return Err(fail(
             ErrorCode::ActionFailed,
@@ -564,16 +580,41 @@ pub(super) fn set_value(
         0 => {}
         n => return Err(fail(ErrorCode::ActionFailed, format!("setting element {index}'s value failed (AXError {n})"))),
     }
-    let old = before.as_ref().and_then(text_of);
-    let now = attr(e, "AXValue").as_ref().and_then(text_of);
-    if texty && now.as_deref() != Some(value) && now.is_some() && now == old {
-        return Err(fail(
-            ErrorCode::ActionFailed,
-            format!(
-                "element {index} did not take the value (it still reads {:?}); click it and use typeText or paste",
-                clip(&now.unwrap_or_default(), 80)
-            ),
-        ));
+    let want = held(&new).ok_or_else(|| fail(ErrorCode::ActionFailed, format!("element {index}'s new value could not be prepared")))?;
+    let old = before.as_ref().and_then(held);
+    let mut now = None;
+    crate::outcome::after(
+        || {
+            now = attr(e, "AXValue").as_ref().and_then(held);
+            Ok(crate::outcome::Check::new(now.as_ref().is_some_and(|now| text::holds(&want, now)), ""))
+        },
+        SETTLE_MAX.as_millis() as u32,
+        cancellation::wait,
+        cancellation::cancelled,
+    )?;
+    match now {
+        Some(now) if text::holds(&want, &now) => {}
+        Some(now) if texty && Some(&now) == old.as_ref() => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!(
+                    "element {index} did not take the value (it still reads {:?}); click it and use typeText or paste",
+                    clip(&now.shown(), 80)
+                ),
+            ))
+        }
+        Some(now) => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!("element {index} reads {:?} after the write, not {value:?}; observe it before retrying", clip(&now.shown(), 80)),
+            ))
+        }
+        None => {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!("element {index}'s value could not be read back after the write, so it is unconfirmed; observe it before retrying"),
+            ))
+        }
     }
     if submit == Some(true) {
         if actions(e).iter().any(|a| a == "AXConfirm") {
@@ -678,6 +719,17 @@ mod tests {
             assert!(check_menu_action(&action, |_| panic!("nonpointer action"), || panic!("nonpointer action")).is_ok());
         }
         assert!(check_menu_action(&click, |_| Ok(false), || Err(menu_unavailable())).is_err());
+    }
+
+    #[test]
+    fn only_menus_that_are_actually_shown_block_pointer_input() {
+        assert!(super::menu_shown(Some(false), None, Some((180.0, 240.0))));
+        assert!(super::menu_shown(None, None, None));
+        assert!(super::menu_shown(Some(false), Some(true), Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(true), None, Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(false), Some(false), Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(false), None, Some((0.0, 0.0))));
+        assert!(!super::menu_shown(Some(false), None, Some((180.0, 0.0))));
     }
 
     #[test]

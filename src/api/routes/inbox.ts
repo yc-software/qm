@@ -70,7 +70,6 @@ export async function inboxView(ctx: ApiCtx): Promise<InboxView | null> {
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId))) return reply(403, { error: "feature_disabled" });
-  if (ctx.capability && ctx.capability.privateScope !== true) return reply(403, { error: "forbidden" });
   const defaults = await ensureDefaultInboxLoops(deps.store, acting.actorId);
   const id = uiStateId(acting.actorId, "inbox-loops");
   const pref = await preferences.putIfAbsent(id, {

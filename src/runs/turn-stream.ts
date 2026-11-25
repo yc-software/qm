@@ -25,6 +25,7 @@ export interface TurnStream {
   settleReasoning(runId: string, step: string, index: number): void;
   reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string): void;
+  noteActivity(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
   noteRuntime(runId: string, runtime: TurnRuntime): void;
@@ -45,6 +46,7 @@ export interface TurnStream {
 interface TurnStreamListener {
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
+  onActivity?(): void;
 }
 
 interface Entry {
@@ -189,6 +191,10 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.firstBlockClosed) {
         for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
       }
+    },
+
+    noteActivity(runId) {
+      for (const l of listeners.get(runId) ?? []) l.onActivity?.();
     },
 
     noteGoal(runId, goal) {

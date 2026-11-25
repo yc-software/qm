@@ -46,7 +46,6 @@ export interface CronPatch {
   archived?: boolean;
   destination?: Destination;
   owner?: string;
-  taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
   forkedAt?: number;
@@ -124,7 +123,6 @@ function cronFields(patch: CronPatch): Partial<Cron> {
   if (patch.destination !== undefined) fields.destination = patch.destination;
   if (patch.archived === true) fields.enabled = false;
   if (patch.owner !== undefined) fields.owner = patch.owner;
-  if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
   if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
   if (patch.script !== undefined) fields.script = patch.script ?? undefined;
   if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;
