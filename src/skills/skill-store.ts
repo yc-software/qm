@@ -213,15 +213,21 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     return built.skills;
   };
   const withCatalog = (rows: Skill[], scopes?: ReadonlySet<string>): Skill[] => {
-    const own = new Set(rows.flatMap((row) => [row.id, `${row.scopeId}\0${row.manifest.name}`]));
+    const catalog = catalogSkills().filter((skill) => !scopes || scopes.has(skill.scopeId));
+    const builtIn = new Map(catalog.map((skill) => [`${skill.scopeId}\0${skill.manifest.name}`, skill]));
+    const kept = rows.filter((row) => {
+      const inherited = builtIn.get(`${row.scopeId}\0${row.manifest.name}`);
+      return !(
+        inherited &&
+        row.status === "published" &&
+        row.createdBy === inherited.createdBy &&
+        row.approvals.every((approval) => inherited.approvals.includes(approval))
+      );
+    });
+    const own = new Set(kept.flatMap((row) => [row.id, `${row.scopeId}\0${row.manifest.name}`]));
     return [
-      ...rows,
-      ...catalogSkills().filter(
-        (skill) =>
-          (!scopes || scopes.has(skill.scopeId)) &&
-          !own.has(skill.id) &&
-          !own.has(`${skill.scopeId}\0${skill.manifest.name}`),
-      ),
+      ...kept,
+      ...catalog.filter((skill) => !own.has(skill.id) && !own.has(`${skill.scopeId}\0${skill.manifest.name}`)),
     ];
   };
   const load = async (id: string): Promise<Skill | null> => {

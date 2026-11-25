@@ -6,6 +6,7 @@ import {
   DeploymentLayerPersistedError,
   DeploymentLayerValidationError,
   LAYER_CREATED_BY,
+  LAYER_REVIEWER,
   type DeploymentLayerBundle,
   type DeploymentLayerStore,
   type StoredDeploymentLayer,
@@ -13,6 +14,7 @@ import {
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
+import { upsertSeedSkill } from "../src/skills/seed.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { testDatabaseUrl, testMap, testAdvisoryLock } from "./support/test-database.ts";
@@ -114,6 +116,14 @@ test("each tenant sees the shared catalog with its own archive and edit override
   assert.equal((await a.resolve("notes", [org])).skill?.manifest.body, "edited");
   assert.equal((await b.resolve("notes", [org])).skill?.manifest.body, "seed body");
   assert.equal((await a.list()).filter((s) => s.manifest.name === "notes").length, 1);
+  await upsertSeedSkill(createSkillStore({ advisoryLock: testAdvisoryLock(), backing: aRows }), {
+    scopeId: org,
+    manifest: { ...builtin, name: "acme", body: "stale" },
+    createdBy: LAYER_CREATED_BY,
+    reviewer: LAYER_REVIEWER,
+  });
+  const layerAcme = (await b.resolve("acme", [org])).skill?.manifest.body;
+  assert.equal((await a.resolve("acme", [org])).skill?.manifest.body, layerAcme, "untouched system copies yield");
 });
 
 test("a stored record that no longer applies keeps the filesystem fallback instead of failing boot", async (t) => {
