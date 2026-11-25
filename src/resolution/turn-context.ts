@@ -22,7 +22,7 @@ import {
   type MemoryRecallContext,
   type MemoryService,
 } from "../memory/memory-service.ts";
-import { connectorTool, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import { connectorTool, uniqueTools, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -61,29 +61,21 @@ export function withBrainTools(
   connectors: McpToolDescriptor[] | undefined,
   brains: readonly Pick<BoundBrain, "id" | "label" | "tools">[],
 ): McpToolDescriptor[] | undefined {
-  const taken = new Set(connectors?.map((tool) => tool.serverId));
-  const listed = brains.filter((brain) => {
-    if (!taken.has(brain.id)) return brain.tools.length > 0;
-    console.warn(`[memory] brain ${brain.id} is hidden because an MCP connector has the same id`);
-    return false;
-  });
+  const listed = brains.filter((brain) => brain.tools.length > 0);
   if (!listed.length) return connectors;
-  const seen = new Set(connectors?.map(({ name }) => name));
-  return [
+  return uniqueTools([
     ...(connectors ?? []),
-    ...listed
-      .flatMap((brain, index) =>
-        brain.tools.map((tool) => ({
-          ...connectorTool(
-            { id: brain.id, name: recallLabel(brain.label), readOnly: true },
-            index === 0 ? BRAIN_ABOUT : undefined,
-            tool,
-          ),
-          brain: true as const,
-        })),
-      )
-      .filter((tool) => (seen.has(tool.name) ? false : (seen.add(tool.name), true))),
-  ];
+    ...listed.flatMap((brain, index) =>
+      brain.tools.map((tool) => ({
+        ...connectorTool(
+          { id: `brain.${brain.id}`, name: recallLabel(brain.label), readOnly: true },
+          index === 0 ? BRAIN_ABOUT : undefined,
+          tool,
+        ),
+        brain: brain.id,
+      })),
+    ),
+  ]);
 }
 
 export async function resolveTurnContext(input: ContextInput) {
@@ -136,11 +128,7 @@ export async function resolveTurnContext(input: ContextInput) {
   };
   const brainAuthority = (personAuthority: boolean) => {
     const by = turnAuthority(input.actor.id, memoryAccess, personAuthority);
-    return !input.external &&
-      read.includes(memoryScopeId) &&
-      brainActsAsPerson(by, memoryScopeId, input.audienceScopeId)
-      ? by
-      : undefined;
+    return read.includes(memoryScopeId) && brainActsAsPerson(by, memoryScopeId, input.audienceScopeId) ? by : undefined;
   };
   const listBrains = async () =>
     (await memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", []))) ?? [];

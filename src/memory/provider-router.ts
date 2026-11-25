@@ -1,6 +1,6 @@
 import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { isSystemActor, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
-import type { McpEnvelope } from "../mcp/mcp-client.ts";
+import { McpCallError, type McpEnvelope } from "../mcp/mcp-client.ts";
 import {
   brainActsAsPerson,
   changesNotebookOnly,
@@ -83,9 +83,11 @@ export function createRoutedMemoryService(opts: {
             : { ref: providerRef(route.provider, ref) }),
           source: { provider: route.provider, label: route.label ?? route.provider },
         }));
+  const recallRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
+    routesFor(scopeId).filter((route) => route.recall !== false);
   const brainRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
-    routesFor(scopeId)
-      .filter((route) => route.recall !== false && opts.providers[route.provider]?.brain)
+    recallRoutes(scopeId)
+      .filter((route) => opts.providers[route.provider]?.brain)
       .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
@@ -140,7 +142,7 @@ export function createRoutedMemoryService(opts: {
       });
     },
     async recall(scopeId, context) {
-      const routes = routesFor(scopeId).filter((route) => route.recall !== false);
+      const routes = recallRoutes(scopeId);
       const batches = strict(
         await Promise.all(
           routes.map((route) =>
@@ -187,7 +189,7 @@ export function createRoutedMemoryService(opts: {
     },
 
     async query(scopeId, q, limit = 20, context) {
-      const routes = routesFor(scopeId).filter((route) => route.recall !== false);
+      const routes = recallRoutes(scopeId);
       const batches = strict(
         await Promise.all(
           routes.map((route) =>
@@ -226,23 +228,38 @@ export function createRoutedMemoryService(opts: {
       const ref = parseProviderRef(tool);
       const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
       if (!ref || !route) throw brainRefused(`${tool} isn't a tool of a brain connected to this conversation.`);
+      const provider = opts.providers[route.provider]!;
+      const reader = {
+        actorId: by!.actorId!,
+        ...(context?.audienceScopeId ? { audienceScopeId: context.audienceScopeId } : {}),
+      };
+      if (!(await provider.lookupTools!(scopeId, reader)).some((listed) => listed.name === ref.ref))
+        throw brainRefused(`${ref.ref} isn't a read-only tool ${route.provider} lists for this person.`);
       const started = Date.now();
+      let failure: unknown;
       try {
-        return await opts.providers[route.provider]!.lookup!(scopeId, ref.ref, args, by, context);
+        return await provider.lookup!(scopeId, ref.ref, args, by, context);
       } catch (error) {
-        opts.onError?.(error, route.provider, "lookup");
-        const problem = problemOf(
-          {
-            provider: route.provider,
-            scope: scopeId,
-            ms: Date.now() - started,
-            ...failedOutcome(error),
-            refs: [ref.ref],
-          },
-          "lookup",
-        )!;
-        throw new Error(`${problemLine(problem)}\n${quotedData(errMessage(error))}`, { cause: error });
+        failure = error;
       }
+      opts.onError?.(failure, route.provider, "lookup");
+      const problem = problemOf(
+        {
+          provider: route.provider,
+          scope: scopeId,
+          ms: Date.now() - started,
+          ...failedOutcome(failure),
+          refs: [ref.ref],
+        },
+        "lookup",
+      )!;
+      throw new Error(
+        [
+          problemLine(problem),
+          quotedData(errMessage(failure)),
+          ...(failure instanceof McpCallError ? failure.warnings : []),
+        ].join("\n"),
+      );
     },
 
     async read(scopeId) {

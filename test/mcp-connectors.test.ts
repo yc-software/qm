@@ -1,7 +1,7 @@
 import { tenantTest as test } from "./support/tenant-test.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
-import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, McpCallError, mcpResultText, toolListings } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
+import { sleep } from "../src/util/async.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -60,7 +61,8 @@ test("mcp client keeps the server's own description, else its instructions", asy
   assert.equal(about, "Call search first.\nThen update.");
 });
 
-test("mcp client caps a server's tool list", async (t) => {
+test("mcp client caps a server's tool list and says so", async (t) => {
+  const warned = t.mock.method(console, "warn", () => {});
   const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
   const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
   const listed = (await createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } }).listTools())
@@ -68,6 +70,38 @@ test("mcp client caps a server's tool list", async (t) => {
   assert.equal(listed.length, 64);
   assert.equal(listed.at(-1)?.name, "t63");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
+  assert.match(String(warned.mock.calls[0]?.arguments[0]), /lists more than 64 tools; QM keeps the first 64$/);
+});
+
+test("a failed brain listing leaves none for its minute, an answered failure drops the old list, and a catalog's failure fails", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const listings = toolListings();
+  const tool = { name: "query", description: "", inputSchema: {} };
+  let failure: Error = new Error("brain down");
+  let asked = 0;
+  const fetch = (key: string, allowStale = true) =>
+    listings.fetch(key, { allowStale, context: { label: "brain", list: () => (asked++, Promise.reject(failure)) } });
+  assert.deepEqual([await fetch("a"), await fetch("a"), asked], [[], [], 1]);
+  for (const [error, kept] of [
+    [new McpCallError("mcp tools/list failed", {}), [tool]],
+    [new McpCallError("mcp tools/list failed", { answered: true }), []],
+  ] as const) {
+    failure = error;
+    listings.set("a", [tool], { ttl: 1 });
+    await sleep(5);
+    assert.deepEqual(await fetch("a"), [tool]);
+    await sleep(5);
+    assert.deepEqual(listings.get("a"), kept);
+  }
+  await assert.rejects(fetch("b", false), /mcp tools\/list failed/);
+});
+
+test("a tool result with no text reads as its structured content, or as nothing", () => {
+  assert.equal(
+    mcpResultText({ content: [{ type: "text", text: " " }], structuredContent: { found: 0 } }),
+    '{"found":0}',
+  );
+  assert.equal(mcpResultText({ content: [] }), "");
 });
 
 test("a capped mcp client refuses a tool list larger than its cap in all, though each page fits", async (t) => {

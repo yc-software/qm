@@ -3,7 +3,6 @@ import { recordAuditInBinding, type AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { onTenantLoad, perTenant } from "../tenants/cache.ts";
 import {
   CATALOG_MAX_TOOLS,
@@ -102,7 +101,7 @@ export interface McpToolDescriptor {
   needsApproval: boolean;
   signIn?: true;
   catalog?: true;
-  brain?: true;
+  brain?: string;
 }
 
 interface McpAppConnection extends ConnectorApp {
@@ -142,7 +141,7 @@ function shared(server: McpServer): boolean {
   return !server.catalog && server.auth === "none" && !server.attestActor;
 }
 
-function unique(tools: McpToolDescriptor[]): McpToolDescriptor[] {
+export function uniqueTools(tools: McpToolDescriptor[]): McpToolDescriptor[] {
   const seen = new Set<string>();
   return tools.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
 }
@@ -178,10 +177,6 @@ function catalogDescriptor(server: McpServer): McpToolDescriptor {
     readOnly: server.readOnly,
     needsApproval: false,
   };
-}
-
-function resultText(result: CallToolResult): string {
-  return mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
 }
 
 function callResource(def: McpToolDescriptor, args: Record<string, unknown>): string {
@@ -382,7 +377,7 @@ export function createMcpToolService(opts: {
       headersFor(server, principalId, approval),
     );
     record("call", `${server.id}/${entry.name}`, approval ? "ok approved" : "ok", principalId);
-    return resultText(result);
+    return mcpResultText(result);
   }
 
   function refresh(): Promise<void> {
@@ -406,7 +401,7 @@ export function createMcpToolService(opts: {
     for (const server of state.servers.values()) {
       if (!shared(server) || state.snapshot.some((t) => t.serverId === server.id)) continue;
       const listing = sharedListings.get(server.url)?.listing;
-      if (listing?.tools.length) state.snapshot = unique([...state.snapshot, ...(await serverTools(server, []))]);
+      if (listing?.tools.length) state.snapshot = uniqueTools([...state.snapshot, ...(await serverTools(server, []))]);
       else if (!listing)
         void sharedListings
           .fetch(server.url, { forceRefresh: true, context: server })
@@ -458,7 +453,7 @@ export function createMcpToolService(opts: {
     const servers = all.filter((s) => s.enabled);
     const previous = state.snapshot;
     const next = await Promise.all(servers.map((s) => serverTools(s, previous)));
-    state.snapshot = unique(next.flat());
+    state.snapshot = uniqueTools(next.flat());
     state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
     state.servers = new Map(servers.map((s) => [s.id, s]));
     state.version = version;
@@ -563,7 +558,7 @@ export function createMcpToolService(opts: {
         }
         const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
         record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
-        return resultText(result);
+        return mcpResultText(result);
       } catch (e) {
         if (e instanceof SignInRequired) {
           record("call", callResource(def, args), "sign-in required", principalId);

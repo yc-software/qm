@@ -15,14 +15,14 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
       label: d.name,
       description: mcpToolDescription(d),
       parameters: (d.inputSchema ?? { type: "object", properties: {} }) as never,
-      async execute(callId, params) {
+      async execute(callId, params, signal) {
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
         await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
         try {
           const args = (params ?? {}) as Record<string, unknown>;
           const out = d.brain
-            ? await tc.lookupBrain(d.serverId, d.remoteName, args)
+            ? await tc.lookupBrain(d.brain, d.remoteName, args, signal)
             : await tc.callMcpTool(d.name, args, ref.approvedToolCalls?.get(callId));
           return recordExternalResult(
             callId,
@@ -34,7 +34,7 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
           return recordResult(
             callId,
             { tool: d.name, mcpServer: d.serverId, failed: true },
-            text(`[error] ${d.brain && error instanceof Error ? error.message : errMessage(error)}`),
+            text(`[error] ${errMessage(error)}`),
             true,
           );
         }

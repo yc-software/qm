@@ -799,8 +799,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         modeName = "mode-conversation";
       const editingApp = modeName === "mode-conversation" ? appEditSlug(conversation.threadRef, actor.id) : null;
       const appEdit = appEditTurnPolicy(editingApp !== null);
+      const connectorTurn = !external && !appEdit;
       const mcpToolsReady =
-        !external && !appEdit && deps.mcp
+        connectorTurn && deps.mcp
           ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
           : undefined;
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
@@ -1730,7 +1731,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(personAuthorityTurn ? { personAuthority: true } : {}),
         };
         const personAuthority = carriesPersonAuthority(runtimeClaims);
-        const turnMcpTools = appEdit ? undefined : context.mcpTools(personAuthority, mcpToolsReady);
+        const turnMcpTools = connectorTurn ? context.mcpTools(personAuthority, mcpToolsReady) : undefined;
         const baseTools = createToolContext({
           tenant,
           desktopCall: mayDriveDesktop(input)

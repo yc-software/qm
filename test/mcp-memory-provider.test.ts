@@ -90,6 +90,38 @@ test("MCP recall is locally bounded and times out", async () => {
   await assert.rejects(shared.recall("org:acme", { startedAt: Date.now() - 900 }), TimeoutError);
 });
 
+test(
+  "a lookup pins acting_user and the provider's actor argument to the member, and stops with its turn",
+  { timeout: 5_000 },
+  async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const lookupClient: McpClient = {
+      listTools: async () => ({ tools: [] }),
+      callTool: (_tool, args, _headers, signal) => {
+        sent.push(args);
+        return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      },
+    };
+    const provider = createMcpMemoryProvider({
+      read: { client: lookupClient, tool: "recall", actorArg: "member", timeoutMs: 100 },
+      attestActor: true,
+      url: "https://brain.example/mcp",
+      lookupClient,
+    });
+    const turn = new AbortController();
+    const asked = provider.lookup!(
+      "personal:U1",
+      "get_page",
+      { acting_user: "U2", member: "U3", slug: "a" },
+      { actorId: "U1", context: "conversation", personAuthority: true },
+      { audienceScopeId: "personal:U1", signal: turn.signal },
+    );
+    turn.abort(new Error("turn stopped"));
+    await assert.rejects(asked, /turn stopped/);
+    assert.deepEqual(sent, [{ acting_user: "U1", member: "U1", slug: "a" }]);
+  },
+);
+
 test("MCP recall returns one row per line of the provider's answer", async () => {
   const memory = createMcpMemoryProvider({
     read: { client: client([], "first fact\n\nsecond fact\n"), tool: "search_knowledge", timeoutMs: 100 },
@@ -108,6 +140,7 @@ test("a write that carries no member is not sent to an attested provider", async
         read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
         write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
         attestActor: true,
+        lookupClient: client(calls),
         url: "https://knowledge.example/mcp",
       }),
     },
@@ -190,6 +223,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       read: { client, tool: "memory_recall", timeoutMs: 100 },
       forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
+      lookupClient: client,
       url: "https://brain.example/mcp",
     });
   const gone = `http://127.0.0.1:${await closedPort()}`;

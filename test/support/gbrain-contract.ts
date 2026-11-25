@@ -25,3 +25,10 @@ export const contract = JSON.parse(
 };
 
 export const contractTools = [...contract.tools, ...contract.personal_tools.tools];
+
+export const contractListing = contractTools.map(({ name, description, mutating, input_schema }) => ({
+  name,
+  description,
+  inputSchema: input_schema,
+  annotations: { readOnlyHint: !mutating },
+}));

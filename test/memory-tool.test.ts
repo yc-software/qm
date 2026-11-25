@@ -448,6 +448,7 @@ test("the memory tool forgets notebook ids and brain refs in one call; a brain r
         write: { ...op, tool: "memory_write" },
         forget: { ...op, tool: "forget_fact", idempotencyArg: "request_id" },
         attestActor: true,
+        lookupClient: client,
         url: "https://acme.example/mcp",
       }),
     },

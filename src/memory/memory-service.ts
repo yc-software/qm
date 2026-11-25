@@ -124,7 +124,7 @@ export interface MemoryService {
     tool: string,
     args: Record<string, unknown>,
     by: MemoryAuthority | undefined,
-    context?: { audienceScopeId?: ScopeId; startedAt?: number },
+    context?: { audienceScopeId?: ScopeId; startedAt?: number; signal?: AbortSignal },
   ): Promise<CallToolResult>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;

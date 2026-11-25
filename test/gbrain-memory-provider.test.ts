@@ -13,7 +13,7 @@ import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
-import { contract, contractTools } from "./support/gbrain-contract.ts";
+import { contract, contractListing, contractTools } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 
@@ -50,11 +50,7 @@ async function gbrain(
   t.after(async () => installPrincipalLinks(null));
   const calls: Call[] = [];
   const server = await startMcpTestServer(t, {
-    tools: contractTools.map(({ name, description, input_schema }) => ({
-      name,
-      description,
-      inputSchema: input_schema,
-    })),
+    tools: contractListing,
     clients: { ro: "x", rw: "y" },
     stateless: true,
     json: true,
