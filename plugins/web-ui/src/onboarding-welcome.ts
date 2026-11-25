@@ -329,7 +329,7 @@ export class OnboardingWelcome extends LitElement {
               ? connectionActions(
                   service.name,
                   Boolean(this.authorizing || this.disconnecting),
-                  () => void this.authorize(service, account.id),
+                  stale ? () => void this.authorize(service, account.id) : undefined,
                   () => this.confirmDisconnect(account, service.name),
                 )
               : nothing

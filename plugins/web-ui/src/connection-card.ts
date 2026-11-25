@@ -102,7 +102,7 @@ export function connectionCard(
       <small class="connection-card-status" role="status">${mark ? icon(mark, 12) : nothing}${text}</small>
     </span>
     <span class="connection-card-actions"
-      >${settled ? connectionActions(service.name, busy, at.stale ? undefined : at.reconnect, at.disconnect) : nothing}${at.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
+      >${settled ? connectionActions(service.name, busy, at.outcome === "failed" && !at.stale ? at.reconnect : undefined, at.disconnect) : nothing}${at.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
     >
   </div>`;
 }

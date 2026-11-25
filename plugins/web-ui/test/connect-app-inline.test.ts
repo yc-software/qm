@@ -45,7 +45,7 @@ test("a card for one app shows only that app and continues the chat after a veri
     assert.equal(scoped.querySelector(".connection-card-status")?.textContent?.trim(), "Connected");
     assert.deepEqual(
       [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
-      ["Reconnect Gmail", "Disconnect Gmail"],
+      ["Disconnect Gmail"],
     );
     const again = Object.assign(document.createElement("qm-onboarding-welcome"), { widget: "apps", toolkit: "gmail" });
     document.querySelector(".message-stack")!.append(again);
