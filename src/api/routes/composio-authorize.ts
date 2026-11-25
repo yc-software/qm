@@ -85,7 +85,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
     const linked = new URLSearchParams({
       user_ids: composioUserIds(access.principal).join(","),
       toolkit_slugs: toolkit,
-      statuses: "ACTIVE,EXPIRED,INACTIVE",
+      statuses: "ACTIVE",
       limit: "1",
     });
     const session = await request(ctx, access.key, "/tool_router/session", {

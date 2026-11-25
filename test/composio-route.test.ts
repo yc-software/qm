@@ -1542,7 +1542,7 @@ test("a first link wakes the conversation it started from once; relinks and repe
   };
   await connect("ca_first", []);
   const history = new URL(f.calls[2]!.url).searchParams;
-  assert.deepEqual([history.get("toolkit_slugs"), history.get("statuses")], ["gmail", "ACTIVE,EXPIRED,INACTIVE"]);
+  assert.deepEqual([history.get("toolkit_slugs"), history.get("statuses")], ["gmail", "ACTIVE"]);
   await connect("ca_again", [{ id: "ca_first" }]);
   assert.deepEqual(wakes, [{ principal: "alice", connector: "gmail", linkId: "composio:ca_first", sessionId: "chat" }]);
 });
