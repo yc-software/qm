@@ -317,7 +317,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     }
     await store.delete(scope);
     sessionByName.delete(name);
-    base.scopeByName.delete(name);
+    base.releaseScope(name);
     await forgetSnapshot(stored?.recoverySnapshotId);
   }
 
@@ -372,7 +372,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
             const name = sandboxScopeName(prefix, scopeId);
-            base.scopeByName.set(name, scopeId);
+            base.bindScope(name, scopeId);
             const { session } = await ensureSession(scopeId, name);
             await snapshotHome(scopeId, session);
           },
@@ -408,7 +408,7 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
               recovery: { ...recovery, state: info.state, checkpointExpiresAtMs: null },
             };
         }
-        base.scopeByName.set(name, scopeId);
+        base.bindScope(name, scopeId);
         const session = sessionByName.get(name) ?? (await client.connect(stored.sandboxId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         const metrics = await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null));

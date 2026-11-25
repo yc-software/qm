@@ -407,7 +407,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     }
     await store.delete(scope);
     sessionByName.delete(name);
-    base.scopeByName.delete(name);
+    base.releaseScope(name);
   }
 
   const sandbox: Sandbox = {
@@ -437,7 +437,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
             const name = sandboxScopeName(prefix, scopeId);
-            base.scopeByName.set(name, scopeId);
+            base.bindScope(name, scopeId);
             const { session } = await ensureSession(scopeId, name);
             await snapshotHome(scopeId, session);
           },
@@ -446,7 +446,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
     async restartComputer(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);
-      base.scopeByName.set(name, scopeId);
+      base.bindScope(name, scopeId);
       return base.provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored?.sessionId) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
@@ -524,7 +524,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
             guestResponsive: false,
             recovery: { ...recovery, state: "paused" },
           };
-        base.scopeByName.set(name, scopeId);
+        base.bindScope(name, scopeId);
         const session = sessionByName.get(name) ?? (await client.connect(stored.sessionId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
