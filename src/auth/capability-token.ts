@@ -62,6 +62,30 @@ export async function personOrOwningBot(
   );
 }
 
+export type ActingClaims = Pick<
+  CapabilityClaims,
+  "actorId" | "botActor" | "internalAudience" | "liveActor" | "liveAuthor"
+> & {
+  scopeId?: string;
+};
+
+export type ScopeAuthorizationClaims = Pick<
+  CapabilityClaims,
+  "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "liveActor" | "members"
+>;
+
+export function scopeAuthorizationClaims(c: ScopeAuthorizationClaims): ScopeAuthorizationClaims {
+  return {
+    actorId: c.actorId,
+    scopeId: c.scopeId,
+    ...(c.scopeVersion ? { scopeVersion: c.scopeVersion } : {}),
+    ...(c.botActor ? { botActor: true } : {}),
+    ...(c.internalAudience ? { internalAudience: true } : {}),
+    ...(c.liveActor ? { liveActor: true } : {}),
+    ...(c.members ? { members: c.members } : {}),
+  };
+}
+
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
@@ -82,12 +106,13 @@ export interface CapabilityClaims {
   ownerConnections?: boolean;
   members?: Principal[];
   keychainMembers?: Principal[];
-  privateScope?: boolean;
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
+  internalAudience?: boolean;
   liveActor?: boolean;
+  ephemeral?: true;
   runId?: string;
   sessionId?: string;
   origin?: SessionOrigin;
@@ -179,6 +204,7 @@ export async function verifyCapabilityToken(
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
+  if (claims.internalAudience !== undefined && typeof claims.internalAudience !== "boolean") return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
@@ -218,4 +244,14 @@ export async function verifyBlobTransferCapability(
   if (grant.id !== undefined && (typeof grant.id !== "string" || !BLOB_ID.test(grant.id))) return null;
   if (expected.dir === "read" ? grant.id !== expected.id : grant.id !== undefined) return null;
   return claims as BlobTransferClaims;
+}
+
+export async function asOrgAdmin(
+  admins: { isOrgAdmin?: (principalId: string) => Promise<boolean> },
+  actor: ActingClaims,
+): Promise<boolean> {
+  if (actor.botActor === true) return false;
+  if (actor.scopeId !== undefined && !(actor.internalAudience === true && (actor.liveActor || actor.liveAuthor)))
+    return false;
+  return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }

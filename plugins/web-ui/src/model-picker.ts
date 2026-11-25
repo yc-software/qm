@@ -19,6 +19,7 @@ import {
   effortLevelsForModel,
   presetModelId,
   modelLoadoutOptions,
+  groupModelsByProvider,
   type LoadoutEntry,
 } from "./composer-loadout.ts";
 import { tip } from "./tooltip.ts";
@@ -26,6 +27,8 @@ import { isPhone } from "./viewport.ts";
 import { burstEffortConfetti } from "./effort-confetti.ts";
 
 const EFFORT_PEAK_FLOOR = EFFORT_LEVELS.findIndex((option) => option.value === "xhigh");
+
+const GROUP_PREVIEW = 4;
 
 function effortText(level: EffortLevel | string): TemplateResult | string {
   const label = effortLabel(level as EffortLevel);
@@ -84,6 +87,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
   const loadoutMenuId = `model-picker-${crypto.randomUUID()}`;
   let loadoutSection: "effort" | "add" | null = null;
   let loadoutSectionHovered = false;
+  const expandedGroups = new Set<string>();
   let loadoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   const catalog: ModelCatalog = bindings.catalog ?? {
@@ -266,6 +270,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     cancelLoadoutClose();
     if (loadoutSection === section && !keyboard) return;
     loadoutSection = section;
+    expandedGroups.clear();
     bindings.redraw();
     placeLoadout();
     if (keyboard)
@@ -363,24 +368,58 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
                   }}
                 />
               </label>
-              ${addable.map(
-                (option) =>
-                  html`<button
-                    class="menu-option"
-                    type="button"
-                    role="menuitem"
-                    aria-label=${`Add ${modelLabel(option)} to presets`}
-                    @click=${() => {
-                      dismissSelection();
-                      presets?.add(option, agent);
-                    }}
-                  >
-                    ${modelGlyph(option)}<span class="menu-option-copy"
-                      ><span>${modelLabel(option)}</span
-                      >${isUltrafastModel(option.model.id) ? html`<span class="loadout-meta">Ultrafast · 6× cost</span>` : nothing}</span
-                    ><span class="loadout-add-label" aria-hidden="true">Add</span>
-                  </button>`,
-              )}
+              ${groupModelsByProvider(addable).map((group) => {
+                const collapsed = !query && !expandedGroups.has(group.label);
+                const shown = collapsed ? group.options.slice(0, GROUP_PREVIEW) : group.options;
+                const hidden = group.options.length - shown.length;
+                return html`<div class="loadout-head loadout-group-head" role="presentation">${group.label}</div>
+                  ${shown.map(
+                    (option) =>
+                      html`<button
+                        class="menu-option"
+                        type="button"
+                        role="menuitem"
+                        aria-label=${`Add ${modelLabel(option)} to presets`}
+                        data-model=${option.value}
+                        @click=${() => {
+                          dismissSelection();
+                          presets?.add(option, agent);
+                        }}
+                      >
+                        ${modelGlyph(option)}<span class="menu-option-copy"
+                          ><span>${modelLabel(option)}</span
+                          >${isUltrafastModel(option.model.id) ? html`<span class="loadout-meta">Ultrafast · 6× cost</span>` : nothing}</span
+                        ><span class="loadout-add-label" aria-hidden="true">Add</span>
+                      </button>`,
+                  )}
+                  ${
+                    hidden > 0
+                      ? html`<button
+                          class="menu-option loadout-more"
+                          type="button"
+                          role="menuitem"
+                          aria-label=${`Show ${hidden} more ${group.label} models`}
+                          @click=${() => {
+                            expandedGroups.add(group.label);
+                            bindings.redraw();
+                            positionLoadout();
+                            const next = group.options[GROUP_PREVIEW];
+                            if (next)
+                              requestAnimationFrame(() =>
+                                bindings
+                                  .host()
+                                  ?.querySelector<HTMLElement>(
+                                    `.loadout-submenu [data-model="${CSS.escape(next.value)}"]`,
+                                  )
+                                  ?.focus(),
+                              );
+                          }}
+                        >
+                          ${hidden} more ${icon(ChevronRight, 13)}
+                        </button>`
+                      : nothing
+                  }`;
+              })}
               ${addable.length ? nothing : html`<div class="loadout-empty">No models found</div>`}`
           : nothing
       }

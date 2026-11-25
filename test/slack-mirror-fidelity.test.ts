@@ -61,7 +61,21 @@ test("canonical snapshots cross the HTTP mapper with explicit empty files, roots
   assert.equal(event.sub, null);
   assert.equal(event.subtype, "");
   assert.equal(event.broadcast, false);
-  assert.equal(event.authorName, "QM");
+  assert.equal(event.authorName, undefined);
+  assert.equal(
+    slackMessageToIngestEvent(
+      { channel: "C", ts: "2", bot_id: "BBOT", bot_profile: { name: "QM" }, username: "Ada", text: "hi" },
+      ids,
+    ).authorName,
+    "Ada",
+  );
+  assert.equal(
+    slackMessageToIngestEvent(
+      { channel: "C", ts: "3", bot_id: "BGH", bot_profile: { name: "GitHub" }, text: "ok" },
+      ids,
+    ).authorName,
+    "GitHub",
+  );
   assert.equal(event.bot, true);
   assert.equal(event.self, true);
   assert.deepEqual(event.files, []);

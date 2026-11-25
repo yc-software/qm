@@ -1,3 +1,4 @@
+import { foldPrincipalId } from "../directory/person.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { likeContains } from "../persistence/like.ts";
 import type { ScopeId, Session } from "../types.ts";
@@ -6,12 +7,21 @@ import type {
   ParticipantPage,
   ParticipantPageQuery,
   ParticipantScope,
+  ReplyNotificationClaim,
   SessionStore,
 } from "./session-store.ts";
 import { AGENT_REPLY_ITEM, msOf, TENANT } from "./items.ts";
-import { BOT_VISIBLE, LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, USER_ACTIVITY } from "./session-rows.ts";
+import {
+  BOT_VISIBLE,
+  LIST_COLUMNS,
+  NOT_AUTOMATION_SURFACE,
+  OWN_CHAT,
+  rowToParticipantSession,
+  USER_ACTIVITY,
+} from "./session-rows.ts";
 
 const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
+const LISTED_SIDE_CHAT = "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')";
 const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
 export const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
   `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
@@ -38,12 +48,15 @@ export function createSessionParticipants(
   | "listParticipants"
   | "distinctParticipants"
   | "participantsOf"
+  | "claimReplyNotifications"
 > {
   const participantSessions: SessionStore["listByParticipant"] = async (principalId, opts) => {
     const limit = opts?.limit === undefined ? undefined : Math.max(0, Math.floor(opts.limit));
     const rows = await q(
-      participantSessionsSql(BOT_VISIBLE(opts?.botActor), LIST_COLUMNS) +
-        (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
+      participantSessionsSql(
+        ` AND NOT s.ephemeral AND ${NOT_AUTOMATION_SURFACE("s")}${BOT_VISIBLE(opts?.botActor)}`,
+        LIST_COLUMNS,
+      ) + (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
       limit === undefined ? [principalId] : [principalId, limit],
     );
     return rows.map(rowToParticipantSession);
@@ -56,7 +69,7 @@ export function createSessionParticipants(
          FROM participants p
         CROSS JOIN LATERAL (
           SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
-            FROM sessions s WHERE s.id = p.session_id OFFSET 0
+            FROM sessions s WHERE s.id = p.session_id AND NOT s.ephemeral AND ${NOT_AUTOMATION_SURFACE("s")} OFFSET 0
         ) s
         WHERE p.principal_id = $1
         GROUP BY s.scope_id`,
@@ -71,12 +84,7 @@ export function createSessionParticipants(
   };
   const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
     const params: unknown[] = [principalId];
-    const where: string[] = [
-      "p.principal_id = $1",
-      OWN_CHAT("s"),
-      "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
-      HAS_CONTENT,
-    ];
+    const where: string[] = ["p.principal_id = $1", OWN_CHAT("s"), LISTED_SIDE_CHAT, HAS_CONTENT];
     const param = (value: unknown): string => {
       params.push(value);
       return `$${params.length}`;
@@ -189,6 +197,30 @@ export function createSessionParticipants(
     async participantsOf(sessionId): Promise<string[]> {
       const rows = await q("SELECT principal_id FROM participants WHERE session_id = $1", [sessionId]);
       return rows.map((r) => r.principal_id as string);
+    },
+
+    async claimReplyNotifications(sessionId, people): Promise<ReplyNotificationClaim[]> {
+      const audience = people === "everyone" ? null : [...new Set(people.flatMap((id) => [id, foldPrincipalId(id)]))];
+      const rows = await q(
+        `WITH reply AS (
+           SELECT e.text, ${msOf("e.created_at")} AS at FROM items e
+            WHERE e.tenant_id = ${TENANT} AND e.session_id = $1 AND ${AGENT_REPLY_ITEM("e")}
+            ORDER BY e.seq DESC LIMIT 1
+         )
+         UPDATE participants p SET notified_at = reply.at
+           FROM sessions s, reply
+          WHERE p.session_id = $1 AND s.id = p.session_id AND s.parent_session_id IS NULL AND s.surface = 'web' AND ${LISTED_SIDE_CHAT}
+            AND NOT starts_with(s.thread_ref, 'web:' || p.principal_id || ':app-edit:')
+            AND ($2::text[] IS NULL OR p.principal_id = ANY($2::text[]) OR lower(p.principal_id) = ANY($2::text[]))
+            AND reply.at > COALESCE(p.read_at, 0) AND reply.at > COALESCE(p.notified_at, 0)
+         RETURNING p.principal_id, COALESCE(p.title, s.title) AS title, COALESCE(reply.text, '') AS text`,
+        [sessionId, audience],
+      );
+      return rows.map((r) => ({
+        principalId: r.principal_id as string,
+        title: (r.title as string | null) ?? null,
+        text: r.text as string,
+      }));
     },
   };
 }

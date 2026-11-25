@@ -13,14 +13,17 @@ import { normalizeRelPath } from "./deploy-fs.ts";
 export interface DeployGitInputFile {
   path: string;
   data: string | Uint8Array;
+  mode?: DeployGitTreeFile["mode"];
 }
 
 export interface DeployGitTreeFile {
   path: string;
   sha: string;
   size: number;
-  mode: "100644";
+  mode: "100644" | "100755";
 }
+
+export type DeployGitBlobRef = Pick<DeployGitTreeFile, "path" | "sha"> & Partial<Pick<DeployGitTreeFile, "mode">>;
 
 export interface DeployGitStore {
   commit(input: {
@@ -34,7 +37,7 @@ export interface DeployGitStore {
   }): Promise<string>;
   treeOf(appId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(appId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(appId: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
+  filesIn(appId: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]>;
   bundle(appId: string, commitSha: string): Promise<Uint8Array>;
   setRef(appId: string, ref: string, sha: string): Promise<void>;
   deleteRef(appId: string, ref: string): Promise<void>;
@@ -223,15 +226,20 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
 
   async function treeOf(appId: string, commitSha: string): Promise<DeployGitTreeFile[]> {
     const repo = await ensureRepo(appId);
-    const out = await git(["--git-dir", repo, "ls-tree", "-r", "-z", "--long", commitSha]);
+    const format = "%(objectmode) %(objectname) %(objectsize)%x09%(path)";
+    const out = await git(["--git-dir", repo, "ls-tree", "-r", "-z", `--format=${format}`, commitSha]);
     return out
       .toString("utf8")
       .split("\0")
       .filter(Boolean)
-      .map((entry) => {
-        const m = /^(100644) blob ([0-9a-f]{40})\s+(\d+)\t(.+)$/.exec(entry);
-        if (!m) throw new Error(`unexpected git tree entry: ${entry}`);
-        return { mode: "100644" as const, sha: m[2]!, size: Number(m[3]!), path: m[4]! };
+      .map((entry): DeployGitTreeFile => {
+        const tab = entry.indexOf("\t");
+        const [mode, sha, size] = entry.slice(0, tab).split(" ");
+        const path = entry.slice(tab + 1);
+        if (mode === "100644" || mode === "100755") return { mode, sha: sha!, size: Number(size), path };
+        if (mode === "120000") throw new Error(`${path} is a symlink; symlinks are not deployable`);
+        if (mode === "160000") throw new Error(`${path} is a git submodule; submodules are not deployable`);
+        throw new Error(`unexpected git tree entry: ${entry}`);
       })
       .sort(byPath);
   }
@@ -245,10 +253,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     }
   }
 
-  async function filesIn(
-    appId: string,
-    entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[],
-  ): Promise<DeployGitInputFile[]> {
+  async function filesIn(appId: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]> {
     if (entries.length === 0) return [];
     const repo = await ensureRepo(appId);
     const shas = [...new Set(entries.map((entry) => entry.sha))];
@@ -272,7 +277,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
     return entries.map((entry) => {
       const data = blobs.get(entry.sha);
       if (!data) throw new Error(`missing blob ${entry.sha} for ${entry.path}`);
-      return { path: entry.path, data };
+      return { path: entry.path, data, mode: entry.mode };
     });
   }
 

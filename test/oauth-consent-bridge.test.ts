@@ -287,7 +287,7 @@ test("the consent-mint route takes only the oauth-consent token of a running tur
       },
       { botActor: true },
       { actor: { externalId: "release-bot", isBot: true }, botActor: true },
-      { surface: "cron", origin: { kind: "automation", ownerFire: true } },
+      { surface: "cron", origin: { kind: "automation" } },
     ];
     for (const [i, extra] of turns.entries()) {
       await selectDefaultSandbox(srv.built, "U1", "personal:U1");

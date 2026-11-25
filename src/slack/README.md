@@ -27,7 +27,7 @@ The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/develo
 feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
 Conversations in the resulting split pane are ordinary DM thread messages and flow through
 the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
-are not implemented. Activity cards are experimental and off by default.
+are not implemented.
 
 Two caveats:
 
@@ -39,20 +39,20 @@ Two caveats:
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
 
-### Optional activity cards
+### Activity cards
 
-In Admin → Customize → Feature flags, enable **Slack loading indicator (experimental)**
-for selected people or conversation scopes. It is off by default. The Slack app must
-support [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block)
-blocks and have `chat:write`.
+Slack threads show a live activity card while QM works. The Slack app must support
+[`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) blocks and
+have `chat:write`.
 
-After QM has been working for ten seconds, one card is posted in the existing reply thread
-and updated in place. Its title is the current step's tool `purpose`, a background job's or
-watch's purpose, or **Waiting on subagents**, prefixed with the acknowledgement emoji.
-Subagents of the thread, including their own subagents, jobs and watches, appear as plan
-rows with their latest step. A subtle **Follow via QM Web** link opens the exact web
-conversation with normal authorization; without a configured web URL, it is omitted.
-Quiet ambient turns, unthreaded DMs and turns that finish within ten seconds do not create
+After QM has been working for thirty seconds, one flat task card is posted in the existing
+reply thread and updated in place. Its title is **Still working:**
+followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
+step is used instead. Background jobs and watches show their own purpose. The card's details
+line is an "Open in QM" link to the exact web conversation with normal authorization,
+followed by the elapsed time after the first minute ("Open in QM · 2m"); without a
+configured web URL, it is the state in plain text (for example "Working on it · 2m").
+Quiet ambient turns, unthreaded DMs and turns that finish within thirty seconds do not create
 cards. Cards are visible to everyone in their thread; own status cards and edits are
 excluded from conversation history.
 
@@ -69,8 +69,8 @@ if Slack does not deduplicate `client_msg_id`. An outage can leave a stale card 
 recovery. Status calls have a separate five-second timeout and never delay reply delivery.
 
 Once no activity remains and the thread has no reply waiting in the delivery outbox, the
-card is deleted and no longer tracked. Later work creates a fresh card. Disabling the flag
-removes open cards without stopping work. Native session status and Stop events are not used.
+card is deleted and no longer tracked. Later work creates a fresh card. Native session status
+and Stop events are not used.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

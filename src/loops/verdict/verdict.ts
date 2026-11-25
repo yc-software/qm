@@ -43,7 +43,7 @@ const DRAFT_PROMPT = `You write the owner's reply to one conversation from their
 Return exactly one JSON object and nothing else:
 {"draft": "<the reply, plain text>"}
 
-Answer the message marked as waiting and anything else still open. Match how the owner writes in the transcript: register, length, punctuation. Never use em dashes or en dashes; use a comma, period or "..." instead. When a voice profile is given, follow its greeting, sign-off, length and hard rules without copying its sentences. Do not add a subject line or quote the thread.`;
+Answer the message marked as waiting and anything else still open. Match how the owner writes in the transcript: register, length, punctuation. Never use em dashes or en dashes; use a comma, period or "..." instead. When a voice profile is given, follow its greeting, sign-off, length and hard rules without copying its sentences. Do not add a subject line or quote the thread. If nothing is worth sending, return {"draft": ""}.`;
 
 function describe(input: VerdictInput): string[] {
   const { owner, conversation } = input;
@@ -120,7 +120,7 @@ export function parseVerdict(reply: string | undefined): ParsedVerdict {
 function parseDraft(reply: string | undefined): string {
   if (reply === undefined) throw new Error("draft model returned no reply (no servable model route?)");
   const draft = jsonObject(reply)?.draft;
-  if (typeof draft !== "string" || !draft.trim()) throw new Error(`draft was not {"draft": string}: ${sample(reply)}`);
+  if (typeof draft !== "string") throw new Error(`draft was not {"draft": string}: ${sample(reply)}`);
   return draft.trim();
 }
 

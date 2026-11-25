@@ -304,7 +304,7 @@ export function createGenericChatInbound(deps: {
     }
     const ts = own?.ts ?? genericChatTs(message.created_at, message.id);
     const startsTurn = event.type === "message.created" && !bot;
-    const direct = chat.kind === "dm" || message.mentions_agent;
+    const direct = chat.kind === "dm" || chat.participation === "always" || message.mentions_agent;
     const followed =
       startsTurn && !direct && !guests && thread !== undefined ? await followedThread(container, thread) : undefined;
     const addressed = startsTurn && (direct || followed !== undefined);
@@ -332,7 +332,13 @@ export function createGenericChatInbound(deps: {
       ],
       GENERIC_CHAT,
     );
-    if (!addressed) return { status: 200, body: { ok: true } };
+    if (!addressed) {
+      if (startsTurn && chat.kind === "group")
+        console.log(
+          `[generic-chat] chat ${chat.id} message ${message.id} names no agent and is in no followed thread: left to ambient judgment`,
+        );
+      return { status: 200, body: { ok: true } };
+    }
     const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
     const frame = turnFrame(event, author, message.user.id, humans, replyThread, guests);
     const replyTarget = frame.deliveryTarget;
@@ -346,7 +352,7 @@ export function createGenericChatInbound(deps: {
     const staged = message.files.length
       ? await stageGenericChatFiles(
           deps.client,
-          event.account,
+          { account: event.account, chat: chat.id },
           message.files,
           deps.stageBlob,
           author.displayName,

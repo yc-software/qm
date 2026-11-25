@@ -1,5 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import { testTenant } from "./support/test-tenant.ts";
+import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -31,6 +33,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         scopeId: scope,
         destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
         exp: Date.now() + CAPABILITY_TTL_MS,
+        internalAudience: true,
         ...liveRunBinding(actorId),
         ...extra,
       },
@@ -60,6 +63,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         destinations: [THREAD, ROOT],
         defaultDestinationKey: THREAD.key,
         exp: Date.now() + CAPABILITY_TTL_MS,
+        internalAudience: true,
         ...liveRunBinding(actorId),
         ...extra,
       },
@@ -761,11 +765,11 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       exp: Date.now() + CAPABILITY_TTL_MS,
     });
     const control = createControlService(built.app, built.scheduler);
-    const script = { command: "./standup.sh" };
-    const passes = async () => undefined;
-    const byPreviousOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
+    const script = { command: "true" };
+    await selectDefaultSandbox(built, "U2", cron.ownerScopeId);
+    const byPreviousOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"));
     assert.equal(byPreviousOwner.ok ? "" : byPreviousOwner.code, "forbidden", "only the owner changes the script");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U2"));
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
     const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U1"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");

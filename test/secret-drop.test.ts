@@ -157,7 +157,7 @@ describe("fireDropResolution", () => {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-      run: async () => ({ status: "pending_approval" }) as TurnResult,
+      run: async () => ({ status: "failed" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
     await fireDropResolution(deps, {
@@ -209,7 +209,10 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
   let built: BuiltApp;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    mintCapabilityToken(
+      { actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, internalAudience: true, ...extra },
+      SECRET,
+    );
   const post = (path: string, body: unknown, cap?: string) =>
     fetch(`${base}${path}`, {
       method: "POST",

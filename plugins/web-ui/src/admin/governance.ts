@@ -705,7 +705,7 @@ export async function mount(next: AdminPage) {
   const token = ++generation;
   if (scope !== loadedScope) failure = "";
   draw();
-  if (!orgScope() && !labels)
+  if (!orgScope() && !labels && page.fullAdmin)
     void page.api("GET", "/api/scopes").then((r) => {
       if (!r.ok) return;
       labels = Object.fromEntries((r.data.scopes || []).map((row: any) => [row.scopeId, row.label || ""]));

@@ -22,7 +22,7 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, scopeAuthorizationClaims, type CapabilityClaims } from "../auth/capability-token.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import type { Tenant } from "../tenants/context.ts";
@@ -31,7 +31,7 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } fro
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import {
   armBodyDeadline,
   PayloadTooLargeError,
@@ -53,13 +53,11 @@ import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
 import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { internalLivePerson, internalPerson } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const ADMIN_WRITE_NEEDS_PERSON =
-  "admin changes need the admin at the keyboard — a cron, webhook or loop fire carries its owner's authority to read, not to change the org. Report what you would change where the run delivers and let them confirm it on a turn they send.";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -67,21 +65,19 @@ async function capabilityAdminDenied(
   url: URL,
   claims: CapabilityClaims,
   config: ServerDeps["config"],
-  method: string,
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (!livePersonCapability(claims)) {
-    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task an automated turn wrote or a conversation owns, a background-job or swarm wake, a loop follow-up someone other than its owner sent, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
+  if (!internalLivePerson(claims)) {
+    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task a conversation owns, a swarm wake, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
-  if (WRITE_METHODS.has(method) && !personAtKeyboard(claims)) return ADMIN_WRITE_NEEDS_PERSON;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
     const target =
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
     if (
       parseScopeId(target).kind !== "org" &&
-      (!livePersonCapability(claims) ||
+      (!internalLivePerson(claims) ||
         (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
     ) {
       return "this admin read returns private content — ask the agent in a DM";
@@ -178,14 +174,7 @@ async function verifyCapability(
   if (
     !(capability.externalSlack
       ? tenant !== undefined && (await externalSlackCapabilityAllowed(tenant, capability, deps))
-      : await app.authorizesCapabilityScope({
-          actorId: capability.actorId,
-          scopeId: capability.scopeId,
-          ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-          ...(capability.botActor ? { botActor: true } : {}),
-          ...(capability.liveActor ? { liveActor: true } : {}),
-          ...(capability.members ? { members: capability.members } : {}),
-        }))
+      : await app.authorizesCapabilityScope(scopeAuthorizationClaims(capability)))
   ) {
     sendJson(res, 403, {
       error: "forbidden",
@@ -200,7 +189,7 @@ async function verifyCapability(
     });
     return null;
   }
-  return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
+  return internalPerson(capability) && !(await runIsActive({ deps, capability }))
     ? {
         ...capability,
         triggered: true,
@@ -208,6 +197,8 @@ async function verifyCapability(
       }
     : capability;
 }
+
+const EPHEMERAL_READ_POST_PATHS = new Set(["/v1/search", "/v1/memory/search"]);
 
 async function gate(
   req: IncomingMessage,
@@ -240,7 +231,7 @@ async function gate(
         return null;
       }
       if (route?.admin) {
-        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config, method);
+        const denied = await capabilityAdminDenied(route.admin, params, url, capability, deps.config);
         if (denied) {
           sendJson(res, 403, { error: "forbidden", message: denied });
           return null;
@@ -276,6 +267,16 @@ async function gate(
       });
       return null;
     }
+  }
+  if (
+    capability?.ephemeral &&
+    !requiredAud &&
+    method !== "GET" &&
+    method !== "HEAD" &&
+    !(method === "POST" && EPHEMERAL_READ_POST_PATHS.has(pathname))
+  ) {
+    sendJson(res, 403, { error: "ephemeral_read_only", message: "Ephemeral sessions cannot write durable state" });
+    return null;
   }
   if (
     capability &&
@@ -381,6 +382,7 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  if (destroyIfRequestFailed(req, res, err)) return;
   if (
     err instanceof MemoryDisclosureDenied ||
     err instanceof MemoryFactsMissing ||

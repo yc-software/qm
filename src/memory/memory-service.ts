@@ -150,16 +150,13 @@ export function queryFacts(
     .map((fact) => ({ ...factCandidate(fact), text: factLine(fact) }));
 }
 
-function cleanCapturedFacts(facts: string[]): string[] {
-  return facts.flatMap((f) => {
-    const text = f
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/^[-*]\s+/, "")
-      .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
-      .replace(/\s+\(said in ([^()]+)\)\s*$/i, " [claimed source: $1]");
-    return text ? [text] : [];
-  });
+function cleanCapturedFact(f: string): string {
+  return f
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
+    .replace(/\s+\(said in ([^()]+)\)\s*$/i, " [claimed source: $1]");
 }
 
 function editedText(text: string): string {
@@ -207,13 +204,15 @@ export function createNotebookMemory(store: FactStore): MemoryService {
     },
 
     async capture(scopeId, facts, at, by, context) {
-      const lines = cleanCapturedFacts(facts);
-      if (!lines.length) return 0;
-      const provenance = captureProvenance(scopeId, context);
+      const entries = facts.flatMap((raw, index) => {
+        const text = cleanCapturedFact(raw);
+        return text ? [{ text, provenance: captureProvenance(scopeId, context, index) }] : [];
+      });
+      if (!entries.length) return 0;
       return store.transact(scopeId, async (tx) => {
         const existing = new Map((await tx.list()).map((fact) => [normalizeClaim(fact.text), fact]));
         let added = 0;
-        for (const text of lines) {
+        for (const { text, provenance } of entries) {
           const key = normalizeClaim(text);
           const duplicate = existing.get(key);
           if (duplicate) {
@@ -252,7 +251,6 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     async edit(scopeId, edits, _by, context) {
       const at = Date.now();
-      const exposure = context ? captureProvenance(scopeId, context) : undefined;
       await store.transact(scopeId, async (tx) => {
         const targets = resolveIds(
           await tx.list(),
@@ -260,6 +258,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
         );
         for (const [index, fact] of targets.entries()) {
           const text = editedText(edits[index]!.text);
+          const exposure = context ? captureProvenance(scopeId, context, index) : undefined;
           await tx.update(
             fact.id,
             { text, ...(exposure ? mergeProvenance([fact, exposure], fact.sensitivity) : {}) },

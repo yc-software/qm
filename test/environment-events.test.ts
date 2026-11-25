@@ -120,6 +120,29 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
   assert.match(renderStandingObligations([cron("17 * * * *")], [], []), /- T — At 17 minutes past the hour$/m);
 });
 
+test("standing obligations list a webhook by its title, falling back to its task", () => {
+  const hook = {
+    id: "wh-1",
+    ownerScopeId: "personal:u1" as const,
+    owner: "u1",
+    createdBy: "u1",
+    createdAt: 0,
+    enabled: true,
+    action: "triage the issue and post a summary",
+    verification: { scheme: "github" as const },
+  };
+  const text = renderStandingObligations(
+    [],
+    [
+      { ...hook, title: "GitHub issue triage" },
+      { ...hook, id: "wh-2" },
+    ],
+    [],
+  );
+  assert.match(text, /^- Webhook: GitHub issue triage$/m);
+  assert.match(text, /^- Webhook: triage the issue and post a summary$/m);
+});
+
 const revision = (version: number, content: string, sessionId?: string) => ({
   scopeId: "personal:u1" as const,
   content,

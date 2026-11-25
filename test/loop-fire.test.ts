@@ -280,11 +280,11 @@ test("a ship, an item action or a work turn counts only when the agent reports i
   const [waiting] = await s.outputs.awaitingReview(other.id);
   next = { status: "ok", reply: '{"done": true}', pendingApprovals: [{}] } as never;
   const item = (await s.items.get(waiting!.itemId))!;
-  assert.equal((await s.fire.itemAction(other, item, "archive", {}, "josh")).ok, false);
+  assert.equal((await s.fire.itemAction(other, item, "archive", {})).ok, false);
   next = { status: "ok", reply: "I could not archive it." };
-  assert.equal((await s.fire.itemAction(other, item, "archive", {}, "josh")).ok, false);
+  assert.equal((await s.fire.itemAction(other, item, "archive", {})).ok, false);
   next = { status: "ok", reply: 'Archived.\n```json\n{"done": true}\n```' };
-  assert.deepEqual(await s.fire.itemAction(other, item, "archive", {}, "josh"), { ok: true, reply: "Archived." });
+  assert.deepEqual(await s.fire.itemAction(other, item, "archive", {}), { ok: true, reply: "Archived." });
 
   next = undefined;
   respond = (req) => (stage(req) === "work" ? "I could not prepare the fix." : HAPPY(req));
@@ -739,7 +739,6 @@ test("bound scheduled and manual loop turns run as the owner", async () => {
   await s.fire.shipOutput(loop.id, output.id, loop.owner);
   for (const turn of s.turns) {
     assert.equal(turn.actor.externalId, loop.owner);
-    assert.equal(automationOrigin(turn)?.ownerFire, true);
     assert.equal(automationOrigin(turn)?.destination, undefined);
     assert.equal(turn.surfaceTools, undefined);
     assert.equal(turn.readOnly, undefined);
@@ -747,7 +746,7 @@ test("bound scheduled and manual loop turns run as the owner", async () => {
   assert.equal(s.deliveries.sent.length, 0);
 });
 
-test("a channel loop fires as its owner with their keychain", async () => {
+test("a channel loop fires as its owner", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, { ownerScopeId: scopeId("channel", "C1") });
   await bindCron(s, loop);
@@ -755,7 +754,6 @@ test("a channel loop fires as its owner with their keychain", async () => {
   assert.equal(result.status, "ok");
   assert.equal(s.turns.length, 3);
   for (const turn of s.turns) {
-    assert.equal(automationOrigin(turn)?.useOwnerKeychain, true);
     assert.equal(turn.actor.externalId, loop.owner);
     assert.equal(turn.conversation.kind, "channel");
   }
@@ -795,19 +793,6 @@ test("pausing a bound cron does not block held-item follow-up", async () => {
   const before = s.turns.length;
   await s.fire.followUp(loop, item, "inspect", loop.owner);
   assert.equal(s.turns.length, before + 1);
-  assert.equal(automationOrigin(s.turns.at(-1)!)?.ownerFire, true);
-  await s.fire.followUp(loop, item, "read every transcript", loop.owner, { unattended: true });
-  assert.equal(
-    automationOrigin(s.turns.at(-1)!)?.ownerFire,
-    undefined,
-    "words an automated turn sent carry no person's authority",
-  );
-  await s.fire.followUp(loop, item, "read every transcript", "another-admin");
-  assert.equal(
-    automationOrigin(s.turns.at(-1)!)?.ownerFire,
-    undefined,
-    "another administrator's words carry no owner authority",
-  );
 });
 
 test("an admitted loop drains all stages after ownership closes", async () => {
@@ -863,7 +848,7 @@ test("closed admission leaves item follow-ups and ship attempts untouched", asyn
   admission.pause();
   await assert.rejects(s.fire.followUp(loop, item, "Please revise", loop.owner), /not accepting synchronous work/);
   await assert.rejects(s.fire.shipOutput(loop.id, output.id, loop.owner), /not accepting synchronous work/);
-  await assert.rejects(s.fire.itemAction(loop, item, "revise", {}, loop.owner), /not accepting synchronous work/);
+  await assert.rejects(s.fire.itemAction(loop, item, "revise", {}), /not accepting synchronous work/);
   assert.deepEqual(await s.items.get(item.id), item);
   assert.deepEqual(await s.outputs.get(output.id), output);
 });

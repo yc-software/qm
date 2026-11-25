@@ -32,11 +32,10 @@ export interface CredentialCatalogTurn {
   conversation: OrchestratorInput["conversation"];
   external: boolean;
   strictReadOnly: boolean;
-  allInternal: boolean;
-  liveAuthorTurn: boolean;
+  internalAudience: boolean;
+  ownerAuthorityTurn: boolean;
   scopeId: ScopeId;
   environmentId: string;
-  sharingSources: readonly ScopeId[];
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   isCurrentSharedScopeMember: IsCurrentSharedScopeMember;
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void;
@@ -59,10 +58,10 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     actor,
     conversation,
     external,
-    liveAuthorTurn,
+    internalAudience,
+    ownerAuthorityTurn,
     scopeId,
     environmentId,
-    sharingSources,
     resolution,
     isCurrentSharedScopeMember,
     audit,
@@ -72,23 +71,14 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   } = turn;
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const actorKeychain = input.botActor !== true;
-  const openSpeakerKeychain =
-    liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
-  const openAutomationKeychain =
+  const openOwnerKeychain =
     actorKeychain &&
+    ownerAuthorityTurn &&
+    internalAudience &&
     !external &&
-    input.origin.kind === "automation" &&
-    input.origin.useOwnerKeychain === true &&
     conversation.kind !== "dm" &&
-    !!deps.isCurrentSharedScopeMember &&
-    (await isOpenScopeMember({
-      actorId: actor.id,
-      scope: scopeId,
-      config: deps.config,
-      isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-    }));
-  const ownCredentialsAllowed =
-    (actorKeychain && scopeId === personalScope(actor.id)) || openSpeakerKeychain || openAutomationKeychain;
+    (await isOpenScopeMember({ actorId: actor.id, scope: scopeId, config: deps.config, isCurrentSharedScopeMember }));
+  const ownCredentialsAllowed = (actorKeychain && scopeId === personalScope(actor.id)) || openOwnerKeychain;
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||
@@ -102,7 +92,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   const credentialIdentities = new Map<string, string>();
 
   const authorizeOwnerCredentials = async (): Promise<void> => {
-    if (!openSpeakerKeychain && !openAutomationKeychain) return;
+    if (!openOwnerKeychain) return;
     if (
       !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
       (await deps.config.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
@@ -116,19 +106,17 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   };
   const resolvedCredential = (materialized: MaterializedCred, writeback: boolean) => {
     if (materialized.kind === "env") return { env: materialized.env };
-    const live = liveAuthorTurn ? { live: true } : {};
     return {
       env: [],
       files: {
         files: materialized.files,
-        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, writeback, ...live }, files),
+        save: (files: CredentialFile[]) => deps.keychain!.updateFiles({ ...materialized, writeback }, files),
         source: {
           credentialId: materialized.credentialId,
           ownerId: materialized.ownerId,
           service: materialized.service,
           ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
           writeback,
-          ...live,
         },
       },
     };
@@ -168,8 +156,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   return {
     ...turn,
     brokeredTools,
-    openSpeakerKeychain,
-    openAutomationKeychain,
+    openOwnerKeychain,
     ownCredentialsAllowed,
     connectorEnv,
     commandCredentials,
@@ -301,7 +288,7 @@ export async function registerServiceCredentials(
     conversation,
     external,
     strictReadOnly,
-    allInternal,
+    internalAudience,
     resolution,
     serviceAllowed,
     grantedServiceCredSlugs,
@@ -354,7 +341,7 @@ export async function registerServiceCredentials(
     })());
   for (const credential of available) {
     if (credential.delivery === "env") {
-      if ((!allInternal && !external) || !credential.envKey) continue;
+      if ((!internalAudience && !external) || !credential.envKey) continue;
       addCredential(
         {
           handle: credential.slug,

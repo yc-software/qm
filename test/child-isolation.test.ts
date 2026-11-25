@@ -45,7 +45,7 @@ async function syscallsRig() {
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
-  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", undefined, {
+  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", {
     context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", actor, conversation }),
   });
   await sessions.addParticipant(room.id, actor.id);
@@ -285,8 +285,7 @@ function turnRig() {
       memoryScopeId: scope,
       transferId: "t",
       swarmSandboxId: undefined,
-      turnSessionDir: "turn/s",
-      turnFilesDir: "turn/s/t",
+      turnSessionKey: "s",
       connectorEnv: {},
       egressTokenForTurn: undefined,
       visibleSkillsForTurn: async () => [],

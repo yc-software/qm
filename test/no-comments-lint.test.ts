@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ESLint } from "eslint";
 
-const eslint = new ESLint();
+const eslint = new ESLint({ overrideConfigFile: "eslint.config.mjs" });
 
 async function rules(text: string, filePath: string) {
   const [result] = await eslint.lintText(text, { filePath });

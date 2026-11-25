@@ -12,6 +12,7 @@ const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", f
 const claims: CapabilityClaims = {
   actorId: "alice",
   scopeId: "personal:alice",
+  internalAudience: true,
   liveActor: true,
   exp: Date.now() + 60000,
 };

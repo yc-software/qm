@@ -1,4 +1,5 @@
 import { PrincipalLinkError } from "../../../identity/principal-links.ts";
+import { adminRoleRank } from "../../../admin/admin-grant-store.ts";
 import { adminStatusFromGrants } from "../../../admin/admin-service.ts";
 import { samePerson } from "../../../directory/person.ts";
 import { sendJson } from "../../http.ts";
@@ -34,7 +35,8 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "link_failed", message: DIRECTORY_MEMBER_IS_CANONICAL });
   if (typeof b.principalId === "string" && typeof b.canonicalId === "string" && deps.admin) {
     const grants = await deps.admin.listGrants(tenantOf(ctx));
-    if (adminStatusFromGrants(grants, b.principalId).isAdmin && !adminStatusFromGrants(grants, b.canonicalId).isAdmin)
+    const rank = (id: string) => adminRoleRank(adminStatusFromGrants(grants, id).role);
+    if (rank(b.principalId) > rank(b.canonicalId))
       return sendJson(res, 400, { error: "link_failed", message: ADMIN_SIGN_IN_NEEDS_ADMIN_CANONICAL });
   }
   try {

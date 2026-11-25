@@ -107,7 +107,7 @@ describe("managed Slack on a shared host", () => {
     assert.equal(await tenantLookup(db.app).tenantFor("slack_team", TEAMS[0]), db.tenants[0]);
   });
 
-  it("delivers each tenant's events only to that tenant's own listener", async () => {
+  it("delivers each tenant's events only to that tenant's own listener", async (t) => {
     for (const [i, tenant] of db.tenants.entries())
       await inTenant(tenant, async () => {
         const receiver = slack.receiver(`install-${i}`);
@@ -125,8 +125,15 @@ describe("managed Slack on a shared host", () => {
       received.map((r) => r.tenant),
       [db.tenants[0], db.tenants[1]],
     );
+    const warn = t.mock.method(console, "warn", () => {});
     assert.equal((await post("events", TOKENS[1], { installId: "install-0", body: event(0) })).status, 409);
     assert.equal((await post("events", TOKENS[0], { installId: "install-1", body: event(1) })).status, 409);
+    assert.equal(warn.mock.calls[0]?.arguments[0], "[slack-installation] installation_mismatch");
+    assert.deepEqual(JSON.parse(String(warn.mock.calls[0]?.arguments[1])), {
+      teamId: TEAMS[0],
+      tenant: db.tenants[1],
+      resolvedTenant: db.tenants[0],
+    });
     assert.equal(
       (await post("events", "unknown-bridge-token", { installId: "install-0", body: event(0) })).status,
       401,

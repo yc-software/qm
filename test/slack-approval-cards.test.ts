@@ -187,9 +187,10 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
   assert.equal(ctx!.threadOnly, true, "channel kind replies thread-only, like the original turn");
   assert.equal(ctx!.command, "git push --force origin main");
   assert.equal(ctx!.reason, "force push");
-  for (const gone of ["surface", "async", "idempotencyKey", "approval"]) {
+  for (const gone of ["async", "idempotencyKey", "approval"]) {
     assert.ok(!(gone in ctx!.turn), `${gone} should be stripped from the replayed turn`);
   }
+  assert.equal((ctx!.turn as { surface?: string }).surface, "slack");
   assert.equal((ctx!.turn as { text?: string }).text, "!run git push --force origin main");
   assert.equal((ctx!.turn as { deliveryTarget?: string }).deliveryTarget, "C1:t1");
   assert.deepEqual((ctx!.turn as { actor?: unknown }).actor, stored.request.actor);

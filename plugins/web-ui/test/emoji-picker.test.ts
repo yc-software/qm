@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { charForName, EMOJI_ROWS, filterEmoji } from "../src/emoji-picker.ts";
+import { charForName, EMOJI_ROWS, emojiMatches, filterEmoji } from "../src/emoji-picker.ts";
 import { testViteServer } from "./vite-server.ts";
 
 test("Slack shortcodes resolve to the emoji users see in Slack", () => {
@@ -59,4 +59,8 @@ test("the web bundle's prebuilt emoji table resolves every shortcode exactly as 
   } finally {
     await server.close();
   }
+});
+
+test("composer suggestions read a query the way picker search does", () => {
+  for (const query of [":tada:", " +1 "]) assert.equal(emojiMatches(query, 1)[0], filterEmoji(EMOJI_ROWS, query)[0]);
 });

@@ -18,3 +18,19 @@ test("editing a webhook's action keeps its id (URL) and secret", async () => {
   assert.equal((await store.get(wh.id))?.action, "new task");
   assert.equal(await store.update("nope", { action: "x" }), null);
 });
+
+test("a webhook's title is set on create, normalized, and renamed without touching its task", async () => {
+  const store = createWebhookStore(testMap(), testMap());
+  const wh = await store.create({
+    owner: "u:a",
+    createdBy: "u:a",
+    ownerScopeId: "personal:a",
+    title: "  GitHub   PR review ",
+    action: "review it",
+    verification: { scheme: "hmac-sha256", secret: "s3cret" },
+  });
+  assert.equal(wh.title, "GitHub PR review");
+  const out = await store.update(wh.id, { title: "PR triage" });
+  assert.equal(out?.title, "PR triage");
+  assert.equal(out?.action, "review it");
+});

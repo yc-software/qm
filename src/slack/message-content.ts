@@ -87,7 +87,7 @@ export function slackMessageContent(message: object): { text: string; files: Sla
   for (const file of nodes(root.files)) addFile(file);
   visit(root, false);
 
-  const base = String(root.text ?? "") || blocksText(root.blocks).join("\n");
+  const base = blocksText(root.blocks).join("\n") || String(root.text ?? "");
   const text = rendered.length ? [base, ...rendered].filter(Boolean).join("\n") : base;
   return { text, files };
 }

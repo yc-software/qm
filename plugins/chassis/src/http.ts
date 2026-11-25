@@ -18,6 +18,12 @@ type ConnectionState = {
   pending?: { method: string; path: string; trace: string; startedAt: number };
 };
 
+export function destroyIfRequestFailed(req: IncomingMessage, res: ServerResponse, err: unknown): boolean {
+  if (err !== req.errored) return false;
+  res.destroy();
+  return true;
+}
+
 export function logUnansweredCloses(server: Server, label: string): void {
   const states = new WeakMap<Socket, ConnectionState>();
   server.on("connection", (socket: Socket) => {

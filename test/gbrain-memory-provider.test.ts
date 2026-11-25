@@ -384,7 +384,7 @@ test("automatic capture of more than 20 facts reaches gbrain as writes within th
   );
   const facts = Array.from({ length: 45 }, (_, i) => `Prefers seat ${i + 1}`);
   const strategy = createPerTurnStrategy({
-    agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
+    agent: { oneShot: async () => JSON.stringify(facts.map((text) => ({ text, sensitivity: "ordinary" }))) },
     memory,
   });
   await strategy.onTurnEnd!({
@@ -424,7 +424,7 @@ test("a strict gbrain route that refuses a later batch still leaves every automa
   );
   const facts = Array.from({ length: 45 }, (_, i) => `Prefers seat ${i + 1}`);
   const strategy = createPerTurnStrategy({
-    agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
+    agent: { oneShot: async () => JSON.stringify(facts.map((text) => ({ text, sensitivity: "ordinary" }))) },
     memory,
   });
   await assert.rejects(

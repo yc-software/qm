@@ -527,7 +527,6 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     const run = (await runs.get(notification.runId!))!;
     assert.equal(run.request.origin.kind, "automation");
     assert.equal(run.request.deliveryTarget, undefined);
-    assert.equal(run.request.origin.kind === "automation" && run.request.origin.useOwnerKeychain, undefined);
     assert.equal(
       runResultDelivery({
         ...run,
@@ -977,8 +976,7 @@ test("the orchestrator sandbox path selects worker storage without changing the 
     memoryScopeId: storageScopeId,
     transferId: "transfer",
     swarmSandboxId: binding.sandboxId,
-    turnSessionDir: "/tmp/session",
-    turnFilesDir: "/tmp/files",
+    turnSessionKey: "session",
     connectorEnv: {},
     isolateOwnerKeychain: false,
     credentialServices: [],

@@ -27,6 +27,7 @@ export function pageClientTools(kit: ToolKit) {
               d.timeoutMs ?? CLIENT_TOOL_DEFAULT_TIMEOUT_MS,
               ref.abortSignal,
               d.name,
+              params,
             );
             if (outcome === "timeout" || outcome === "cancelled")
               return recordCoreAuthoredResult(

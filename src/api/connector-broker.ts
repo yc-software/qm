@@ -1,5 +1,5 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { PublishedApp } from "../deploy/deploy-store.ts";
+import { lentConnectors, type PublishedApp } from "../deploy/deploy-store.ts";
 import { tokenFor, type ConnectorTokenSource } from "../loops/sources/adapter.ts";
 import { errMessage } from "../util/errors.ts";
 import {
@@ -21,7 +21,9 @@ interface ConnectorBrokerRequest extends Omit<BrokerRequest, "credential"> {
 export async function brokerConnectorCall(opts: {
   claims: CapabilityClaims;
   body: ConnectorBrokerRequest;
-  loadApp: (id: string) => Promise<Pick<PublishedApp, "id" | "createdBy" | "connectors" | "public"> | null>;
+  loadApp: (
+    id: string,
+  ) => Promise<Pick<PublishedApp, "id" | "createdBy" | "ownerScopeId" | "connectors" | "public"> | null>;
   tokens: ConnectorTokenSource;
   fetchImpl: BrokerFetch;
   audit?: BrokerAudit;
@@ -55,7 +57,7 @@ export async function brokerConnectorCall(opts: {
   const publishedApp = claims.deployment ? await opts.loadApp(claims.deployment) : null;
   if (!publishedApp || publishedApp.id !== claims.deployment)
     return deny(403, "not_entitled", "only a published app can borrow its publisher's connectors");
-  if (!publishedApp.connectors?.includes(host) || publishedApp.public)
+  if (!lentConnectors(publishedApp).includes(host))
     return deny(403, "connector_not_lent", "the publisher has not lent this connector to the app");
   if (!parsed) return deny(400, "bad_url", "url is not a valid absolute URL");
   if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password)

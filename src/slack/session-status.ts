@@ -2,14 +2,11 @@ import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
-import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
-import { EMOJI_CHAR_BY_NAME } from "./emoji-map.ts";
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -18,7 +15,6 @@ export interface SlackSessionStatusState {
   threadTs: string;
   anchorRunId: string;
   startedAt?: number;
-  emoji?: string;
   cardId?: string;
   cardTs?: string;
   cardContent?: string;
@@ -37,7 +33,6 @@ export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
   runs: Pick<RunStore, "get">,
-  flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
@@ -55,10 +50,7 @@ export function createSlackSessionStatus(
           });
           const writer = randomUUID();
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
-          const scope = anchor && conversationScope(anchor.request.conversation, anchor.request.actor.id);
-          const optedIn = !!scope && (await flags.enabled("slack_loading_indicator", scope));
-          if (next && (!optedIn || !anchor?.deliveryState?.replying || anchor.request.privateSessionMessage))
-            return true;
+          if (next && (!anchor?.deliveryState?.replying || anchor.request.privateSessionMessage)) return true;
           if (leaseLost) return true;
           if (next) await store.putIfAbsent(id, { ...next, writer });
           if (leaseLost) {
@@ -67,17 +59,16 @@ export function createSlackSessionStatus(
           }
           const current = await store.get(id);
           if (!current || leaseLost) return true;
-          const work = optedIn && anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
+          const work = anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
           if (work?.delivering) return true;
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
           const followUrl = work?.sessionId ? conversationWebUrl(activity.publicWebUrl, work.sessionId) : undefined;
-          const { blocks, headline } = renderCard(work, { emoji: current.emoji, cardId, elapsed, followUrl });
+          const { blocks, headline } = renderCard(work, { cardId, elapsed, followUrl });
           const ongoing = !!work?.busy;
           const content = JSON.stringify(blocks);
-          const post =
-            current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
+          const post = current.cardContent !== content && (!!current.cardTs || (ongoing && elapsed >= SHOW_AFTER_MS));
           if (!next && ongoing && !post && current.startedAt && current.cardId) return true;
           let state = await update(id, (row) =>
             leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
@@ -142,24 +133,15 @@ export function createSlackSessionStatus(
     });
   }
   return {
-    async start(
-      client: StatusClient,
-      account: string,
-      runId: string,
-      channel: string,
-      threadTs?: string,
-      emoji?: Promise<string | undefined>,
-    ) {
+    async start(client: StatusClient, account: string, runId: string, channel: string, threadTs?: string) {
       if (!threadTs) return;
       const startedAt = now();
-      const picked = await emoji?.catch(swallowAs("slack: session status emoji", undefined));
       await sync(client, key(account, channel, threadTs), {
         account,
         channel,
         threadTs,
         anchorRunId: runId,
         startedAt,
-        ...(picked ? { emoji: picked } : {}),
         cardId: randomUUID(),
       }).catch(swallowAs("slack: start session status", undefined));
     },
@@ -171,14 +153,25 @@ export function createSlackSessionStatus(
   };
 }
 
-const SHOW_AFTER_MS = 10_000;
-const PLAN_TASK_LIMIT = 50;
+const SHOW_AFTER_MS = 30_000;
 const BACKGROUND_STEP = { watch: "Watching for updates", job: "Background job" } as const;
 
+function stillWorking(step: string): string {
+  const second = step.charAt(1);
+  const lower = second && second === second.toLowerCase() ? step.charAt(0).toLowerCase() + step.slice(1) : step;
+  return `Still working: ${lower}`;
+}
+
 function headlineOf(work: SessionWork | undefined): [string, string] {
-  if (work?.running) return [work.running.purpose ?? "Thinking it through", "Working on it"];
+  if (work?.running) return [stillWorking(work.running.purpose ?? "Thinking it through"), "Working on it"];
   if (work?.queued) return [work.queued.purpose ?? "Queued", "Picking back up shortly"];
-  if (work?.branches.length || work?.returning) return ["Waiting on subagents", ""];
+  const branch = work?.branches.find((b) => b.step) ?? work?.branches[0];
+  if (branch)
+    return [
+      stillWorking(branch.step ?? (branch.background ? BACKGROUND_STEP[branch.background] : "Thinking it through")),
+      "Working on it",
+    ];
+  if (work?.returning) return [stillWorking("Wrapping up"), "Working on it"];
   if (work?.background?.kind === "watch") return [work.background.purpose ?? BACKGROUND_STEP.watch, "Keeping watch"];
   if (work?.background) return [work.background.purpose ?? BACKGROUND_STEP.job, "Running in the background"];
   return ["", ""];
@@ -186,46 +179,20 @@ function headlineOf(work: SessionWork | undefined): [string, string] {
 
 function renderCard(
   work: SessionWork | undefined,
-  card: { emoji?: string | undefined; cardId: string; elapsed: number; followUrl?: string | undefined },
+  card: { cardId: string; elapsed: number; followUrl?: string | undefined },
 ) {
   const [title, phrase] = headlineOf(work);
-  const icon = card.emoji ? EMOJI_CHAR_BY_NAME[card.emoji] : undefined;
-  const headline = icon ? `${icon} ${title}` : title;
-  const details = richText(
-    icon ? undefined : card.emoji,
-    card.elapsed >= 60_000 ? `${phrase} · ${minutes(card.elapsed)}` : phrase,
-  );
-  const rows = (work?.branches ?? []).map(({ id, title, step, background }) => ({
-    task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:${id}`,
-    title,
-    status: "in_progress",
-    details: richText(undefined, step ?? (background ? BACKGROUND_STEP[background] : "Thinking it through")),
-  }));
-  const tasks =
-    rows.length > PLAN_TASK_LIMIT
-      ? [
-          ...rows.slice(0, PLAN_TASK_LIMIT - 1),
-          {
-            task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}:more`,
-            title: `${rows.length - PLAN_TASK_LIMIT + 1} more subagents`,
-            status: "in_progress",
-          },
-        ]
-      : rows;
+  const details = richText(phrase, card.elapsed >= 60_000 ? ` · ${minutes(card.elapsed)}` : "", card.followUrl);
   const blocks: Record<string, unknown>[] = [
-    rows.length
-      ? { type: "plan", title: headline, tasks }
-      : {
-          type: "task_card",
-          task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
-          title: headline,
-          status: "in_progress",
-          ...(details ? { details } : {}),
-        },
+    {
+      type: "task_card",
+      task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
+      title,
+      status: "in_progress",
+      ...(details ? { details } : {}),
+    },
   ];
-  if (card.followUrl)
-    blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `<${card.followUrl}|Follow via QM Web>` }] });
-  return { blocks, headline };
+  return { blocks, headline: title };
 }
 
 function minutes(ms: number): string {
@@ -233,12 +200,12 @@ function minutes(ms: number): string {
   return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
 }
 
-function richText(emoji: string | undefined, text: string) {
-  const elements = [
-    ...(emoji ? [{ type: "emoji", name: emoji }] : []),
-    ...(text ? [{ type: "text", text: emoji ? ` ${text}` : text }] : []),
-  ];
-  return elements.length ? { type: "rich_text", elements: [{ type: "rich_text_section", elements }] } : undefined;
+function richText(phrase: string, elapsed: string, url?: string) {
+  if (!phrase) return undefined;
+  const elements = url
+    ? [{ type: "link", url, text: "Open in QM" }, ...(elapsed ? [{ type: "text", text: elapsed }] : [])]
+    : [{ type: "text", text: `${phrase}${elapsed}` }];
+  return { type: "rich_text", elements: [{ type: "rich_text_section", elements }] };
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;

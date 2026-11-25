@@ -11,6 +11,10 @@ struct RuntimeSelection: Codable, Equatable {
     if let fastMode { options["fastMode"] = fastMode }
     return options
   }
+
+  static func effortLabel(_ level: String) -> String {
+    level == "xhigh" ? "Extra high" : level.capitalized
+  }
 }
 
 struct RuntimeModelMetadata: Decodable {
@@ -69,9 +73,6 @@ struct RuntimeDraft {
 struct RuntimeControlsView: View {
   let client: APIClient
   let scopeID: String
-  var showsCancel = false
-  var selected: RuntimeSelection? = nil
-  var onSelect: ((RuntimeSelection?) -> Void)? = nil
   @Environment(\.dismiss) private var dismiss
   @State private var configuration: RuntimeConfiguration?
   @State private var draft: RuntimeDraft?
@@ -82,12 +83,10 @@ struct RuntimeControlsView: View {
     QMForm {
       if let configuration, let draft {
         Section("Model") {
-          if onSelect == nil {
-            Text(
-              "Sets the model default for this space. Existing running tasks keep their current model."
-            )
-            .font(.footnote).foregroundStyle(.secondary)
-          }
+          Text(
+            "Sets the model default for this space. Existing running tasks keep their current model."
+          )
+          .font(.footnote).foregroundStyle(.secondary)
           if let reason = configuration.unavailableReason {
             Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(QMTheme.warning)
           }
@@ -99,7 +98,7 @@ struct RuntimeControlsView: View {
                 Text("\(draft.model) (unavailable)").tag(draft.model)
               }
               ForEach(configuration.models, id: \.self) { id in
-                Text(configuration.modelCatalog[id]?.label ?? id).tag(id)
+                Text(ModelBrand.label(id, configuration)).tag(id)
               }
             }
             if configuration.efforts(model: draft.model).count > 1 {
@@ -107,7 +106,7 @@ struct RuntimeControlsView: View {
                 ForEach(
                   configuration.efforts(model: draft.model), id: \.self
                 ) {
-                  Text($0 == "xhigh" ? "Extra high" : $0.capitalized).tag($0)
+                  Text(RuntimeSelection.effortLabel($0)).tag($0)
                 }
               }
             }
@@ -117,25 +116,13 @@ struct RuntimeControlsView: View {
           }
         }
         Section {
-          if onSelect != nil {
-            LabeledContent(
-              "Workspace default",
-              value: configuration.modelCatalog[configuration.effective.modelId]?.label
-                ?? configuration.effective.modelId)
-            Button("Use workspace default") {
-              onSelect?(nil)
-              dismiss()
-            }
+          LabeledContent(
+            "Organization default",
+            value: ModelBrand.label(configuration.orgDefault.modelId, configuration))
+          if configuration.scopeOverride != nil {
+            Button("Use organization default") { Task { await save(inherit: true) } }
           } else {
-            LabeledContent(
-              "Organization default",
-              value: configuration.modelCatalog[configuration.orgDefault.modelId]?.label
-                ?? configuration.orgDefault.modelId)
-            if configuration.scopeOverride != nil {
-              Button("Use organization default") { Task { await save(inherit: true) } }
-            } else {
-              Text("Following the organization default").foregroundStyle(.secondary)
-            }
+            Text("Following the organization default").foregroundStyle(.secondary)
           }
         }
       } else if busy {
@@ -166,11 +153,6 @@ struct RuntimeControlsView: View {
     .navigationTitle("Model settings")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      if showsCancel {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }.disabled(busy)
-        }
-      }
       ToolbarItem(placement: .confirmationAction) {
         Button {
           Task { await save(inherit: false) }
@@ -217,7 +199,7 @@ struct RuntimeControlsView: View {
       let loaded: RuntimeConfiguration = try await client.fetch(
         "api/runtime-config", query: [.init(name: "scopeId", value: scopeID)])
       configuration = loaded
-      var next = RuntimeDraft(selected ?? loaded.effective)
+      var next = RuntimeDraft(loaded.effective)
       next.normalize(using: loaded)
       draft = next
     } catch {
@@ -233,11 +215,6 @@ struct RuntimeControlsView: View {
     do {
       var normalized = draft
       normalized.normalize(using: configuration)
-      if let onSelect {
-        onSelect(normalized.selection)
-        dismiss()
-        return
-      }
       let body: [String: Any] =
         inherit
         ? ["scopeId": scopeID, "inherit": true] : normalized.body(scopeID: scopeID)

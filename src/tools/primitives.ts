@@ -1,5 +1,4 @@
 import type { Tenant } from "../tenants/context.ts";
-import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import type { SelfApiCall } from "./self-api.ts";
 import { parkedOutputKey, TOOL_OUTPUT_RETENTION_DAYS, type ToolOutputStore } from "../sessions/tool-output.ts";
@@ -10,7 +9,6 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
-import type { MemoryCaptureMetadata } from "../memory/facts.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withAbort, withTimeout } from "../util/async.ts";
@@ -90,11 +88,13 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import { personAtKeyboard, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
+import { internalPerson, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
+import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import { DESKTOP_UNAVAILABLE_TEXT, type DesktopCall } from "../surfaces/desktop-calls.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -266,6 +266,7 @@ export interface ToolContext extends SurfaceToolDeps {
     timeoutMs: number,
     signal?: AbortSignal,
     toolName?: string,
+    args?: unknown,
   ): Promise<ClientToolResult | "timeout" | "cancelled">;
   backgroundStart(
     command: string,
@@ -331,7 +332,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ControlOk<Record<never, never>> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
   webhookUpdate(
     id: string,
-    action: string,
+    patch: WebhookPatch,
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
@@ -474,7 +475,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 
 export interface ToolContextDeps {
   tenant: Tenant;
-  desktopClientId?: string;
+  desktopCall?: DesktopCall | undefined;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   sandbox: Sandbox;
@@ -521,7 +522,6 @@ export interface ToolContextDeps {
   config?: ScopedConfigStore;
   memory?: MemoryService;
   memoryScopeId?: ScopeId;
-  memoryCaptureMetadata?: () => MemoryCaptureMetadata;
   memoryAccess?: { write?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
@@ -656,11 +656,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   const runId = deps.runId;
-
-  const trialOn =
-    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
-    (script) =>
-      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
 
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
@@ -1147,7 +1142,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const d = await deps.deploy.setAppPublic(id, isPublic, {
         createdBy: deps.createdBy,
         botActor: deps.botActor,
-        personAtKeyboard: personAtKeyboard(deps.controlClaims),
+        personAtKeyboard: internalPerson(deps.controlClaims),
       });
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
@@ -1189,7 +1184,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         facts,
         turnAuthority(deps.createdBy, deps.memoryAccess),
         {
-          ...deps.memoryCaptureMetadata?.(),
+          ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
           mode: "explicit",
           ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}),
           conversationScopeId: writableScopeId,
@@ -1202,7 +1197,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const write = deps.memoryAccess?.write;
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, turnAuthority(deps.createdBy, deps.memoryAccess), {
-        ...deps.memoryCaptureMetadata?.(),
+        ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
         conversationScopeId: writableScopeId,
       });
       return true;
@@ -1262,9 +1257,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       });
     },
 
-    async awaitClientResult(callId, timeoutMs, signal, toolName) {
-      if (toolName === "desktop" && !deps.desktopClientId)
-        return { content: "Computer access unavailable; continue from QM desktop.", isError: true };
+    async awaitClientResult(callId, timeoutMs, signal, toolName, args) {
+      if (toolName === "desktop")
+        return deps.desktopCall
+          ? deps.desktopCall(callId, args, timeoutMs, signal)
+          : { content: DESKTOP_UNAVAILABLE_TEXT, isError: true };
       if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
       return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });
     },
@@ -1367,15 +1364,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate(req) {
-      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
-    },
-    cronList: () => controlOp((c, cl) => c.listCrons(cl)),
+    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
+    cronList: () => controlOp((c, cl) => c.listCrons(cl, deps.tenant)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch(id, req) {
-      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
-    },
+    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
@@ -1384,7 +1377,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
-    webhookUpdate: (id, action) => controlOp((c, cl) => c.updateWebhook(id, { action }, cl)),
+    webhookUpdate: (id, patch) => controlOp((c, cl) => c.updateWebhook(id, patch, cl)),
     soulRead() {
       if (!deps.control || !deps.controlClaims) return CONTROL_UNAVAILABLE;
       return deps.control.readSoul(deps.controlClaims);

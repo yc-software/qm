@@ -2,6 +2,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import {
   botWorkInPersonsName,
   mintCapabilityToken,
+  scopeAuthorizationClaims,
   verifyCapabilityToken,
   MEMORY_BRAIN_DROP_AUD,
   SECRET_DROP_AUD,
@@ -156,14 +157,14 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: Capabi
   const audienceScopeId = rec.audienceScopeId;
   if (!audienceScopeId || !isSharedScope(audienceScopeId)) return Promise.resolve(true);
   return ctx.app
-    .authorizesCapabilityScope({
-      actorId: rec.ownerId,
-      scopeId: audienceScopeId,
-      ...(rec.scopeVersion ? { scopeVersion: rec.scopeVersion } : {}),
-      ...(claims?.botActor ? { botActor: true } : {}),
-      ...(claims?.liveActor ? { liveActor: true } : {}),
-      ...(claims?.members ? { members: claims.members } : {}),
-    })
+    .authorizesCapabilityScope(
+      scopeAuthorizationClaims({
+        ...claims,
+        actorId: rec.ownerId,
+        scopeId: audienceScopeId,
+        scopeVersion: rec.scopeVersion,
+      }),
+    )
     .catch(reportFailureAs("secret drop: conversation membership check", false));
 }
 
@@ -427,6 +428,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
       actorId: ownerId,
       scopeId: capability.scopeId,
       ...(capability.botActor ? { botActor: true } : {}),
+      ...(capability.internalAudience ? { internalAudience: true } : {}),
       ...(capability.liveActor ? { liveActor: true } : {}),
       ...(capability.members ? { members: capability.members } : {}),
       aud: brain ? MEMORY_BRAIN_DROP_AUD : SECRET_DROP_AUD,

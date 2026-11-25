@@ -110,7 +110,7 @@ const cap = (actorId: string, scope?: ScopeId, liveActor = true): CapabilityClai
     actorId,
     scopeId: scope ?? scopeId("personal", actorId),
     exp: 9_999_999_999,
-    ...(liveActor ? { liveActor: true } : {}),
+    ...(liveActor ? { internalAudience: true, liveActor: true } : {}),
   }) as CapabilityClaims;
 
 function baseState(over: Partial<FakeState> = {}): FakeState {
@@ -647,9 +647,9 @@ test("a team member who didn't create a team-owned skill can share it onward; a 
 });
 
 test("skill mutations from an automated trigger are blocked for team homes, like channel and group homes", () => {
-  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), false), true);
-  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), true), false);
-  assert.equal(triggerBlocksSharedSkill(scopeId("personal", "U1"), false), false);
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), {}), true);
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), { liveActor: true, internalAudience: true }), false);
+  assert.equal(triggerBlocksSharedSkill(scopeId("personal", "U1"), {}), false);
 });
 
 test("a trigger (no liveActor) cannot MOVE a personal skill INTO a shared scope either — a move that authors a group-wide skill is guarded like create", async () => {

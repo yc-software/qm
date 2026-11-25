@@ -106,6 +106,7 @@ const capFor = (actorId: string, scope?: string) =>
       actorId,
       scopeId: scope ?? scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
+      internalAudience: true,
       liveActor: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },

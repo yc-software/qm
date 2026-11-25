@@ -3,7 +3,7 @@ import type { Surface, SurfaceCapabilities, SurfacePromptHints } from "./contrac
 export const SLACK = "slack";
 
 export type SurfaceToolPrompt = Pick<Surface, "label"> &
-  Pick<SurfacePromptHints, "mentionSyntax"> & { textOnly?: boolean };
+  Pick<SurfacePromptHints, "mentionSyntax"> & { textOnly?: boolean; transcript?: boolean };
 
 export function turnCapabilities(
   surface: Surface | undefined,

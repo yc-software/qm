@@ -24,7 +24,7 @@ const WEB_UI = ["plugins/web-ui/"];
 const IMAGE = "deploy/core/Dockerfile";
 const IMAGE_CHECKS = ["deploy/core", "scripts/smoke-core-image.sh", ".dockerignore"];
 const CLI = ["cli/", "deploy/stacks/"];
-const ROOT_PACKAGE = ["src/", "test/", "scripts/"];
+const ROOT_PACKAGE = ["src/", "test/", "scripts/", "superserve/"];
 const MODULES = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs"];
 const EXTENSIONS = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.js"];
 
@@ -41,6 +41,8 @@ const copied = (dockerfile: string) =>
 const runsAll = (path: string) => RUN_ALL.exact.includes(path) || under(path, RUN_ALL.prefixes);
 const isModule = (path: string) => MODULES.includes(posix.extname(path));
 const isCoreTest = (path: string) => posix.dirname(path) === "test" && path.endsWith(".test.ts");
+const isStartupSkill = (path: string) =>
+  path.startsWith("skills-seed/") || (path.startsWith("plugins/") && path.split("/")[2] === "skills");
 
 function runtimeCode(path: string, source: string) {
   if (![".ts", ".mts", ".cts"].includes(posix.extname(path))) return source;
@@ -54,7 +56,7 @@ function runtimeCode(path: string, source: string) {
 
 function references(path: string, source: string, files: Set<string>, dirs: Set<string>) {
   const here = posix.dirname(path);
-  const found = { files: new Set<string>(), dirs: new Set<string>() };
+  const found = { files: new Set<string>(), dirs: new Set<string>(), listsTracked: false };
   const add = (target: string, candidates: string[]) => {
     const file = candidates.map((candidate) => posix.normalize(candidate)).find((candidate) => files.has(candidate));
     const dir = posix.normalize(target).replace(/\/$/, "");
@@ -66,11 +68,16 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
     const target = posix.join(here, specifier);
     add(target, [...EXTENSIONS.map((extension) => target + extension), target.replace(/\.js$/, ".ts")]);
   };
-  const literalEdges = (text: string) => {
-    for (const piece of text.split(/[\s=,:;()"']+/)) {
+  const literalEdges = (text: string, open: boolean) => {
+    const pieces = text.split(/[\s=,:;()"']+/);
+    const last = pieces.at(-1)!;
+    if (open) pieces.push(last.slice(0, last.lastIndexOf("/") + 1));
+    for (const piece of pieces) {
+      if (piece === "ls-files") found.listsTracked = true;
       if (!piece.replaceAll(".", "").replaceAll("/", "") || !(piece.includes("/") || posix.extname(piece))) continue;
       add(posix.join(here, piece), [posix.join(here, piece)]);
-      if (!piece.startsWith(".")) add(piece.replace(/^\/+/, ""), [piece.replace(/^\/+/, "")]);
+      const fromRoot = posix.normalize(piece).replace(/^\/+/, "");
+      if (!piece.startsWith(".") || files.has(fromRoot)) add(fromRoot, [fromRoot]);
     }
   };
   const literals = under(path, ROOT_PACKAGE);
@@ -80,7 +87,8 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
       ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0];
     if (loaded && ts.isStringLiteralLike(loaded)) return importEdge(loaded.text);
     if (specifier && ts.isStringLiteralLike(specifier)) return importEdge(specifier.text);
-    if (literals && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node))) literalEdges(node.text);
+    if (literals && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)))
+      literalEdges(node.text, ts.isTemplateHead(node));
     ts.forEachChild(node, visit);
   };
   visit(ts.createSourceFile(path, runtimeCode(path, source), ts.ScriptTarget.Latest));
@@ -90,17 +98,20 @@ function references(path: string, source: string, files: Set<string>, dirs: Set<
 export function select(changed: string[], tracked: string[], read: (path: string) => string): Selection {
   if (changed.length === 0) return { core: [], webUi: false, cli: false, coreImage: false };
   if (changed.some(runsAll)) return ALL;
-  if (changed.some((path) => path.startsWith("src/") && !isModule(path))) return ALL;
+  if (changed.some((path) => (path.startsWith("src/") && !isModule(path)) || isStartupSkill(path))) return ALL;
   const files = new Set(tracked);
   const image = [...IMAGE_CHECKS, ...(files.has(IMAGE) ? copied(read(IMAGE)) : [])];
   const dirs = new Set(tracked.flatMap((path) => [...path.matchAll(/\//g)].map((slash) => path.slice(0, slash.index))));
   const importers = new Map<string, string[]>();
   const reached = new Set(changed);
+  const imageChanged = changed.some((path) => image.some((source) => path === source || path.startsWith(`${source}/`)));
+  if (imageChanged) reached.add(IMAGE);
   for (const path of tracked) {
     if (!isModule(path)) continue;
     const found = references(path, read(path), files, dirs);
     for (const target of found.files) importers.set(target, [...(importers.get(target) ?? []), path]);
-    if ([...found.dirs].some((dir) => changed.some((file) => file.startsWith(`${dir}/`)))) reached.add(path);
+    if (found.listsTracked || [...found.dirs].some((dir) => changed.some((file) => file.startsWith(`${dir}/`))))
+      reached.add(path);
   }
   for (const path of reached) for (const importer of importers.get(path) ?? []) reached.add(importer);
   if (RUNNERS.some((runner) => reached.has(runner))) return ALL;
@@ -109,7 +120,7 @@ export function select(changed: string[], tracked: string[], read: (path: string
     core: paths.filter((path) => isCoreTest(path) && files.has(path)).sort(),
     webUi: paths.some((path) => under(path, WEB_UI)),
     cli: paths.some((path) => under(path, CLI)),
-    coreImage: changed.some((path) => image.some((source) => path === source || path.startsWith(`${source}/`))),
+    coreImage: imageChanged,
   };
 }
 

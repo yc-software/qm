@@ -77,7 +77,7 @@ immediate and does not use embeddings.
   "routes": [
     {
       "provider": "default",
-      "scopes": ["personal", "channel", "group", "team"],
+      "scopes": ["personal", "channel", "group", "team", "persona"],
       "capture": "automatic"
     },
     {
@@ -91,7 +91,7 @@ immediate and does not use embeddings.
 }
 ```
 
-Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
+Set the compact JSON document as `MEMORY_PROVIDER_CONFIG`. `default` names QM's local/Postgres notebook. A scope selector may be a kind (`org`) or an exact scope ID (`org:acme`). The kinds are `personal`, `channel`, `group`, `team`, `org` and `persona`; a deployment that uses [personas](./personas.md) adds `persona` to the `default` route, since a room that pins a persona saves and recalls in the persona's notebook, a kind no route serves has no memory, and a save made from a room into another scope's notebook reaches the notebook provider alone. Earlier matching routes can compose multiple recall providers; the first route with `manage` enabled supplies notebook editing and revision history.
 
 Capture policies are:
 
@@ -192,7 +192,11 @@ Set the four client values as `GBRAIN_RO_CLIENT_ID`, `GBRAIN_RO_CLIENT_SECRET`, 
     }
   ],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     {
       "provider": "gbrain",
       "scopes": ["personal"],
@@ -273,7 +277,11 @@ either direction.
 {
   "providers": [{ "id": "procedures", "type": "memorable" }],
   "routes": [
-    { "provider": "default", "scopes": ["personal", "channel", "group", "team", "org"], "capture": "automatic" },
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
     { "provider": "procedures", "scopes": ["personal"], "capture": "automatic", "manage": false, "label": "Procedures" }
   ]
 }
@@ -387,7 +395,7 @@ These routes take only an agent capability from a turn the member sent that is s
 
 ### API
 
-Every `/v1/admin/memory-registry` route needs an org admin and is audited. Every reply carries registry entries, so an admin's agent reads or changes the registry only in the admin's DM or in a conversation whose sharing is open. Outside chat, an org admin calls these routes from an administrator session in the web UI behind the portal (`/api/admin/memory-registry/...`). Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. A request that sets `clientSecret` must also send the brain's `url` (400 otherwise), so a secret goes only to a destination the admin names. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret` or changes an existing brain's `url` (QM refuses both with 400), and it can't delete a brain or binding (403). A binding carries memory only once its brain holds a secret, and a secret is never set in chat. So QM calls no brain an agent registered until an admin sets its secret outside chat, and only an admin outside chat can move or remove an org brain that holds one. An agent's binding to a brain that already holds a secret serves on the next memory operation, within the member links the brain's operator provisioned. A member's own brain is the one exception, described above.
+Every `/v1/admin/memory-registry` route needs an org admin or org owner and is audited; org owners see and manage only org-level brains, their bindings, and the `memberBrains` switch (and can mint secret links for org brains), while member-owned brains stay `org_admin`-only. Every reply carries registry entries, so an admin's agent reads or changes the registry only in the admin's DM or in a conversation whose sharing is open. Outside chat, an org admin calls these routes from an administrator session in the web UI behind the portal (`/api/admin/memory-registry/...`). Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, exactly as sent, and changing a brain's `url` clears its secret. A request that sets `clientSecret` must also send the brain's `url` (400 otherwise), so a secret goes only to a destination the admin names. An admin's agent can register a brain and change bindings, but it never sends a `clientSecret` or changes an existing brain's `url` (QM refuses both with 400), and it can't delete a brain or binding (403). A binding carries memory only once its brain holds a secret, and a secret is never set in chat. So QM calls no brain an agent registered until an admin sets its secret outside chat, and only an admin outside chat can move or remove an org brain that holds one. An agent's binding to a brain that already holds a secret serves on the next memory operation, within the member links the brain's operator provisioned. A member's own brain is the one exception, described above.
 
 An agent can register a brain for an admin, or connect a member's own, but never carries its client secret. On that person's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. Only an org admin, or the member who owns the brain while member brains are on, can mint or use one. The link stops working if the brain's `url` changes or the person who minted it can no longer set the secret.
 
