@@ -1,6 +1,6 @@
 import { sendJson } from "../http.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { audit, isObj, isOrgAdmin, livePersonTurn } from "./shared.ts";
+import { audit, isObj, isOrgAdmin, requirePersonAuthority } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
@@ -8,6 +8,7 @@ import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
 import { scopeId } from "../../types.ts";
+import { actionApproved } from "../action-approval.ts";
 
 function principalOf(ctx: ApiCtx, from: "query" | "body"): string | null {
   const body = isObj(ctx.body) && typeof ctx.body.principalId === "string" ? ctx.body.principalId : "";
@@ -119,8 +120,9 @@ function auditPersona(ctx: ApiCtx, principalId: string, personaId: string, actio
 async function deletePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !livePersonTurn(ctx)) return;
+  if (!personas || !principalId || !requirePersonAuthority(ctx)) return;
   const id = ctx.params.id!;
+  if (!(await actionApproved(ctx, { summary: `Delete persona ${id}` }))) return;
   const result = await personas.remove(principalId, id, (grantId) =>
     auditPersona(ctx, principalId, id, "keychain.revoke", grantId),
   );
@@ -169,7 +171,7 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !livePersonTurn(ctx)) return;
+  if (!personas || !principalId || !requirePersonAuthority(ctx)) return;
   const access = isObj(ctx.body) ? ctx.body.access : undefined;
   respond(ctx, await personas.setAccess(principalId, ctx.params.id!, access), "access");
 }
@@ -186,9 +188,11 @@ async function keychainResult<T>(ctx: ApiCtx, fn: () => Promise<PersonaResult<T>
 async function attachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !livePersonTurn(ctx)) return;
+  if (!personas || !principalId || !requirePersonAuthority(ctx)) return;
   const credentialId = isObj(ctx.body) ? ctx.body.credentialId : undefined;
   const id = ctx.params.id!;
+  const summary = `Lend credential ${String(credentialId)} to persona ${id}`;
+  if (!(await actionApproved(ctx, { summary }))) return;
   await keychainResult(
     ctx,
     async () => {
@@ -203,7 +207,7 @@ async function attachCredential(ctx: ApiCtx): Promise<void> {
 async function detachCredential(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
-  if (!personas || !principalId || !livePersonTurn(ctx)) return;
+  if (!personas || !principalId || !requirePersonAuthority(ctx)) return;
   const [id, grantId] = [ctx.params.id!, ctx.params.grantId!];
   await keychainResult(
     ctx,

@@ -6,12 +6,11 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
-import { refuseWithoutPerson, sendJson } from "../http.ts";
+import { sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
 import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
 import { isToolkitId } from "../../mcp/connector-apps.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, requirePersonAuthority } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unknown, state: unknown): string | null {
@@ -38,7 +37,7 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (!requirePersonAuthority(ctx)) return;
   const access = await credential(ctx, true);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;

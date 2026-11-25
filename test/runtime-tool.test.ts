@@ -12,7 +12,8 @@ const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", f
 const claims: CapabilityClaims = {
   actorId: "alice",
   scopeId: "personal:alice",
-  liveActor: true,
+  internalAudience: true,
+  personAuthority: true,
   exp: Date.now() + 60000,
 };
 async function setup(allowed = true) {
@@ -46,14 +47,14 @@ test("scope defaults persist", async () => {
   assert.equal((await config.getRuntimeSelectionDurable(claims.scopeId))?.modelId, "gpt-6-astra");
 });
 
-test("runtime changes reject revoked access, bots, triggers and foreign personal scopes", async () => {
+test("runtime changes reject revoked access, bots, turns without a person's authority and foreign personal scopes", async () => {
   const denied = await setup(false);
   assert.deepEqual(await denied.service(claims, active, { action: "get" }), { ok: false, error: "forbidden" });
   const { service } = await setup();
-  for (const extra of [{ botActor: true }, { triggered: true }, { liveActor: false }]) {
+  for (const extra of [{ botActor: true }, { personAuthority: false }]) {
     assert.deepEqual(await service({ ...claims, ...extra }, active, { action: "set", model: "Astra" }), {
       ok: false,
-      error: "live_actor_required",
+      error: "authority_required",
     });
   }
   assert.deepEqual(await service({ ...claims, scopeId: "personal:bob" }, active, { action: "set", model: "Astra" }), {
@@ -152,38 +153,22 @@ test("cancellation during validation prevents a scope write", async () => {
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
-test("cron fires may change their task runtime without changing saved defaults", async () => {
+test("cron fires change their task runtime only with their owner's authority", async () => {
   const { service, config } = await setup();
-  const cronClaims = { ...claims, liveActor: false, triggered: true };
-  const result = await service(
-    cronClaims,
-    active,
-    { action: "set", model: "Astra" },
-    undefined,
-    false,
-    undefined,
-    true,
-  );
+  const cronClaims = { ...claims, personAuthority: false };
+  const result = await service(claims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true);
   assert.deepEqual(result, { ok: true, handoff: { lifetime: "task", choice: { ...active, modelId: "gpt-6-astra" } } });
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
   assert.deepEqual(
-    await service(
-      cronClaims,
-      active,
-      { action: "set", model: "Astra", lifetime: "scope" },
-      undefined,
-      false,
-      undefined,
-      true,
-    ),
-    { ok: false, error: "live_actor_required" },
+    await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
+    { ok: false, error: "authority_required" },
   );
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
 test("cron task handoffs still enforce actor, access, model and account policy", async () => {
   const { service, config } = await setup();
-  const cronClaims = { ...claims, liveActor: false, triggered: true };
+  const cronClaims = claims;
   assert.deepEqual(
     await service(
       { ...cronClaims, botActor: true },
@@ -194,7 +179,7 @@ test("cron task handoffs still enforce actor, access, model and account policy",
       undefined,
       true,
     ),
-    { ok: false, error: "live_actor_required" },
+    { ok: false, error: "authority_required" },
   );
   assert.deepEqual(
     await service(

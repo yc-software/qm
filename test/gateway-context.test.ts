@@ -134,7 +134,7 @@ test("web prompt tells cron creators to use a real notification destination", as
   assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
 });
 
-test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
+test("automated destination turns tell the agent to return the deliverable, not self-send it", async () => {
   const { app } = freshApp();
   const res = await app.turn({
     surface: "cron",

@@ -192,7 +192,13 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);
   const service = createRuntimeService({ config }, { authorizesCapabilityScope: async () => true });
-  const claims = { actorId: "test", scopeId: "personal:test" as const, liveActor: true, exp: Date.now() + 60_000 };
+  const claims = {
+    actorId: "test",
+    scopeId: "personal:test" as const,
+    internalAudience: true,
+    personAuthority: true,
+    exp: Date.now() + 60_000,
+  };
   for (const effort of ["adaptive", "default"]) {
     const result = await service(claims, active, { action: "set", effort, lifetime: "scope" });
     assert.equal(result.ok, true);

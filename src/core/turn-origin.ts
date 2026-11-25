@@ -19,7 +19,11 @@ export function midTurnSessionMessage(message: string, fromParent: boolean): str
 }
 
 export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
-  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
+  if (!origin) return { kind: "automation", screenData: text };
+  if (origin.kind === "automation") {
+    const { fire: _fire, ...relayed } = origin;
+    return { ...relayed, screenData: text };
+  }
   if (origin.kind === "human") return { kind: "human" };
   if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
   return origin;

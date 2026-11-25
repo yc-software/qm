@@ -34,6 +34,7 @@ import { canonicalPerson, personIds, samePerson } from "../directory/person.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { APPROVAL_DECISION_SIGNAL_TEXT, executesOnApprove } from "../core/orchestrator/approvals.ts";
 import { sleep } from "../util/async.ts";
+import { APPROVAL_SURFACE } from "../triggers/approval-continuation.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
@@ -217,10 +218,15 @@ export function createTurnMethods(
         if (record.sessionId !== session.id || (await approvalResumable(session, actorId, record)) !== "ok")
           return null;
         if (!live || live.status !== "running" || leaseLapsed(live, Date.now())) return null;
+        const liveOrigin = live.request.origin;
         if (
           !samePerson(live.request.actor.id, actorId) ||
           isSessionTurn(live.request) ||
-          !(isPersonAuthored(live.request.origin.kind) || spokenByPerson(live.request.origin))
+          !(
+            isPersonAuthored(liveOrigin.kind) ||
+            spokenByPerson(liveOrigin) ||
+            (liveOrigin.kind === "automation" && liveOrigin.fire === true)
+          )
         )
           return null;
         const dedupeKey = `approval:${decision.requestId}:${record.createdAt ?? 0}:${decision.approved}:${live.id}`;
@@ -267,7 +273,7 @@ export function createTurnMethods(
       const individualAuth = modelAccount !== "company";
       const automated = req.origin?.kind === "automation";
       const runtimePurpose = turnRuntimePurpose(
-        { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
+        { surface: req.surface, automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
       const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
@@ -331,7 +337,7 @@ export function createTurnMethods(
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
         ...((!individualAuth || req.surface === "web") && req.model ? { model: req.model } : {}),
-        ...turnModelOptions({ ...req, triggered: automated }),
+        ...turnModelOptions({ ...req, automated }),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
           ? {
@@ -403,6 +409,9 @@ export function createTurnMethods(
         const routed = await routeApprovalIntoLiveRun(req, req.approval, actor.id, conversation.threadRef);
         if (routed) return routed;
       }
+      const firedBy = approvedRequest?.origin;
+      const continuesFire = firedBy?.kind === "automation" && firedBy.fire === true && req.surface !== APPROVAL_SURFACE;
+      if (req.approval && continuesFire && deps.continueApproval) return deps.continueApproval(req.approval, actor.id);
 
       const redeliveryKey = req.approval ? undefined : req.redeliveryKey;
       if (redeliveryKey && deps.signals) {

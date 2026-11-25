@@ -416,7 +416,7 @@ test("the `memory` tool quotes what it reads", async () => {
   );
 });
 
-test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
+test("the memory tool forgets notebook ids and brain refs in one call; a brain ref needs a sign-off and the person's own DM", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
@@ -459,7 +459,13 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     const current = ctxFor({
       scope: personal,
       memory: memory as ReturnType<typeof createPostgresMemoryService>,
-      deps: { sessionId: "s1", audienceScopeId: personal, personTurn: true, ...deps },
+      deps: {
+        sessionId: "s1",
+        audienceScopeId: personal,
+        personAuthority: true,
+        authorizeCommand: () => true,
+        ...deps,
+      },
     });
     const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
       (t) => t.name === "memory",
@@ -468,10 +474,14 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personTurn: false }])
+  assert.match(
+    await run({ action: "delete", ids: ["#1", "acme:7"] }, { authorizeCommand: () => false }),
+    /^\[blocked: needs human approval\] needs your sign-off/,
+  );
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personAuthority: false }])
     assert.match(
       await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
-      /^\[error\] Only the person, on a turn they sent in their own DM/,
+      /^\[error\] Only the person, in their own DM with QM, can forget a brain fact/,
     );
   assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
   assert.match(await run({ action: "delete", ids: ["#9", "acme:7"] }), /^\[error\] No fact #9 /);

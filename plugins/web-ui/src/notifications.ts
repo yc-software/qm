@@ -121,7 +121,7 @@ export function notificationPrompt(): TemplateResult | typeof nothing {
   if (!canNotify() || Notification.permission !== "default" || localStorage.getItem(PROMPT_DISMISSED_KEY))
     return nothing;
   return html`
-    <div class="top-banner" role="status">
+    <div class="top-banner notify" role="status">
       <span>Get a notification when ${brandName()} replies in a conversation you aren't viewing.</span>
       <button class="top-banner-action" type="button" @click=${() => void turnOnNotifications()}>Turn on</button>
       <button class="top-banner-action" type="button" @click=${dismissPrompt}>Not now</button>

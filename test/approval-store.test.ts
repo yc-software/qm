@@ -178,3 +178,18 @@ test("automation approvals route through the fallback route and generic-chat des
     [["a-chat", "acc:room"]],
   );
 });
+
+test("a fire's approval reaches its owner's DM whatever surface the run came from", async () => {
+  for (const surface of ["cron", "webhook", "loop", "approval"]) {
+    const deliveries = createDeliveryStore();
+    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+    const approval = record(`cron:c1:${surface}`);
+    approval.request!.surface = surface;
+    approval.request!.actor.externalId = "owner@example.com";
+    await approvals.put("A1", approval);
+    const [delivery] = await deliveries.pending("principal");
+    assert.equal(delivery?.destination.target, "owner@example.com", surface);
+    assert.equal(delivery?.destination.commandApprovalId, "A1");
+    assert.equal((await approvals.get("A1"))?.cardTo, "owner@example.com");
+  }
+});

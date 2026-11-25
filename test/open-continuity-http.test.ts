@@ -90,7 +90,8 @@ async function fixture(t: TestContext) {
         actorId,
         scopeId,
         members,
-        liveActor: true,
+        internalAudience: true,
+        personAuthority: true,
         exp: Date.now() + 600_000,
         destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
       },
@@ -259,7 +260,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   );
 });
 
-test("HTTP every run of its owner writes a saved login back, cron fires and typed turns alike", async (t) => {
+test("HTTP an owner's cron fire and their own turn both write back changes to their saved login", async (t) => {
   const b = await fixture(t);
   const keychain = b.keychain!;
   const encode = (text: string) => Buffer.from(text).toString("base64");
@@ -295,9 +296,9 @@ test("HTTP every run of its owner writes a saved login back, cron fires and type
     await b.awaitFire(created.body.cron.id, owner);
     assert.deepEqual(await saved(), { ".aws/config": config, ".aws/sso/cache/session.json": session });
   }
-  await b.turn(proof(token("https://other.example", "t3"), "[profile live]"), "alice");
+  await b.turn(proof(token("https://other.example", "t3"), "[profile typed]"), "alice");
   assert.deepEqual(await saved(), {
-    ".aws/config": "[profile live]",
+    ".aws/config": "[profile typed]",
     ".aws/sso/cache/session.json": token("https://other.example", "t3"),
   });
 });

@@ -963,13 +963,21 @@ export function createChatSurface(
     drawActiveChat(agent);
     try {
       const threadRef = chatState.threadRef;
-      const runId = await resolveApproval(decision);
-      if (!runId && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
-      if (runId && chatState.normalStreamFn && chatState.onWork)
-        await resumeRun(agent, threadRef, chatState.normalStreamFn, chatState.onWork, runId, undefined, () => {
-          releaseSubmission();
-          drawActiveChat(agent);
-        });
+      const submitted = await resolveApproval(decision);
+      if (submitted.status === "gone" && agent === chatState.agent) ctx.composer.state.error = APPROVAL_GONE_MESSAGE;
+      if (submitted.status === "resumed" && chatState.normalStreamFn && chatState.onWork)
+        await resumeRun(
+          agent,
+          threadRef,
+          chatState.normalStreamFn,
+          chatState.onWork,
+          submitted.runId,
+          undefined,
+          () => {
+            releaseSubmission();
+            drawActiveChat(agent);
+          },
+        );
     } catch (err) {
       if (agent === chatState.agent) {
         ctx.composer.state.error = errMessage(err, "Could not send the approval.");
@@ -1690,6 +1698,7 @@ export function createChatSurface(
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
     const roSession = readOnly.session();
     if (
+      ctx.composerOnly ||
       !agent ||
       agent !== chatState.agent ||
       !chatState.host ||

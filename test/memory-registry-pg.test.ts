@@ -787,7 +787,7 @@ test("a registry brain forgets by ref only while a binding serves it, so a revoc
       memory,
       ALICE_SCOPE,
       BRAIN_REF.ids,
-      { actorId: "U1", context: "conversation", personTurn: true },
+      { actorId: "U1", context: "conversation", personAuthority: true },
       { audienceScopeId: ALICE_SCOPE },
       "session:call",
     );
@@ -849,7 +849,8 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
       actorId: "U1",
       scopeId: ALICE_SCOPE,
       audienceScopeId: ALICE_SCOPE,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       runId: "ended-run",
       memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
       exp: Date.now() + CAPABILITY_TTL_MS,
@@ -858,7 +859,7 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
   );
   const ended = await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability");
   assert.equal(ended.status, 403);
-  assert.match(ended.text, /only while that turn is running/);
+  assert.match(ended.text, /approval_unavailable/);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
@@ -1002,7 +1003,7 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   assert.equal(brain.calls.length, before);
 });
 
-test("only Alice's own DM turn forgets a brain fact; her subagent and the turn its report starts are refused", async (t) => {
+test("a brain fact is forgotten only after Alice's sign-off, whether her DM turn or her subagent asks; a fixture with no approval store cannot raise the card", async (t) => {
   const { brain, built, api, bind } = await boundToBrain(t);
   await bind();
   const text = "!memoryforget acme-personal:42";
@@ -1013,12 +1014,20 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
     conversation: { kind: "dm", threadRef: "dm:U1:forget" },
     text,
   };
-  assert.equal((await built.app.turn(dm)).reply, "forgot 1");
+  const asked = await built.app.turn(dm);
+  assert.equal(asked.reply, "[blocked] needs your sign-off");
+  const card = asked.pendingApprovals![0]!;
+  assert.match(card.command, /Forget brain facts acme-personal:42/);
+  assert.equal(forgets(brain).length, 0);
+  const signed = await built.app.turn({ ...dm, approval: { requestId: card.requestId, approved: true } });
+  assert.equal(signed.reply, "forgot 1");
   const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
   const own = (await built.sessions.getByThread("dm:U1:forget"))!;
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
   await built.sessions.setParentSession(child.id, own.id);
   const { actor, conversation } = parent!.request;
+  const original = { ...parent!.request };
+  delete original.approval;
   await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
   await built.sessions.addParticipant(child.id, "U1");
   const enqueue = async (threadRef: string, sessionSenderId: string) =>
@@ -1027,7 +1036,7 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
         sessionId: threadRef,
         maxAttempts: 1,
         request: {
-          ...parent!.request,
+          ...original,
           conversation: { ...conversation, threadRef },
           delegatingRunId: parent!.id,
           sessionSenderId,
@@ -1041,8 +1050,8 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
       actorId: "U1",
       scopeId: ALICE_SCOPE,
       audienceScopeId: ALICE_SCOPE,
-      liveActor: true,
-      liveAuthor: true,
+      internalAudience: true,
+      personAuthority: true,
       runId: held.id,
       runAttempt: held.attempts,
       runLeaseToken: held.leaseToken!,
@@ -1053,17 +1062,19 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
     TEST_CAPABILITY_SECRET,
   );
   const overHttp = await api.call("DELETE", "/v1/memory/facts", token, BRAIN_REF, "x-agent-capability");
-  assert.match(overHttp.text, /Nothing was changed/);
+  assert.equal(overHttp.status, 403);
+  assert.match(overHttp.text, /approval_unavailable/);
   await built.runs.complete(held.id, held.leaseToken!, { status: "ok" });
   built.runtime.start();
   t.after(() => built.runtime.stop());
-  const replyTo = async (runId: string) => {
+  const cardFor = async (runId: string) => {
     for (let current = await built.runs.get(runId); ; current = await built.runs.get(runId)) {
-      if (current?.status === "done" || current?.status === "failed") return current.result?.reply;
+      if (current?.status === "done" || current?.status === "failed")
+        return current.result?.pendingApprovals?.[0]?.command;
       await sleep(25);
     }
   };
-  assert.match((await replyTo(await enqueue(child.threadRef, own.id)))!, /Nothing was changed/);
-  assert.match((await replyTo(await enqueue(own.threadRef, child.id)))!, /Nothing was changed/);
+  assert.equal(await cardFor(await enqueue(child.threadRef, own.id)), "Forget brain facts acme-personal:42");
+  assert.equal(await cardFor(await enqueue(own.threadRef, child.id)), "Forget brain facts acme-personal:42");
   assert.equal(forgets(brain).length, 1);
 });

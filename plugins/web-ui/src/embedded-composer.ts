@@ -34,6 +34,7 @@ class EmbeddedComposer extends AsyncDirective {
       this.key = key;
       const host: ConvHost = {
         pane: compact,
+        composerOnly: true,
         ownsUrl: false,
         container: () => this.element,
         claimContainer: () => this.element,
@@ -64,11 +65,12 @@ class EmbeddedComposer extends AsyncDirective {
       this.ctx = ctx;
       this.listen();
       queueMicrotask(() => {
-        if (this.ctx === ctx) void ctx.composer.refreshRuntimeSelection(null, this.agent!);
+        if (this.ctx === ctx && !options.slack) void ctx.composer.refreshRuntimeSelection(null, this.agent!);
       });
     }
     this.ctx.pane = compact;
     this.options!.prepareSubmit = options.prepareSubmit;
+    this.options!.slack = options.slack;
     return this.template();
   }
 

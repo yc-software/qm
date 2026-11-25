@@ -11,8 +11,9 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "./slack/approval-cards.ts";
+import { createApprovalStore } from "./surfaces/approval-store.ts";
+import { createApprovalContinuation } from "./triggers/approval-continuation.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -146,11 +147,9 @@ import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from ".
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
-import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import {
   BACKFILL_BOT_MARKER_MIGRATION,
-  DROP_RECIPIENT_CONSENT_MIGRATION,
+  DROP_RETIRED_TRIGGER_FIELDS_MIGRATION,
   MARK_BOT_EDITED_CRONS_MIGRATION,
 } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
@@ -567,6 +566,7 @@ export interface BuiltApp {
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
   keychainApprovals?: KeychainApprovals;
+  approvals: ServerDeps["approvals"];
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
@@ -2077,10 +2077,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
-  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
-  pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
+  pgArtifactMap.pool.registerMigration(DROP_RETIRED_TRIGGER_FIELDS_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
@@ -2154,7 +2151,7 @@ export function buildApp(
     ],
   });
   const approvals = createApprovalStore(
-    artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]),
+    artifactMap<PendingApprovalRecord>("approvals", ["sessionId", "cardTo"]),
     deliveries,
     { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
     async (request, sessionId) => {
@@ -2541,6 +2538,7 @@ export function buildApp(
     sandbox,
     files,
     approvals,
+    continueApproval: (decision, actorId) => continueApproval(decision, actorId),
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
@@ -2553,7 +2551,7 @@ export function buildApp(
           ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
         }
       : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: artifactMap<{ lastJudgedAt: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,
@@ -2589,7 +2587,6 @@ export function buildApp(
       work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
       publicWebUrl: config.publicWebUrl,
     },
-    featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
@@ -2806,18 +2803,22 @@ export function buildApp(
     const { access: _access, ...internal } = bound;
     return app.turn({ ...req, surfaceOrigin: { ...internal, audience: "internal" } });
   };
+  const triggerDeps = {
+    deliveries,
+    idempotency,
+    identity,
+    run: runTriggered,
+    directory,
+    currentScopeMembers,
+    sessions,
+    resolveRecipient,
+  };
+  const continueApproval = createApprovalContinuation({ ...triggerDeps, approvals });
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
           {
-            deliveries,
-            idempotency,
-            identity,
-            run: runTriggered,
-            directory,
-            currentScopeMembers,
-            sessions,
-            resolveRecipient,
+            ...triggerDeps,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
             getGrant: (id) => keychain.getGrant(id),
@@ -2868,16 +2869,7 @@ export function buildApp(
           }),
         }
       : {}),
-    trigger: {
-      deliveries,
-      idempotency,
-      identity,
-      run: runTriggered,
-      directory,
-      currentScopeMembers,
-      sessions,
-      resolveRecipient,
-    },
+    trigger: triggerDeps,
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
@@ -2923,15 +2915,8 @@ export function buildApp(
     cronOrigin: (cron) => app.cronOrigin(cron),
     advisoryLock,
     crons,
-    deliveries,
-    idempotency,
-    identity,
-    run: runTriggered,
+    ...triggerDeps,
     leaderLease,
-    directory,
-    currentScopeMembers,
-    sessions,
-    resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
     sweepAsks: async (now) => {
@@ -2965,14 +2950,7 @@ export function buildApp(
           monitors,
           processes,
           sandbox,
-          deliveries,
-          idempotency,
-          identity,
-          run: runTriggered,
-          directory,
-          currentScopeMembers,
-          sessions,
-          resolveRecipient,
+          ...triggerDeps,
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,
@@ -3372,6 +3350,7 @@ export function buildApp(
     ...(keychain ? { keychain } : {}),
     serviceCreds,
     deliveries,
+    approvals,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
@@ -3516,6 +3495,7 @@ export function serverDeps(
     serviceCreds: built.serviceCreds,
     deliveries: built.deliveries,
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
+    approvals: built.approvals,
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
     signals: built.signals,

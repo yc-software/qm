@@ -1,4 +1,4 @@
-import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
+import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
@@ -34,7 +34,7 @@ const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean };
 
-export type ScriptTrialCron = Pick<Cron, "owner" | "ownerScopeId" | "botActor"> & { taskAuthor?: "automation" | null };
+export type ScriptTrialCron = Pick<Cron, "owner" | "ownerScopeId" | "botActor">;
 
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
@@ -329,7 +329,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           threadRef,
           surface: "cron",
           sourceId: cron.id,
-          ownerFire: ownerAuthored(cron),
           redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
@@ -667,7 +666,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           input: script.command,
           fireKey: `cron:trial-${randomUUID()}`,
           surface: "cron",
-          ownerFire: ownerAuthored(cron),
           cronScript: script,
           cronScriptTrial: true,
         },
