@@ -209,27 +209,24 @@ async function mintControlPlaneTokens(
       ...(turnSurface ? { surface: turnSurface } : {}),
       ...(input.liveReplies ? { liveReplies: true } : {}),
     };
-    const rosterToken = await mintCapabilityToken(
-      controlClaims,
-      deps.capabilitySecret ?? deps.signingSecret,
-      deps.capabilityTokenCompression,
-    ).catch((e: unknown) => {
-      if (e instanceof CapabilityClaimsTooLarge) return undefined;
+    const secret = deps.capabilitySecret ?? deps.signingSecret;
+    const mintControl = (claims: CapabilityClaims) =>
+      mintCapabilityToken(claims, secret, deps.capabilityTokenCompression);
+    const rosterToken = await mintControl(controlClaims).catch((e: unknown) => {
+      if (e instanceof CapabilityClaimsTooLarge) return e;
       throw e;
     });
-    if (
-      rosterToken &&
-      Buffer.byteLength(`${CAPABILITY_HEADER}: ${rosterToken}\r\n`) <= maxHeaderSize - REQUEST_HEAD_ALLOWANCE
-    )
-      connectorEnv.AGENT_API_TOKEN = rosterToken;
+    const fits =
+      typeof rosterToken === "string" &&
+      Buffer.byteLength(`${CAPABILITY_HEADER}: ${rosterToken}\r\n`) <= maxHeaderSize - REQUEST_HEAD_ALLOWANCE;
+    if (fits) connectorEnv.AGENT_API_TOKEN = rosterToken;
     else {
+      console.warn(
+        `[capability] ${conversation.threadRef}: turn tokens carry no member list (${controlClaims.members?.length ?? 0} members, ${controlClaims.keychainMembers?.length ?? 0} keychain members): ${typeof rosterToken === "string" ? `a ${rosterToken.length}-byte token leaves too little of core's ${maxHeaderSize}-byte header limit` : rosterToken.message}`,
+      );
       scopeAttestation = withoutRoster(attestation);
       controlClaims = withoutRoster(controlClaims);
-      connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
-        controlClaims,
-        deps.capabilitySecret ?? deps.signingSecret,
-        deps.capabilityTokenCompression,
-      );
+      connectorEnv.AGENT_API_TOKEN = await mintControl(controlClaims);
     }
     if (browserModel) {
       connectorEnv.BROWSE_LAB_BASE_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}/v1/browser-model`;
