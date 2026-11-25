@@ -443,18 +443,18 @@ export function superserveGenerationKey(
 
 export type SandboxImages = Record<string, Partial<Record<SandboxBackendName, string>>>;
 
-const IMAGE_BACKENDS: ReadonlySet<string> = new Set([
-  "aws",
-  "local",
-  "smolmachines",
-  "e2b",
-  "modal",
-  "porter",
-  "agent37",
-  "superserve",
-  "do-managed-agents",
-  "render",
-]);
+const IMAGE_BACKENDS: Record<Exclude<SandboxBackendName, "sprites">, true> = {
+  aws: true,
+  local: true,
+  smolmachines: true,
+  e2b: true,
+  modal: true,
+  porter: true,
+  agent37: true,
+  superserve: true,
+  "do-managed-agents": true,
+  render: true,
+};
 
 function sandboxImagesEnv(raw: string | undefined): SandboxImages {
   if (!raw?.trim()) return {};
@@ -467,7 +467,7 @@ function sandboxImagesEnv(raw: string | undefined): SandboxImages {
     if (!name.trim() || !isObject(refs))
       throw new Error(`SANDBOX_IMAGES.${name} must be a named object mapping providers to image references`);
     for (const [backend, ref] of Object.entries(refs)) {
-      if (!IMAGE_BACKENDS.has(backend))
+      if (!Object.hasOwn(IMAGE_BACKENDS, backend))
         throw new Error(`SANDBOX_IMAGES.${name}.${backend}: that provider cannot boot a chosen image`);
       if (typeof ref !== "string" || !ref.trim())
         throw new Error(`SANDBOX_IMAGES.${name}.${backend} must be an image reference`);
