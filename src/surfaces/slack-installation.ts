@@ -120,9 +120,13 @@ export function createSlackInstallationStore(
     async get() {
       const record = await map.get(orgId);
       if (!record || record.disabled) return null;
+      const [botToken, appToken] = await Promise.all([
+        secrets.get(record.botTokenEnc),
+        record.appTokenEnc ? secrets.get(record.appTokenEnc) : Promise.resolve(undefined),
+      ]);
       return {
-        botToken: await secrets.get(record.botTokenEnc),
-        ...(record.appTokenEnc ? { appToken: await secrets.get(record.appTokenEnc) } : {}),
+        botToken,
+        ...(appToken ? { appToken } : {}),
         ...(record.appId ? { appId: record.appId } : {}),
         ...(record.installId ? { installId: record.installId } : {}),
         ...(record.installedAt ? { installedAt: record.installedAt } : {}),
@@ -138,12 +142,16 @@ export function createSlackInstallationStore(
     },
     async set(input) {
       const updatedAt = Date.now();
+      const [botTokenEnc, appTokenEnc] = await Promise.all([
+        secrets.put(botTokenName, input.botToken),
+        input.appToken ? secrets.put(appTokenName, input.appToken) : Promise.resolve(undefined),
+      ]);
       const record: StoredSlackInstallation = {
         orgId,
         disabled: false,
         serviceBlocked: true,
-        botTokenEnc: await secrets.put(botTokenName, input.botToken),
-        ...(input.appToken ? { appTokenEnc: await secrets.put(appTokenName, input.appToken) } : {}),
+        botTokenEnc,
+        ...(appTokenEnc ? { appTokenEnc } : {}),
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.installId ? { installId: input.installId } : {}),
         ...(input.teamId ? { teamId: input.teamId } : {}),

@@ -29,12 +29,14 @@ export async function deleteReplacedSecrets(
   previous: readonly (string | undefined)[],
   next: readonly (string | undefined)[],
 ): Promise<void> {
-  for (const ref of previous) {
-    if (!ref || next.includes(ref)) continue;
-    try {
-      await store.delete(ref);
-    } catch (err) {
-      console.error(`[secret-store] failed to delete replaced secret ${ref}: ${errMessage(err)}`);
-    }
-  }
+  const dropped = [...new Set(previous.filter((ref): ref is string => !!ref && !next.includes(ref)))];
+  await Promise.all(
+    dropped.map(async (ref) => {
+      try {
+        await store.delete(ref);
+      } catch (err) {
+        console.error(`[secret-store] failed to delete replaced secret ${ref}: ${errMessage(err)}`);
+      }
+    }),
+  );
 }

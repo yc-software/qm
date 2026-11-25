@@ -1,6 +1,6 @@
 import { perTenant } from "../tenants/cache.ts";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
-import { deleteReplacedSecrets, type SecretStore } from "../credentials/secret-store.ts";
+import { createEncryptedSecretStore, deleteReplacedSecrets, type SecretStore } from "../credentials/secret-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { hashId } from "../util/crypto.ts";
@@ -153,7 +153,7 @@ export interface RegistryContext {
   secrets?: SecretStore;
 }
 
-export async function openBrainSecrets(
+async function openBrainSecrets(
   record: MemoryRegistry,
   { secrets }: RegistryContext,
 ): Promise<ReadonlyMap<string, string | Error>> {
@@ -501,10 +501,11 @@ export function createMemoryRegistryStore(opts: {
     if (slot.cached?.version !== version) slot.cached = { version, record: await opts.map.get(RECORD_ID) };
     return slot.cached;
   };
+  const secrets = opts.secrets ?? createEncryptedSecretStore(opts.key);
   const ctx: RegistryContext = {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     key: opts.key,
-    ...(opts.secrets ? { secrets: opts.secrets } : {}),
+    secrets,
   };
   return {
     ...ctx,
@@ -513,8 +514,7 @@ export function createMemoryRegistryStore(opts: {
       return resolveMemoryRegistry(record, ctx, await openBrainSecrets(record, ctx));
     },
     async update(change, secret) {
-      const clientSecretRef =
-        opts.secrets && secret ? await opts.secrets.put(brainSecretName(secret.brainId), secret.value) : undefined;
+      const clientSecretRef = secret ? await secrets.put(brainSecretName(secret.brainId), secret.value) : undefined;
       let previous: MemoryRegistry | undefined;
       let next: MemoryRegistry | undefined;
       try {
@@ -531,13 +531,11 @@ export function createMemoryRegistryStore(opts: {
         ]);
         return next!;
       } finally {
-        if (opts.secrets) {
-          await deleteReplacedSecrets(
-            opts.secrets,
-            next ? [clientSecretRef, ...(previous ? brainSecretRefs(previous) : [])] : [clientSecretRef],
-            next ? brainSecretRefs(next) : [],
-          );
-        }
+        await deleteReplacedSecrets(
+          secrets,
+          next ? [clientSecretRef, ...(previous ? brainSecretRefs(previous) : [])] : [clientSecretRef],
+          next ? brainSecretRefs(next) : [],
+        );
       }
     },
   };
