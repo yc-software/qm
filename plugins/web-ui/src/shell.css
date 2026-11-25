@@ -36,7 +36,6 @@
   --meta-lane: 24px;
   --ultrafast-accent: #7540bd;
   --brand-accent: #4f46e5;
-  --dev-accent: #8a5a00;
   --markdown-link: #2563b8;
   --brand-mark: none;
   --cta: oklch(0.27 0.062 250);
@@ -11971,9 +11970,6 @@ h3.ambient-field-label {
   font-size: var(--font-13);
   font-weight: 500;
 }
-.top-banner.dev {
-  background: var(--dev-accent);
-}
 .top-banner.notify {
   background: color-mix(in oklch, var(--background), black 6%);
   color: var(--muted-foreground);
@@ -12049,17 +12045,6 @@ h3.ambient-field-label {
   font-weight: 600;
   letter-spacing: 0;
   margin-bottom: 4px;
-}
-.signin-brand .dev-chip {
-  margin-left: auto;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--dev-accent);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
 }
 .signin-body {
   font-size: var(--font-13-5);
