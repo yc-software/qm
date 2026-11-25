@@ -651,6 +651,8 @@ test("allow once authorizes a single use of the rule, not the rest of the sessio
 
   const sibling = await app.turn(dm("!run zz-tool beta"));
   assert.equal(sibling.status, "pending_approval");
+  const again = await app.turn(dm("!run zz-tool alpha"));
+  assert.notEqual(again.pendingApprovals![0]!.requestId, pending.requestId, "a later run's card gets its own id");
 });
 
 test("approvals collected during an approval re-run are still surfaced (multi-step chains)", async () => {

@@ -2755,7 +2755,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let approval: PendingApproval;
           try {
             approval = await withManagedRosterVersion(() =>
-              issueApproval(commandApprovalId(session.id, input.runId, err.command), {
+              issueApproval(commandApprovalId(session.id, err.command, err.approvalKey, input.runId), {
                 sessionId: session.id,
                 command: err.command,
                 reason: err.approvalReason,

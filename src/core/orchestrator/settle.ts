@@ -176,11 +176,11 @@ export async function selectTurnResult(turn: {
     for (const pa of turnApprovals) {
       const requestId = commandApprovalId(
         session.id,
-        input.runId,
         pa.screenedOutput
           ? `${pa.command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
           : pa.command,
         pa.approvalKey,
+        input.runId,
       );
       issued.push([
         requestId,

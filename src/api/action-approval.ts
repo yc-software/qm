@@ -46,7 +46,7 @@ export async function actionApproved(ctx: ApiCtx, card: { summary: string; shown
   }
   const command = approvalCallText(`${action.method} ${action.path}`, card.shownBody ?? action.body);
   const approvalKey = toolCallApprovalKey(API_ACTION_TOOL, action);
-  const requestId = commandApprovalId(claims.sessionId, claims.runId, command, approvalKey);
+  const requestId = commandApprovalId(claims.sessionId, command, approvalKey);
   if (!(await deps.approvals.get(requestId))) {
     const record = newApprovalRecord(
       {
