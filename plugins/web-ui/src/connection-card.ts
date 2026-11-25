@@ -78,7 +78,7 @@ export function connectionCard(
       >
     </span>
     <span class="connection-card-actions"
-      >${settled ? connectionActions(service.name, Boolean(at.working), tone === "error" && !at.stale ? at.reconnect : undefined, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
+      >${settled ? connectionActions(service.name, Boolean(at.working), at.outcome === "failed" && !at.stale ? at.reconnect : undefined, at.disconnect) : nothing}${at?.recheck ? button("Check again", `Check ${service.name} again`, at.recheck) : nothing}${next}</span
     >
   </div>`;
 }
