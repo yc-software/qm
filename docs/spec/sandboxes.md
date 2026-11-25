@@ -1,6 +1,6 @@
 # Sandboxes
 
-_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at bd371980c (2026-11-24): statements were read in the code at c6056de14 and re-read where later commits changed it, unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -65,7 +65,7 @@ Most of `src/sandbox` is the eleven backends and their provider clients.
 
 ### `src/sandbox/sandbox-routing.ts` — the router
 
-**Job.** Be the one `Sandbox` object the rest of core holds, in front of every constructed backend. **Key idea.** A handle carries `backend` and `resourceId`. Each call on a handle that has a resource id is forwarded to that backend inside `use` on the resource, which refuses retired sandboxes; a scratch handle has none and goes straight to the backend. Commands and file operations take no lock; in the router only destroy, restart, and plain teardown on backends that park (`parksOnTeardown`: `local`, `e2b`, `aws`, `do-managed-agents`) take the exclusive `sandbox-resource:<id>` advisory lock, as do `create`, `retire` and `retireJobComputer` in `src/sandbox/sandbox-resources.ts`. **Surprising.** The router's own `profile` is the default backend's, so `sandbox.profile` describes the deployment default, not the sandbox in hand; `profileFor` answers for a scope or sandbox. The load probe is added here, so every command on a resource runs inside a wrapper, while scratch commands are not sampled. The router also records one `io_pressure_high` error per episode (opens at 75% IO pressure, clears below 40%).
+**Job.** Be the one `Sandbox` object the rest of core holds, in front of every constructed backend. **Key idea.** A handle carries `backend` and `resourceId`. Each call on a handle that has a resource id is forwarded to that backend inside `use` on the resource, which refuses retired sandboxes; a scratch handle has none and goes straight to the backend. Commands and file operations take no lock. Starting a background job through `startRegisteredProcess` holds the `sandbox-resource:<id>` advisory lock in shared mode across the launch and the write of the job's registry row; in the router destroy, restart, and plain teardown on backends that park (`parksOnTeardown`: `local`, `e2b`, `aws`, `do-managed-agents`) take it exclusively, as do `create`, `retire` and `retireJobComputer` in `src/sandbox/sandbox-resources.ts`, so each waits for every start in flight. **Surprising.** The router's own `profile` is the default backend's, so `sandbox.profile` describes the deployment default, not the sandbox in hand; `profileFor` answers for a scope or sandbox. The load probe is added here, so every command on a resource runs inside a wrapper, while scratch commands are not sampled. The router also records one `io_pressure_high` error per episode (opens at 75% IO pressure, clears below 40%).
 
 ### `src/sandbox/sandbox-resources.ts` — records, defaults and access
 

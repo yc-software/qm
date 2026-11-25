@@ -1,6 +1,6 @@
 # Credentials and connectors
 
-_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at bd371980c (2026-11-24): statements were read in the code at c6056de14 and re-read where later commits changed it, unless marked **[interpretation]**._
 
 ## In one paragraph
 

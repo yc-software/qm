@@ -1,6 +1,6 @@
 # Context: prompt, guidance, memory, skills and personas
 
-_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at bd371980c (2026-11-24): statements were read in the code at c6056de14 and re-read where later commits changed it, unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -303,7 +303,7 @@ One record (table `memory_registry`, row `org`) holds every brain, every binding
 
 ### Forgetting a brain fact
 
-The `memory` tool's delete and `DELETE /v1/memory/facts` take notebook `#ids` and brain refs together, at most 20 refs. QM checks every id first; a refused call changes nothing. A ref is sent to a brain only on a turn that carries a person's authority in that person's own DM, and only after the person approves the card "Forget brain facts <refs>" (the tool call waits on it; the route answers `202` `approval_required`); bot and ambient turns, the tidy, admin routes and `/v1/memory` self-service are refused. Each ref gets its own outcome. Notebook ids are deleted unless a ref's outcome is `unknown`; sending the same delete again finishes it. The call is the preset's forget tool with `{ "id": <whole number>, "request_id": "<UUID>" }`. The answer's `structuredContent.state` decides: `committed` is done; `queued`, `running` or `recovering` is pending; `conflict`, `failed` or `cancelled` is failed; any other state is unknown. The error code `fact_already_expired` counts as done.
+The `memory` tool's delete and `DELETE /v1/memory/facts` take notebook `#ids` and brain refs together, at most 20 refs. QM checks every id first; a refused call changes nothing. A ref is sent to a brain only on a turn that carries a person's authority and whose memory scope and audience scope are both that person's own personal scope (`ownPrivateConversation` in `src/directory/person.ts`; the refusal text calls this "their own DM with QM"), and only after the person approves the card "Forget brain facts <refs>" (the tool call waits on it; the route answers `202` `approval_required`); bot and ambient turns, the tidy, admin routes and `/v1/memory` self-service are refused. Each ref gets its own outcome. Notebook ids are deleted unless a ref's outcome is `unknown`; sending the same delete again finishes it. The call is the preset's forget tool with `{ "id": <whole number>, "request_id": "<UUID>" }`. The answer's `structuredContent.state` decides: `committed` is done; `queued`, `running` or `recovering` is pending; `conflict`, `failed` or `cancelled` is failed; any other state is unknown. The error code `fact_already_expired` counts as done.
 
 ### Skill pack and persona routes
 

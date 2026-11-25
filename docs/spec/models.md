@@ -1,6 +1,6 @@
 # Models and runtimes
 
-_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at bd371980c (2026-11-24): statements were read in the code at c6056de14 and re-read where later commits changed it, unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -82,7 +82,7 @@ Ada at Acme opens the web app and types "Summarize the Q3 notes". Acme is a [Pac
 
 ### Runtime changes mid-task: `src/agent/runtime-control.ts`, `runtime-recovery.ts`, `runtime-types.ts`
 
-**Job.** Back the agent's `runtime` tool: list choices, or switch model, effort or fast mode. **Key idea.** A switch is a _handoff_. The tool result ends the current Pi session and the orchestrator starts another on the new runtime, for this task only (`task`) or also saved for the scope (`scope`). **Surprising.** The handoff is stored in the tool result item, and `recoveredRuntime` reads it back so a retried run resumes on the switched runtime. A change needs a turn that carries a person's authority in an internal-audience conversation (`internalPerson`; otherwise the tool answers `authority_required`), except a cron fire changing its own task.
+**Job.** Back the agent's `runtime` tool: list choices, or switch model, effort or fast mode. **Key idea.** A switch is a _handoff_. The tool result ends the current Pi session and the orchestrator starts another on the new runtime, for this task only (`task`) or also saved for the scope (`scope`). **Surprising.** The handoff is stored in the tool result item, and `recoveredRuntime` reads it back so a retried run resumes on the switched runtime. A change needs a turn that carries a person's authority (`carriesPersonAuthority`: the `personAuthority` claim set and `botActor` not; otherwise the tool answers `authority_required`). A cron fire gets no exception: it can change its runtime only when it carries that claim, which the orchestrator sets for a person's fire to an all-internal audience.
 
 ### Accounts: `src/core/individual-auth-routing.ts`, `src/core/orchestrator/turn-runtime.ts`, `src/api/routes/user-model-auth.ts`
 

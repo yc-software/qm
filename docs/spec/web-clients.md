@@ -1,6 +1,6 @@
 # Web UI and clients
 
-_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at bd371980c (2026-11-24): statements were read in the code at c6056de14 and re-read where later commits changed it, unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -90,7 +90,7 @@ Where other paths diverge:
 
 ### `src/api/routes/ui-canvas.ts`
 
-**Job.** Let the agent place live HTML, CSS and JavaScript in a person's page, and read a snapshot of what the page shows. **Key idea.** The agent calls `/v1/ui/canvas` and `/v1/ui/observe` from its sandbox with its capability token; the page loads the canvas through the cookie-authenticated `/v1/ui/canvases/...` routes. **Surprising.** Canvas script runs unsandboxed in the person's page with their full session. It is gated by the `ui_canvas` flag for that one person. The agent's calls are accepted only on a web-surface turn that carries a person's authority and an internal audience (`internalPerson`); any other turn gets 403 `not_web_turn`, and a page snapshot also needs a private conversation (403 `not_private`). A canvas already stored keeps loading in the page after the turn ends.
+**Job.** Let the agent place live HTML, CSS and JavaScript in a person's page, and read a snapshot of what the page shows. **Key idea.** The agent calls `/v1/ui/canvas` and `/v1/ui/observe` from its sandbox with its capability token; the page loads the canvas through the cookie-authenticated `/v1/ui/canvases/...` routes. **Surprising.** Canvas script runs unsandboxed in the person's page with their full session. It is gated by the `ui_canvas` flag, which is on for a person when the flag's row holds their personal scope or the organization scope. The agent's calls are accepted only on a web-surface turn that carries a person's authority (`carriesPersonAuthority`, a claim the orchestrator sets only for an all-internal audience); any other turn gets 403 `not_web_turn`, and a page snapshot also needs a private conversation (403 `not_private`). A canvas already stored keeps loading in the page after the turn ends.
 
 ### `src/api/routes/voice.ts` and `src/voice`
 
