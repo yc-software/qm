@@ -64,6 +64,9 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
   const res = await built.app.turn(externalChannelTurn("slack"));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello channel/);
+  await built.app.upsertChannels([{ channelId: "C1", name: "c1" }], [{ channelId: "C1", principalId: "U1" }]);
+  const runId = (await built.runs.list())[0]!.id;
+  assert.equal(await built.app.swarms!.authorizes({ actorId: "U1", scopeId: scopeId("channel", "C1"), runId }), false);
 });
 
 test("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
