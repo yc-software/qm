@@ -66,41 +66,58 @@ export function slackWireToPlain(text: string): string {
     .join("");
 }
 
-function joinsWord(c: string | undefined): boolean {
-  return c !== undefined && (c === "*" || (c >= "0" && c <= "9") || c.toLowerCase() !== c.toUpperCase());
+const SLACK_MARKS: Record<string, string> = { "*": "**", _: "_", "~": "~~" };
+const MARKDOWN_SYNTAX = new Set("\\`*_~[]()<>#+-=.!|&");
+
+function joinsWord(c: string | undefined, mark: string): boolean {
+  return c !== undefined && (c === mark || (c >= "0" && c <= "9") || c.toLowerCase() !== c.toUpperCase());
 }
 
-function boldClose(text: string, open: number): number {
+function spanClose(text: string, open: number): number {
+  const mark = text[open]!;
   const next = text[open + 1];
-  if (joinsWord(text[open - 1]) || next === undefined || !next.trim() || next === "*") return -1;
+  if (joinsWord(text[open - 1], mark) || next === undefined || !next.trim() || next === mark) return -1;
   for (let i = open + 1; i < text.length && text[i] !== "\n" && text[i] !== "`"; i++)
-    if (text[i] === "*") return !text[i - 1]!.trim() || joinsWord(text[i + 1]) ? -1 : i;
+    if (text[i] === mark) return !text[i - 1]!.trim() || joinsWord(text[i + 1], mark) ? -1 : i;
   return -1;
 }
 
-function slackBold(text: string): string {
+function codeEnd(text: string, open: number): number {
+  const fence = text.startsWith("```", open) ? "```" : "`";
+  const close = text.indexOf(fence, open + fence.length);
+  if (close < 0 || (fence === "`" && text.slice(open, close).includes("\n"))) return -1;
+  return close + fence.length;
+}
+
+function slackMarkdown(text: string, lineStart: boolean): string {
   let out = "";
-  let code = false;
+  let leading = lineStart;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === "`") code = !code;
-    const close = !code && text[i] === "*" ? boldClose(text, i) : -1;
-    if (close < 0) out += !code && text[i] === "*" ? "\\*" : text[i];
-    else {
-      out += `**${text.slice(i + 1, close)}**`;
+    const c = text[i]!;
+    const code = c === "`" ? codeEnd(text, i) : -1;
+    const close = SLACK_MARKS[c] ? spanClose(text, i) : -1;
+    if (code > 0) {
+      out += text.slice(i, code);
+      i = code - 1;
+    } else if (close > 0) {
+      out += SLACK_MARKS[c] + slackMarkdown(text.slice(i + 1, close), false) + SLACK_MARKS[c];
       i = close;
-    }
+    } else if (c === ">" && (i ? text[i - 1] === "\n" : lineStart)) out += c;
+    else if (c === " " && leading) out += "\u00a0";
+    else out += MARKDOWN_SYNTAX.has(c) ? `\\${c}` : c;
+    leading = code < 0 && close < 0 && (c === "\n" || (leading && c === " "));
   }
   return out;
 }
 
 export function slackWireToMarkdown(text: string, emojiFor: (name: string) => string | null): string {
-  return splitSlackWire(text)
-    .map((seg) => {
-      if (seg.kind === "mention") return `<@${seg.handle}>`;
-      if (seg.kind === "link") return `[${seg.label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](<${seg.href}>)`;
-      return slackBold(withEmoji(seg.text, emojiFor).replaceAll("<", "\\<"));
-    })
-    .join("");
+  let out = "";
+  for (const seg of splitSlackWire(text)) {
+    if (seg.kind === "mention") out += `<@${seg.handle}>`;
+    else if (seg.kind === "link") out += `[${seg.label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](<${seg.href}>)`;
+    else out += slackMarkdown(withEmoji(seg.text, emojiFor), !out || out.endsWith("\n"));
+  }
+  return out;
 }
 
 const REACTION_DIRECTIVE = /\[\[react:[^[\]]*\]\]/gi;

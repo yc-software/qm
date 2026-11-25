@@ -106,7 +106,7 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
       [
         [true, "deploys broke", undefined, false],
         [true, "@qm DM me", undefined, false],
-        [false, "thanks!", undefined, true],
+        [false, "thanks\\!", undefined, true],
         [true, undefined, "https://avatars.slack-edge.com/app_72.png", false],
         [true, undefined, undefined, false],
       ],
