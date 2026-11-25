@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
-import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
@@ -50,13 +49,11 @@ for (const postgres of [false, true]) {
   );
 }
 
-test("canonical snapshots cross the HTTP mapper with explicit empty files, roots and bot identity", () => {
-  const event = toEvent(
-    slackMessageToIngestEvent(
-      { channel: "C", ts: "1", bot_id: "BBOT", bot_profile: { name: "QM" }, text: "A &amp; B" },
-      ids,
-    ),
-  )!;
+test("canonical snapshots carry explicit empty files, roots and bot identity", () => {
+  const event = slackMessageToIngestEvent(
+    { channel: "C", ts: "1", bot_id: "BBOT", bot_profile: { name: "QM" }, text: "A &amp; B" },
+    ids,
+  );
   assert.equal(event.text, "A & B");
   assert.equal(event.sub, null);
   assert.equal(event.subtype, "");
@@ -99,7 +96,7 @@ test("mirror and live render the same allowed message subtypes", async () => {
     "tombstone",
   ].map((subtype, i) => ({ ts: `1000.00000${i}`, text: `body-${i}`, user: "U1", subtype }));
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest(raw.map((m) => toEvent(slackMessageToIngestEvent({ ...m, channel: "C" }, ids))!));
+  await cache.ingest(raw.map((m) => slackMessageToIngestEvent({ ...m, channel: "C" }, ids)));
   const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
   const client = { conversations: { history: async () => ({ messages: raw.slice().reverse(), has_more: false }) } };
   const views = [];
@@ -130,7 +127,7 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
   const core = {
     readSurfaceMessages: cache.readMessages,
     rememberSurfaceHistory: async (events) => {
-      await cache.ingest(events.map((e) => toEvent(e)!));
+      await cache.ingest(events);
     },
   } as SlackCoreClient;
   const read = createSlackHistoryReader({ core, ids });
@@ -225,7 +222,7 @@ for (const postgres of [false, true]) {
         text: "Report",
         files: [{ id: "FLARGE", title: "Large report", size: 1_000_000_001, mimetype: "application/pdf" }],
       };
-      const event = toEvent(slackMessageToIngestEvent(raw, ids))!;
+      const event = slackMessageToIngestEvent(raw, ids);
       try {
         await cache.ingest([event]);
         await cache.ingest([{ container, ts: "1000", text: "Report", editedAt: 20 }]);
@@ -294,13 +291,6 @@ for (const postgres of [false, true]) {
   );
 }
 
-test("HTTP ingestion rejects invalid file sizes", () => {
-  for (const size of [-1, Infinity, NaN, 0.5, Number.MAX_SAFE_INTEGER + 1, "10"]) {
-    assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size }] })!.files![0]!.size, undefined);
-  }
-  assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size: 0 }] })!.files![0]!.size, 0);
-});
-
 test("the whole Slack message is stored in Postgres and follows the same edit and delete precedence as text", async () => {
   const url = testDatabaseUrl();
   const cache = createPostgresSurfaceCache(url);
@@ -316,30 +306,28 @@ test("the whole Slack message is stored in Postgres and follows the same edit an
     (await db.query("SELECT raw FROM channel_messages WHERE container = $1 AND ts = '1000'", [container])).rows[0]?.raw;
   await db.connect();
   try {
-    await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids))!]);
+    await cache.ingest([slackMessageToIngestEvent(original, ids)]);
     assert.deepEqual(await storedRaw(), original);
 
-    await cache.ingest([toEvent(slackMessageToIngestEvent(edited, ids, { partial: true }))!]);
+    await cache.ingest([slackMessageToIngestEvent(edited, ids, { partial: true })]);
     assert.deepEqual(await storedRaw(), edited);
 
-    await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids, { handled: true }))!]);
+    await cache.ingest([slackMessageToIngestEvent(original, ids, { handled: true })]);
     assert.deepEqual(await storedRaw(), edited);
 
     await cache.ingest([{ container, ts: "1000", deleted: true }]);
     assert.deepEqual(await storedRaw(), edited);
 
     await cache.ingest([
-      toEvent(
-        slackMessageToIngestEvent(
-          {
-            ...original,
-            ts: "2000",
-            text: "broken \ud800 emoji",
-            metadata: { event_type: "alarm", event_payload: { "key\udc00": "value" } },
-          } as Parameters<typeof slackMessageToIngestEvent>[0],
-          ids,
-        ),
-      )!,
+      slackMessageToIngestEvent(
+        {
+          ...original,
+          ts: "2000",
+          text: "broken \ud800 emoji",
+          metadata: { event_type: "alarm", event_payload: { "key\udc00": "value" } },
+        } as Parameters<typeof slackMessageToIngestEvent>[0],
+        ids,
+      ),
     ]);
     const [lone] = (
       await db.query(

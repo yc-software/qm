@@ -43,7 +43,6 @@ import { pinRoutes } from "./pins.ts";
 import { uiCanvasRoutes } from "./ui-canvas.ts";
 import { desktopCallRoutes } from "./desktop-calls.ts";
 import { desktopDownloadRoutes } from "./desktop-download.ts";
-import { surfaceCacheRoutes } from "./surface-cache.ts";
 import { environmentRoutes } from "./environments.ts";
 import { emojiRoutes } from "./emoji.ts";
 import { projectRoutes } from "./projects.ts";
@@ -161,7 +160,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...uiCanvasRoutes,
   ...desktopCallRoutes,
   ...desktopDownloadRoutes,
-  ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,
   ...inboxRoutes,

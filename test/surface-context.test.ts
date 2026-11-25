@@ -10,7 +10,6 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -42,27 +41,18 @@ describe("surface-context pulls", async () => {
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
-  let pollSeq = 0;
-  const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
-  const signedGet = (path: string) =>
-    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "") });
-  const signedPost = (path: string, body: unknown) => {
-    const raw = JSON.stringify(body);
-    return fetch(`${base}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...signedRequestHeaders(SECRET, "POST", path, raw) },
-      body: raw,
-    });
-  };
+  const pending = () => built.app.pendingContextRequests("slack");
 
-  const fulfillNext = async (answer: (q: any) => unknown): Promise<any> => {
+  const fulfillNext = async (answer: (q: any) => any): Promise<any> => {
     for (let i = 0; i < 100; i++) {
-      const res = await signedGet(pendingPath());
-      const { requests } = (await res.json()) as { requests: Array<{ id: string; query: any }> };
+      const requests = await pending();
       if (requests.length) {
         const r = requests[0]!;
-        const ok = await signedPost(`/v1/surface-context/${r.id}/result`, answer(r.query));
-        assert.equal(ok.status, 200);
+        const reply = answer(r.query);
+        assert.equal(
+          await built.app.fulfillContextRequest(r.id, "error" in reply ? { error: reply.error } : { result: reply }),
+          true,
+        );
         return r.query;
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -114,7 +104,7 @@ describe("surface-context pulls", async () => {
       messages: [{ ts: "1699.0001", author: "Alice", text: "deploy went out" }],
       hasMore: true,
       nextBefore: "1699.0001",
-      selfTs: ["1699.0001", 7],
+      selfTs: ["1699.0001"],
       liveSearch: "unconnected",
     }));
     assert.equal(
@@ -132,8 +122,7 @@ describe("surface-context pulls", async () => {
     assert.equal(body.nextBefore, "1699.0001");
     assert.deepEqual(body.selfTs, ["1699.0001"]);
     assert.equal(body.liveSearch, "unconnected");
-    const pending = await (await signedGet(pendingPath())).json();
-    assert.deepEqual((pending as any).requests, []);
+    assert.deepEqual(await pending(), []);
   });
 
   it("passes an explicit live read through the authorized context route", async () => {
@@ -188,8 +177,7 @@ describe("surface-context pulls", async () => {
   it("refuses a raw channel id the actor can't be confirmed to see (fail-closed)", async () => {
     const res = await post("/v1/surface-context", { channel: "C0RAWID99" }, { "x-agent-capability": await cap() });
     assert.equal(res.status, 403, "an unverifiable raw id fails closed rather than dumping unknown history");
-    const pending = await (await signedGet(pendingPath())).json();
-    assert.deepEqual((pending as any).requests, [], "nothing was parked");
+    assert.deepEqual(await pending(), [], "nothing was parked");
   });
 
   it("relays a plugin-side failure as 502", async () => {
@@ -204,8 +192,7 @@ describe("surface-context pulls", async () => {
     const res = await post("/v1/surface-context", { channel: "warroom" }, { "x-agent-capability": await cap() });
     assert.equal(res.status, 403, "a non-member can't read a private channel's history");
     assert.equal(((await res.json()) as any).error, "not_visible");
-    const pending = await (await signedGet(pendingPath())).json();
-    assert.deepEqual((pending as any).requests, [], "nothing was parked for the surface to read");
+    assert.deepEqual(await pending(), [], "nothing was parked for the surface to read");
   });
 
   it("tells an actor not in the directory to link Slack, rather than implying exclusion", async () => {
@@ -265,29 +252,7 @@ describe("surface-context pulls", async () => {
   it("requires auth: no capability and no source signature → rejected", async () => {
     const res = await post("/v1/surface-context", { channel: "eng" });
     assert.notEqual(res.status, 200);
-    const pending = await signedGet(pendingPath());
-    assert.deepEqual(((await pending.json()) as any).requests, [], "nothing was parked");
-  });
-
-  it("hanging pending-poll returns the moment a request is parked, not after a poll tick", async () => {
-    const t0 = Date.now();
-    const hanging = signedGet(`/v1/surface-context/pending?source=slack&waitMs=10000&t=${pollSeq++}`);
-    setTimeout(async () => {
-      void post("/v1/surface-context", { count: 1 }, { "x-agent-capability": await cap() });
-    }, 300);
-    const { requests } = (await (await hanging).json()) as { requests: Array<{ id: string }> };
-    const elapsed = Date.now() - t0;
-    assert.equal(requests.length, 1, "the hanging poll surfaced the parked request");
-    assert.ok(
-      elapsed < 5000,
-      `returned in ${elapsed}ms — should be shortly after the request landed, not at the wait cap`,
-    );
-    await signedPost(`/v1/surface-context/${requests[0]!.id}/result`, { messages: [] });
-  });
-
-  it("404s a result for an expired/unknown request id", async () => {
-    const res = await signedPost("/v1/surface-context/nonexistent/result", { messages: [] });
-    assert.equal(res.status, 404);
+    assert.deepEqual(await pending(), [], "nothing was parked");
   });
 
   it("answers a file pull with metadata plus a download token pinned to exactly that blob", async () => {
@@ -329,7 +294,9 @@ describe("surface-context pulls", async () => {
       { ts: "1700.2", threadTs: "1700.0001" },
       { "x-agent-capability": await cap() },
     );
-    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b2", name: "notes.txt", sizeBytes: 9 }] }));
+    const query = await fulfillNext(() => ({
+      attachments: [{ blobId: "b2", name: "notes.txt", sizeBytes: 9, mimetype: "text/plain" }],
+    }));
     assert.equal(query.conversationTarget, "C9:1700.0001");
     assert.deepEqual(query.file, { ts: "1700.2", threadTs: "1700.0001" });
     assert.equal((await asking).status, 200);
@@ -343,14 +310,16 @@ describe("surface-context pulls", async () => {
     );
     assert.equal(refused.status, 403);
     assert.equal(((await refused.json()) as any).error, "not_visible");
-    assert.deepEqual(((await (await signedGet(pendingPath())).json()) as any).requests, [], "nothing was parked");
+    assert.deepEqual(await pending(), [], "nothing was parked");
 
     const asking = post(
       "/v1/surface-file",
       { channel: "warroom", ts: "1.0" },
       { "x-agent-capability": await cap({ actorId: "U-member" }) },
     );
-    const query = await fulfillNext(() => ({ attachments: [{ blobId: "b3", name: "secret.pdf", sizeBytes: 1 }] }));
+    const query = await fulfillNext(() => ({
+      attachments: [{ blobId: "b3", name: "secret.pdf", sizeBytes: 1, mimetype: "application/pdf" }],
+    }));
     assert.equal(query.channelId, "C-SECRET");
     assert.equal((await asking).status, 200);
   });

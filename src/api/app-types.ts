@@ -558,7 +558,7 @@ export interface App {
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: WebhookPatch): Promise<Webhook | null>;
-  pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
+  pendingDeliveries(type: string): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
     text: string;
