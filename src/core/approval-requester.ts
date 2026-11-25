@@ -63,7 +63,7 @@ async function recordDeclined(
     body: {
       command: record.command,
       ...(record.purpose ? { purpose: record.purpose } : {}),
-      ...(record.summary ? { summary: record.summary } : {}),
+      ...(record.summary && record.call ? { summary: record.summary } : {}),
       ...body,
     },
   });

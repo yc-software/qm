@@ -371,7 +371,7 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         body: {
           command: record.command,
           ...(record.purpose ? { purpose: record.purpose } : {}),
-          ...(record.summary ? { summary: record.summary } : {}),
+          ...(record.summary && record.call ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
