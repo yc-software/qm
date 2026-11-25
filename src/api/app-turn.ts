@@ -173,7 +173,7 @@ export function createTurnMethods(
           status: "refused",
           refusalKind: "linked_bot",
           reason:
-            "I can't run this: a sign-in in this principal link is marked as a bot or app, and a bot can't act as a person. An org admin can delete the link (docs/principal-links.md).",
+            "I can't run this: a sign-in in this principal link is marked as a bot or app, and a bot can't act as a person. An org admin can delete the link (docs/spec/scopes.md).",
         };
       if (!deps.identity.isInternal(actor)) {
         return {

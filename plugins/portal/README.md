@@ -43,7 +43,7 @@ surfaces. Core imports it; it does **not** import the core and talks to core onl
    serves the live web UI release. Before handing off, the portal asks core for the session subject's canonical principal
    (`GET /v1/principals/:id/canonical`, cached for a minute). A sign-in that an org admin has
    linked to another identity therefore acts as that person's canonical principal; see
-   [`docs/principal-links.md`](../../docs/principal-links.md).
+   [`docs/spec/scopes.md`](../../docs/spec/scopes.md).
 
 ## Additional trusted entry (PoC)
 

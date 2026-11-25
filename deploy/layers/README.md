@@ -20,7 +20,7 @@ scaffolding, an operator runbook, and a per-directory `.gitignore` that keeps `.
 and Terraform state out of Git. Generate the layer rather than hand-building it so that
 `.gitignore` comes with it; the root `.gitignore` covers the same files as a backstop.
 
-The result, described in full in [`docs/deploy-directory.md`](../../docs/deploy-directory.md):
+The result, described in full in [`docs/spec/deployments.md`](../../docs/spec/deployments.md):
 
 ```text
 deploy/layers/<org>/

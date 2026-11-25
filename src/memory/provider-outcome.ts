@@ -23,8 +23,8 @@ export const DENIED_CODES: ReadonlySet<string> = new Set([
   "permission_denied",
 ]);
 export const MAX_FACTS_PER_WRITE = 20;
-const TROUBLESHOOTING = "docs/memory-providers.md#troubleshooting";
-const FORGET_DOCS = "docs/memory-providers.md#forgetting-a-brain-fact";
+const TROUBLESHOOTING = "docs/spec/context.md#troubleshooting";
+const FORGET_DOCS = "docs/spec/context.md#forgetting-a-brain-fact";
 
 const envelopes = new AsyncLocalStorage<(envelope: McpEnvelope) => void>();
 
@@ -155,7 +155,7 @@ function problemOf(group: ProblemGroup, operation: ProviderOperation): MemoryPro
         code: "memory_provider_disabled",
         provider,
         detail: `Memory provider ${provider} is registered for this scope but not serving it${reason}, so QM didn't call it.`,
-        fix: `Look up ${code ?? "the code"} in docs/memory-providers.md#memory-registry; GET /v1/admin/memory-registry shows the entry.`,
+        fix: `Look up ${code ?? "the code"} in docs/spec/context.md#memory-registry; GET /v1/admin/memory-registry shows the entry.`,
       };
     default:
       return undefined;

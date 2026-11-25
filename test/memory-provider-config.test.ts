@@ -325,7 +325,7 @@ test("provider URL errors name only the protocol and host and never echo secrets
         const text = String(error);
         assert.match(text, message);
         assert.match(text, /localhost, 127\.0\.0\.1, \*\.internal, \*\.flycast or \*\.local/);
-        assert.match(text, /docs\/memory-providers\.md#troubleshooting/);
+        assert.match(text, /docs\/spec\/context\.md#troubleshooting/);
         assert.doesNotMatch(text, new RegExp(SENTINEL));
         assert.doesNotMatch(text, /user:|token=/);
         return true;

@@ -2,7 +2,7 @@
 
 The standalone deployment CLI for QM. The normative directory schema,
 security guarantees, target behavior, and lifecycle are in
-[`docs/deploy-directory.md`](../docs/deploy-directory.md). `qm init` materializes
+[`docs/spec/deployments.md`](../docs/spec/deployments.md). `qm init` materializes
 the agent-consumable package runbook into the deployment repository.
 
 ```bash
