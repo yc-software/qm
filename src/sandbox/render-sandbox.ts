@@ -37,7 +37,6 @@ import type {
 } from "./render-client.ts";
 import type { RenderBase } from "./render-base.ts";
 import {
-  RENDER_COMPUTER_LIFETIME_SEC,
   RENDER_IDLE_STOP_MS,
   RENDER_BASE_TOOLS,
   RENDER_SANDBOX_TTL_SEC,
@@ -53,6 +52,7 @@ const RESTARTED_MESSAGE =
 const DELETED_MESSAGE = "This Render computer was deleted while the command ran";
 const FENCE = { stopped: true, stopping: true } as const;
 const UNFENCE = { stopped: undefined, stopping: undefined };
+const RESUMABLE = new Set(["running", "suspending", "suspended", "resuming"]);
 const activeSince = (stored: StoredRenderSandbox | null, cutoffMs: number): boolean =>
   !stored || stored.lastActivityMs > cutoffMs;
 
@@ -63,7 +63,6 @@ interface RenderSandboxResources {
 
 export interface StoredRenderSandbox extends RenderSandboxResources, SnapshotBookkeeping {
   sandboxId: string;
-  expiresAtMs: number;
   lastActivityMs: number;
   baseImage: string;
   stopped?: boolean;
@@ -110,7 +109,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
   const egressAllowlist = opts.egressProxyUrl ? renderEgressAllowlist(opts.egressProxyUrl) : undefined;
   const egress = egressAllowlist ? { egressAllowlist } : {};
@@ -363,13 +361,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     let stored = await store.get(scope);
     if (stored) stored = await cleanupRetired(scope, stored);
     const info = stored ? await client.get(stored.sandboxId) : null;
-    if (!stored || info?.status !== "running" || !egressCurrent(info)) return replace(scope, stored, info, onStatus);
-    const now = Date.now();
-    if (
-      info.expiresAtMs <= now + rotationMarginMs &&
-      (info.expiresAtMs <= now + rotationMarginMs / 2 || !activeSince(stored, now - ACTIVITY_GRACE_MS)) &&
-      !(await hasLiveProcesses(info.id))
-    )
+    if (!stored || !info || !RESUMABLE.has(info.status) || !egressCurrent(info))
       return replace(scope, stored, info, onStatus);
     await store.merge(scope, { lastActivityMs: Date.now(), ...(stored.stopped || stored.stopping ? UNFENCE : {}) });
     return { coldStart: false };
@@ -442,7 +434,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     const created = await client.create({
       name: await nameSandbox(),
       snapshotId: source.snapshotId,
-      lifetimeSec: RENDER_COMPUTER_LIFETIME_SEC,
       ...egress,
       onCreated: (sandboxId) => holdForCleanup(scope, sandboxId),
     });
@@ -453,7 +444,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       await store.put(scope, {
         ...stored,
         sandboxId: created.id,
-        expiresAtMs: created.expiresAtMs,
         lastActivityMs: Date.now(),
         baseImage: source.ref,
         stopped: undefined,
@@ -632,7 +622,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
-        os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; it resumes from its last checkpoint with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it suspends after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and resumes on the next command with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
@@ -743,7 +733,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     async reapDeepIdle(idleMs) {
       let reaped = 0;
       const scratchDue = (scratch: StoredRenderScratch | null): boolean =>
-        !!scratch && (scratch.cleanupPending || scratch.expiresAtMs <= Date.now());
+        !!scratch && (scratch.cleanupPending || (scratch.expiresAtMs ?? Infinity) <= Date.now());
       await claimThenBind(scratchStore.claimTenants, async () => {
         for (const [name, scratch] of await scratchStore.entries())
           if (scratchDue(scratch))
@@ -757,8 +747,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         Date.now() - Math.max(ACTIVITY_GRACE_MS, Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS));
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
-        !!stored.stopping ||
-        (!stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored)));
+        !!stored.stopping || (!stored.stopped && (stored.lastActivityMs <= cutoff || stale(stored)));
       await claimThenBind(
         () => cleanupStore.claimIds(),
         (scope) =>
@@ -777,12 +766,11 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
             if (!stored || !due(stored)) return;
             const info = await client.get(stored.sandboxId);
             if (!info || info.status === "terminated" || info.status === "errored") {
-              if (stored.expiresAtMs > Date.now())
-                reportError(
-                  "computer_ended",
-                  new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
-                  scope,
-                );
+              reportError(
+                "computer_ended",
+                new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+                scope,
+              );
               await store.merge(scope, { stopped: true });
               return;
             }
@@ -801,7 +789,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
                 reportError("credential_clear_failed", error, scope),
               );
               await checkpoint(scope, fenced, false);
-              await client.terminate(info.id);
+              await client.suspend(info.id);
               return true;
             });
             await store.merge(scope, stopped ? { stopping: undefined } : UNFENCE);
@@ -853,7 +841,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
           machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,
           provisioned: running,
           guestResponsive: response?.exitCode === 0,
-          expiresAtMs: stored.expiresAtMs,
           recovery,
           ...(running ? { lifecycleState: "running" } : {}),
         };

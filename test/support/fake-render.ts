@@ -76,6 +76,7 @@ export function createFakeRender() {
   const home = (id: string): string => join(root, id);
   const requireRunning = (id: string): RenderSandboxInfo => {
     const info = sandboxes.get(id);
+    if (info?.status === "suspended") info.status = "running";
     if (info?.status !== "running") throw new Error(`Render sandbox ${id} is no longer running`);
     return info;
   };
@@ -144,7 +145,11 @@ export function createFakeRender() {
   const client: RenderClient = {
     async create({ name, snapshotId, image, lifetimeSec, egressAllowlist, onCreated }) {
       const id = `sbx-${sandboxes.size + 1}`;
-      const info: RenderSandboxInfo = { id, status: "running", expiresAtMs: Date.now() + lifetimeSec * 1000 };
+      const info: RenderSandboxInfo = {
+        id,
+        status: "running",
+        ...(lifetimeSec ? { expiresAtMs: Date.now() + lifetimeSec * 1000 } : {}),
+      };
       if (snapshotId) {
         if ((snapshots.get(snapshotId) ?? goldens.get(snapshotId))?.status !== "available")
           throw new Error("checkpoint unavailable");
@@ -196,6 +201,9 @@ export function createFakeRender() {
       const info = sandboxes.get(id);
       if (info) info.status = "terminated";
       rmSync(home(id), { recursive: true, force: true });
+    },
+    async suspend(id) {
+      requireRunning(id).status = "suspended";
     },
     async runScript(id, script) {
       requireRunning(id);
@@ -413,6 +421,11 @@ export function serveFakeRenderApi(
       if (!fake.sandboxes.has(match[1]!)) return missing();
       await fake.client.terminate(match[1]!);
       return new Response(null, { status: 204 });
+    }
+    if ((match = /^\/sandboxes\/([^/]+)\/suspend$/.exec(path)) && request.method === "POST") {
+      if (!fake.sandboxes.has(match[1]!)) return missing();
+      await fake.client.suspend(match[1]!);
+      return new Response(null, { status: 202 });
     }
     if ((match = /^\/sandboxes\/([^/]+)\/(runs|files)\/([a-z]+)\/token$/.exec(path))) {
       const [, sandboxId, kind, operation] = match as unknown as [string, string, string, string];

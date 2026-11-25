@@ -35,7 +35,7 @@ const sdkErrors = {
 export interface RenderSandboxInfo {
   id: string;
   status: string;
-  expiresAtMs: number;
+  expiresAtMs?: number;
 }
 
 export interface RenderLiveSandbox extends RenderSandboxInfo {
@@ -51,7 +51,7 @@ interface RenderCreateOptions {
   name?: string;
   snapshotId?: string;
   image?: string;
-  lifetimeSec: number;
+  lifetimeSec?: number;
   egressAllowlist?: string[];
   onCreated?: (sandboxId: string) => Promise<void>;
 }
@@ -78,6 +78,7 @@ export interface RenderClient {
   get(sandboxId: string): Promise<RenderLiveSandbox | null>;
   listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
+  suspend(sandboxId: string): Promise<void>;
   runScript(
     sandboxId: string,
     script: string,
@@ -101,7 +102,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   const normalizeInfo = (value: Awaited<ReturnType<typeof api.create>>): RenderSandboxInfo => ({
     id: value.id,
     status: value.status,
-    expiresAtMs: Date.parse(value.createdAt) + value.timeoutSeconds * 1000,
+    ...(value.timeoutSeconds ? { expiresAtMs: Date.parse(value.createdAt) + value.timeoutSeconds * 1000 } : {}),
   });
   const normalizeSnapshot = (value: Awaited<ReturnType<typeof api.snapshots.create>>): RenderSnapshot => ({
     id: value.id,
@@ -227,7 +228,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         () =>
           api.create({
             plan: RENDER_SANDBOX_PLAN,
-            timeoutSeconds: lifetimeSec,
+            timeoutSeconds: lifetimeSec ?? 0,
             idleTimeoutSeconds: 0,
             networkPolicy: egressAllowlist
               ? { type: "allow-list", rules: egressAllowlist.map((domain) => ({ domain })) }
@@ -305,6 +306,12 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       }
     },
     terminate,
+    async suspend(sandboxId) {
+      await retryOperation(() => api.suspend(sandboxId), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: CONTROL_TIMEOUT_MS,
+      });
+    },
     runScript,
     async readFileBytes(sandboxId, absPath) {
       const exists = await exec(sandboxId, `test -f ${shq(absPath)}`, AbortSignal.timeout(CONTROL_TIMEOUT_MS));

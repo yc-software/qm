@@ -1,7 +1,6 @@
 import { isIP } from "node:net";
 
 export const RENDER_SANDBOX_TTL_SEC = 86400;
-export const RENDER_COMPUTER_LIFETIME_SEC = 2592000;
 export const RENDER_IDLE_STOP_MS = 3600_000;
 
 export const RENDER_BASE_TOOLS: ReadonlyArray<readonly [label: string, command: string]> = [
