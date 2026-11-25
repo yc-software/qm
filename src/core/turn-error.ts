@@ -90,7 +90,26 @@ export const steerWithheldItem = (sender: string): NewItem<"Error"> => ({
 const GENERIC_TURN_FAILURE = "That turn failed and couldn't be completed. The details are in the operator error log.";
 
 export const MODEL_BUDGET_TEXT =
-  "This workspace has used up its model budget, so I can't run until it resets. An admin can raise the limit.";
+  "This workspace has used up its included model budget. Ask an admin to add an organization API key.";
+
+export function modelBudgetMessage(opts: {
+  isAdmin?: boolean;
+  providersUrl?: string;
+  settingsUrl?: string;
+  personalModelAuth?: boolean;
+}): string {
+  if (opts.isAdmin) {
+    return opts.providersUrl
+      ? `This workspace has used up its included model budget. Add your own Anthropic, OpenAI, or OpenRouter API key to keep running: ${opts.providersUrl}`
+      : "This workspace has used up its included model budget. Add your own Anthropic, OpenAI, or OpenRouter API key in Settings → Onboarding to keep running.";
+  }
+  if (opts.personalModelAuth) {
+    return opts.settingsUrl
+      ? `This workspace has used up its included model budget. Connect your own Claude or ChatGPT account (${opts.settingsUrl}), or ask an admin to add an organization API key.`
+      : "This workspace has used up its included model budget. Connect your own Claude or ChatGPT account in Settings, or ask an admin to add an organization API key.";
+  }
+  return MODEL_BUDGET_TEXT;
+}
 
 export function isNonRetryable(err: unknown): boolean {
   return err instanceof NonRetryableTurnError || (err instanceof ProviderTurnError && !err.retryable);

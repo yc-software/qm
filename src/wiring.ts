@@ -749,10 +749,12 @@ export function buildApp(
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
+  const slackKeyMaterial = config.connectorSecretKey ?? randomBytes(32);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
-    config.connectorSecretKey ?? randomBytes(32),
+    slackKeyMaterial,
+    config.publicUrl ? { publicUrl: config.publicUrl } : undefined,
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)

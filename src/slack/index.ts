@@ -357,6 +357,7 @@ export async function startSlackPlugin(
   const statusSweep = createSweeper(reconcileStatus, 5_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
+    ...(cfg.personaId ? { personaId: cfg.personaId } : {}),
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) =>
       continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),

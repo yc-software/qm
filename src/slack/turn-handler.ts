@@ -115,6 +115,7 @@ function channelLocation(
 
 export function createTurnHandler(deps: {
   accountId?: string;
+  personaId?: string;
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
@@ -194,6 +195,7 @@ export function createTurnHandler(deps: {
       (classified.actor.isExternalGuest || classified.actor.isBot || !inc.userId || inc.synthetic)
     )
       return;
+    if (deps.personaId && inc.unprompted) return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(classified.actor)) return;
     const actor = botAuthoredActor(classified.actor, inc, ids.identityMode);
@@ -399,6 +401,7 @@ export function createTurnHandler(deps: {
         })(),
         text,
         gatewayContext,
+        ...(deps.personaId ? { personaId: deps.personaId } : {}),
         ...(actor.isBot ? { botActor: true } : {}),
         ...(conversationHeader ? { conversationHeader } : {}),
         ...(priorTurns ? { priorTurns } : {}),
