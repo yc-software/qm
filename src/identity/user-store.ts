@@ -455,14 +455,18 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 const MARKED = "string_to_array(current_setting('qm.marked_apps'), ',')::uuid[]";
 const BOT_WORK = [markBotWork(unlessSlackListsAPerson("l"), MARKED), holdBotLoopShips("system", MARKED)];
 
+async function markBotWorkOf(client: PoolClient, apps: readonly Record<string, unknown>[]): Promise<void> {
+  if (!apps.length) return;
+  await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [apps.map((app) => app.id).join(",")]);
+  for (const statement of BOT_WORK) await client.query(statement);
+}
+
 async function markAppsIn(client: PoolClient, aliases: readonly string[]): Promise<number> {
   const { rows } = await client.query(
     `UPDATE users SET kind = 'app' WHERE kind <> 'app' AND primary_alias = ANY($1::text[]) RETURNING id`,
     [aliases],
   );
-  if (!rows.length) return 0;
-  await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [rows.map((row) => row.id).join(",")]);
-  for (const statement of BOT_WORK) await client.query(statement);
+  await markBotWorkOf(client, rows);
   return rows.length;
 }
 
@@ -521,6 +525,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     `INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at) VALUES ($1, $2, $3, $4, ${ts("$5")})`,
     [link.principalId, target, link.evidence, linkedBy, link.createdAt],
   );
+  await markBotWorkOf(client, await q(`SELECT id FROM users WHERE id = $1 AND kind = 'app' FOR SHARE`, [target]));
   return toLink((await q(`${LINK_SELECT} WHERE l.alias_id = $1`, [link.principalId]))[0]!);
 }
 

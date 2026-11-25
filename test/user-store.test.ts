@@ -92,19 +92,26 @@ test("a user is a person until QM records it as an app by its own sign-in; then 
   await pg.close();
 });
 
-test("a link refuses an app user unless its directory row says it is a person, and the merge keeps a person", async () => {
+test("a link refuses an app user unless its directory row says it is a person, the merge keeps a person, and what a sign-in made becomes bot work when it joins an app", async () => {
   const app = `U-${randomUUID().slice(0, 8)}`;
-  const pat = unique("pat");
-  const roster = store();
-  await roster.record({ id: app, source: "turn", at: Date.now() });
-  await roster.markApps([app]);
+  const [pat, sam, kit, lee] = [unique("pat"), unique("sam"), unique("kit"), unique("lee")];
+  const [roster, db] = [store(), createPgPool(url)];
+  for (const id of [app, sam, kit]) await roster.record({ id, source: "turn", at: Date.now() });
+  await roster.markApps([app, sam]);
   const link = { principalId: app, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() };
   await assert.rejects(roster.link(link), PrincipalLinkError);
-  await createPostgresDirectoryStore(url).replace([
-    { principalId: app, displayName: "Sam", type: "internal", isBot: false },
-  ]);
+  await createPostgresDirectoryStore(url).replace(
+    [app, sam].map((principalId) => ({ principalId, displayName: "Sam", type: "internal", isBot: false }) as const),
+  );
   await roster.link(link);
   assert.deepEqual([(await roster.get(app))?.principalId, (await roster.get(pat))?.kind], [pat, "person"]);
+  const auto = { ownerScopeId: "channel:C1", shipActions: [{ gate: "auto" }] };
+  for (const who of [kit, lee]) {
+    await db.q("INSERT INTO loops (id, json) VALUES ($1, $2)", [who, { ...auto, createdBy: who }]);
+    await roster.link({ ...link, principalId: who, canonicalId: sam });
+  }
+  const held = `SELECT id FROM loops WHERE json @> '{"botActor": true, "shipActions": [{"gate": "hold"}]}'`;
+  assert.equal((await db.q(`${held} AND id = ANY($1)`, [[kit, lee]])).length, 2);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
