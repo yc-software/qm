@@ -1,6 +1,6 @@
 # qm
 
-**Read [`docs/SPEC.md`](./docs/SPEC.md) first, then the area spec it routes you to under [`docs/spec/`](./docs/spec/).** The spec is the source of truth for QM's north stars, deployment shapes, what is core and what is optional, subsystems and past mistakes. Where another doc disagrees, the spec wins.
+**Read [`docs/SPEC.md`](./docs/SPEC.md) first, then the area spec it routes you to under [`docs/spec/`](./docs/spec/).** `docs/SPEC.md` is the short source of truth for QM's north stars, deployment shapes, subsystems and past mistakes; the area specs hold the detail. Where another doc disagrees, the spec wins.
 
 To run and test, see [`README.md`](./README.md).
 
