@@ -10,12 +10,14 @@ import {
   type McpClient,
 } from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { attestedPerson, attestedActorHeaders, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { factHash, type MemoryCandidate } from "./facts.ts";
 import {
   DENIED_CODES,
+  failedOutcome,
   MAX_FACTS_PER_WRITE,
   MemoryWriteUnconfirmed,
   reportEnvelope,
@@ -44,6 +46,7 @@ function refuseDenied(result: CallToolResult, tool: string): void {
     throw new McpCallError(`memory provider refused ${tool} (${code}): ${mcpResultText(result)}`, {
       code,
       answered: true,
+      warnings: metaWarnings(result),
     });
 }
 
@@ -90,7 +93,7 @@ export function createMcpMemoryProvider(
     write?: McpMemoryOperation;
     forget?: McpMemoryOperation;
     label?: string;
-  } & ({ attestActor?: false } | { attestActor: true; url: string; lookupClient: McpClient }),
+  } & ({ attestActor?: false } | { attestActor: true; url: string }),
 ): MemoryService {
   const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
@@ -101,19 +104,32 @@ export function createMcpMemoryProvider(
 
   const listings = toolListings();
   const memoryTools = new Set([opts.read.tool, opts.write?.tool, opts.forget?.tool, WRITE_RECEIPT_TOOL]);
-  const lookupTools = async (scopeId: string, actorId: string | undefined, audienceScopeId: string | undefined) => {
+  const label = `memory provider ${opts.label}: tools/list`;
+  const lookupTools = async (
+    scopeId: string,
+    actorId: string | undefined,
+    audienceScopeId: string | undefined,
+    allowStale: boolean,
+  ) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     const listed = await listings.fetch(person!, {
+      allowStale,
       context: {
-        label: `memory provider ${opts.label}: tools/list`,
-        list: async () =>
-          (
-            await opts.read.client.listTools({
+        label,
+        list: () =>
+          opts.read.client
+            .listTools({
               headers: headers!,
               maxTools: CATALOG_MAX_TOOLS,
               signal: AbortSignal.timeout(opts.read.timeoutMs),
             })
-          ).tools,
+            .then(
+              ({ tools }) => tools,
+              (error: unknown) => {
+                if (failedOutcome(error).outcome !== "denied") throw error;
+                return reportFailureAs(label, [])(error);
+              },
+            ),
       },
     });
     return (listed ?? []).filter((tool) => tool.annotations?.readOnlyHint === true && !memoryTools.has(tool.name));
@@ -230,10 +246,11 @@ export function createMcpMemoryProvider(
     ...(opts.attestActor
       ? {
           brain: { endpoint: factHash(opts.url).slice(0, 16), timeoutMs: opts.read.timeoutMs },
-          lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
+          lookupTools: (scopeId, { actorId, audienceScopeId }, { allowStale }) =>
+            lookupTools(scopeId, actorId, audienceScopeId, allowStale),
           lookup: async (scopeId, tool, args, by, context) => {
             const result = await call(
-              { ...opts.read, client: opts.lookupClient, tool },
+              { ...opts.read, tool },
               { ...args },
               [opts.read.actorArg ?? ACTING_USER, ACTING_USER].filter((arg) => Object.hasOwn(args, arg)),
               by?.actorId,

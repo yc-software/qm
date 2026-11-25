@@ -214,10 +214,12 @@ export function createRoutedMemoryService(opts: {
           id: provider,
           label: label ?? provider,
           ...opts.providers[provider]!.brain!,
-          tools: await opts.providers[provider]!.lookupTools!(scopeId, reader).catch((error: unknown) => {
-            opts.onError?.(error, provider, "lookup");
-            return [];
-          }),
+          tools: await opts.providers[provider]!.lookupTools!(scopeId, reader, { allowStale: true }).catch(
+            (error: unknown) => {
+              opts.onError?.(error, provider, "lookup");
+              return [];
+            },
+          ),
         })),
       );
     },
@@ -233,33 +235,30 @@ export function createRoutedMemoryService(opts: {
         actorId: by!.actorId!,
         ...(context?.audienceScopeId ? { audienceScopeId: context.audienceScopeId } : {}),
       };
-      if (!(await provider.lookupTools!(scopeId, reader)).some((listed) => listed.name === ref.ref))
-        throw brainRefused(`${ref.ref} isn't a read-only tool ${route.provider} lists for this person.`);
       const started = Date.now();
-      let failure: unknown;
-      try {
-        return await provider.lookup!(scopeId, ref.ref, args, by, context);
-      } catch (error) {
-        failure = error;
-      }
-      opts.onError?.(failure, route.provider, "lookup");
-      const problem = problemOf(
-        {
-          provider: route.provider,
-          scope: scopeId,
-          ms: Date.now() - started,
-          ...failedOutcome(failure),
-          refs: [ref.ref],
-        },
-        "lookup",
-      )!;
-      throw new Error(
-        [
-          problemLine(problem),
-          quotedData(errMessage(failure)),
-          ...(failure instanceof McpCallError ? failure.warnings : []),
-        ].join("\n"),
-      );
+      const failed = (error: unknown) => {
+        opts.onError?.(error, route.provider, "lookup");
+        const problem = problemOf(
+          {
+            provider: route.provider,
+            scope: scopeId,
+            ms: Date.now() - started,
+            ...failedOutcome(error),
+            refs: [ref.ref],
+          },
+          "lookup",
+        )!;
+        const warnings = error instanceof McpCallError ? error.warnings : [];
+        return new Error([problemLine(problem), quotedData([errMessage(error), ...warnings].join("\n"))].join("\n"));
+      };
+      const listed = await provider.lookupTools!(scopeId, reader, { allowStale: false }).catch((error: unknown) => {
+        throw failed(error);
+      });
+      if (!listed.some((tool) => tool.name === ref.ref))
+        throw brainRefused(`${ref.ref} isn't a read-only tool ${route.provider} lists for this person.`);
+      return provider.lookup!(scopeId, ref.ref, args, by, context).catch((error: unknown) => {
+        throw failed(error);
+      });
     },
 
     async read(scopeId) {

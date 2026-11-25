@@ -131,13 +131,12 @@ export function toolListings(): ToolListings {
     ttl: LISTING_TTL_MS,
     allowStale: true,
     ignoreFetchAbort: true,
+    noDeleteOnFetchRejection: true,
     fetchMethod: (_key, stale, { context, options }) =>
       context.list().catch((error: unknown) => {
         if (!options.allowStale) throw error;
-        return reportFailureAs(
-          context.label,
-          error instanceof McpCallError && error.answered ? [] : (stale ?? []),
-        )(error);
+        options.noUpdateTTL = true;
+        return reportFailureAs(context.label, stale ?? [])(error);
       }),
   });
 }
@@ -290,9 +289,11 @@ export function createMcpClient(opts: {
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
+      const rpcCode = e instanceof McpError ? envelopeOf(e.data).code : undefined;
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        ...(rpcCode ? { code: rpcCode } : {}),
         ...(opened
           ? {
               answered:

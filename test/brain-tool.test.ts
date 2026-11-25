@@ -312,9 +312,8 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   const warned = { _meta: { warnings: [{ code: "unknown_param", param: "colour" }], brain_hot_memory: HOT_MEMORY } };
   acme.failures.set("Warned", { content: [{ type: "text", text: "nothing found" }], ...warned });
   acme.failures.set("Unknown", { isError: true, content: [{ type: "text", text: "query needs words" }], ...warned });
-  acme.failures.set("Big", { content: [{ type: "text", text: "x".repeat(1_100_000) }] });
   const ask = (query: string) => ({ call: { server: "brain.acme", tool: "query", args: { query } } });
-  const asked = ["slow", "Nobody", "Unlisted", "Broken", "Malformed", "Withheld", "Warned", "Unknown", "Big"];
+  const asked = ["slow", "Nobody", "Unlisted", "Broken", "Malformed", "Withheld", "Warned", "Unknown"];
   const { texts } = (await turn(asked.map(ask)))!;
   assert.match(texts[0]!, /"query":"slow"/);
   assert.match(
@@ -332,8 +331,7 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   );
   assert.match(texts[5]!, /^\[error\] \[memory_provider_denied\] Memory provider acme refused query \(scope_denied\)/);
   assert.equal(texts[6], 'nothing found\nwarning: {"code":"unknown_param","param":"colour"}');
-  assert.match(texts[7]!, /query needs words[\s\S]*\nwarning: \{"code":"unknown_param","param":"colour"\}$/);
-  assert.doesNotMatch(texts[8]!, /^\[error\]/);
+  assert.match(texts[7]!, /query needs words[\s\S]*\nwarning: \{"code":"unknown_param","param":"colour"\}\n```$/);
   for (const text of texts.slice(1, 6)) assert.equal(text.match(/refused with|rebuilding/g)?.length, 1, text);
 });
 

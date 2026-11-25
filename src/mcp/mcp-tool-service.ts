@@ -142,8 +142,15 @@ function shared(server: McpServer): boolean {
 }
 
 export function uniqueTools(tools: McpToolDescriptor[]): McpToolDescriptor[] {
-  const seen = new Set<string>();
-  return tools.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+  const seen = new Map<string, McpToolDescriptor>();
+  return tools.filter((tool) => {
+    const kept = seen.get(tool.name);
+    if (!kept) return (seen.set(tool.name, tool), true);
+    console.warn(
+      `[mcp] ${tool.remoteName} on ${tool.serverId} is hidden because ${kept.remoteName} on ${kept.serverId} has the same tool name ${tool.name}`,
+    );
+    return false;
+  });
 }
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {

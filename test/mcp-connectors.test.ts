@@ -11,6 +11,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { sleep } from "../src/util/async.ts";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -73,27 +74,38 @@ test("mcp client caps a server's tool list and says so", async (t) => {
   assert.match(String(warned.mock.calls[0]?.arguments[0]), /lists more than 64 tools; QM keeps the first 64$/);
 });
 
-test("a failed brain listing leaves none for its minute, an answered failure drops the old list, and a catalog's failure fails", async (t) => {
+test("a failed brain listing leaves none for its minute, keeps an old list stale, and fails a caller that needs it fresh", async (t) => {
   t.mock.method(console, "error", () => {});
   const listings = toolListings();
   const tool = { name: "query", description: "", inputSchema: {} };
-  let failure: Error = new Error("brain down");
   let asked = 0;
   const fetch = (key: string, allowStale = true) =>
-    listings.fetch(key, { allowStale, context: { label: "brain", list: () => (asked++, Promise.reject(failure)) } });
+    listings.fetch(key, {
+      allowStale,
+      context: { label: "brain", list: () => (asked++, Promise.reject(new Error("brain down"))) },
+    });
   assert.deepEqual([await fetch("a"), await fetch("a"), asked], [[], [], 1]);
-  for (const [error, kept] of [
-    [new McpCallError("mcp tools/list failed", {}), [tool]],
-    [new McpCallError("mcp tools/list failed", { answered: true }), []],
-  ] as const) {
-    failure = error;
-    listings.set("a", [tool], { ttl: 1 });
-    await sleep(5);
-    assert.deepEqual(await fetch("a"), [tool]);
-    await sleep(5);
-    assert.deepEqual(listings.get("a"), kept);
-  }
-  await assert.rejects(fetch("b", false), /mcp tools\/list failed/);
+  listings.set("b", [tool], { ttl: 1 });
+  await sleep(5);
+  assert.deepEqual(await fetch("b"), [tool]);
+  await sleep(5);
+  await assert.rejects(fetch("b", false), /brain down/);
+  assert.deepEqual(await fetch("b"), [tool]);
+});
+
+test("a JSON-RPC error carries the server's own code", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    call: () => {
+      throw new McpError(ErrorCode.InvalidRequest, "actor_not_attested: nothing was read", {
+        code: "actor_not_attested",
+      });
+    },
+  });
+  const client = createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } });
+  await assert.rejects(
+    client.callTool("query", {}),
+    (error) => error instanceof McpCallError && error.code === "actor_not_attested",
+  );
 });
 
 test("a tool result with no text reads as its structured content, or as nothing", () => {

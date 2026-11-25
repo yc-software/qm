@@ -95,7 +95,7 @@ test(
   { timeout: 5_000 },
   async () => {
     const sent: Array<Record<string, unknown>> = [];
-    const lookupClient: McpClient = {
+    const brain: McpClient = {
       listTools: async () => ({ tools: [] }),
       callTool: (_tool, args, _headers, signal) => {
         sent.push(args);
@@ -103,10 +103,9 @@ test(
       },
     };
     const provider = createMcpMemoryProvider({
-      read: { client: lookupClient, tool: "recall", actorArg: "member", timeoutMs: 100 },
+      read: { client: brain, tool: "recall", actorArg: "member", timeoutMs: 100 },
       attestActor: true,
       url: "https://brain.example/mcp",
-      lookupClient,
     });
     const turn = new AbortController();
     const asked = provider.lookup!(
@@ -121,6 +120,25 @@ test(
     assert.deepEqual(sent, [{ acting_user: "U1", member: "U1", slug: "a" }]);
   },
 );
+
+test("a brain that refuses a member's tool list offers them none, and one that fails it leaves a lookup nothing to check", async (t) => {
+  t.mock.method(console, "error", () => {});
+  let failure = new McpCallError("mcp tools/list failed", { code: "actor_not_attested", answered: true });
+  const provider = createMcpMemoryProvider({
+    read: { client: { ...client([]), listTools: () => Promise.reject(failure) }, tool: "recall", timeoutMs: 100 },
+    attestActor: true,
+    url: "https://brain.example/mcp",
+  });
+  const listed = (member: string) =>
+    provider.lookupTools!(
+      `personal:${member}`,
+      { actorId: member, audienceScopeId: `personal:${member}` },
+      { allowStale: false },
+    );
+  assert.deepEqual(await listed("U1"), []);
+  failure = new McpCallError("mcp tools/list failed (HTTP 502)", { status: 502 });
+  await assert.rejects(listed("U2"), /HTTP 502/);
+});
 
 test("MCP recall returns one row per line of the provider's answer", async () => {
   const memory = createMcpMemoryProvider({
@@ -140,7 +158,6 @@ test("a write that carries no member is not sent to an attested provider", async
         read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
         write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
         attestActor: true,
-        lookupClient: client(calls),
         url: "https://knowledge.example/mcp",
       }),
     },
@@ -223,7 +240,6 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       read: { client, tool: "memory_recall", timeoutMs: 100 },
       forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
-      lookupClient: client,
       url: "https://brain.example/mcp",
     });
   const gone = `http://127.0.0.1:${await closedPort()}`;

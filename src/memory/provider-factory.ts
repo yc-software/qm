@@ -14,18 +14,22 @@ import type { Item } from "../sessions/items.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 
-function client(url: string, { auth }: McpMemoryOperationConfig, fetchFn: AddressFetch, maxResponseBytes?: number) {
-  return createMcpClient({ url, auth: { mode: "client-credentials", ...auth }, fetch: fetchFn, maxResponseBytes });
-}
-
 function operation(
   url: string,
-  config: McpMemoryOperationConfig,
+  { auth, ...spec }: McpMemoryOperationConfig,
   timeoutMs: number,
   fetchFn: AddressFetch,
 ): McpMemoryOperation {
-  const { auth: _auth, ...spec } = config;
-  return { client: client(url, config, fetchFn, MAX_RESPONSE_BYTES), timeoutMs, ...spec };
+  return {
+    client: createMcpClient({
+      url,
+      auth: { mode: "client-credentials", ...auth },
+      fetch: fetchFn,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
+    }),
+    timeoutMs,
+    ...spec,
+  };
 }
 
 export const logMemoryProviderError = (error: unknown, provider: string, operation: string): void =>
@@ -58,13 +62,7 @@ export function createMemoryProviders(
         ? { forget: operation(provider.url, provider.forget, MAX_PROVIDER_TIMEOUT_MS, fetchFn) }
         : {}),
       label: provider.id,
-      ...(provider.attestActor
-        ? {
-            attestActor: true as const,
-            url: provider.url,
-            lookupClient: client(provider.url, provider.read, fetchFn),
-          }
-        : { attestActor: false as const }),
+      ...(provider.attestActor ? { attestActor: true as const, url: provider.url } : { attestActor: false as const }),
     });
   }
   return providers;

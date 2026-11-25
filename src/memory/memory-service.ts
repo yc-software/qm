@@ -117,7 +117,7 @@ export interface BoundBrain {
 export interface MemoryService {
   attestActor?: boolean;
   brain?: Pick<BoundBrain, "endpoint" | "timeoutMs">;
-  lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
+  lookupTools?(scopeId: ScopeId, reader: MemoryReader, listing: { allowStale: boolean }): Promise<McpRemoteTool[]>;
   brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
   lookup?(
     scopeId: ScopeId,
