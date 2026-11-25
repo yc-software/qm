@@ -388,13 +388,6 @@ import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
 import { watchReplyNotices } from "./notifications/reply-notifications.ts";
-import {
-  createWebPush,
-  webPushSubject,
-  type VapidKeyRecord,
-  type WebPush,
-  type WebPushSubscriptionRecord,
-} from "./notifications/web-push.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
@@ -597,7 +590,6 @@ export interface BuiltApp {
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
-  webPush?: WebPush;
   slackCore: SlackCoreClient;
 }
 
@@ -2678,22 +2670,10 @@ export function buildApp(
       if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
-  const pushSubject = webPushSubject(config.publicUrl);
-  const webPush = pushSubject
-    ? createWebPush({
-        subscriptions: artifactMap<WebPushSubscriptionRecord>("web_push_subscriptions", ["principalId"]),
-        vapid: artifactMap<VapidKeyRecord>("web_push_vapid"),
-        key: deriveConnectorKey(config.connectorSecretKey, "web-push"),
-        secrets: secretStore,
-        subject: pushSubject,
-      })
-    : undefined;
   watchReplyNotices({
     bus: sessionStateBus,
     sessions,
     notifiable: () => enabledPeople(featureFlags, "web_notifications"),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(webPush ? { send: webPush.send } : {}),
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
@@ -3419,7 +3399,6 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    ...(webPush ? { webPush } : {}),
     sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
@@ -3565,7 +3544,6 @@ export function serverDeps(
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
-    ...(built.webPush ? { webPush: built.webPush } : {}),
     environments: built.environments,
     sandboxResources: built.sandboxResources,
   };
