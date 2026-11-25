@@ -66,7 +66,11 @@ struct RootView: View {
             NativeConversationSections(
               conversations: visibleConversations, contexts: contexts, search: search,
               selectedID: selectedConversation?.id, updatingIDs: model.updatingConversationIDs,
-              onOpen: open, actions: conversationActions
+              onOpen: open,
+              onNew: { scopeId, title in
+                open(.draft(user: identity.user, scopeId: scopeId, channelName: title))
+              },
+              actions: conversationActions
             )
             .id(model.client?.baseURL)
             loadMoreRow

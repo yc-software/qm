@@ -168,6 +168,7 @@ struct NativeConversationSections<Actions: View>: View {
   let selectedID: String?
   let updatingIDs: Set<String>
   let onOpen: (Conversation) -> Void
+  var onNew: ((_ scopeId: String, _ title: String) -> Void)?
   @ViewBuilder let actions: (Conversation) -> Actions
   @State private var collapsedScopes = Set<String>()
   @State private var expandedFolderScopes = Set<String>()
@@ -183,33 +184,51 @@ struct NativeConversationSections<Actions: View>: View {
     _ section: NativeConversationSection, contexts: [String: WorkspaceContext]
   ) -> some View {
     let expanded = !search.isEmpty || !collapsedScopes.contains(section.id)
-    Button {
-      if !collapsedScopes.insert(section.id).inserted {
-        collapsedScopes.remove(section.id)
+    let scopeId = section.id.hasPrefix("scope:") ? String(section.id.dropFirst(6)) : nil
+    let newScope = scopeId.flatMap { ScopeKind(scopeId: $0) == .personal ? nil : $0 }
+    HStack(spacing: 0) {
+      Button {
+        if !collapsedScopes.insert(section.id).inserted {
+          collapsedScopes.remove(section.id)
+        }
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: expanded ? section.icon : "chevron.right")
+            .frame(width: 18)
+          Text(section.title).lineLimit(1)
+          Spacer(minLength: 0)
+          if !section.members.isEmpty { NativeGroupAvatars(members: section.members) }
+          if expanded { Image(systemName: "chevron.down").font(.caption2) }
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .frame(minHeight: 40)
+        .contentShape(Rectangle())
       }
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: expanded ? section.icon : "chevron.right")
-          .frame(width: 18)
-        Text(section.title).lineLimit(1)
-        Spacer(minLength: 0)
-        if !section.members.isEmpty { NativeGroupAvatars(members: section.members) }
-        if expanded { Image(systemName: "chevron.down").font(.caption2) }
+      .buttonStyle(.plain)
+      .accessibilityLabel(
+        section.title
+          + (section.members.isEmpty
+            ? "" : ", with " + section.members.map(\.displayName).joined(separator: ", "))
+      )
+      .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+      .accessibilityHint("Show or hide conversations in this section")
+      .disabled(!search.isEmpty)
+      if let newScope, let onNew {
+        Button {
+          onNew(newScope, section.title)
+        } label: {
+          Image(systemName: "plus")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(width: 36, height: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .padding(.trailing, -10)
+        .accessibilityLabel("New conversation in \(section.title)")
       }
-      .font(.subheadline)
-      .foregroundStyle(.secondary)
-      .frame(minHeight: 40)
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .accessibilityLabel(
-      section.title
-        + (section.members.isEmpty
-          ? "" : ", with " + section.members.map(\.displayName).joined(separator: ", "))
-    )
-    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-    .accessibilityHint("Show or hide conversations in this section")
-    .disabled(!search.isEmpty)
     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
     .listRowSeparator(.hidden)
     ForEach(
