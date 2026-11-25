@@ -10,7 +10,6 @@ export function connectorCard(
   withReturnTo: (url: string) => string = (url) => url,
 ): TemplateResult {
   const composio = link.provider === "composio";
-  const external = link.provider === "external";
   const name = CONNECTOR_LABELS[link.provider]?.name ?? "your account";
   const service = connectorService(link);
   if (!composio && connected) {
@@ -22,15 +21,14 @@ export function connectorCard(
   }
   return html`<a
     class="connector-widget"
-    href=${composio || external ? link.url : withReturnTo(link.url)}
+    href=${composio ? link.url : withReturnTo(link.url)}
     target="_blank"
     rel="noreferrer"
     title="Opens in a new tab"
   >
-    ${connectorLogo(service, external ? `https://logos.composio.dev/api/${service}` : undefined)}
+    ${connectorLogo(service)}
     <span class="connector-widget-text"
-      ><strong>${((composio || external) && link.label) || `Connect ${name}`}</strong>
-      <small>${external ? new URL(link.url).hostname : "Authorize access"} · New tab</small></span
+      ><strong>${(composio && link.label) || `Connect ${name}`}</strong> <small>Authorize access · New tab</small></span
     >
     <span class="connector-widget-action" aria-hidden="true">${icon(ArrowUpRight, 16)}</span>
   </a>`;

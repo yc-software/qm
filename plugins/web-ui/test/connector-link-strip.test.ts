@@ -185,25 +185,3 @@ test("Composio service logos use recognizable names without changing the destina
   assert.equal(connectorService({ provider: "composio", url: COMPOSIO_URL }), "");
   assert.equal(connectorService({ provider: "github", url: URL, label: "Slack" }), "github");
 });
-
-test("a Connect link to another site becomes a card only when it names a known app", () => {
-  const text = [
-    "[Connect Gmail](https://partner.example/integrations#gmail-read)",
-    "[Connect Granola](https://partner.example/integrations#granola)",
-    "[Connect Acme](https://partner.example/acme)",
-    "[Gmail settings](https://partner.example/gmail)",
-    "[Connect Gmail](http://partner.example/insecure)",
-  ].join("\n");
-  const links = connectorLinksIn(text, "https://agent.example.com");
-  assert.deepEqual(
-    links.map((link) => [link.provider, connectorService(link), link.url]),
-    [
-      ["external", "gmail", "https://partner.example/integrations#gmail-read"],
-      ["external", "granola_mcp", "https://partner.example/integrations#granola"],
-    ],
-  );
-  assert.equal(
-    stripConnectorLinks("Here: [Connect Granola](https://partner.example/integrations#granola)", links),
-    "Here:",
-  );
-});

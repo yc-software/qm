@@ -42,10 +42,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     releaseStatus();
     await settle();
     assert.match(element.textContent ?? "", /Add to Slack/);
-    assert.match(element.textContent ?? "", /Choose your company’s workspace, where your team already talks\./);
-    Object.assign(element, { cohort: "F26" });
-    await settle();
-    assert.match(element.textContent ?? "", /Choose your company’s workspace, not the F26 batch Slack\./);
+    assert.match(element.textContent ?? "", /Choose your company’s own workspace, not a shared community one\./);
     assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
     const browserUrls: string[] = [];
     Object.assign(window, {

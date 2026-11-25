@@ -301,7 +301,7 @@ The welcome uses the organization's configured branding `orgName`, falling back 
 
 ### Setup widgets in agent replies
 
-In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. When an install started from that card is verified, the card animates to its added state and the chat continues once, like an app connected from the picker. On deployments with a welcome cohort, its hint names the cohort's batch Slack so founders pick their company workspace instead. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
+In web chat, an assistant reply can include `::connect-apps{}` as a standalone paragraph to render the reusable app picker. The separate `::add-to-slack{}` directive renders the Slack setup action for administrators; include both to show both. When an install started from that card is verified, the card animates to its added state and the chat continues once, like an app connected from the picker. A single-app card for an app a connector serves (one with a `connectUrl`) opens that site, and the chat continues once the app shows as connected. It omits the welcome and animation and uses the signed-in viewer’s authorization routes. The Composio skill teaches this response for requests to connect apps or reopen setup. Code blocks, quotations, and inline examples remain ordinary text. The directive persists in the transcript and renders again when reopened. Connected-account status retains the same limitations as the onboarding picker and local return-flow preview.
 
 ## Optional product analytics
 
@@ -368,7 +368,5 @@ access failures do not retry on company credentials. Messages using a different
 account queue separately instead of steering an existing run; an explicit steer
 across accounts is refused. Organizations that already require individual accounts
 continue to require them.
-
-A Markdown link to another site whose label starts with `Connect ` and names a known app, such as `[Connect Granola](https://example.com/integrations#granola)`, renders as a connector card showing the app's logo and the destination host. It opens in a new tab; QM cannot see when such a connection finishes, so the card does not continue the chat.
 
 The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.

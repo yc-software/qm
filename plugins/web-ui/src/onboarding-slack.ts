@@ -16,10 +16,9 @@ export class OnboardingSlack extends LitElement {
     busy: { state: true },
     error: { state: true },
     justInstalled: { state: true },
-    cohort: {},
   };
-  declare cohort: string;
   private connected = false;
+  private installStarted = false;
   private justInstalled = false;
   private installAvailable: boolean | undefined;
   private unavailable = false;
@@ -70,8 +69,8 @@ export class OnboardingSlack extends LitElement {
       const wasConnected = this.connected;
       this.installAvailable = status.installAvailable === true;
       this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
-      if (this.connected && !wasConnected && Date.now() < this.pollUntil) {
-        this.pollUntil = 0;
+      if (this.connected && !wasConnected && this.installStarted) {
+        this.installStarted = false;
         this.justInstalled = true;
         this.dispatchEvent(new window.CustomEvent("slack-installed", { bubbles: true }));
       }
@@ -94,12 +93,17 @@ export class OnboardingSlack extends LitElement {
     }
   }
 
+  private watchInstall(): void {
+    this.installStarted = true;
+    this.pollUntil = Date.now() + 10 * 60_000;
+    void this.refresh();
+  }
+
   private async install(): Promise<void> {
     if (this.busy || this.installAvailable === undefined) return;
     try {
       if (await openDesktopBrowser(`${SLACK_SETTINGS}?slack=install`)) {
-        this.pollUntil = Date.now() + 10 * 60_000;
-        void this.refresh();
+        this.watchInstall();
         return;
       }
     } catch {
@@ -114,8 +118,7 @@ export class OnboardingSlack extends LitElement {
     popup.opener = null;
     if (this.installAvailable === false && !this.unavailable) {
       popup.location.href = `${SLACK_SETTINGS}?setup=slack`;
-      this.pollUntil = Date.now() + 10 * 60_000;
-      void this.refresh();
+      this.watchInstall();
       return;
     }
     popup.document.title = "Connecting Slack";
@@ -144,8 +147,7 @@ export class OnboardingSlack extends LitElement {
       form.action = target.href;
       popup.document.body.append(form);
       form.submit();
-      this.pollUntil = Date.now() + 10 * 60_000;
-      void this.refresh();
+      this.watchInstall();
     } catch {
       popup.close();
       this.error = failure;
@@ -157,10 +159,6 @@ export class OnboardingSlack extends LitElement {
   protected render() {
     let label = this.busy ? "Opening Slack…" : "Add to Slack";
     if (this.installAvailable === undefined) label = "Checking Slack…";
-    const cohort = this.cohort?.trim();
-    const hint = cohort
-      ? `Choose your company’s workspace, not the ${cohort} batch Slack.`
-      : "Choose your company’s workspace, where your team already talks.";
     let status = html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`;
     if (this.justInstalled)
       status = html`<div class="welcome-slack slack-installed" role="status">
@@ -177,7 +175,9 @@ export class OnboardingSlack extends LitElement {
             ?disabled=${this.busy || this.installAvailable === undefined}
             @click=${() => void this.install()}
           >
-            ${slackMark(24)}<span><strong>${label}</strong><small>${hint}</small></span
+            ${slackMark(24)}<span
+              ><strong>${label}</strong
+              ><small>Choose your company’s own workspace, not a shared community one.</small></span
             >${icon(ArrowUpRight, 16)}
           </button>`
     }

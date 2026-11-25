@@ -71,13 +71,7 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
       if (!out.some((l) => l.provider === "slack-bot")) out.push({ provider: "slack-bot", url });
       continue;
     }
-    if (trustedOrigin && parsed.origin !== trustedOrigin) {
-      const label = labels.get(url) ?? "";
-      const external: ConnectorLink = { provider: "external", url, label };
-      if (parsed.protocol === "https:" && label.startsWith("Connect ") && connectorService(external))
-        if (!out.some((l) => l.url === url)) out.push(external);
-      continue;
-    }
+    if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
     if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
     const provider = parsed.searchParams.get("p") ?? "";
     if (!CONNECTOR_LABELS[provider]) continue;
@@ -99,7 +93,7 @@ export function stripConnectorLinks(text: string, links = connectorLinksIn(text)
 }
 
 export function connectorService(link: ConnectorLink): string {
-  if (link.provider !== "composio" && link.provider !== "external") return link.provider;
+  if (link.provider !== "composio") return link.provider;
   const label = (link.label ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -116,7 +110,6 @@ export function connectorService(link: ConnectorLink): string {
     ["github", /\bgithub\b/],
     ["dropbox", /\bdropbox\b/],
     ["x", /\b(?:twitter|x)\b/],
-    ["granola_mcp", /\bgranola\b/],
   ];
   const matches = services.filter(([, pattern]) => pattern.test(label));
   const hasGoogleProduct = matches.some(([id]) => id.startsWith("google") && id !== "google");
