@@ -31,6 +31,7 @@ const selfServed: Array<Record<string, unknown>> = [];
 const orgTenants: Record<string, string> = {};
 const principalLookups: string[] = [];
 const claimed = new Set<string>();
+let claimsDown = false;
 const admissions: Array<string | undefined> = [];
 const surface: Array<string | undefined> = [];
 const coreCalls: Array<{ path: string; tenant: string | undefined }> = [];
@@ -83,6 +84,7 @@ const upstream = createServer((req, res) => {
       return void res.end(JSON.stringify({ tenants: principalTenants, shared, selfServe }));
     }
     if (path === "/v1/auth/broker/claim") {
+      if (claimsDown) return void res.writeHead(503).end("{}");
       let raw = "";
       for await (const chunk of req) raw += String(chunk);
       const id = (JSON.parse(raw) as { ids: string[] }).ids[0]!;
@@ -161,15 +163,20 @@ function sessionOf(response: Response): Record<string, unknown> | null {
   return open(readCookie(cookieFrom(response, "portal_session") ?? "", "portal_session"), sessionKey);
 }
 
-async function callback(): Promise<Response> {
+async function callbackRequest(): Promise<() => Promise<Response>> {
   const login = await fetch(`${base}/auth/login?returnTo=%2F`, { redirect: "manual" });
   const tmpCookie = cookieFrom(login, "portal_oidc_tmp")!;
   const tmp = open(readCookie(tmpCookie, "portal_oidc_tmp"), tmpKey)!;
   nonce = tmp.nonce as string;
-  return fetch(`${base}/auth/callback?code=test&state=${tmp.state as string}`, {
-    headers: { cookie: tmpCookie },
-    redirect: "manual",
-  });
+  return () =>
+    fetch(`${base}/auth/callback?code=test&state=${tmp.state as string}`, {
+      headers: { cookie: tmpCookie },
+      redirect: "manual",
+    });
+}
+
+async function callback(): Promise<Response> {
+  return (await callbackRequest())();
 }
 
 function choose(choiceCookie: string, tenant: string): Promise<Response> {
@@ -191,6 +198,20 @@ test("an email in one tenant signs in bound to it and every proxied request name
   surface.length = 0;
   await fetch(`${base}/`, { headers: { cookie: cookieFrom(response, "portal_session")! }, redirect: "manual" });
   assert.equal(surface.at(-1), alpha);
+});
+
+test("a replayed sign-in callback is refused", async () => {
+  tenants = [];
+  const request = await callbackRequest();
+  assert.equal((await request()).status, 302);
+  assert.equal((await request()).status, 400);
+});
+
+test("a sign-in callback fails closed while the shared claim store is down", async () => {
+  tenants = [];
+  claimsDown = true;
+  const response = await callback().finally(() => (claimsDown = false));
+  assert.deepEqual([response.status, sessionOf(response)], [503, null]);
 });
 
 test("an email in no tenant keeps today's untenanted sign-in", async () => {

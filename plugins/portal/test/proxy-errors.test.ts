@@ -51,7 +51,6 @@ process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";
 process.env.CORE_API_URL = upstreamUrl;
 
-const { consumeState, consumedStates } = await import("../src/index.ts");
 const { deriveKey, seal } = await import("../src/session.ts");
 const { base, port, close } = await startWithFakeCore();
 
@@ -215,21 +214,3 @@ for (const mode of ["down", "malformed"] as const) {
     assert.equal(ok.status, 200);
   });
 }
-
-test("consumeState: single-use, TTL-bounded, never wholesale-wiped", () => {
-  assert.equal(consumeState("state-a"), true);
-  assert.equal(consumeState("state-a"), false, "a consumed state cannot be replayed");
-  const exp = consumedStates.get("state-a");
-  assert.ok(
-    exp !== undefined && exp <= Date.now() + 600_000,
-    `replay is gated on the cookie's own wall clock (exp=${exp})`,
-  );
-  const remaining = consumedStates.getRemainingTTL("state-a");
-  assert.ok(
-    remaining > 0 && remaining <= 1_200_000,
-    `consumed state must lapse after its tmp cookie is dead (ttl=${remaining})`,
-  );
-  assert.equal(consumeState("state-b"), true);
-  for (let i = 0; i < 5000; i++) consumeState(`flood-${i}`);
-  assert.equal(consumeState("state-b"), false, "a live state survives a flood of other states");
-});

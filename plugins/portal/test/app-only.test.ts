@@ -33,6 +33,7 @@ const upstream = createServer((req, res) => {
         .sign(privateKey);
       return void res.end(JSON.stringify({ access_token: "test-access", id_token: idToken }));
     }
+    if (path === "/v1/auth/broker/claim") return void res.end(JSON.stringify({ claimed: path }));
     if (path === "/userinfo") return void res.end(JSON.stringify({ sub: "idp-subject", email, email_verified: true }));
     if (path === "/v1/auth/broker/email-allowed") {
       res.statusCode = coreStatus;
