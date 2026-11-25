@@ -9,13 +9,7 @@ import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
 import { MemoryProviderDisabled } from "./provider-outcome.ts";
 import { createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
-import {
-  readRegistry,
-  openBrainSecrets,
-  resolveMemoryRegistry,
-  type DisabledRegistryRoute,
-  type MemoryRegistryStore,
-} from "./registry.ts";
+import { readRegistry, type DisabledRegistryRoute, type MemoryRegistryStore } from "./registry.ts";
 
 const NOTEBOOK_ROUTE: MemoryProviderRoute = {
   provider: "default",
@@ -49,7 +43,7 @@ const alongside = async <T>(served: Promise<T>, disabled: Promise<unknown>[]): P
 export function createRegistryMemoryService(opts: {
   defaultMemory: MemoryService;
   overlay?: MemoryProviderConfig;
-  registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
+  registry: Pick<MemoryRegistryStore, "current" | "resolve">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
   registryFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
@@ -71,11 +65,7 @@ export function createRegistryMemoryService(opts: {
     if (version === slot.snapshot.version) return slot.snapshot;
     try {
       const registry = readRegistry(record);
-      const { config, disabled } = resolveMemoryRegistry(
-        registry,
-        opts.registry,
-        await openBrainSecrets(registry, opts.registry),
-      );
+      const { config, disabled } = await opts.registry.resolve(registry);
       slot.snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),

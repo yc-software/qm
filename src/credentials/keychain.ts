@@ -795,12 +795,17 @@ export function createKeychain(deps: {
   }
 
   async function sealTokens(id: string, token: OAuthToken): Promise<SealedTokens> {
+    const [accessToken, refreshToken, idToken] = await Promise.all([
+      secrets.put(secretName(id, "secret"), token.accessToken),
+      token.refreshToken
+        ? secrets.put(secretName(id, "refresh-token"), token.refreshToken)
+        : Promise.resolve(undefined),
+      token.idToken ? secrets.put(secretName(id, "id-token"), token.idToken) : Promise.resolve(undefined),
+    ]);
     return {
-      accessToken: await secrets.put(secretName(id, "secret"), token.accessToken),
-      ...(token.refreshToken
-        ? { refreshToken: await secrets.put(secretName(id, "refresh-token"), token.refreshToken) }
-        : {}),
-      ...(token.idToken ? { idToken: await secrets.put(secretName(id, "id-token"), token.idToken) } : {}),
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(idToken ? { idToken } : {}),
     };
   }
 
@@ -867,10 +872,15 @@ export function createKeychain(deps: {
   }
 
   async function recToOAuthToken(rec: KeychainCredential): Promise<OAuthToken> {
+    const [accessToken, refreshToken, idToken] = await Promise.all([
+      secrets.get(rec.secretEnc),
+      rec.refresh?.refreshTokenEnc ? secrets.get(rec.refresh.refreshTokenEnc) : Promise.resolve(undefined),
+      rec.refresh?.idTokenEnc ? secrets.get(rec.refresh.idTokenEnc) : Promise.resolve(undefined),
+    ]);
     return {
-      accessToken: await secrets.get(rec.secretEnc),
-      ...(rec.refresh?.refreshTokenEnc ? { refreshToken: await secrets.get(rec.refresh.refreshTokenEnc) } : {}),
-      ...(rec.refresh?.idTokenEnc ? { idToken: await secrets.get(rec.refresh.idTokenEnc) } : {}),
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(idToken ? { idToken } : {}),
       ...(rec.refresh?.accountId ? { accountId: rec.refresh.accountId } : {}),
       ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
       ...(rec.refresh?.grantedScopes ? { grantedScopes: rec.refresh.grantedScopes } : {}),
@@ -1237,10 +1247,7 @@ export function createKeychain(deps: {
       const baseline = new Map(Object.entries(materialized.baseline ?? credentialFileHashes(materialized.files)));
       const ours = Object.entries(credentialFileHashes(normalized));
       if (ours.length === baseline.size && ours.every(([path, hash]) => baseline.get(path) === hash)) return unchanged;
-      let overruled: string[];
-      let byExpiry: Array<{ path: string; kept: string }>;
-
-      for (let attempt = 0; ; attempt++) {
+      return lock.withLock(`keychain-file-update:${materialized.credentialId}`, async () => {
         const current = await deps.creds.get(materialized.credentialId);
         if (!current) throw new KeychainError(410, "Credential was removed during execution");
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
@@ -1252,44 +1259,36 @@ export function createKeychain(deps: {
           refreshed: normalized,
           hash: (file) => fingerprint([file]),
         });
-        overruled = merged.overruled;
-        byExpiry = merged.byExpiry;
         const next = checkedFiles(merged.files);
         if (!next.length) {
           console.warn(
             `[credentials] ${materialized.credentialId}: a save would have left no files, so the stored login was kept unchanged`,
           );
-          break;
+          return { overruled: merged.overruled };
         }
-        if (fingerprint(next) === fingerprint(currentFiles)) break;
-        const secret = JSON.stringify(next);
-        const secretEnc = await secrets.put(secretName(current.id, "secret"), secret);
-        let replaced = false;
-        const written = await deps.creds.update(materialized.credentialId, (latest) => {
-          if (!sameVersion(latest, current)) return latest;
-          replaced = true;
-          return {
+        if (fingerprint(next) !== fingerprint(currentFiles)) {
+          const secret = JSON.stringify(next);
+          const secretEnc = await secrets.put(secretName(current.id, "secret"), secret);
+          const written = await deps.creds.update(materialized.credentialId, (latest) => ({
             ...latest,
             targets: next.map((file) => file.path),
             secretEnc,
             fingerprint: fingerprintOf(secret),
             updatedAt: now(),
-          };
-        });
-        await deleteDroppedSecrets(current, written, [secretEnc]);
-        if (!written) throw new KeychainError(410, "Credential was removed during execution");
-        if (replaced) break;
-        if (attempt >= 4) throw new KeychainError(409, "Credential changed during execution");
-      }
-      if (overruled.length)
-        console.warn(
-          `[credentials] ${materialized.credentialId}: kept the stored version of ${overruled.join(", ")} over a concurrent change`,
-        );
-      for (const { path, kept } of byExpiry)
-        console.warn(
-          `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
-        );
-      return { overruled };
+          }));
+          await deleteDroppedSecrets(current, written, [secretEnc]);
+          if (!written) throw new KeychainError(410, "Credential was removed during execution");
+        }
+        if (merged.overruled.length)
+          console.warn(
+            `[credentials] ${materialized.credentialId}: kept the stored version of ${merged.overruled.join(", ")} over a concurrent change`,
+          );
+        for (const { path, kept } of merged.byExpiry)
+          console.warn(
+            `[credentials] ${materialized.credentialId}: kept the ${kept} version of ${path} over a concurrent change because it expires later`,
+          );
+        return { overruled: merged.overruled };
+      });
     },
 
     async writebackBaseline(source, fileHashes) {
@@ -1711,30 +1710,28 @@ export function createKeychain(deps: {
     },
 
     async materializeStanding(scopeId) {
-      const out: MaterializedEnvCred[] = [];
-      for (const grant of await activeGrantsFor(scopeId)) {
-        if (grant.mode !== "standing") continue;
-        const cred = await deps.creds.get(grant.credentialId);
-        if (!cred || cred.kind !== "env" || isBackendCredential(cred)) continue;
-        if (cred.managed === "connector") {
-          const value = cred.host ? await connectorTokenForRecord(cred) : null;
-          if (value && cred.host) {
-            out.push({
+      const standing = (await activeGrantsFor(scopeId)).filter((g) => g.mode === "standing");
+      const results = await Promise.all(
+        standing.map(async (grant): Promise<MaterializedEnvCred | null> => {
+          const cred = await deps.creds.get(grant.credentialId);
+          if (!cred || cred.kind !== "env" || isBackendCredential(cred)) return null;
+          if (cred.managed === "connector") {
+            const value = cred.host ? await connectorTokenForRecord(cred) : null;
+            if (!value || !cred.host) return null;
+            return {
               credentialId: cred.id,
               ownerId: cred.ownerId,
               service: cred.service,
               env: [{ key: envKey(cred.host), value }],
               grantId: grant.id,
               purpose: grant.purpose,
-            });
+            };
           }
-          continue;
-        }
-        if (cred.managed || credExpired(cred, now())) continue;
-        const mat = await tryDecrypt(cred, (c) => decryptToEnv(c, { grantId: grant.id, purpose: grant.purpose }));
-        if (mat) out.push(mat);
-      }
-      return out;
+          if (cred.managed || credExpired(cred, now())) return null;
+          return tryDecrypt(cred, (c) => decryptToEnv(c, { grantId: grant.id, purpose: grant.purpose }));
+        }),
+      );
+      return results.filter((c): c is MaterializedEnvCred => c !== null);
     },
   };
 }
