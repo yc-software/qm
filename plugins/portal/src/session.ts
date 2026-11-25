@@ -90,6 +90,21 @@ export function openSession(
   return p as unknown as SessionClaims;
 }
 
+export function openSessionCookie(
+  cookies: string | undefined,
+  name: string,
+  key: Buffer,
+  now: number,
+  expectedOrg: string,
+  maxAgeSeconds?: number,
+): SessionClaims | null {
+  for (const token of readCookies(cookies, name)) {
+    const session = openSession(token, key, now, expectedOrg, maxAgeSeconds);
+    if (session) return session;
+  }
+  return null;
+}
+
 export function openImpersonation(token: string | null, key: Buffer, now: number): ImpersonationClaims | null {
   const p = open(token, key);
   if (!p || p.k !== "impersonate") return null;
@@ -168,15 +183,21 @@ function sessionClears(path: string, secure: boolean, domain?: string): string[]
 }
 
 export function readCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = header.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]+)`));
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1] ?? "");
-  } catch {
-    return null;
+  return readCookies(header, name)[0] ?? null;
+}
+
+function readCookies(header: string | undefined, name: string): string[] {
+  const out: string[] = [];
+  for (const part of (header ?? "").split(";")) {
+    const p = part.trim();
+    if (!p.startsWith(`${name}=`) || p.length === name.length + 1) continue;
+    try {
+      out.push(decodeURIComponent(p.slice(name.length + 1)));
+    } catch (error) {
+      if (!(error instanceof URIError)) throw error;
+    }
   }
+  return out;
 }
 
 export function signedOutCookies(secure: boolean, domain: string | undefined, staleDomain?: string): string[] {

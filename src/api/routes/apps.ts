@@ -29,7 +29,7 @@ import { appAccess } from "../../deploy/app-access.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
+import { portalSession } from "../../auth/portal-session.ts";
 import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
@@ -861,14 +861,13 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, Date.now()) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, "portal_session", sessionSecret) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (publishedApp?.embedAncestors ?? []) : [];
-  if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, Date.now());
-  }
+  if (!session && sessionSecret && embedAncestors.length)
+    session = portalSession(req.headers.cookie, "portal_session_x", sessionSecret);
   if (session?.t !== undefined && session.t !== ctx.tenant?.id) {
     sendJson(res, 404, { error: "not_found" });
     return true;
