@@ -77,3 +77,18 @@ test("a result the server rejects is replaced by an error naming why, so the tur
     isError: true,
   });
 });
+
+test("a stop during the claim keeps the call from starting, and a duplicate announcement never runs it twice", async () => {
+  const held = Promise.withResolvers<typeof claim>();
+  const { posts, post } = recorder(() => held.promise);
+  let ran = 0;
+  const desk = { call: async () => ({ content: String(++ran) }) };
+  const stopped = answerDesktopCall("call-6", post, desk);
+  await answerDesktopCall("call-6", post, desk);
+  stopDesktopCall("call-6", desk);
+  held.resolve(claim);
+  await stopped;
+  assert.equal(ran, 0);
+  assert.equal(posts.length, 2);
+  assert.match(String((posts[1]!.body.result as { content: string }).content), /stopped before the call started/);
+});

@@ -221,6 +221,7 @@ pub enum Reply {
     Permissions {
         accessibility: bool,
         screen_recording: bool,
+        input_monitoring: bool,
         binary: String,
         help: String,
     },
