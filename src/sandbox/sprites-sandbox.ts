@@ -19,7 +19,6 @@ import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { tenantSpritesShape } from "./tenant-sandbox-shape.ts";
-import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
   attemptSnapshot,
@@ -115,7 +114,6 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
-  connectorSdk?: () => Promise<ConnectorSdkBundle>;
   layerToolFiles?: () => readonly LayerInstallFile[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -424,11 +422,7 @@ export function createSpritesSandbox(opts: SpritesSandboxOptions): Sandbox {
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
-    installLayerTools: withConnectorSdk(
-      HOME_DIR,
-      createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
-      opts.connectorSdk,
-    ),
+    installLayerTools: createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
     combineLayerToolPrep: true,
     egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "sprite_delete_failed",

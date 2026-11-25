@@ -43,7 +43,3 @@ A source or image pin must adopt this change before behavior changes. Existing c
 5. Configure and test callback verification only after deciding project routing. Existing connections do not need new OAuth consent merely because verification is enabled. Verify one new connection and one read-only operation, plus affected scheduled jobs and shared conversations.
 
 No production credentials, projects, consent settings, fleet pins, or connections are changed by installing this code in a development checkout. Rolling back to an older worker restores its ability to deliver whichever project key it can read and therefore reopens the old boundary.
-
-## SDK assets
-
-Older images and the build pipeline may still contain the credential-free Composio SDK bundle. It is not an authorization mechanism and is no longer used by the standard skill. Keeping or removing that asset does not replace rotating previously delivered keys.

@@ -41,7 +41,7 @@ migrate() {
 }
 
 echo "Installing published release $base"
-(cd "$worktree" && npm ci --ignore-scripts --no-audit --no-fund && npm run build:connector-sdk) >/dev/null
+(cd "$worktree" && npm ci --ignore-scripts --no-audit --no-fund) >/dev/null
 
 migrate "$base" "$worktree" "$DATABASE_URL"
 DATABASE_URL="$DATABASE_URL" node "$root/scripts/seed-upgrade-rows.mjs"

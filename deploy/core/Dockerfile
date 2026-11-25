@@ -3,12 +3,6 @@ FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9
 RUN apk add --no-cache go \
   && CGO_ENABLED=0 GOBIN=/out go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2
 
-FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS connector-sdk-build
-WORKDIR /app
-COPY deploy/connector-sdk ./deploy/connector-sdk
-RUN npm ci --prefix deploy/connector-sdk --ignore-scripts --no-audit --no-fund \
-  && node deploy/connector-sdk/build.mjs
-
 FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS web-ui-build
 WORKDIR /app/plugins/web-ui
 ARG WEB_UI_BASE=/
@@ -35,7 +29,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
-COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
 COPY src ./src
 COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/frontmatter.ts cli/src/render-job-command.ts cli/src/render-source.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts cli/src/web-release.ts ./cli/src/
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json

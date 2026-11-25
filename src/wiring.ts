@@ -33,7 +33,6 @@ import { createKeychainApprovals, type KeychainApprovals } from "./credentials/k
 import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
-import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
@@ -942,7 +941,6 @@ export function buildApp(
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1103,7 +1101,6 @@ export function buildApp(
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
