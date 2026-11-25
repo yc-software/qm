@@ -44,10 +44,10 @@ export async function checkCard(
   }
   if (kind === "add_to_slack") {
     const response = await get("/v1/admin/slack-installation");
-    if (response.status === 403 || response.status === 401)
+    if (response.status === 403)
       return {
         error:
-          "Only an org admin can add QM to the company's Slack, and this person isn't one. Tell them an admin needs to add it; don't show a card.",
+          "Only an org admin can add QM to the company's Slack, and this person isn't one. Don't show a card. If they want their own Slack access, try link_slack; otherwise tell them an admin needs to add QM.",
       };
     if (response.status !== 200) return { error: failure(response, "Slack installation") };
     if (isObj(response.body) && response.body.configured === true)
@@ -83,7 +83,7 @@ export function cardTool(kit: ToolKit) {
       "link_slack: link this person's own Slack account (after QM is installed).",
     parameters: Type.Object({
       kind: Type.Union([Type.Literal("apps"), Type.Literal("add_to_slack"), Type.Literal("link_slack")]),
-      toolkit: Type.Optional(Type.String({ pattern: "^[a-z0-9_-]{1,100}$", description: "apps only: one app's id." })),
+      toolkit: Type.Optional(Type.String({ minLength: 1, description: "apps only: one app's id." })),
     }),
     async execute(callId, params: { kind: CardKind; toolkit?: string }) {
       const selfApi = ref.current?.selfApi;
