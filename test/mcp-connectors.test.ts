@@ -258,20 +258,12 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     ),
     /"needsApproval":true/,
   );
-  const ask = (tool: string) =>
-    service.needsApproval("records", { operation: "invoke", tool }, "alice@example.com", personalScope("alice@example.com"));
-  assert.equal(await ask("send-message"), true);
-  assert.equal(await ask("find-record"), false);
-  assert.equal(await ask("send_message"), false, "an invented tool name is not an approval question");
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "search" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    false,
-  );
+  const ask = (args: Record<string, unknown>) =>
+    service.needsApproval("records", args, "alice@example.com", personalScope("alice@example.com"));
+  assert.equal(await ask({ operation: "invoke", tool: "send-message" }), true);
+  assert.equal(await ask({ operation: "invoke", tool: "find-record" }), false);
+  assert.equal(await ask({ operation: "invoke", tool: "send_message" }), false, "an invented name asks no question");
+  assert.equal(await ask({ operation: "search" }), false);
   await assert.rejects(
     service.call(
       "records",
