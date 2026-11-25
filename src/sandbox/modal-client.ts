@@ -225,7 +225,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       await sbx.mountImage("/root", await client.images.fromId(imageId));
     },
     async terminate(): Promise<void> {
-      await sbx.terminate().catch((err) => {
+      await sbx.terminate({ wait: true }).catch((err) => {
         if (!isSandboxGoneError(sdk, err)) throw err;
       });
     },
