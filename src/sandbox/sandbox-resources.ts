@@ -1,5 +1,4 @@
-import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
-import { perTenant } from "../tenants/cache.ts";
+import { tenantSandboxBackend } from "./tenant-sandbox-shape.ts";
 import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
@@ -119,7 +118,6 @@ interface SandboxProviderProfile {
 export interface SandboxResources {
   profiles(): SandboxProviderProfile[];
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
-  initialize(): Promise<void>;
   list(
     actorId: string,
     scopeId: ScopeId,
@@ -246,7 +244,6 @@ export async function defaultComputer(
 }
 
 export function createSandboxResources(opts: {
-  upgrade?: () => Promise<void>;
   records: DurableMap<SandboxResource>;
   loads: DurableMap<LoadSample>;
   defaults: DurableMap<SandboxDefault>;
@@ -258,16 +255,6 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  const upgraded = perTenant<{ done?: Promise<void> }>(() => ({}));
-  const initialize = async (): Promise<void> => {
-    if (!opts.upgrade) return;
-    const state = upgraded();
-    state.done ??= opts.upgrade().catch((error: unknown) => {
-      state.done = undefined;
-      throw error;
-    });
-    await state.done;
-  };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
     return [
@@ -282,7 +269,6 @@ export function createSandboxResources(opts: {
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
   const get = async (id: string): Promise<SandboxResource> => {
-    await initialize();
     const record = await opts.records.get(id);
     if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
@@ -339,17 +325,13 @@ export function createSandboxResources(opts: {
           withSpeakerMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     async defaultBackend() {
-      const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
+      const backend = await tenantSandboxBackend(opts.defaultBackend);
       if (!opts.backends[backend])
         throw new Error(`sandbox backend unavailable: ${backend}; this deployment does not run it`);
       return backend;
     },
-    initialize,
     get,
-    async getMany(ids) {
-      await initialize();
-      return opts.records.getMany(ids);
-    },
+    getMany: (ids) => opts.records.getMany(ids),
     use,
     recordLoad: (id, sample) => opts.loads.put(id, sample),
     load: (id) => opts.loads.get(id),
@@ -376,7 +358,6 @@ export function createSandboxResources(opts: {
       return live.includes(true);
     },
     async retire(actorId, id) {
-      await initialize();
       const record = await agentRecord(actorId, id);
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
@@ -397,7 +378,6 @@ export function createSandboxResources(opts: {
     },
     async eachJobComputer(work) {
       await claimThenBind(opts.records.claimTenants, async () => {
-        await initialize();
         for (const record of await opts.records.all()) if (record.jobOnly) await work(record);
       });
     },
@@ -417,7 +397,6 @@ export function createSandboxResources(opts: {
       return use(id, () => backend.computerStatus!(record.backingScopeId));
     },
     async restart(actorId, id, memoryGb) {
-      await initialize();
       const record = await agentRecord(actorId, id);
       if (record.state === "retired") throw new Error("sandbox has been retired");
       const backend = opts.backends[record.backend];
@@ -433,13 +412,11 @@ export function createSandboxResources(opts: {
       );
     },
     async resolve(scopeId) {
-      await initialize();
       const route = await opts.defaults.get(scopeId);
       return route?.sandboxId ? get(route.sandboxId) : null;
     },
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
-      await initialize();
       const route = await opts.defaults.get(scopeId);
       const sandboxes: SandboxResource[] = [];
       for (const record of await opts.records.all()) {
@@ -458,7 +435,6 @@ export function createSandboxResources(opts: {
       };
     },
     async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
-      await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
@@ -523,7 +499,6 @@ export function createSandboxResources(opts: {
       });
     },
     async setDefault(actorId, scopeId, id) {
-      await initialize();
       await authorize(actorId, scopeId);
       await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
         if (id !== null) {
