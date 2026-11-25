@@ -13,6 +13,7 @@ import type { LoopItemVerdict, LoopVerdictState } from "../src/loops/types.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { personalScope } from "../src/types.ts";
 
 function world(enabled = true) {
   const deps = {
@@ -96,7 +97,7 @@ test("archived Loops are neither offered nor selectable in the Inbox", async () 
   const { loop } = await w.deps.store.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "Retired",
     playbook: "Read messages",
     successCondition: "Messages reviewed",
@@ -113,7 +114,7 @@ test("selection reuses original items, counts items, omits heavy fields, and enf
   const { loop } = await w.deps.store.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "QM error repairs",
     icon: "bug",
     sources: ["gmail"],
@@ -312,7 +313,7 @@ test("a loop whose open items are all still queued shows a count of zero beside 
   const { loop } = await w.deps.store.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "Reviews",
     playbook: "Review things",
     successCondition: "Reviewed",

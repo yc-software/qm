@@ -8,6 +8,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",
@@ -21,7 +22,7 @@ test(
       const { loop } = await loops.create({
         owner: "qa",
         createdBy: "qa",
-        ownerScopeId: "personal:qa",
+        ownerScopeId: personalScope("qa"),
         name: "PG ingress",
         playbook: "Review",
         successCondition: "Reviewed",

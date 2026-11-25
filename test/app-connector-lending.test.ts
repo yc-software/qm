@@ -15,7 +15,7 @@ import { testTenant } from "./support/test-tenant.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { personalScope, scopeId } from "../src/types.ts";
+import { personalScope, scopeId, type ScopeId } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
@@ -222,7 +222,7 @@ test("only the publisher can lend, with a signed-off card, per app and per conne
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     [
       "/v1/share",
-      { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true },
+      { type: "deploy", id: h.d.id, toScope: personalScope("x@example.com"), move: true },
       { personAuthority: false },
     ],
   ] as const) {
@@ -314,7 +314,12 @@ test("an upgrade withdraws loans on apps outside their publisher's library", asy
   const url = testDatabaseUrl();
   const apps = createPostgresMapFactory(url).map<PublishedApp>("deployments", undefined, APP_TABLES);
   const lent = (id: string, owner: string) =>
-    ({ id, createdBy: PUBLISHER, ownerScopeId: personalScope(owner), connectors: ["slack.com"] }) as PublishedApp;
+    ({
+      id,
+      createdBy: PUBLISHER,
+      ownerScopeId: `personal:${owner}` as ScopeId,
+      connectors: ["slack.com"],
+    }) as PublishedApp;
   await apps.put("kept", lent("kept", PUBLISHER));
   await apps.put("moved", lent("moved", CO_MANAGER));
   const audit = createPostgresAuditLog(url);

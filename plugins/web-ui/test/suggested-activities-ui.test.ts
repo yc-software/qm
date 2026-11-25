@@ -80,7 +80,7 @@ test("activity selection fills and persists an editable draft without sending or
       prompt: `Draft request ${i}`,
       icon: ["🛠️", "yc", "app", "app"][i]!,
     }));
-    appState.me = { user: "tester", org: "test", suggestedActivities: activities };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test", suggestedActivities: activities };
     const host = document.querySelector<HTMLElement>("main")!;
     const agentState = { isStreaming: false, messages: [] };
     const agent = { state: agentState } as unknown as Agent;

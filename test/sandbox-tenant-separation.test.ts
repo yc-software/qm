@@ -6,6 +6,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 await bindBootTenant(async () => undefined);
 
@@ -25,7 +26,7 @@ const router = createSandboxRouter({
   resources: {} as SandboxResources,
 });
 
-const handle = (name: string): SandboxHandle => ({ scopeId: "personal:pat", backend: name }) as SandboxHandle;
+const handle = (name: string): SandboxHandle => ({ scopeId: personalScope("pat"), backend: name }) as SandboxHandle;
 
 test("on a deployment shared by tenants, backends that cannot keep tenants apart are refused", async () => {
   const tenant = randomUUID();

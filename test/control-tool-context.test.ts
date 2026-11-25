@@ -14,7 +14,7 @@ import {
   CONTROL_UNAVAILABLE,
   NeedsApproval,
 } from "../src/tools/primitives.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -79,7 +79,7 @@ test("webhook registration through the tool needs the owner's authority and a si
   const { built, control } = build();
   const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
   const auditBefore = await built.auditLog.events(testTenant);
-  for (const scope of ["personal:U1", "channel:C1"] as const) {
+  for (const scope of [personalScope("U1"), "channel:C1"] as const) {
     for (const extra of [
       {},
       { personAuthority: false },

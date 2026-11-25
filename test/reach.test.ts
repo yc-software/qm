@@ -13,7 +13,14 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
+import {
+  scopeId,
+  type Destination,
+  type Principal,
+  type TurnRequest,
+  type TurnResult,
+  personalScope,
+} from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
 function fakeDirectory(): ReachDirectory & {
@@ -91,7 +98,7 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
     assert.equal((r as any).destination.type, "principal");
     assert.equal((r as any).destination.target, "U-alice");
     assert.equal((r as any).destination.onBehalfOf, "U-carol");
-    assert.equal((r as any).destination.audienceScopeId, "personal:U-alice");
+    assert.equal((r as any).destination.audienceScopeId, personalScope("U-alice"));
     assert.equal((r as any).recipient.displayName, "Alice");
   });
 

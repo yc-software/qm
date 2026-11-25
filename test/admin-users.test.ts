@@ -17,6 +17,7 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 const user = (id: string, aliases: string[]): UserRecord => ({ id, principalId: aliases[0]!, aliases, kind: "person" });
 const seen = (userId: string | null, principalId: string, sessions: number, turns: number, lastSeenAt: number) => ({
@@ -223,7 +224,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
     assert.equal(r.status, 200);
     const d: any = await r.json();
     assert.equal(d.principalId, "U1");
-    assert.equal(d.scopeId, "personal:U1");
+    assert.equal(d.scopeId, personalScope("U1"));
     assert.equal(d.stats.sessions, 1);
     for (const key of ["conversations", "files", "crons", "apps"]) assert.equal(key in d, false);
 
@@ -418,7 +419,7 @@ test("user detail resolves mixed-case email links to the canonical personal scop
   const s = start();
   try {
     t.mock.method(s.built.sessions, "scopeConversationCount", async (scope: string) => {
-      assert.equal(scope, "personal:alice@example.com");
+      assert.equal(scope, personalScope("alice@example.com"));
       return 3;
     });
     const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
@@ -427,7 +428,7 @@ test("user detail resolves mixed-case email links to the canonical personal scop
     assert.equal(response.status, 200);
     const data = (await response.json()) as any;
     assert.equal(data.principalId, "alice@example.com");
-    assert.equal(data.scopeId, "personal:alice@example.com");
+    assert.equal(data.scopeId, personalScope("alice@example.com"));
     assert.equal(data.stats.sessions, 3);
   } finally {
     await s.close();
@@ -440,7 +441,7 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
     try {
       if (canonicalPrincipal === "Alice@example.com")
         await s.built.directory.replace([{ principalId: canonicalPrincipal, displayName: "Alice", type: "internal" }]);
-      const scope = "personal:" + canonicalPrincipal;
+      const scope = personalScope(canonicalPrincipal);
       const session = await s.built.sessions.getOrCreateByThread("dm:case-test", "dm", scope);
       await s.built.sessions.addParticipant(session.id, canonicalPrincipal);
       const other = await s.built.sessions.getOrCreateByThread("channel:case-test", "channel", "channel:C1");
@@ -463,7 +464,7 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
       assert.equal((await detail()).stats.sessions, 0);
       assert.equal(await s.built.sessions.get(session.id), null);
       assert.ok(await s.built.sessions.get(other.id));
-      assert.equal(await s.built.memory.read("personal:ALICE@example.com"), "");
+      assert.equal(await s.built.memory.read(personalScope("ALICE@example.com")), "");
     } finally {
       await s.close();
     }
@@ -504,7 +505,7 @@ test("/v1/admin/users: a person with a linked sign-in is one row with every sign
     const detail: any = await (await fetch(`${s.base}/v1/admin/users/${rows[0].userId}`, { headers })).json();
     assert.deepEqual(
       [detail.userId, detail.principalId, detail.scopeId, detail.user.aliases],
-      [rows[0].userId, "pat@example.com", "personal:pat@example.com", ["pat@example.com", "U-PAT"]],
+      [rows[0].userId, "pat@example.com", personalScope("pat@example.com"), ["pat@example.com", "U-PAT"]],
     );
     const viaSignIn: any = await (await fetch(`${s.base}/v1/admin/users/U-PAT`, { headers })).json();
     assert.equal(viaSignIn.userId, rows[0].userId, "any sign-in opens the same user");

@@ -8,6 +8,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 type StoreArgs = Parameters<typeof createRoutedApprovalStore>;
 const createApprovalStore = (backing: StoreArgs[0], deliveries: StoreArgs[1]) =>
@@ -142,7 +143,7 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   const [delivery] = await deliveries.pending("principal");
   assert.equal(delivery?.destination.target, "U9");
   assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
-  assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+  assert.equal(delivery?.destination.audienceScopeId, personalScope("oidc:linked-principal"));
 });
 
 test("automation approvals route through the fallback route and generic-chat destinations", async () => {

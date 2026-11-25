@@ -101,12 +101,14 @@ test("a persona's last active owner leaving hands it to the default admin, and o
       [["Ada", ADMIN]],
     );
     assert.deepEqual(
-      ok(await personas.detail(ADMIN, ada.id)).access.map((a) => [a.scopeId, a.role]),
+      ok(await personas.detail(ADMIN, ada.id))
+        .access.map((a) => [a.scopeId, a.role])
+        .sort(),
       [
         [personal(ADMIN), "owner"],
         [personal(ANN), "owner"],
         [personal(BOB), "write"],
-      ],
+      ].sort(),
     );
     assert.deepEqual(await built.app.personaHandover!.adoptOrphans(), []);
 

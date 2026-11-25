@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import pg from "pg";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -55,8 +56,12 @@ test("stored harness choices are dropped while their runtime selections stay rec
       subagentRuntime: { harnessId: "claude", modelId: "claude-opus-5", effortLevel: "low" },
       fallbackRuntime: { harnessId: "pi", modelId: "gpt-5.6-sol" },
     });
-    await insert("base_model_configs", "personal:a", { scopeId: "personal:a", harnessId: "claude", modelId: "x" });
-    await insert("base_model_configs", "personal:b", { scopeId: "personal:b", modelId: "legacy-only" });
+    await insert("base_model_configs", personalScope("a"), {
+      scopeId: personalScope("a"),
+      harnessId: "claude",
+      modelId: "x",
+    });
+    await insert("base_model_configs", personalScope("b"), { scopeId: personalScope("b"), modelId: "legacy-only" });
     await insert("approved_harness_configs", "org:o", { scopeId: "org:o", ids: ["pi", "claude"] });
     await insert("auto_flagger_configs", "org:o", { scopeId: "org:o", harnessId: "claude", modelId: "m", rubric: "r" });
     await insert("crons", "c1", { id: "c1", runtime: { harnessId: "claude", modelId: "m" } });
@@ -76,8 +81,8 @@ test("stored harness choices are dropped while their runtime selections stay rec
       subagentRuntime: { modelId: "claude-opus-5", effortLevel: "low" },
       fallbackRuntime: { modelId: "gpt-5.6-sol" },
     });
-    assert.deepEqual(base["personal:a"], { scopeId: "personal:a", modelId: "x", orgRevision: 0 });
-    assert.deepEqual(base["personal:b"], { scopeId: "personal:b", modelId: "legacy-only" });
+    assert.deepEqual(base[personalScope("a")], { scopeId: personalScope("a"), modelId: "x", orgRevision: 0 });
+    assert.deepEqual(base[personalScope("b")], { scopeId: personalScope("b"), modelId: "legacy-only" });
     assert.equal((await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t, null);
     assert.deepEqual((await rows(admin, "auto_flagger_configs"))["org:o"], {
       scopeId: "org:o",

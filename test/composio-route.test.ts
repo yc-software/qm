@@ -13,7 +13,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
@@ -624,7 +624,7 @@ const privateCap: CapabilityClaims = {
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
   internalAudience: true,
   personAuthority: true,
@@ -818,7 +818,7 @@ test("shared org connections recheck grants for every audience member", async ()
   await f.deps.acl!.grant(tenant, {
     ownerScopeId: org,
     ref: "service-cred:composio",
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "read",
     grantedBy: "admin",
   });

@@ -8,21 +8,36 @@ test("can(key) is false before /me loads", () => {
 });
 
 test("can(key) gates on the permission being present", () => {
-  appState.me = { user: "alice", org: "acme", permissions: ["admin"] };
+  appState.me = {
+    user: "alice",
+    personalScope: "personal:alice",
+    org: "acme",
+    permissions: ["admin"],
+  };
   assert.equal(can("admin"), true);
   assert.equal(can("nope"), false);
 });
 
 test("a user without the permission cannot — drives hiding the admin session-log link", () => {
-  appState.me = { user: "bob", org: "acme", permissions: [] };
+  appState.me = {
+    user: "bob",
+    personalScope: "personal:bob",
+    org: "acme",
+    permissions: [],
+  };
   assert.equal(can("admin"), false);
 
-  appState.me = { user: "carol", org: "acme" };
+  appState.me = { user: "carol", personalScope: "personal:carol", org: "acme" };
   assert.equal(can("admin"), false);
 });
 
 test("loops view requires the loops permission", () => {
-  appState.me = { user: "alice", org: "acme", permissions: [] };
+  appState.me = {
+    user: "alice",
+    personalScope: "personal:alice",
+    org: "acme",
+    permissions: [],
+  };
   assert.equal(canView("loops"), false);
   assert.equal(canView("chats"), true);
 

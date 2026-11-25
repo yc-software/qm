@@ -6,7 +6,7 @@ import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
@@ -90,7 +90,7 @@ test("normal personal cron produces durable suggestions without a notification d
   await f.settle();
   const cron = (await f.crons.list())[0]!;
   assert.equal(cron.owner, "alice");
-  assert.equal(cron.ownerScopeId, "personal:alice");
+  assert.equal(cron.ownerScopeId, personalScope("alice"));
   assert.equal(cron.destination, undefined);
   assert.equal(cron.schedule.timezone, "America/Los_Angeles");
   assert.match(cron.schedule.cron!, /^\d+ 2 \* \* \*$/);

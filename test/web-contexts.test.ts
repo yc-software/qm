@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { ContextSummary } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
@@ -37,7 +38,7 @@ test("GET /v1/contexts: personal always; public channels and current private mem
   try {
     const before = await contexts(s.base, "alice");
     assert.equal(before.length, 1);
-    assert.equal(before[0]!.scopeId, "personal:alice");
+    assert.equal(before[0]!.scopeId, personalScope("alice"));
     assert.equal(before[0]!.kind, "personal");
 
     await s.built.app.upsertChannels(
@@ -49,14 +50,14 @@ test("GET /v1/contexts: personal always; public channels and current private mem
     );
 
     const alice = await contexts(s.base, "alice");
-    assert.deepEqual(alice.map((c) => c.scopeId).sort(), ["channel:C1", "channel:C2", "personal:alice"]);
+    assert.deepEqual(alice.map((c) => c.scopeId).sort(), ["channel:C1", "channel:C2", personalScope("alice")]);
     assert.equal(alice[0]!.kind, "personal", "personal sorts first");
     assert.equal(alice.find((c) => c.scopeId === "channel:C2")!.isPrivate, true);
 
     const bob = await contexts(s.base, "bob");
     assert.deepEqual(
       bob.map((c) => c.scopeId).sort(),
-      ["channel:C1", "personal:bob"],
+      ["channel:C1", personalScope("bob")],
       "public rooms remain usable without stale-session authority",
     );
   } finally {

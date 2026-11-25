@@ -22,7 +22,7 @@ import {
   setMemberBrains,
 } from "../src/memory/registry.ts";
 import type { DropResolution } from "../src/triggers/keychain-ask.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -320,7 +320,7 @@ test("a member connects their own brain from chat and sets its secret through th
   assert.equal(put.json.principalId, "U-member");
   assert.deepEqual(
     [put.json.brain?.id, put.json.brain?.auth, put.json.binding?.scope, put.json.disabled.map(({ code }) => code)],
-    [id, { clientId: "member-qm", hasClientSecret: false }, "personal:U-member", ["secret_missing"]],
+    [id, { clientId: "member-qm", hasClientSecret: false }, personalScope("U-member"), ["secret_missing"]],
   );
   assert.deepEqual((await self("U-member", "GET")).json.brain, put.json.brain);
 

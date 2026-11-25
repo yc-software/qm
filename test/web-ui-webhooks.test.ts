@@ -12,6 +12,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -60,7 +61,7 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
   };
   assert.equal(created.webhook.owner, "alice");
   assert.equal(created.webhook.createdBy, "alice");
-  assert.equal(created.webhook.ownerScopeId, "personal:alice");
+  assert.equal(created.webhook.ownerScopeId, personalScope("alice"));
   assert.equal(created.url, incoming(created.webhook.id));
   assert.match(created.webhook.verification.secret ?? "", /^[0-9a-f]{64}$/);
 

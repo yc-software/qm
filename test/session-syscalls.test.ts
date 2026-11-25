@@ -31,7 +31,7 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "../src/sessions/subagent-mail.ts";
-import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type ScopeId, type Session, personalScope } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -3464,8 +3464,12 @@ test("sessions list shows only sidebar sessions the whole audience can see, and 
 
 test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
   const sent: Array<{ runId: string; signal: unknown }> = [];
-  const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
-  const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
+  const root = { id: "root", scopeId: personalScope("a"), threadRef: "web:root" } as unknown as Session;
+  const child = {
+    id: "child",
+    scopeId: personalScope("a"),
+    threadRef: "agent:main:subagent:child",
+  } as unknown as Session;
   const stopped = await stopSessionTree(
     {
       sessions: { childrenOf: async (id: string) => (id === "root" ? [child] : []) },

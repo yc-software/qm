@@ -7,13 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
-  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  const computer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "default");
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
   return built;
 }
 
@@ -141,7 +141,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
   const built = freshApp();
   for (let i = 0; i < 20; i++) {
     const skill = await built.skills.create({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       createdBy: "U1",
       manifest: {
         name: `helper-${String(i).padStart(2, "0")}`,

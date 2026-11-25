@@ -18,6 +18,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -65,7 +66,7 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
       trigger: "conversation",
       surface: "slack",
       fireKey: "run:r-1",
-      sourceScopeId: "personal:internal:U1",
+      sourceScopeId: personalScope("internal:U1"),
       sourceThreadRef: "t",
     },
     idempotencyKey: "run:r-1",
@@ -348,7 +349,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
 
 const failureSessions = async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
+  const scope = personalScope("u1@example.test") as import("../src/types.ts").ScopeId;
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
 };

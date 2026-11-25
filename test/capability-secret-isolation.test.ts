@@ -12,6 +12,7 @@ import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../sr
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -23,7 +24,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 
   const cap = async (secret: string) =>
     mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: "U1", scopeId: personalScope("U1"), aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
       secret,
     );
 

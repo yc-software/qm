@@ -13,6 +13,7 @@ import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
 import { webNotificationsOn } from "../../notifications/web-push.ts";
+import { personalScope } from "../../types.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
@@ -62,6 +63,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
     user,
+    personalScope: personalScope(user),
     org: orgId(),
     companyName: branding.orgName?.trim() || null,
     workspace: tenancyBooted() && !bootTenant() ? branding.orgName?.trim() || null : null,

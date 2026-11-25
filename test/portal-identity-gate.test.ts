@@ -10,7 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -223,7 +223,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   it("direct cron reads and mutations require the portal actor as principalId", async () => {
     const cron = await built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -283,7 +283,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const alice = await token("U1");
     const aliceHeaders = { "content-type": "application/json", "x-portal-identity": alice };
     const webhook = await built.app.createWebhook({
-      ownerScopeId: "personal:U2",
+      ownerScopeId: personalScope("U2"),
       owner: "U2",
       createdBy: "U2",
       action: "private webhook",
@@ -402,8 +402,8 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       ["PATCH", "/v1/projects/p1", { name: "renamed" }],
       ["PUT", "/v1/projects/p1/slack-channel", { channel: "C1" }],
       ["DELETE", "/v1/projects/p1/slack-channel", {}],
-      ["PUT", "/v1/runtime-config", { scopeId: "personal:U1", inherit: true }],
-      ["PUT", "/v1/channel-header-pin", { scopeId: "personal:U1", on: true }],
+      ["PUT", "/v1/runtime-config", { scopeId: personalScope("U1"), inherit: true }],
+      ["PUT", "/v1/channel-header-pin", { scopeId: personalScope("U1"), on: true }],
       ["POST", "/v1/ui/canvases/s1", { pinned: true }],
       ["POST", "/v1/ui/observe/c1/result", { snapshot: {} }],
       ["POST", "/v1/suggested-activities", {}],
@@ -437,14 +437,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     try {
       const openBase = `http://localhost:${(open.address() as AddressInfo).port}`;
       const cron = await built.app.createCron({
-        ownerScopeId: "personal:U1",
+        ownerScopeId: personalScope("U1"),
         owner: "U1",
         createdBy: "U1",
         schedule: { everyMs: 60_000 },
         action: "private task",
       });
       const webhook = await built.app.createWebhook({
-        ownerScopeId: "personal:U1",
+        ownerScopeId: personalScope("U1"),
         owner: "U1",
         createdBy: "U1",
         action: "private webhook",

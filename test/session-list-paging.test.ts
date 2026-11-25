@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -36,7 +37,7 @@ async function withServer<T>(
 }
 
 async function chat(built: ReturnType<typeof buildApp>, threadRef: string, title: string, owner = "U1") {
-  const session = await built.sessions.getOrCreateByThread(threadRef, "dm", `personal:${owner}`, undefined, "web");
+  const session = await built.sessions.getOrCreateByThread(threadRef, "dm", personalScope(owner), undefined, "web");
   await built.sessions.addParticipant(session.id, owner, title);
   return session;
 }
@@ -61,7 +62,7 @@ test("the session list pages top-level chats newest first and keeps pinned, arch
     await built.sessions.updateParticipantView(archived.id, "U1", { archived: true });
     const child = await chat(built, "subagent:c0:1", "Child");
     await built.sessions.setParentSession(child.id, chats[0]!.id);
-    const cron = await built.sessions.getOrCreateByThread("cron:job:1", "dm", "personal:U1", undefined, "cron");
+    const cron = await built.sessions.getOrCreateByThread("cron:job:1", "dm", personalScope("U1"), undefined, "cron");
     await built.sessions.addParticipant(cron.id, "U1", "Cron run");
     await chat(built, "web:U2:theirs", "Someone else's", "U2");
 

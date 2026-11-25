@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 
@@ -30,10 +31,10 @@ function publishedApp(id: string, ownerScopeId: string, createdBy: string): Publ
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-offboard-")) }));
   const publishedApps = [
-    publishedApp("app-personal", "personal:U1", "U1"),
+    publishedApp("app-personal", personalScope("U1"), "U1"),
     publishedApp("app-shared", "channel:C1", "U1"),
-    publishedApp("app-other", "personal:U9", "U9"),
-    publishedApp("app-broken", "personal:U1", "U1"),
+    publishedApp("app-other", personalScope("U9"), "U9"),
+    publishedApp("app-broken", personalScope("U1"), "U1"),
   ];
   const archivedApps: string[] = [];
   const app = {
@@ -66,7 +67,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
   try {
     const { app, keychain, sandboxResources, skills, identity } = s.built;
     const personalCron = await app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       title: "daily digest",
@@ -81,14 +82,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       action: "team ping",
     });
     const othersCron = await app.createCron({
-      ownerScopeId: "personal:U9",
+      ownerScopeId: personalScope("U9"),
       owner: "U9",
       createdBy: "U9",
       schedule: { everyMs: 60_000 },
       action: "noise",
     });
     const loopCron = await app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -98,14 +99,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     const { loop } = await s.built.loops.store.create({
       owner: "U1",
       createdBy: "U1",
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       name: "inbox",
       playbook: "triage",
       successCondition: "done",
       cronId: loopCron.id,
     });
     const webhook = await app.createWebhook({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       action: "handle event",
@@ -120,10 +121,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       purpose: "ci",
     });
     const manifest = (name: string) => ({ name, description: name, requiredCapabilities: [], body: "..." });
-    const personalSkill = await skills.create({ scopeId: "personal:U1", manifest: manifest("mine"), createdBy: "U1" });
+    const personalSkill = await skills.create({
+      scopeId: personalScope("U1"),
+      manifest: manifest("mine"),
+      createdBy: "U1",
+    });
     const sharedSkill = await skills.create({ scopeId: "channel:C1", manifest: manifest("team"), createdBy: "U1" });
-    const computer = await sandboxResources.create("U1", "personal:U1", "sprites", "laptop");
-    await sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const computer = await sandboxResources.create("U1", personalScope("U1"), "sprites", "laptop");
+    await sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
 
     const preview = await s.offboard("U1", {});
     assert.equal(preview.status, 200);
@@ -172,7 +177,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.notEqual((await skills.get(sharedSkill.id))!.status, "archived");
     assert.deepEqual(s.archivedApps, ["app-personal"]);
     assert.equal((await sandboxResources.get(computer.id)).state, "retired");
-    assert.equal(await sandboxResources.resolve("personal:U1"), null, "the default was cleared first");
+    assert.equal(await sandboxResources.resolve(personalScope("U1")), null, "the default was cleared first");
 
     const events = await s.built.auditLog.events(testTenant);
     for (const change of applied.changes)

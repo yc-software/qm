@@ -15,7 +15,7 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, scopeId, personalScope } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
@@ -688,11 +688,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
-      if (
-        g.permission === "read" &&
-        principalId.includes("@") &&
-        g.granteeScopeId === `personal:${principalId.trim().toLowerCase()}`
-      ) {
+      if (g.permission === "read" && principalId.includes("@") && g.granteeScopeId === personalScope(principalId)) {
         best = "read";
         continue;
       }

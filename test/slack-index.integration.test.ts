@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -902,7 +903,7 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+        topic: `Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=${encodeURIComponent(personalScope("U1"))}|More settings>`,
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -1002,7 +1003,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
       ],
     );
     for (const listener of f.core.modelChangeListeners)
-      withTenant(TENANT, () => listener("personal:alice@example.com"));
+      withTenant(TENANT, () => listener(personalScope("alice@example.com")));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
