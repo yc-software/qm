@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { item } from "./item-fixture.ts";
-import { harness, runtimeConfig } from "./deep-link-boot-fixture.ts";
+import { harness, runtimeConfig, settle } from "./deep-link-boot-fixture.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
-
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 300 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.ok(check());
-}
 
 test("leaving a side chat before sending keeps a typed draft as a card and drops an empty one", async () => {
   const base = { scopeId: "personal:tester", type: "dm", canContinue: true, createdAt: 0 } as const;
@@ -45,21 +40,23 @@ test("leaving a side chat before sending keeps a typed draft as a card and drops
     document.dispatchEvent(new window.Event("selectionchange"));
     paragraph.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
     document.querySelector<HTMLButtonElement>(".side-chat-discuss")!.click();
-    await until(() => Boolean(input()));
+    await settle(() => Boolean(input()));
   };
   try {
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    await until(() => Boolean(document.querySelector(".message-row p")));
+    await settle(() => Boolean(document.querySelector(".message-row p")));
     await ask();
     outside();
-    await until(() => !document.querySelector(".side-chat-card"));
+    await settle(() => !document.querySelector(".side-chat-card"));
+    assert.ok(!document.querySelector(".side-chat-card"));
     await ask();
     input()!.value = "Why durable?";
     input()!.dispatchEvent(new window.Event("input", { bubbles: true }));
     outside();
-    await until(() => document.querySelector(".side-chat-preview.draft")?.textContent === "Draft Why durable?");
+    await settle(() => Boolean(document.querySelector(".side-chat-preview.draft")));
+    assert.equal(document.querySelector(".side-chat-preview.draft")?.textContent, "Draft Why durable?");
   } finally {
     await h.close();
   }

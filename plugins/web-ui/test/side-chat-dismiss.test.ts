@@ -1,16 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { item } from "./item-fixture.ts";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness, settle } from "./deep-link-boot-fixture.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
-
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 300; i++) {
-    if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail("Side chat did not reach the expected state");
-}
 
 test("clicking outside an open side chat collapses it, clicking inside keeps it open", async () => {
   const source: CoreSession = {
@@ -49,19 +41,21 @@ test("clicking outside an open side chat collapses it, clicking inside keeps it 
     h.releaseSessions();
     await h.boot();
     await h.sessionsReady();
-    await until(() => Boolean(document.querySelector(".side-chat-preview")));
+    await settle(() => Boolean(document.querySelector(".side-chat-preview")));
     const note = document.querySelector<HTMLElement>(".side-chat-card")!;
     note.dispatchEvent(new window.FocusEvent("focusin", { bubbles: true }));
     assert.ok(note.classList.contains("hovered"), "a focused note is marked so it lights up with its passage");
     note.dispatchEvent(new window.FocusEvent("focusout", { bubbles: true }));
     assert.ok(!note.classList.contains("hovered"));
     document.querySelector<HTMLElement>(".side-chat-preview")!.click();
-    await until(() => open()?.textContent?.includes("Jobs survive restarts.") === true);
+    await settle(() => open()?.textContent?.includes("Jobs survive restarts.") === true);
+    assert.ok(open());
     press(open()!.querySelector(".message-row")!);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(open(), "a click inside the side chat keeps it open");
     press(document.querySelector(".chat-scroll > .message-stack > .message-row")!);
-    await until(() => !open() && Boolean(document.querySelector(".side-chat-card.collapsed")));
+    await settle(() => !open() && Boolean(document.querySelector(".side-chat-card.collapsed")));
+    assert.ok(!open() && document.querySelector(".side-chat-card.collapsed"));
   } finally {
     await h.close();
   }

@@ -147,6 +147,10 @@ export function withPendingSession(list: CoreSession[], pending: CoreSession): C
   return [pending, ...list.filter((s) => s.threadRef !== pending.threadRef)];
 }
 
+export function hasHumanMessage(messages: readonly object[]): boolean {
+  return messages.some((message) => !(message as { opener?: boolean }).opener);
+}
+
 export function isAbandonedNewChat(state: {
   threadRef: string | null;
   nextThreadRef: string | null;

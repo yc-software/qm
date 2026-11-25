@@ -213,6 +213,7 @@ import {
   clearWorking,
   conversationBackground,
   cronRowMeta,
+  hasHumanMessage,
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
@@ -595,7 +596,7 @@ export function createChatSurface(
         nextThreadRef,
         sessionId: chatState.sessionId,
         pendingSend: chatState.pendingSend,
-        hasHumanMessage: (chatState.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener),
+        hasHumanMessage: hasHumanMessage(chatState.agent?.state.messages ?? []),
         draft: ctx.composer.state.draft || storedDraft(ref ?? ""),
         attachments: ctx.composer.state.attachments.length,
       })
