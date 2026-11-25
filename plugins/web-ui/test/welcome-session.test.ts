@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { isWelcomeConversation } from "../src/welcome-session.ts";
 import type { CoreSession } from "../src/core-bridge.ts";
 
-const ALEX = { user: "alex", personalScope: "personal:alex", personalScope: "personal:alex" };
+const ALEX = { user: "alex", personalScope: "personal:alex" };
 
 const first: CoreSession = {
   id: "first",

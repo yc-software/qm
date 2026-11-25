@@ -83,7 +83,7 @@ test("project interactions preserve focus and successful local mutations", async
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { contextsState, renderContexts } = await vite.ssrLoadModule("/src/contexts.ts");
-    appState.me = { user: "owner", org: "acme" };
+    appState.me = { user: "owner", personalScope: "personal:owner", org: "acme" };
     appState.currentView = "contexts";
     appState.mainEl = document.querySelector("#main");
     contextsState.list = [];

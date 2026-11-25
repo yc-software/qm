@@ -18,7 +18,7 @@ let appState: {
   currentView: string;
   viewRenderSeq: number;
   mainEl: HTMLElement | null;
-  me: { user: string; org: string } | null;
+  me: { user: string; personalScope: string; org: string } | null;
 };
 let renderApps: () => Promise<void>;
 let openAppById: (id: string) => void;

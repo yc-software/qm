@@ -370,8 +370,12 @@ function canonicalScopes(value: unknown, scoped = false): unknown {
   );
 }
 
+function rawUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? "/", "http://localhost");
+}
+
 function requestUrl(req: IncomingMessage): URL {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const url = rawUrl(req);
   for (const key of ["scope", "scopeId"]) {
     if (!url.searchParams.has(key)) continue;
     const values = url.searchParams.getAll(key);
@@ -381,8 +385,7 @@ function requestUrl(req: IncomingMessage): URL {
   return url;
 }
 
-function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
-  const url = requestUrl(req);
+function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring, url = requestUrl(req)): BaseCtx {
   const tenant = requestTenants.get(req);
   return {
     req,
@@ -602,7 +605,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
     if (!res) return void socket.destroy();
-    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    const base: BaseCtx = { ...baseCtx(req, res, wiring, rawUrl(req)), upgrade: { socket, head } };
     await withRequestContext("core", req, res, () =>
       inRequestTenant(req, res, base, null, async () => {
         if (await proxyAppSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
@@ -612,11 +615,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring, rawUrl(req));
     const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
     if (alias && canonicalPath(req, base.pathname)) {
       req.url = `${alias}${base.url.search}`;
-      base = baseCtx(req, res, wiring);
+      base = baseCtx(req, res, wiring, rawUrl(req));
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
@@ -636,6 +639,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         requestTenants.set(req, tenant);
         base.tenant = tenant;
       }
+      base.url = requestUrl(req);
       return then();
     };
     const inbound = inboundKey(req, deps, found, base.url);

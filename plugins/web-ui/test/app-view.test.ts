@@ -22,7 +22,6 @@ import {
 const BLAIR = {
   user: "blair@example.com",
   personalScope: "personal:blair@example.com",
-  personalScope: "personal:blair@example.com",
 };
 
 function publishedApp(patch: Partial<AppView>): AppView {
