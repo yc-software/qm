@@ -30,6 +30,7 @@ struct ChatView: View {
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
   @FocusState private var composerFocused: Bool
+  @State private var clipboardHasImage = false
 
   init(
     model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
@@ -82,6 +83,7 @@ struct ChatView: View {
       if focused {
         showingAgents = false
       }
+      clipboardHasImage = focused && UIPasteboard.general.hasImages
     }
     .task(id: model.transcriptEntries.count) { await position(proxy) }
     .onChange(of: targetSequence) { _, target in
@@ -827,6 +829,17 @@ struct ChatView: View {
           )
           .disabled(model.sending)
           .transition(.opacity)
+          // The text field offers Paste only for text, so a copied image gets its own button.
+          if clipboardHasImage, !model.uploading {
+            PasteButton(supportedContentTypes: [.image]) { providers in
+              MainActor.assumeIsolated {
+                model.addAttachments(providers.map(AttachmentSource.image))
+              }
+            }
+            .labelStyle(.iconOnly)
+            .buttonBorderShape(.circle)
+            .transition(.opacity)
+          }
           if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
             modelSelector.transition(.opacity)
           }
