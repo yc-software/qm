@@ -1,7 +1,7 @@
 export const desktopComputerTool = {
   name: "desktop",
   description:
-    "Run JavaScript to observe and control apps on the user's Mac through the computer API. Prefer an available connector or API when it can complete the task. Top-level await is supported; variables persist between calls within this turn. The first call returns API documentation. Start with await computer.listApps() or await computer.getApp(name). Console output, observations, and screenshots are returned. Set reset to clear JavaScript state. Runs through the QM desktop app open on the person's Mac, whichever app this message came from, but only on messages the person addressed to you themselves; returns an error if no desktop app answers.",
+    "Run JavaScript to observe and control apps on the user's Mac through the computer API. Prefer an available connector or API when it can complete the task. Top-level await is supported; variables persist between calls within this turn. The first call returns API documentation. Start with await computer.listApps() or await computer.getApp(name). Console output, observations, and screenshots are returned. Set reset to clear JavaScript state. Work in the background: prefer accessibility actions (setValue, performSecondaryAction \"AXPress\") over real clicks, keyboard input and raise(), which can pull the window in front of the person's work. Runs through the QM desktop app open on the person's Mac, whichever app this message came from, but only on messages the person addressed to you themselves; returns an error if no desktop app answers.",
   timeoutMs: 60_000,
   inputSchema: {
     type: "object",

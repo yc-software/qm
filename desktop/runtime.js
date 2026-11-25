@@ -402,6 +402,11 @@ app.listWindows() -> [{id, title, role, subrole, frame, focused, main, minimized
 app.useWindow(id | null) targets that window for later observations and actions on this App and emits its tree; null
   returns to the focused window.
 
+Work in the background by default: the person is usually using their Mac while you act, so never take focus from them.
+Prefer actions that do not raise the window: setValue (navigate Chrome by setting its address bar with submit: true),
+performSecondaryAction(id, "AXPress") for buttons, links and checkboxes, click on ids outside web content, and observation.
+Use real clicks, keyboard input or raise() only when no background action works, and tell the person first.
+
 Observe the intended app before acting and use targets from its current state. Actions return after input is sent and
 confirm the requested outcome only when given expect. Otherwise observe to verify each meaningful change, and stop once
 the requested result is visible. After an error, interruption or timeout, inspect the current state before retrying an action that
@@ -417,7 +422,8 @@ app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift",
   Ids in web content, rows and cells get a real click; other ids use the accessibility press action.
   A real click on an id scrolls it into view first and fails if it stays offscreen or something covers it.
   While a menu is open, click its items by id or press Escape; other clicks and pointer actions fail.
-  Input uses app-local activation rather than automatically bringing the app to the front.
+  Real clicks (pixel targets, and ids in web content, rows and cells) and keyboard input (pressKey, typeText, paste)
+  can bring the target window in front of the person's work.
   If you use the target app yourself, actions on it wait for a quiet moment and then fail so it can be observed again.
 app.drag([x, y], [x, y], {expect}) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels}, {expect})
