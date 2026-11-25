@@ -644,7 +644,16 @@ test("a Slack message records who wrote it and the names it mentions, addressed 
     return res;
   };
   const ackEmoji = { requestAckEmoji: async () => undefined, ackPickCandidates: () => [] };
-  const deps = { core: {}, flow: { callCore }, directory, mirror: {}, serializer, ids, ackEmoji, threads: { mark() {} } };
+  const deps = {
+    core: {},
+    flow: { callCore },
+    directory,
+    mirror: {},
+    serializer,
+    ids,
+    ackEmoji,
+    threads: { mark() {} },
+  };
   const prefetched = { actor: internalActor, info: { name: "c" }, audience: [internalActor] };
   const inc = { kind: "channel", channel: "C1", userId: "U1", threadTs: "1.000", files: [], prefetched };
   const handler = createTurnHandler(deps as never);
