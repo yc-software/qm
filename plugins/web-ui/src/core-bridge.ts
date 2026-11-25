@@ -581,6 +581,7 @@ export type AssistantWork = AssistantMessage & {
   viaId?: string;
   personaId?: string;
   supersedes?: number;
+  runId?: string;
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -2242,7 +2243,7 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
-const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+export const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
 
 function deliveredSilence(item: Item): boolean {
   if (item.kind !== "ToolResult") return false;
@@ -2286,6 +2287,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
   let posted = false;
   let stoppedShown = false;
   let hiddenPrompt = false;
+  let turn = { id: null as string | null, start: 0 };
   const heldPosts = new Map<string, { text: string; item: Item }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.item);
@@ -2344,6 +2346,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     }
     const msg: AssistantWork = {
       persisted: true,
+      ...(turn.id !== null ? { runId: turn.id } : {}),
       ...(entrySeqs.length ? { entrySeqs } : {}),
       role: "assistant",
       content: [{ type: "text", text }],
@@ -2369,7 +2372,6 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
-  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
     if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";

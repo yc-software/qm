@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { CoreSession } from "./core-bridge";
+import { messageText, SILENCE_TOOLS, type AssistantWork } from "./core-bridge.ts";
+import { activityItems } from "./items.ts";
 import { REACTION_PREFIX, splitOnce } from "./slack-text.ts";
 
 export function hiddenMessage(message: AgentMessage): boolean {
@@ -26,13 +27,52 @@ export function continuedSpeakers(agents: boolean, rows: readonly AgentMessage[]
   return continued;
 }
 
-export function slackAppIcon(
-  session: CoreSession | null,
-  message: AgentMessage,
-  iconUrl: string | null | undefined,
-): string | undefined {
-  const wornPersona = Boolean((message as { personaId?: string }).personaId);
-  return session?.surface === "slack" && !wornPersona ? iconUrl || undefined : undefined;
+type WorkRow = AssistantWork & { entrySeqs?: number[]; work: NonNullable<AssistantWork["work"]> };
+
+function workOnlyRow(message: AgentMessage): message is WorkRow {
+  const row = message as AssistantWork;
+  return (
+    row.role === "assistant" &&
+    row.persisted === true &&
+    Boolean(row.work) &&
+    !row.deliveredFiles?.length &&
+    !messageText(message).trim()
+  );
+}
+
+const foldedRows = new WeakMap<WorkRow, { into: AssistantWork; merged: AssistantWork }>();
+
+function foldInto(into: AssistantWork & { entrySeqs?: number[] }, row: WorkRow): AssistantWork {
+  const hit = foldedRows.get(row);
+  if (hit?.into === into) return hit.merged;
+  const work = into.work;
+  const merged = {
+    ...into,
+    entrySeqs: [...(into.entrySeqs ?? []), ...(row.entrySeqs ?? [])],
+    work: work
+      ? {
+          ...work,
+          startedAt: work.startedAt ?? row.work.startedAt,
+          finishedAt: row.work.finishedAt ?? work.finishedAt,
+          activity: [...work.activity, ...row.work.activity],
+        }
+      : row.work,
+  };
+  foldedRows.set(row, { into, merged });
+  return merged;
+}
+
+export function slackRows(messages: readonly AgentMessage[]): AgentMessage[] {
+  const rows: AgentMessage[] = [];
+  for (const message of messages) {
+    const previous = rows.at(-1) as AssistantWork | undefined;
+    if (!workOnlyRow(message)) rows.push(message);
+    else if (previous?.role === "assistant" && previous.persisted && previous.runId && previous.runId === message.runId)
+      rows[rows.length - 1] = foldInto(previous, message) as AgentMessage;
+    else if (!activityItems(message.work.activity).some((item) => SILENCE_TOOLS.has(item.tool ?? "")))
+      rows.push(message);
+  }
+  return rows;
 }
 
 export function fromSomeoneElse(message: AgentMessage, viewer: string | undefined): boolean {

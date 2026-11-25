@@ -164,7 +164,10 @@ function signOutFromMenu(): void {
   void signOut();
 }
 
-onCustomEmojiLoaded(() => renderSidebarTop());
+onCustomEmojiLoaded(() => {
+  renderSidebarTop();
+  for (const conversation of allConversations()) conversation.redraw();
+});
 
 function startHiddenChatFromMenu(): void {
   closeFormMenus();
