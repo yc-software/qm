@@ -94,7 +94,9 @@ export interface SwarmService {
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
   botComputerRule(swarmIds: readonly string[]): Promise<Pick<SwarmService, "botMayUseComputer">>;
-  authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
+  authorizes(
+    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members" | "runId">,
+  ): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(
     tenant: Tenant,
@@ -936,7 +938,10 @@ export function createSwarmService(deps: {
         ({ auth, swarm } = await load(caller));
       }
     },
-    authorizes: (claims) => deps.authorize(claims),
+    authorizes: async (claims) => {
+      const run = claims.runId ? await runs.get(claims.runId) : null;
+      return deps.authorize(run ? { ...claims, members: run.request.conversation.audience } : claims);
+    },
     botComputerRule,
     botMayUseComputer: async (computer, turn) => (await botComputerRule([])).botMayUseComputer(computer, turn),
     notePersonUse,
