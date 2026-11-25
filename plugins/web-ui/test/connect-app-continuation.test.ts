@@ -7,9 +7,19 @@ test("connection continuation waits for scoped runtime settings before submittin
   const h = await harness({
     path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
     session: { ...SESSION, type: "dm", createdAt: 1, scopeId: "context:demo" },
-    items: [item("AgentMessage", { seq: 1, createdAt: 1, text: '::connect-apps{toolkit="gmail"}' })],
+    items: [
+      item("ToolCall", { seq: 1, createdAt: 1, tool: "card", callId: "c1", body: { kind: "apps", toolkit: "gmail" } }),
+      item("ToolResult", {
+        seq: 2,
+        createdAt: 1,
+        tool: "card",
+        callId: "c1",
+        body: { display: { kind: "apps", toolkit: "gmail" } },
+      }),
+      item("AgentMessage", { seq: 3, createdAt: 1, text: "Connect Gmail below." }),
+    ],
     connectionReturn: true,
-    returnWidget: "reply:1:0:0",
+    returnWidget: "card:c1",
   });
   const originalFetch = globalThis.fetch;
   let releaseRuntime = (): void => {};

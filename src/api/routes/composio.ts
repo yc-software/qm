@@ -569,10 +569,12 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   const installation = await ctx.deps.slackInstallation?.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   let nativeOAuth = false;
-  if (ctx.actor && !ctx.actor.imp && !ctx.capability) {
+  const signedIn = ctx.actor && !ctx.actor.imp ? ctx.actor.p : undefined;
+  const principal = ctx.capability ? ctx.capability.actorId : signedIn;
+  if (principal) {
     try {
-      if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
-      const native = await nativeSlackConnection(ctx);
+      if (!(await activePrincipal(ctx.deps, principal))) return sendJson(ctx.res, 403, { error: "forbidden" });
+      const native = await nativeSlackConnection(ctx, principal);
       if (native)
         return sendJson(ctx.res, 200, {
           connected: true,
@@ -582,7 +584,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
           workspaceInstalled,
         });
       nativeOAuth = await nativeSlackConfigured(ctx);
-      if (nativeOAuth && !(await hasSlackAccount(ctx)))
+      if (nativeOAuth && !(await hasSlackAccount(ctx, principal)))
         return sendJson(ctx.res, 200, { connected: false, nativeOAuth, workspaceInstalled });
     } catch (error) {
       reportFailure("Slack connection status", error);

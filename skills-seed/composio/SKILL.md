@@ -31,33 +31,27 @@ Those skills call `POST /v1/composio/proxy`, which forwards one raw request to t
 
 ## Show setup in web chat
 
-When the user asks to connect apps, browse integrations, or show setup again in web chat, include the following directive as its own paragraph in your reply, with blank lines around it:
-
-```text
-::connect-apps{}
-```
-
-Write the directive directly, without a code fence or quotation. The web UI renders only the searchable app picker in place. To display the separate Add to Slack action, use `::add-to-slack{}` as its own paragraph instead. Include both directives in separate paragraphs when the user asks for full setup. The Slack action is available to administrators; other users should ask their administrator to install QM. Do not repeat the welcome or celebration. Rendering the widget does not authorize any service or require an SDK call; the user chooses an app and completes provider consent. Do not claim accounts are connected without verified status. Outside web chat, use ordinary authorization links instead of this web-only directive.
+When the user asks to connect apps, browse integrations, or show setup again in web chat, call the `card` tool with kind `apps`; the searchable app picker appears with your reply. For the separate Add to Slack action, call `card` with kind `add_to_slack`; call both when the user asks for full setup. The Slack action is for administrators; other users should ask their administrator to install QM. `card` checks the real state first; when it returns an error, no card is shown, so act on the error instead of promising one. Do not repeat the welcome or celebration. Showing a card does not authorize any service; the user chooses an app and completes provider consent. Do not claim accounts are connected without verified status. Outside web chat, use ordinary authorization links; the `card` tool exists only in web chat.
 
 ## When a task needs an app that isn't connected
 
 Check `connections` before work that depends on an app. If the app is in the catalog but not connected, ask for it in your first reply: do any part that doesn't need the app, show the connect option, and stop. Don't finish a long partial answer first.
 
-- Slack uses its dedicated connection flow even though `toolkits` lists it. In web chat, use `::link-slack-account{}` as its own paragraph for personal Slack access or its connection status. Use `::add-to-slack{}` for the separate administrator step of installing the workspace bot, which must be completed first. Outside web chat, direct the user to QM web Settings (`/?view=settings`) and **Link your Slack account**, signed into their existing web account. Never use `::connect-apps{toolkit="slack"}` or a generic Slack authorization link. `::link-slack-account{}` does not automatically resume the task; ask the user to reply after linking. `::add-to-slack{}` continues the conversation on its own once the install is verified.
-- For other apps in web chat, put `::connect-apps{toolkit="notion"}` on its own paragraph, using the exact `id` from `toolkits`. It shows a single connect button for that app. After consent the user returns to this conversation, the account is verified, and a message is sent so you can continue the task.
+- Slack uses its dedicated connection flow even though `toolkits` lists it. In web chat, call `card` with kind `link_slack` for personal Slack access or its connection status, and kind `add_to_slack` for the separate administrator step of installing the workspace bot, which must be completed first. Outside web chat, direct the user to QM web Settings (`/?view=settings`) and **Link your Slack account**, signed into their existing web account. Never use the `apps` card or a generic Slack authorization link for Slack. The `link_slack` card does not automatically resume the task; ask the user to reply after linking. The `add_to_slack` card continues the conversation on its own once the install is verified.
+- For other apps in web chat, call `card` with kind `apps` and `toolkit` set to the exact `id` from `toolkits` (for example `notion`). It shows a single connect button for that app. After consent the user returns to this conversation, the account is verified, and a message is sent so you can continue the task.
 - For other apps outside web chat, mint a link with `authorize` (step 3 below) and say you'll pick the task back up when they reply.
 - If the app isn't in the catalog, say so in one sentence and don't show the picker. Look for the provider's official API or MCP server yourself. If it uses API keys, send a secure keychain drop link instead of asking for the key in chat.
 
 ## Apps connected somewhere else
 
-Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, in web chat show its card with `::connect-apps{toolkit="<id>"}` as its own paragraph: the card opens `connectUrl`. On other surfaces, give its `connectUrl` as a plain link. Either way, say you'll continue when they reply. Never call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
+Some apps are served by one of the workspace's connectors instead of Composio. In `toolkits` they carry `connectUrl` and `connector`; in `connections` a connected one is listed with `connector` and an empty `id`. Do their work with that connector's tools, never with Composio's. When one isn't connected, in web chat call `card` with kind `apps` and its `id` as `toolkit`: the card opens `connectUrl`. On other surfaces, give its `connectUrl` as a plain link. Either way, say you'll continue when they reply. Never call `authorize` for it: `authorize` refuses it with `409 connect_elsewhere`.
 
 ## Reconnect or disconnect an app
 
 Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection was never asked for. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.
 
 - When a tool fails with 403 or an insufficient-scope error and that account's `missingScopes` is non-empty, say so in one sentence and offer to reconnect instead of retrying.
-- In web chat, show `::connect-apps{toolkit="twitter"}`. For a connected app it offers Reconnect and Disconnect, and removes the replaced account itself after a verified reconnect.
+- In web chat, call `card` with kind `apps` and toolkit `twitter`. For a connected app it offers Reconnect and Disconnect, and removes the replaced account itself after a verified reconnect.
 - Elsewhere, `authorize` a new link (step 3 below). Once the new account ID is listed in `connections`, remove the old one with `apps("disconnect", {accountId})`, never before.
 - When asked to remove or reset a connection, call `apps("disconnect", {accountId})`; it raises an approval card to the user, only removes their own connections and can't be undone.
 

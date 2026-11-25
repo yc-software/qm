@@ -9,7 +9,7 @@ import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
-import { setupContent } from "./setup-widget";
+import { setupCardsIn, type SetupCard } from "./setup-cards";
 import { welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
@@ -2472,37 +2472,25 @@ export function createChatSurface(
     return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
   }
 
-  function assistantText(
-    text: string,
-    returnKey: string | null,
-    body: (text: string) => TemplateResult,
-  ): TemplateResult[] {
-    const parts: TemplateResult[] = [];
-    for (const [partIndex, part] of setupContent(text).entries()) {
-      if (part.type !== "text") {
-        if (returnKey !== null)
-          parts.push(
-            html`<qm-onboarding-welcome
-              class="inline-setup"
-              .me=${appState.me}
-              .base=${withBase("")}
-              .widget=${part.type === "setup" ? "apps" : part.type}
-              .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
-              .onConnected=${continueAfterConnection}
-              @slack-installed=${() => void continueAfterConnection("QM to our Slack workspace")}
-              .returnKey=${`${returnKey}:${partIndex}`}
-              .setupOnly=${true}
-              .animateWelcome=${false}
-            ></qm-onboarding-welcome>`,
-          );
-        continue;
-      }
-      const links = part.text.trim() ? connectorLinksIn(part.text, location.origin) : [];
-      const shown = links.length ? stripConnectorLinks(part.text, links) : part.text;
-      if (shown.trim()) parts.push(body(shown));
-      for (const link of links) parts.push(connectorWidget(link));
-    }
-    return parts;
+  function setupCard(card: SetupCard): TemplateResult {
+    return html`<qm-onboarding-welcome
+      class="inline-setup"
+      .me=${appState.me}
+      .base=${withBase("")}
+      .widget=${{ apps: "apps", add_to_slack: "slack", link_slack: "slack-account" }[card.kind]}
+      .toolkit=${card.toolkit}
+      .onConnected=${continueAfterConnection}
+      @slack-installed=${() => void continueAfterConnection("QM to our Slack workspace")}
+      .returnKey=${`card:${card.callId}`}
+      .setupOnly=${true}
+      .animateWelcome=${false}
+    ></qm-onboarding-welcome>`;
+  }
+
+  function assistantText(text: string, body: (text: string) => TemplateResult): TemplateResult[] {
+    const links = text.trim() ? connectorLinksIn(text, location.origin) : [];
+    const shown = links.length ? stripConnectorLinks(text, links) : text;
+    return [...(shown.trim() ? [body(shown)] : []), ...links.map(connectorWidget)];
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
@@ -2524,7 +2512,6 @@ export function createChatSurface(
         parts.push(
           ...assistantText(
             assistantDisplayText(workActive ? "" : text),
-            (message as AssistantWork).persisted ? `reply:${message.timestamp}:${chunkIndex}` : null,
             (body) =>
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
                 ${markdown(body, animating, isStreaming && work ? streamedAnswer(baseline, work) : baseline)}
@@ -2545,6 +2532,7 @@ export function createChatSurface(
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
+    for (const card of setupCardsIn((message as AssistantWork).work?.activity)) parts.push(setupCard(card));
     const continuing = isStreaming ? undefined : (message as AssistantWork).continuing;
     if (continuing)
       parts.push(html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`);
@@ -3285,7 +3273,7 @@ export function createChatSurface(
         if (item.kind !== "tool") return true;
         const speech = postSpeechText(item.row);
         if (speech === null) return true;
-        replies.push(spokenText(speech, `reply:${item.row.result?.createdAt}:0`, "streaming-text"));
+        replies.push(spokenText(speech, "streaming-text"));
         return false;
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
@@ -3374,7 +3362,6 @@ export function createChatSurface(
       const said = tail.trim()
         ? assistantText(
             tail,
-            null,
             (body) =>
               html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
                 ${markdown(body, animating, streamedAnswer(baseline, work))}
@@ -3491,15 +3478,11 @@ export function createChatSurface(
   }
 
   function interimReply(item: Item): TemplateResult {
-    return spokenText(item.text ?? "", `said:text:${item.seq}`, "work-said streaming-text");
+    return spokenText(item.text ?? "", "work-said streaming-text");
   }
 
-  function spokenText(text: string, returnKey: string, className: string): TemplateResult {
-    return html`${assistantText(
-      text,
-      returnKey,
-      (body) => html`<div class=${className} dir="auto">${markdown(body)}</div>`,
-    )}`;
+  function spokenText(text: string, className: string): TemplateResult {
+    return html`${assistantText(text, (body) => html`<div class=${className} dir="auto">${markdown(body)}</div>`)}`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
