@@ -61,10 +61,10 @@ export type TimelineItem =
   | { kind: "tool"; row: ToolRowModel }
   | { kind: "approval"; approval: PendingApproval };
 
-export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
+export function workTimelineSegments(items: TimelineItem[], inline: ReadonlySet<number> = new Set()): TimelineItem[][] {
   const segments: TimelineItem[][] = [[]];
   for (const item of items) {
-    if (item.kind === "steer" || item.kind === "text") segments.push([item], []);
+    if (item.kind === "steer" || (item.kind === "text" && !inline.has(item.item.seq))) segments.push([item], []);
     else segments.at(-1)!.push(item);
   }
   return segments;

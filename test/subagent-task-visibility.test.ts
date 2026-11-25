@@ -86,9 +86,18 @@ test("a wake's reply in a web conversation replaces the agent's reply since the 
   const stacked = await subagentReply();
   assert.equal(stacked.body.supersedes, undefined, "flag off: the wake adds a message");
   await built.featureFlags.setEnabled("wake_reply_rewrite", scopeId("personal", "U1"), true, "test");
+  const greeting = (await built.sessions.getItems(session.id)).find(isAgentReply)!;
   const rewritten = await subagentReply();
-  assert.equal(rewritten.body.supersedes, stacked.seq);
-  assert.ok(rewritten.text!.includes(`"${stacked.text!.slice(0, 20)}`), "the model is told which message it replaces");
+  assert.deepEqual(
+    [rewritten.body.supersedes, rewritten.body.alsoSupersedes],
+    [stacked.seq, [greeting.seq]],
+    "every reply since the person last typed is replaced",
+  );
+  assert.ok(
+    rewritten.text!.includes(
+      `your 2 messages to the person since they last wrote, the latest beginning "${stacked.text!.slice(0, 20)}`,
+    ),
+  );
 
   assert.ok((await peer.syscalls.write({ wake: true, target: session.id, text: "take this over" })).ok);
   const fromPeer = async () => [await latestRun()].find((run) => run?.request.sessionSenderId === peer.session.id);
@@ -114,11 +123,24 @@ test("a wake's reply in a web conversation replaces the agent's reply since the 
   assert.notEqual((await lastReply()).seq, kept.seq, "the watch fire posted its own reply");
   const report = { kind: "AgentMessage" as const, text: "nightly report", body: { via: "cron" } };
   await built.sessions.append({ sessionId: session.id, turnId: randomUUID() }, report);
-  assert.equal(
-    (await subagentReply()).body.supersedes,
-    kept.seq,
+  const passed = await subagentReply();
+  assert.deepEqual(
+    [passed.body.supersedes, passed.body.alsoSupersedes],
+    [kept.seq, undefined],
     "a fire's reply and a delivered report are passed over",
   );
+
+  await built.app.turn({ ...turn, conversation: { kind: "dm", threadRef }, text: "!preamble Checking the repo" });
+  const typed = await built.sessions.getItems(session.id);
+  const narration = typed.findLast((item) => item.kind === "AgentMessage" && item.variant === "narration")!;
+  const answered = typed.findLast(isAgentReply)!;
+  assert.deepEqual(
+    [answered.body.supersedes, answered.body.alsoSupersedes],
+    [undefined, [narration.seq]],
+    "a typed turn's answer supersedes its own narration",
+  );
+  const afterNarration = await subagentReply();
+  assert.deepEqual([afterNarration.body.supersedes, afterNarration.body.alsoSupersedes], [answered.seq, undefined]);
 
   const project = (await built.app.createProject("U1", "Launch"))!;
   await built.app.upsertDirectory([{ principalId: "U2", displayName: "Second", type: "internal" }]);
