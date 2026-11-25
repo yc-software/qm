@@ -102,7 +102,9 @@ export async function awsRequireColorDrained(
       return;
     }
     if (now() - started >= DRAIN_DEADLINE_MS) {
-      throw new CliError(`${aws.cluster} still served ${requests} requests from ${window}; it has not drained`);
+      throw new CliError(
+        `${aws.cluster} still served ${requests} requests from ${window}, ${DRAIN_DEADLINE_MS / 60_000} minutes after this check began; it has not drained`,
+      );
     }
     log(`${aws.cluster} served ${requests} requests from ${window}; waiting for it to drain`);
     await sleep(DRAIN_POLL_MS);

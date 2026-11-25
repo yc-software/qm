@@ -1360,7 +1360,7 @@ test("AWS waits for an idle color to serve no requests before calling it drained
     writeFileSync(idle.requests, Array(200).fill(5).join(","));
     await assert.rejects(
       () => awsRequireColorDrained(idle.paired, opts),
-      /still served 10 requests .* it has not drained/,
+      /still served 10 requests .*, 20 minutes after this check began; it has not drained/,
     );
     assert.doesNotMatch(readFileSync(idle.log, "utf8"), /modify-rule|update-service/);
   } finally {

@@ -3739,7 +3739,6 @@ export function assertAwsPublicRouting(
 
 export interface AwsPublicRoutingState {
   loadBalancerArn: string;
-  listenerArn: string;
   targets: ReadonlyMap<string, string>;
   colorRoutes: ReadonlyMap<string, AwsColorRoute>;
 }
@@ -4000,7 +3999,6 @@ export function awsPublicRouting(
   const colorRoutes = new Map<string, AwsColorRoute>();
   const state = (): AwsPublicRoutingState => ({
     loadBalancerArn,
-    listenerArn: listener.ListenerArn!,
     targets,
     colorRoutes,
   });
