@@ -35,19 +35,10 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(externalOrgId(), id)))];
 }
 
-// An agent naming an app by its plain name ("granola") should still get that app's card when Composio
-// files it under a variant id ("granola_mcp"). Use the search result only when exactly one toolkit's id
-// starts with the requested id, so an ambiguous name never picks an app the person didn't ask for.
 async function closestToolkit(ctx: ApiCtx, key: string, id: string): Promise<{ items: unknown[] }> {
-  const found = await request(
-    ctx,
-    key,
-    `/toolkits?${new URLSearchParams({ search: id.replace(/_/g, " "), limit: "20" })}`,
-  );
+  const found = await request(ctx, key, `/toolkits?${new URLSearchParams({ search: id })}`);
   const items = Array.isArray(found.items) ? found.items : [];
-  const close = items.filter(
-    (item) => typeof item?.slug === "string" && (item.slug === id || item.slug.startsWith(`${id}_`)),
-  );
+  const close = items.filter((item) => typeof item?.slug === "string" && item.slug.startsWith(`${id}_`));
   return { items: close.length === 1 ? close : [] };
 }
 
