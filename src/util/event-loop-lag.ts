@@ -15,9 +15,9 @@ const GC_KINDS: Record<number, string> = {
 
 export function logEventLoopLag(intervalMs = 60_000, gcWarnMs = GC_WARN_MS): Sweeper {
   const delay = monitorEventLoopDelay({ resolution: RESOLUTION_MS });
-  delay.enable();
   const lagMs = (nanoseconds: number) => Math.max(0, Math.round(nanoseconds / 1e6 - RESOLUTION_MS));
   const mb = (bytes: number) => Math.round(bytes / BYTES_PER_MB);
+  const heapLimitMb = mb(getHeapStatistics().heap_size_limit);
   const gcObserver = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
       if (entry.duration > gcWarnMs) {
@@ -27,7 +27,6 @@ export function logEventLoopLag(intervalMs = 60_000, gcWarnMs = GC_WARN_MS): Swe
       }
     }
   });
-  gcObserver.observe({ entryTypes: ["gc"] });
   const sweeper = createSweeper(
     () => {
       console.log(
@@ -35,25 +34,23 @@ export function logEventLoopLag(intervalMs = 60_000, gcWarnMs = GC_WARN_MS): Swe
       );
       delay.reset();
       const mem = process.memoryUsage();
-      const heap = getHeapStatistics();
       console.log(
-        `[memory] rss=${mb(mem.rss)} heapUsed=${mb(mem.heapUsed)} heapTotal=${mb(mem.heapTotal)} heapLimit=${mb(heap.heap_size_limit)} external=${mb(mem.external)} arrayBuffers=${mb(mem.arrayBuffers)} MB`,
+        `[memory] rss=${mb(mem.rss)} heapUsed=${mb(mem.heapUsed)} heapTotal=${mb(mem.heapTotal)} heapLimit=${heapLimitMb} external=${mb(mem.external)} arrayBuffers=${mb(mem.arrayBuffers)} MB`,
       );
     },
     intervalMs,
-    { label: "event-loop lag" },
+    {
+      label: "event-loop lag",
+      onStart() {
+        delay.enable();
+        gcObserver.observe({ entryTypes: ["gc"] });
+      },
+      onStop() {
+        gcObserver.disconnect();
+        delay.disable();
+      },
+    },
   );
   sweeper.start();
-  return {
-    start(overrideMs?: number) {
-      delay.enable();
-      gcObserver.observe({ entryTypes: ["gc"] });
-      sweeper.start(overrideMs);
-    },
-    stop() {
-      gcObserver.disconnect();
-      delay.disable();
-      return sweeper.stop();
-    },
-  };
+  return sweeper;
 }

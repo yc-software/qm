@@ -8,7 +8,7 @@ export interface Sweeper {
 export function createSweeper(
   fn: () => unknown,
   defaultIntervalMs: number,
-  opts: { label?: string; immediate?: boolean } = {},
+  opts: { label?: string; immediate?: boolean; onStart?: () => void; onStop?: () => void } = {},
 ): Sweeper {
   const label = opts.label ?? "sweeper";
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -26,13 +26,17 @@ export function createSweeper(
   return {
     start(intervalMs?: number) {
       if (timer || stopping) return;
+      opts.onStart?.();
       timer = setInterval(sweep, intervalMs ?? defaultIntervalMs);
       timer.unref?.();
       if (opts.immediate) sweep();
     },
     stop() {
-      if (timer) clearInterval(timer);
-      timer = null;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+        opts.onStop?.();
+      }
       stopping ??= Promise.all(pending)
         .then(() => {})
         .finally(() => {
