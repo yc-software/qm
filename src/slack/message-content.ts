@@ -1,4 +1,5 @@
 import type { SlackFile } from "./attachments.ts";
+import { isStatusChromeBlock } from "./message-gating.ts";
 
 type SlackNode = Record<string, unknown>;
 
@@ -10,6 +11,40 @@ const nodes = (value: unknown): SlackNode[] => (Array.isArray(value) ? value.fil
 const str = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const textObject = (value: unknown): string => (isNode(value) ? str(value.text) : str(value));
+
+function richTextElementText(el: SlackNode): string {
+  switch (el.type) {
+    case "text":
+      return str(el.text);
+    case "link":
+      return str(el.text) || str(el.url);
+    case "user":
+      return str(el.user_id) ? `<@${str(el.user_id)}>` : "";
+    case "channel":
+      return str(el.channel_id) ? `<#${str(el.channel_id)}>` : "";
+    case "usergroup":
+      return str(el.usergroup_id) ? `<!subteam^${str(el.usergroup_id)}>` : "";
+    case "emoji":
+      return str(el.name) ? `:${str(el.name)}:` : "";
+    case "broadcast":
+      return str(el.range) ? `<!${str(el.range)}>` : "";
+    default:
+      return str(el.text);
+  }
+}
+
+function richTextContainerText(container: SlackNode): string {
+  switch (container.type) {
+    case "rich_text_section":
+    case "rich_text_preformatted":
+    case "rich_text_quote":
+      return nodes(container.elements).map(richTextElementText).join("");
+    case "rich_text_list":
+      return nodes(container.elements).map(richTextContainerText).filter(Boolean).join("\n");
+    default:
+      return nodes(container.elements).map(richTextElementText).join("");
+  }
+}
 
 function blockText(block: SlackNode): string {
   switch (block.type) {
@@ -28,6 +63,16 @@ function blockText(block: SlackNode): string {
 const blocksText = (blocks: unknown): string[] =>
   nodes(blocks)
     .map((block) => blockText(block).trim())
+    .filter(Boolean);
+
+const replyBlocksText = (blocks: unknown): string[] =>
+  nodes(blocks)
+    .filter((block) => block.type !== "plan" && block.type !== "task_card" && block.type !== "context")
+    .map((block) =>
+      block.type === "rich_text"
+        ? nodes(block.elements).map(richTextContainerText).filter(Boolean).join("\n").trim()
+        : blockText(block).trim(),
+    )
     .filter(Boolean);
 
 function attachmentText(attachment: SlackNode): string {
@@ -87,7 +132,10 @@ export function slackMessageContent(message: object): { text: string; files: Sla
   for (const file of nodes(root.files)) addFile(file);
   visit(root, false);
 
-  const base = blocksText(root.blocks).join("\n") || String(root.text ?? "");
+  const hasStatusPlan = Array.isArray(root.blocks) && root.blocks.some(isStatusChromeBlock);
+  const base = hasStatusPlan
+    ? replyBlocksText(root.blocks).join("\n")
+    : blocksText(root.blocks).join("\n") || String(root.text ?? "");
   const text = rendered.length ? [base, ...rendered].filter(Boolean).join("\n") : base;
   return { text, files };
 }
