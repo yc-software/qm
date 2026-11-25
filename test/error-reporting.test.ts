@@ -449,12 +449,13 @@ test("human turns are always traced while other runs follow the configured rate"
     `
     const { createServer } = await import('node:http');
     let declined;
+    const { setRunAttribute } = await import('./plugins/chassis/src/error-reporting.ts');
     const server = createServer((req, res) => { declined = traceCarrier(); res.end('ok'); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     await fetch('http://127.0.0.1:' + server.address().port + '/v1/things', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
     server.close();
     for (let i = 0; i < 20; i++) {
-      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => {});
+      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => setRunAttribute('qm.started_by', 'person'));
       await traceQueued(undefined, 'cron-run', { 'qm.surface': 'cron', 'qm.origin': 'automation' }, async () => {});
       await traceQueued(undefined, 'subagent-run', { 'qm.origin': 'direct' }, async () => {});
     }
@@ -481,6 +482,29 @@ test("human turns are always traced while other runs follow the configured rate"
   const human = sampled.segments.find((sent) => sent.name === "human-run")!;
   assert.equal(human.attributes["sentry.sample_rate"], 1);
   assert.equal(human.attributes["qm.origin"], "human");
+  assert.equal(human.attributes["qm.started_by"], "person");
   assert.equal(human.attributes["qm.surface"], "slack");
   assert.match(human.attributes["messaging.message.id"], /^run-\d+$/);
+});
+
+test("execute stages keep their diagnostic attributes and the command's own run time", async () => {
+  const { spans } = await runReporting(
+    `
+    const { tracePhase, traceElapsed } = await import('./plugins/chassis/src/error-reporting.ts');
+    await traceQueued(undefined, 'run', { 'qm.origin': 'human' }, () =>
+      tracePhase('exec.run', async () => { traceElapsed('exec.command', 250); return { code: 3 }; }, {
+        attributes: (ran) => ({ 'qm.exec.provider': 'sprites', 'qm.exec.exit_code': ran.code }),
+      }),
+    );
+    await flushErrorReporting();
+  `,
+    true,
+    { SENTRY_TRACES_SAMPLE_RATE: "1" },
+  );
+  const run = spans.find((span) => span.name === "exec.run")!;
+  assert.equal(run.attributes["qm.exec.provider"], "sprites");
+  assert.equal(run.attributes["qm.exec.exit_code"], 3);
+  const command = spans.find((span) => span.name === "exec.command")!;
+  assert.equal(command.parent_span_id, run.span_id);
+  assert.ok(Math.abs(command.end_timestamp - command.start_timestamp - 0.25) < 0.01);
 });

@@ -388,13 +388,6 @@ import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
 import { watchReplyNotices } from "./notifications/reply-notifications.ts";
-import {
-  createWebPush,
-  webPushSubject,
-  type VapidKeyRecord,
-  type WebPush,
-  type WebPushSubscriptionRecord,
-} from "./notifications/web-push.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
@@ -462,7 +455,7 @@ import { genericChatSender } from "./surfaces/generic-chat/outbound.ts";
 import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
 import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
 import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
-import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
+import { GENERIC_CHAT, genericChatOrganizationBearer } from "./surfaces/generic-chat/protocol.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -597,7 +590,6 @@ export interface BuiltApp {
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
-  webPush?: WebPush;
   slackCore: SlackCoreClient;
 }
 
@@ -1415,9 +1407,18 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
+  const genericChat = config.genericChat;
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    ...(genericChat
+      ? {
+          organizationBearer: async () => {
+            const org = await sessions.tenantLookup.boundExternalOrg(ambientTenant(), genericChat.issuer);
+            return org && genericChatOrganizationBearer(genericChat.secret, org);
+          },
+        }
+      : {}),
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -2669,22 +2670,10 @@ export function buildApp(
       if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
-  const pushSubject = webPushSubject(config.publicUrl);
-  const webPush = pushSubject
-    ? createWebPush({
-        subscriptions: artifactMap<WebPushSubscriptionRecord>("web_push_subscriptions", ["principalId"]),
-        vapid: artifactMap<VapidKeyRecord>("web_push_vapid"),
-        key: deriveConnectorKey(config.connectorSecretKey, "web-push"),
-        secrets: secretStore,
-        subject: pushSubject,
-      })
-    : undefined;
   watchReplyNotices({
     bus: sessionStateBus,
     sessions,
     notifiable: () => enabledPeople(featureFlags, "web_notifications"),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(webPush ? { send: webPush.send } : {}),
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
@@ -2706,6 +2695,9 @@ export function buildApp(
   };
   const genericChatNotices = config.genericChat ? createGenericChatNotices({ deliveries }) : null;
   const genericChatClient = config.genericChat ? createGenericChatClient(config.genericChat) : null;
+  const genericChatIssuer = config.genericChat?.issuer;
+  const genericChatAccountTenant =
+    genericChatIssuer && ((account: string) => sessions.tenantLookup.externalOrgTenant(genericChatIssuer, account));
   const genericChatTurns = genericChatClient
     ? createGenericChatTurns({
         app,
@@ -2717,9 +2709,10 @@ export function buildApp(
       })
     : null;
   const genericChatInbound =
-    genericChatNotices && genericChatClient && genericChatTurns && config.genericChat
+    genericChatNotices && genericChatClient && genericChatTurns && genericChatAccountTenant && config.genericChat
       ? createGenericChatInbound({
           secret: config.genericChat.secret,
+          accountTenant: genericChatAccountTenant,
           client: genericChatClient,
           stageBlob: slackCore.stageBlob,
           app,
@@ -2742,10 +2735,11 @@ export function buildApp(
         })
       : null;
   const genericChatDelivery =
-    genericChatClient && genericChatTurns
+    genericChatClient && genericChatTurns && genericChatAccountTenant
       ? createDeliveryRelay(deliveries, {
           type: GENERIC_CHAT,
           send: genericChatSender({
+            accountTenant: genericChatAccountTenant,
             client: genericChatClient,
             blobs: slackCore,
             app,
@@ -3405,7 +3399,6 @@ export function buildApp(
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
-    ...(webPush ? { webPush } : {}),
     sessionShares: inboundMap<SessionShare>("session_shares"),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
@@ -3551,7 +3544,6 @@ export function serverDeps(
     loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
-    ...(built.webPush ? { webPush: built.webPush } : {}),
     environments: built.environments,
     sandboxResources: built.sandboxResources,
   };

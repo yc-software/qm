@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
   originContext,
+  personaContinues,
   slackPersonaReplyArgs,
   createDeliveryTracker,
   createThreadTracker,
@@ -99,7 +100,10 @@ export function createSlackDeliverer(deps: {
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
-  function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
+  async function deliveryFooter(
+    d: Delivery,
+    at: { channel: string; threadTs?: string; before?: string },
+  ): Promise<Array<Record<string, unknown>>> {
     const p = d.provenance;
     let source: { page: "crons" | "webhooks"; id: string; title?: string } | undefined;
     const cronId = p?.trigger === "cron" ? cronIdOf(p.sourceThreadRef) : null;
@@ -111,9 +115,9 @@ export function createSlackDeliverer(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
+    const continues = await personaContinues(core.readSurfaceMessages?.bind(core), at, d.destination.persona);
     const origin = originContext({
-      persona: d.destination.persona,
-      project: d.destination.project,
+      ...(continues ? {} : { persona: d.destination.persona, project: d.destination.project }),
       webUiPublicUrl: deps.webUiPublicUrl,
       ...(source ? { source } : {}),
     });
@@ -237,7 +241,7 @@ export function createSlackDeliverer(deps: {
               return undefined;
             }
             const footer = [
-              ...deliveryFooter(d),
+              ...(await deliveryFooter(d, { channel, threadTs, before: d.destination.edit.messageTs })),
               ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
             ];
             const unfurlLinks = d.destination.unfurlLinks;
@@ -293,7 +297,7 @@ export function createSlackDeliverer(deps: {
                 .catch(swallowAs("slack: post upload-failure note", undefined));
             }
           };
-          const messageFooter = deliveryFooter(d);
+          const messageFooter = await deliveryFooter(d, { channel, threadTs, ...(editRef ? { before: editRef } : {}) });
           if (!text.trim() && !messageFooter.length && d.attachments?.length) text = "Files attached.";
           const footer = [
             ...messageFooter,
@@ -419,7 +423,7 @@ export function createSlackDeliverer(deps: {
           if (!text.trim() && !d.attachments?.length) return undefined;
           const channel = await openConversationFor(client, [d.destination.target]);
           const threadTs = d.destination.threadTs;
-          const footer = deliveryFooter(d);
+          const footer = await deliveryFooter(d, { channel, threadTs });
           if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
           const blocks = card?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
           let uploadError: unknown;

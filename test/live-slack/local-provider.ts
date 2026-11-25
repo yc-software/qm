@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { startQm } from "../../src/start.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
+import { personalScope } from "../../src/types.ts";
 import { bootTenant, inBootTenant } from "../../src/tenants/boot.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
 
 async function qualify(built: Awaited<ReturnType<typeof startQm>>["built"]): Promise<unknown[]> {
   const actorId = `provider-qualification-${randomUUID()}`;
-  const scopeId = `personal:${actorId}`;
+  const scopeId = personalScope(actorId);
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
@@ -55,8 +56,7 @@ async function qualify(built: Awaited<ReturnType<typeof startQm>>["built"]): Pro
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
-    const left = randomUUID();
-    const right = randomUUID();
+    const [left, right] = [randomUUID(), randomUUID()];
     const result = await built.app.turn({
       surface: "qualification",
       actor: { externalId: actorId },

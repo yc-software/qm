@@ -667,7 +667,7 @@ test("a DM reply wearing a persona posts under its name and icon", async () => {
       assert.equal(post.icon_emoji, ":art:");
       assert.deepEqual(post.blocks?.at(-1), {
         type: "context",
-        elements: [{ type: "mrkdwn", text: "From Ada", verbatim: true }],
+        elements: [{ type: "mrkdwn", text: "Answered as Ada", verbatim: true }],
       });
     }
   } finally {
