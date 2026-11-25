@@ -455,6 +455,11 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
 const MARKED = "string_to_array(current_setting('qm.marked_apps'), ',')::uuid[]";
 const BOT_WORK = [markBotWork(unlessSlackListsAPerson("l"), MARKED), holdBotLoopShips("system", MARKED)];
 
+export const MARK_EARLIER_LINKS_MIGRATION = {
+  id: "users/v2/0012-mark-earlier-links",
+  statements: [markBotWork(unlessSlackListsAPerson("l")), holdBotLoopShips("system:migration")],
+};
+
 async function markBotWorkOf(client: PoolClient, apps: readonly Record<string, unknown>[]): Promise<void> {
   if (!apps.length) return;
   await client.query(`SELECT set_config('qm.marked_apps', $1, true)`, [apps.map((app) => app.id).join(",")]);

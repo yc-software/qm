@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { createPostgresUserStore } from "../src/identity/user-store.ts";
+import { createPostgresUserStore, MARK_EARLIER_LINKS_MIGRATION } from "../src/identity/user-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -35,9 +35,7 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
     grants: await Promise.all(["gb", "pa", "ge", "gr", "gd"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
-  await pg.q(
-    "DELETE FROM qm_schema_migrations WHERE id IN ('users/v2/0010-rerun-bot-marker-backfill', 'users/v2/0011-hold-bot-loop-ships')",
-  );
+  await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [MARK_EARLIER_LINKS_MIGRATION.id]);
   await migrateRegisteredPgSchemas(url);
   const after = await state();
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
