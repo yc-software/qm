@@ -17,8 +17,15 @@ interface ReplyVersions {
 }
 
 function foldable(message: AgentMessage, superseded: Map<AgentMessage, number>): boolean {
-  const row = message as AssistantWork & { subagentMail?: unknown; hidden?: boolean };
-  if (row.role === "assistant") return superseded.has(message) || !messageText(row).trim();
+  const row = message as AssistantWork & { subagentMail?: unknown; hidden?: boolean; stopReason?: string };
+  if (row.role === "assistant")
+    return (
+      superseded.has(message) ||
+      (!messageText(row).trim() &&
+        !row.deliveredFiles?.length &&
+        row.stopReason !== "error" &&
+        row.stopReason !== "aborted")
+    );
   return (row.role === "user" || row.role === "user-with-attachments") && Boolean(row.subagentMail || row.hidden);
 }
 
