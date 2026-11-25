@@ -58,10 +58,15 @@ when it fits the user's intent, not as a silent fallback from a failed personal 
 intended account is unclear before a write, ask. For personal access, see the GitHub / GitLab
 skill and use an authorized login that supports Git transport.
 
+Selecting the credential routes that command's Git through the broker: plain
+`https://<host>/<repo-path>` URLs, and remotes already pointing at
+`$AGENT_API_URL/v1/credentials/git/<slug>/`, authenticate with the command's token, including
+partial-clone blob fetches. Nothing is saved in the checkout, so select the credential on every
+command that reaches the remote.
+
 ```bash
-git remote add broker "$AGENT_API_URL/v1/credentials/git/<slug>/<repo-path>.git"
-git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
-  push broker HEAD:refs/heads/codex/small-change
+git clone --filter=blob:none https://<host>/<repo-path>.git
+git push origin HEAD:refs/heads/codex/small-change
 ```
 
 The same credential policy applies: the slug must be listed in your prompt, its allowed methods
