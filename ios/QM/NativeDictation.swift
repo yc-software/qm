@@ -242,6 +242,9 @@ final class NativeDictationModel {
   var canFinish: Bool { state == .recording || state == .ready }
   private let provider: any SpeechToTextProvider
   private let microphonePermission: @MainActor () async -> Bool
+  /// How long to wait after the panel starts opening before any microphone setup. Parts of
+  /// it still run on the main thread and stalled the opening animation.
+  private let openingDelay: Duration
   private var audioEngine: AVAudioEngine?
   private var audioFile: AVAudioFile?
   private var liveRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -254,11 +257,13 @@ final class NativeDictationModel {
 
   init(
     provider: any SpeechToTextProvider,
+    openingDelay: Duration = .zero,
     microphonePermission: @escaping @MainActor () async -> Bool = {
       await AVAudioApplication.requestRecordPermission()
     }
   ) {
     self.provider = provider
+    self.openingDelay = openingDelay
     self.microphonePermission = microphonePermission
   }
 
@@ -277,6 +282,8 @@ final class NativeDictationModel {
     revision = current
     operation = Task { [self] in
       do {
+        if openingDelay > .zero { try await Task.sleep(for: openingDelay) }
+        guard current == revision, !Task.isCancelled else { return }
         try await provider.availability()
         guard current == revision, !Task.isCancelled else { return }
         guard await microphonePermission() else {

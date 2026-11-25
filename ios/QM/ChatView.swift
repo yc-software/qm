@@ -43,7 +43,8 @@ struct ChatView: View {
     self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
-      initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
+      initialValue: NativeDictationModel(
+        provider: OnDeviceSpeechToTextProvider(), openingDelay: .milliseconds(420)))
     _suggestions = State(initialValue: NativeSuggestedActivitiesModel(client: model.client))
     self.initialSequence = initialSequence
     _targetSequence = State(initialValue: initialSequence)
@@ -865,6 +866,7 @@ struct ChatView: View {
         } else {
           Button {
             composerFocused = false
+            liftsTranscript = followsLatest
             dictation.start()
           } label: {
             Image(systemName: "mic")
