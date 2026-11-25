@@ -685,13 +685,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             : nothing
         }
         ${attachmentStrip(agent)}
-        ${
-          approvalPauses.length
-            ? composerApprovalPanel(approvalPauses, ctx.chat.resolveCommandApproval, docked.length > 0)
-            : receipt
-              ? approvalReceipt(receipt)
-              : nothing
-        }
+        ${approvalPauses.length ? composerApprovalPanel(approvalPauses, ctx.chat.resolveCommandApproval, docked.length > 0) : nothing}
+        ${!approvalPauses.length && receipt ? approvalReceipt(receipt) : nothing}
         ${composerInput({
           value: composerState.draft,
           placeholder,
