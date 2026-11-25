@@ -750,7 +750,8 @@ export function createChatSurface(
     container.replaceChildren(chatState.host);
     const opening = startProactiveOpenerIfNew(agent, threadRef, normalStreamFn, onWork, sessionId, scopeId, messages);
     const runningSince = !opening && session?.working ? session.workingSince : undefined;
-    if (runningSince !== undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince);
+    if (runningSince !== undefined)
+      void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince, session?.workingRun);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
     if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
@@ -1234,6 +1235,7 @@ export function createChatSurface(
     normalStreamFn: Agent["streamFn"],
     onWork: (work: WorkBlock) => void,
     runningSince?: number,
+    workingRun?: string,
   ): Promise<boolean> {
     const lookup = activeRunForThread(threadRef).then(
       (activeRun) => {
@@ -1249,7 +1251,17 @@ export function createChatSurface(
       },
     );
     if (runningSince !== undefined)
-      return resumeRun(agent, threadRef, normalStreamFn, onWork, lookup, undefined, undefined, runningSince);
+      return resumeRun(
+        agent,
+        threadRef,
+        normalStreamFn,
+        onWork,
+        lookup,
+        undefined,
+        undefined,
+        runningSince,
+        workingRun,
+      );
     const located = await lookup;
     return located ? resumeRun(agent, threadRef, normalStreamFn, onWork, located.runId, located.run) : false;
   }
@@ -1263,6 +1275,7 @@ export function createChatSurface(
     initialRun?: RunPoll,
     onStarted?: () => void,
     runningSince?: number,
+    workingRun?: string,
   ): Promise<boolean> {
     if (
       agent !== chatState.agent ||
@@ -1276,7 +1289,11 @@ export function createChatSurface(
       if (!initialRun) initialRun = await api<RunPoll>(`/api/runs/${encodeURIComponent(target)}`);
       if (agent !== chatState.agent || agent.state.isStreaming) return false;
     }
-    const { messages: msgs, popped } = continuableMessages(agent.state.messages, initialRun?.input);
+    const { messages: msgs, popped } = continuableMessages(
+      agent.state.messages,
+      initialRun?.input,
+      typeof target === "string" ? target : workingRun,
+    );
     agent.state.messages = msgs;
     const seedText = popped
       .map((m) => messageText(m).trim())
@@ -1287,7 +1304,11 @@ export function createChatSurface(
         ? target
         : target.then((located) => {
             if (located && agent === chatState.agent)
-              agent.state.messages = continuableMessages(agent.state.messages, located.run.input).messages;
+              agent.state.messages = continuableMessages(
+                agent.state.messages,
+                located.run.input,
+                located.runId,
+              ).messages;
             return located;
           });
     const seed =
@@ -1457,7 +1478,7 @@ export function createChatSurface(
     else restoreScroll();
     ctx.ensureDeliveryStream();
     const runningSince = s.working ? s.workingSince : undefined;
-    void resumeTrackedRun(agent, s.threadRef, normalStreamFn, onWork, runningSince);
+    void resumeTrackedRun(agent, s.threadRef, normalStreamFn, onWork, runningSince, s.workingRun);
     consumeBackgroundPanelRequest();
   }
 
