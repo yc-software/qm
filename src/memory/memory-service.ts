@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpRemoteTool } from "../mcp/mcp-client.ts";
 import { ownPrivateConversation } from "../directory/person.ts";
 import type { ScopeId } from "../types.ts";
@@ -119,8 +120,8 @@ export interface MemoryService {
     tool: string,
     args: Record<string, unknown>,
     by: MemoryAuthority | undefined,
-    context?: { audienceScopeId?: ScopeId },
-  ): Promise<string>;
+    context?: { audienceScopeId?: ScopeId; startedAt?: number },
+  ): Promise<CallToolResult>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(
