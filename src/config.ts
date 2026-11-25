@@ -123,7 +123,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  genericChat?: { url: string; secret: string; label?: string; mark?: string };
+  genericChat?: { url: string; secret: string; issuer: string; label?: string; mark?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -560,8 +560,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
-  if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
-    throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
+  const genericChatSet = [env.GENERIC_CHAT_URL, env.GENERIC_CHAT_SECRET, env.GENERIC_CHAT_ISSUER].map(
+    (v) => !!v?.trim(),
+  );
+  if (new Set(genericChatSet).size > 1)
+    throw new Error("GENERIC_CHAT_URL, GENERIC_CHAT_SECRET and GENERIC_CHAT_ISSUER must be set together");
   const genericChatMark = env.GENERIC_CHAT_MARK?.trim();
   if (genericChatMark && !isSvgPathData(genericChatMark))
     throw new Error(`GENERIC_CHAT_MARK must be SVG path data of at most ${SVG_PATH_MAX} characters`);
@@ -687,11 +690,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim()
+    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim() && env.GENERIC_CHAT_ISSUER?.trim()
       ? {
           genericChat: {
             url: env.GENERIC_CHAT_URL.trim(),
             secret: env.GENERIC_CHAT_SECRET.trim(),
+            issuer: env.GENERIC_CHAT_ISSUER.trim(),
             ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
             ...(genericChatMark ? { mark: genericChatMark } : {}),
           },

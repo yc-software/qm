@@ -48,7 +48,10 @@ describe("POST /v1/reach with edit", () => {
 
   before(async () => {
     built = buildApp(
-      testConfig({ signingSecret: SECRET, genericChat: { url: "https://chat.example", secret: SECRET } }),
+      testConfig({
+        signingSecret: SECRET,
+        genericChat: { url: "https://chat.example", secret: SECRET, issuer: "https://idp.example" },
+      }),
     );
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },

@@ -10,13 +10,13 @@ import { tenantLookup } from "../src/tenants/lookup.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
 
 const secret = "generic-chat-shared-secret-0123456789abcdef";
+const issuer = "https://idp.example";
 
 describeTwoTenants("generic chat on a shared host", (db) => {
   const handledIn: (string | undefined)[] = [];
   const containers: string[] = [];
   const requests: { url: string; init: RequestInit }[] = [];
   const app = {
-    tenantFor: (...key: Parameters<App["tenantFor"]>) => tenantLookup(db.app).tenantFor(...key),
     ingestSurfaceEvents: async (events: Parameters<App["ingestSurfaceEvents"]>[0]) => {
       handledIn.push(boundTenant());
       containers.push(...events.map((event) => event.container));
@@ -36,9 +36,18 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     },
   });
   const stageBlob = async () => ({ blobId: "" });
+  const lookup = () => tenantLookup(db.app);
+  const accountTenant = (account: string) => lookup().externalOrgTenant(issuer, account);
+  const bind = (tenant: string, org: string, by = issuer) =>
+    db.owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [
+      by,
+      org,
+      tenant,
+    ]);
   const inbound = createGenericChatInbound({
     registerGroup: async () => {},
     secret,
+    accountTenant,
     client,
     stageBlob,
     turns: { start: async () => {} },
@@ -50,7 +59,7 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     onAction: async () => {},
   });
   const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
-  const send = genericChatSender({ app, client, blobs });
+  const send = genericChatSender({ app, accountTenant, client, blobs });
 
   async function deliver(account: string, origin?: string): Promise<number> {
     const ada = { id: "5", email: "ada@x.test" };
@@ -66,13 +75,16 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     return withTenant(db.tenants[0], (tenant) => send(delivery as Parameters<typeof send>[0], tenant));
   }
 
-  it("binds an account to one workspace, handles its events there and posts only for the sender's own", async () => {
-    const bind = (tenant: string, account: string) =>
-      db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, { partnerChatAccount: account }]);
+  it("routes an account to the workspace its organization is linked to, and posts only for the sender's own", async () => {
     for (const [i, tenant] of db.tenants.entries()) await bind(tenant, `700${i}`);
-    await assert.rejects(bind(db.tenants[1], "7000"), /tenants_partner_chat_account/);
-    assert.deepEqual([await deliver("7000"), await deliver("7001"), await deliver("9999")], [200, 200, 404]);
+    const [other] = await db.owner.q("INSERT INTO tenants DEFAULT VALUES RETURNING id::text AS id");
+    await bind(String(other!.id), "7002", "https://other-idp.example");
+    const deliveries = [await deliver("7000"), await deliver("7001"), await deliver("7002"), await deliver("9999")];
+    assert.deepEqual(deliveries, [200, 200, 404, 404]);
     assert.deepEqual(handledIn, [...db.tenants]);
+    const orgs = await Promise.all(db.tenants.map((t) => withTenant(t, () => lookup().boundExternalOrg(issuer))));
+    assert.deepEqual(orgs, ["7000", "7001"]);
+    assert.equal(await withTenant(String(other!.id), () => lookup().boundExternalOrg(issuer)), undefined);
     assert.equal(await post("7000"), undefined);
     assert.ok((await post("7001"))?.refused);
     await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving": false}' WHERE id = $1`, [db.tenants[1]]);
@@ -80,7 +92,7 @@ describeTwoTenants("generic chat on a shared host", (db) => {
   });
 
   it("isolates cloned chats by signed origin and returns that origin through the configured callback", async () => {
-    await db.owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [db.tenants[0], { partnerChatAccount: "7000" }]);
+    await bind(db.tenants[0], "7000");
     const origins = ["https://one.dev.example.test", "https://two.dev.example.test"];
     const start = containers.length;
     for (const origin of origins) assert.equal(await deliver("7000", origin), 200);

@@ -100,3 +100,25 @@ export const TENANT_EXTERNAL_ORG_ACCOUNT: PgMigrationDefinition = {
     existingAccounts,
   ],
 };
+
+const orgTenant = `CREATE OR REPLACE FUNCTION qm_tenant_for_external_org(issuer text, org text)
+  RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT o.tenant FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.org_id = $2 AND o.tenant IN (SELECT qm_serving_tenants())
+  $f$`;
+
+const boundOrg = `CREATE OR REPLACE FUNCTION qm_bound_external_org(issuer text)
+  RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT o.org_id FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.tenant = nullif(current_setting('qm.tenant_id', true), '')::uuid
+  $f$`;
+
+export const TENANT_EXTERNAL_ORG_LOOKUPS: PgMigrationDefinition = {
+  id: "0000-tenancy/external-org-lookups",
+  statements: [
+    `DO $lookup$ BEGIN EXECUTE format($sql$${orgTenant}$sql$, current_schema()); END $lookup$`,
+    `DO $lookup$ BEGIN EXECUTE format($sql$${boundOrg}$sql$, current_schema()); END $lookup$`,
+  ],
+};
