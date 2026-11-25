@@ -9,12 +9,15 @@ export interface SecretStore {
 
 export type SecretStoreFactory = (key: SecretKey) => SecretStore;
 
+export const VAULT_REF = "vault:";
+
 export function createEncryptedSecretStore(key: SecretKey): SecretStore {
   return {
     async put(_name, value) {
       return encryptSecret(value, key);
     },
     async get(ref) {
+      if (ref.startsWith(VAULT_REF)) throw new Error(`secret ${ref} is stored in Vault, but VAULT_ADDR is not set`);
       return decryptSecret(ref, key);
     },
     async delete() {},

@@ -408,3 +408,34 @@ test("Helm does not shadow an external OIDC allowlist with a derived value", opt
   }
   assert.ok(!container(render({ envFrom })).env.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
 });
+
+test("Helm points core at Vault, and projects a login token only when the chart names an audience", options, () => {
+  const addr = "http://qm-agent-secrets.qm.svc.cluster.local:8080";
+  const resources = render({
+    vault: { addr, auth: { method: "kubernetes", role: "qm", tokenAudience: "porter-agent-secrets" } },
+    services: { core: { persistence: { enabled: true } } },
+  });
+  const pod = deployment(resources).spec.template.spec;
+  assert.deepEqual(
+    pod.volumes?.map((v) => v.name),
+    ["data", "vault-token"],
+  );
+  assert.deepEqual(
+    container(resources).volumeMounts?.map((m) => m.mountPath),
+    ["/data", "/var/run/secrets/qm-vault"],
+  );
+  assert.equal(env(resources).VAULT_ADDR, addr);
+  assert.equal(env(resources).VAULT_AUTH_METHOD, "kubernetes");
+  assert.equal(env(resources).VAULT_AUTH_ROLE, "qm");
+  assert.equal(env(resources).VAULT_AUTH_JWT_FILE, "/var/run/secrets/qm-vault/token");
+  assert.equal(env(resources).VAULT_KV_MOUNT, undefined);
+  assert.equal(container(resources, "egress-proxy").volumeMounts, undefined);
+
+  const withoutAudience = render({ vault: { addr, auth: { method: "kubernetes", role: "qm" } } });
+  assert.equal(deployment(withoutAudience).spec.template.spec.volumes, undefined);
+  assert.equal(env(withoutAudience).VAULT_AUTH_JWT_FILE, undefined);
+
+  const without = render({});
+  assert.equal(deployment(without).spec.template.spec.volumes, undefined);
+  assert.equal(env(without).VAULT_ADDR, undefined);
+});

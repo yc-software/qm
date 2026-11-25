@@ -92,11 +92,13 @@ test(
         const inspect = (container: string) =>
           JSON.parse(execFileSync("docker", ["inspect", container], { encoding: "utf8" }))[0] as {
             Config: { Env: string[] };
+            HostConfig: { Sysctls: Record<string, string> };
             Mounts: Array<{ Source: string; Destination: string }>;
           };
         const coreInfo = inspect(core);
         assert.ok(coreInfo.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
         assert.ok(coreInfo.Config.Env.includes(`QM_CORE_CONTAINER=${core}`));
+        assert.equal(coreInfo.HostConfig.Sysctls["net.ipv4.ip_forward"], "0");
         assert.ok(coreInfo.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
         assert.ok(!inspect(widget).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
       });

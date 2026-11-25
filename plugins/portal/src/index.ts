@@ -84,9 +84,7 @@ import {
   FORWARD_AGENT_API_HEADERS,
   FORWARD_APP_GIT_HEADERS,
   FORWARD_DEPLOYMENT_LAYER_HEADERS,
-  FORWARD_OAUTH_HEADERS,
   FORWARD_BROKER_HEADERS,
-  FORWARD_WEBHOOK_HEADERS,
   INTERNAL_HEADERS,
 } from "./proxy.ts";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
@@ -117,6 +115,7 @@ import {
   isMissingOrPlaceholder,
 } from "../../chassis/src/env.ts";
 import { isAppGitRoute } from "../../chassis/src/app-git.ts";
+import { matchPublicPassthrough } from "./public-passthrough.ts";
 
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");
 const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
@@ -631,12 +630,6 @@ async function coreImpersonate(
   }
 }
 
-function isOAuthPublicPassthrough(method: string, pathname: string): boolean {
-  if (method !== "GET") return false;
-  if (/^\/v1\/connectors\/oauth\/[^/]+\/callback$/.test(pathname)) return true;
-  return false;
-}
-
 function hasAgentCapability(req: IncomingMessage): boolean {
   const value = req.headers["x-agent-capability"];
   return typeof value === "string" && value.trim().length > 0;
@@ -973,46 +966,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return json(res, 400, { error: "bad_request", message: "illegal path" });
   }
 
-  if (
-    (pathname === "/v1/slack/managed/installation" && (method === "POST" || method === "DELETE")) ||
-    (pathname === "/v1/slack/managed/events" && method === "POST")
-  ) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["authorization", "content-type"]);
-  }
-
-  if (pathname === "/v1/surfaces/generic-chat/events" && method === "POST") {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
-      "content-type",
-      "content-length",
-      "x-agent-app-request-timestamp",
-      "x-agent-app-signature",
-    ]);
-  }
-
-  if (method === "POST" && pathname === "/slack/events") {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
-      ...FORWARD_WEBHOOK_HEADERS,
-      "content-length",
-      "x-slack-retry-num",
-      "x-slack-retry-reason",
-    ]);
-  }
-
-  if (method === "GET" && (pathname === "/v1/spend/export" || pathname === "/v1/apps/export")) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
-      "authorization",
-      "accept",
-    ]);
-  }
-
-  if (
-    method === "POST" &&
-    (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
-  ) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
-      ...FORWARD_WEBHOOK_HEADERS,
-      "authorization",
-    ]);
+  const passthrough = matchPublicPassthrough(method, pathname);
+  if (passthrough) {
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: passthrough.forwardSearch ? url.search : "" },
+      passthrough.headers,
+    );
   }
 
   const consentBounce = (): void => {
@@ -1032,10 +993,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && selfConnect) {
     if (!session) return consentBounce();
     return handleSelfConnect(res, { provider: decodeURIComponent(selfConnect[1] ?? ""), session });
-  }
-
-  if (isOAuthPublicPassthrough(method, pathname)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_OAUTH_HEADERS);
   }
 
   const dropForm = /^\/drop\/([^/]+)\/form$/.exec(pathname);

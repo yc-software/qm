@@ -1263,7 +1263,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async awaitClientResult(callId, timeoutMs, signal, toolName, args) {
       if (toolName === "desktop")
         return deps.desktopCall
-          ? deps.desktopCall(callId, args, timeoutMs, signal)
+          ? deps.desktopCall(args, timeoutMs, signal)
           : { content: DESKTOP_UNAVAILABLE_TEXT, isError: true };
       if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
       return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });

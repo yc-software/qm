@@ -27,14 +27,14 @@ built.sessionStateBus.subscribe((event) => {
 const relay = { bus: built.sessionStateBus, uiState: built.uiState, signals: built.signals };
 const [windowA, windowB] = [randomUUID(), randomUUID()];
 
-const call = (callId: string, opts: { clientId?: string; signal?: AbortSignal; timeoutMs?: number } = {}) =>
+const call = (opts: { clientId?: string; signal?: AbortSignal; timeoutMs?: number } = {}) =>
   desktopCallFor(relay, {
     actorId: "alice",
     threadRef: "web:alice:t1",
     sessionId: "s1",
     runId: randomUUID(),
     ...(opts.clientId ? { clientId: opts.clientId } : {}),
-  })!(callId, { code: "await computer.listApps()" }, opts.timeoutMs ?? 20_000, opts.signal);
+  })!({ code: "await computer.listApps()" }, opts.timeoutMs ?? 20_000, opts.signal);
 
 const post = (path: string, body: unknown, user = "alice") =>
   fetch(`${base}/api/desktop/calls/${path}`, {
@@ -47,61 +47,62 @@ const post = (path: string, body: unknown, user = "alice") =>
     body: JSON.stringify(body),
   });
 
-async function announced(callId: string, stop?: boolean): Promise<void> {
+async function announced(stop?: boolean): Promise<string> {
   for (let i = 0; i < 100; i++) {
-    const event = events.find((e) => e.ui?.kind === "desktop" && e.ui.callId === callId && e.ui.stop === stop);
-    if (event) return assert.deepEqual(event.participants, ["alice"]);
+    const idx = events.findIndex((e) => e.ui?.kind === "desktop" && e.ui.stop === stop);
+    if (idx >= 0) {
+      const event = events.splice(idx, 1)[0]!;
+      assert.deepEqual(event.participants, ["alice"]);
+      if (event.ui?.kind === "desktop") return event.ui.callId;
+    }
     await new Promise((r) => setTimeout(r, 20));
   }
-  assert.fail(`no desktop call announced for ${callId}`);
+  assert.fail("no desktop call announced");
 }
 
 test("a call from any turn reaches the person's open desktop app, which claims and answers it once", async () => {
-  const pending = call("c1");
-  await announced("c1");
-  assert.equal(
-    (await post("c1/claim", { desktopClientId: windowA }, "bob")).status,
-    404,
-    "another person cannot claim",
-  );
-  const claim = await post("c1/claim", { desktopClientId: windowA });
+  const pending = call();
+  const id = await announced();
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA }, "bob")).status, 404);
+  const claim = await post(`${id}/claim`, { desktopClientId: windowA });
   assert.equal(claim.status, 200);
   assert.deepEqual(((await claim.json()) as { args: unknown }).args, { code: "await computer.listApps()" });
-  assert.equal((await post("c1/claim", { desktopClientId: windowB })).status, 404, "a second window loses");
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowB })).status, 404, "a second window loses");
   assert.equal(
-    (await post("c1/claim", { desktopClientId: windowA })).status,
+    (await post(`${id}/claim`, { desktopClientId: windowA })).status,
     404,
     "a duplicate announcement cannot run the call twice in the same window",
   );
-  const forged = await post("c1/result", { desktopClientId: windowB, result: { content: "forged" } });
+  const forged = await post(`${id}/result`, { desktopClientId: windowB, result: { content: "forged" } });
   assert.equal(forged.status, 404);
-  const answered = await post("c1/result", { desktopClientId: windowA, result: { content: "Calculator" } });
+  const answered = await post(`${id}/result`, { desktopClientId: windowA, result: { content: "Calculator" } });
   assert.equal(answered.status, 200);
   assert.deepEqual(await pending, { content: "Calculator" });
 });
 
 test("a call from a desktop app turn is claimable only by the window that sent it", async () => {
-  const pending = call("c2", { clientId: windowA });
-  await announced("c2");
-  assert.equal((await post("c2/claim", { desktopClientId: windowB })).status, 404);
-  assert.equal((await post("c2/claim", { desktopClientId: windowA })).status, 200);
-  await post("c2/result", { desktopClientId: windowA, result: { content: "ok" } });
+  const pending = call({ clientId: windowA });
+  const id = await announced();
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowB })).status, 404);
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA })).status, 200);
+  await post(`${id}/result`, { desktopClientId: windowA, result: { content: "ok" } });
   assert.deepEqual(await pending, { content: "ok" });
 });
 
 test("with no desktop app connected the call ends with a clear error", async () => {
-  assert.deepEqual(await call("c3", { timeoutMs: 500 }), { content: NO_DESKTOP_TEXT, isError: true });
-  assert.equal((await post("c3/claim", { desktopClientId: windowA })).status, 404, "an expired call cannot be claimed");
+  assert.deepEqual(await call({ timeoutMs: 500 }), { content: NO_DESKTOP_TEXT, isError: true });
+  const id = await announced();
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA })).status, 404);
 });
 
 test("stopping the turn tells the desktop app to stop the running call", async () => {
   const turn = new AbortController();
-  const pending = call("c4", { signal: turn.signal });
-  await announced("c4");
-  assert.equal((await post("c4/claim", { desktopClientId: windowA })).status, 200);
+  const pending = call({ signal: turn.signal });
+  const id = await announced();
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA })).status, 200);
   turn.abort();
   assert.equal(await pending, "cancelled");
-  await announced("c4", true);
+  assert.equal(await announced(true), id);
 });
 
 test("Download for Mac follows the desktop update feed to its current release", async () => {

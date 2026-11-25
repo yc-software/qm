@@ -52,6 +52,7 @@ done
 socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
 docker run -d --name "$container" --network "$network" --group-add "$socket_group" \
+  --sysctl net.ipv4.ip_forward=0 \
   --add-host host.docker.internal:host-gateway \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/test/live-slack/local-provider.ts:/app/test/live-slack/local-provider.ts:ro" \

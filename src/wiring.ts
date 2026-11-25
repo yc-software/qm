@@ -17,6 +17,7 @@ import { createApprovalContinuation } from "./triggers/approval-continuation.ts"
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
+import { createVaultSecretStores } from "./credentials/vault-secret-store.ts";
 import { createEncryptedSecretStore, type SecretStoreFactory } from "./credentials/secret-store.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
@@ -696,7 +697,9 @@ export function buildApp(
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
-  const secretStore: SecretStoreFactory = createEncryptedSecretStore;
+  const secretStore: SecretStoreFactory = config.vault
+    ? createVaultSecretStores(config.vault)
+    : createEncryptedSecretStore;
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
