@@ -566,7 +566,7 @@ test("a tool that declares approval runs once for the exact approved arguments",
     (item) => item.kind === "UserMessage" && item.hidden,
   );
   assert.ok(
-    notes.some((item) => /denied this pending operation, so it did not run: example_send/.test(item.text ?? "")),
+    notes.some((item) => /declined this pending operation, so it did not run: example_send/.test(item.text ?? "")),
   );
 });
 
@@ -782,7 +782,7 @@ test("denying a pending approval clears it and does not run the command", async 
     }),
   );
   assert.equal(denied.status, "refused");
-  assert.match(denied.reason ?? "", /approval denied/);
+  assert.match(denied.reason ?? "", /approval declined/);
   assert.equal(denied.refusalKind, "approval_denied");
 });
 

@@ -224,6 +224,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
+    ...(p.declinePendingApprovals === true && !approval && !ctx.actor?.imp ? { declinePendingApprovals: true } : {}),
     ...(ephemeral ? { ephemeral: true } : {}),
     ...(proactiveOpener ? { proactiveOpener: true } : {}),
     ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),

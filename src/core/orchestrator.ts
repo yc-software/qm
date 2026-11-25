@@ -769,6 +769,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const approval = await issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
+              summary: "Let through a message held by the security screen",
               reason: heldReason,
               homeChannel: homeChannel?.channelName,
               blocksInput: true,

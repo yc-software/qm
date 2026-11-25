@@ -1115,7 +1115,7 @@ for (const origin of [undefined, "https://one.dev.example.test", "https://two.de
       await settle(async () => {
         const session = await built.sessions.getByThread(`partner-chat:${account}:group:88:1002`);
         const items = session ? await built.sessions.getItems(session.id) : [];
-        return items.some((i) => /denied this pending operation/.test((i as { text?: string }).text ?? ""));
+        return items.some((i) => /declined this pending operation/.test((i as { text?: string }).text ?? ""));
       });
       await new Promise((r) => setTimeout(r, 1_000));
       assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));

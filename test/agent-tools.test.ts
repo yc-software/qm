@@ -5127,6 +5127,7 @@ test("a catalog server's one tool stays in the tools array as its own definition
     );
     assert.deepEqual(Object.keys((added[0]!.parameters as { properties: object }).properties), [
       "operation",
+      "purpose",
       "retrySafe",
     ]);
   }

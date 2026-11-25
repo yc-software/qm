@@ -136,6 +136,7 @@ import {
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
+import { approvalRecord } from "./approval-card";
 import {
   buildTimeline,
   rowArgs,
@@ -339,6 +340,7 @@ export function createChatSurface(
     normalStreamFn: null as Agent["streamFn"] | null,
     onWork: null as ((work: WorkBlock) => void) | null,
     resolvingApprovals: new Set<string>(),
+    declineApprovalsOnSend: false,
     transcriptAnchorSeq: null as number | null,
     earlierCount: 0,
     loadingEarlier: false,
@@ -818,6 +820,7 @@ export function createChatSurface(
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
       ...(chatState.ephemeral ? { ephemeral: true } : {}),
+      ...(chatState.declineApprovalsOnSend ? { declinePendingApprovals: true } : {}),
     };
     if (ctx.composer.followsDefault()) return target;
     return {
@@ -1001,10 +1004,10 @@ export function createChatSurface(
     }
   }
 
-  function resolveCommandApproval(decision: ApprovalDecision): void {
+  async function resolveCommandApproval(decision: ApprovalDecision): Promise<void> {
     const ro = readOnly.approve(decision);
-    if (ro) void ro;
-    else if (chatState.agent) void approveCommand(chatState.agent, decision);
+    if (ro) await ro;
+    else if (chatState.agent) await approveCommand(chatState.agent, decision);
   }
 
   function activePendingApprovals(): PendingApproval[] {
@@ -2168,24 +2171,12 @@ export function createChatSurface(
       `;
     }
     if (role === "approval-decision") {
-      const decision = message as unknown as HistoryApprovalDecision;
-      let label = decision.declined === "expired" ? "Approval expired" : "Approval denied";
-      if (decision.approved) {
-        const labels: Record<string, string> = {
-          once: "Approved once",
-          session: "Approved for this session",
-          always: "Approved always",
-        };
-        label = labels[decision.scope ?? "once"] ?? "Approved";
-      }
       return html`<article
-        class="message-row system-note-row"
+        class="message-row approval-record-row"
         data-index=${index}
         data-entry-seqs=${messageEntrySeqs(message).join(" ")}
       >
-        <div class="system-note approval-decision">
-          ${label}<code class="approval-cmd approval-cmd-full">${decision.command}</code>
-        </div>
+        ${approvalRecord(message as unknown as HistoryApprovalDecision)}
       </article>`;
     }
     if (role === "system-note") {
@@ -3257,7 +3248,6 @@ export function createChatSurface(
 
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
-    if (item.kind === "approval") return `approval:${item.approval.requestId}`;
     if (item.kind === "thinking") return `thinking:${item.step ?? item.seq}`;
     return `${item.kind}:${item.item.seq}`;
   }
@@ -3384,46 +3374,6 @@ export function createChatSurface(
     })}`;
   }
 
-  function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
-    const summary = firstLine(a.command, 80);
-    const truncated = a.command.includes("\n") || a.command.length > 80;
-    return html`
-      <div class="approval-head">
-        <span class="approval-title">Approval needed</span>
-        ${a.reason ? html`<span class="approval-reason-badge">${a.reason}</span>` : nothing}
-      </div>
-      ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
-      ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
-      ${
-        expanded
-          ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
-          : html`<code class="approval-summary" ${tip(a.command)}>${summary}</code>`
-      }
-      ${
-        a.matched
-          ? html`<div class="approval-match">
-              <span class="approval-match-label">Triggered by</span
-              ><code class="approval-match-snippet">${a.matched}</code>
-            </div>`
-          : nothing
-      }
-      ${
-        !expanded && truncated
-          ? html`<details class="approval-full">
-              <summary>Show full command</summary>
-              <code class="approval-cmd">${a.command}</code>
-            </details>`
-          : nothing
-      }
-    `;
-  }
-
-  function approvalMarker(a: PendingApproval): TemplateResult {
-    return html`<div class="approval-card inline-approval-marker">
-      <div class="approval-text">${approvalSummaryView(a)}</div>
-    </div>`;
-  }
-
   function waitingSteerRows(agent: Agent): TemplateResult[] {
     return ctx.composer.waitingSteers(agent).map(
       (q) =>
@@ -3475,7 +3425,6 @@ export function createChatSurface(
       const reason = retractedReason(item.item);
       return reason ? retractedRow(reason, item.item.text ?? "") : interimReply(item.item);
     }
-    if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
@@ -3691,13 +3640,9 @@ export function createChatSurface(
 
   function toolRow(row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale = false): TemplateResult {
     if (row.approval) {
-      const p = toolBody(row.approval);
       return html`<div class="tool-row tool-approval">
         <span class="tool-icon">${icon(Wrench, 13)}</span>
-        <span class="tool-label"
-          >Approval
-          needed${p.reason ? html` <span class="tool-detail">${firstLine(p.reason, 90)}</span>` : nothing}</span
-        >
+        <span class="tool-label">Approval needed</span>
       </div>`;
     }
     const call = toolBody(row.call);
@@ -3708,15 +3653,15 @@ export function createChatSurface(
     const name = toolName(tool) || "Tool";
     const kind = toolRowKind(row, status);
     let label = knownMeta ? meta.attempted : `Tried ${name}`;
-    if (kind === "approval") label = row.pending ? "Approval needed" : "Approval requested";
+    if (kind === "approval")
+      label = `${row.pending ? "Waiting for approval" : "Approval requested"}${row.waiting && row.waiting > 1 ? ` · ${row.waiting} calls` : ""}`;
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
     } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
-    if (kind === "approval") why = firstLine(result.reason ?? "", 90);
-    else if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
+    if (kind === "failed") why = firstLine(result.error ?? result.reason ?? "", 90);
     const base = kind === "approval" ? "" : toolDetail(tool, call, result);
     const attempts = row.attempts && row.attempts > 1 ? `${row.attempts} attempts` : "";
     const detail = [base, why, attempts].filter(Boolean).join(" · ");
@@ -4020,7 +3965,6 @@ export function createChatSurface(
     requestBackgroundPanel,
     activePendingApprovals,
     resolveCommandApproval,
-    approvalSummaryView,
     notePendingSessionOnSend,
     syncPaneState: postCurrentPaneState,
     onDelivery,
