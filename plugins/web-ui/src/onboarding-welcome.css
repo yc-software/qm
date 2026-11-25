@@ -177,6 +177,37 @@ qm-onboarding-welcome.inline-setup + .streaming-text {
 .connection-card[data-tone="success"] .connection-card-status svg {
   color: var(--success);
 }
+.connection-card.just-connected {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  animation: slack-installed-card 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.connection-card.just-connected .connector-logo {
+  position: relative;
+  overflow: visible;
+}
+.connection-card.just-connected .connector-logo::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--success);
+  opacity: 0;
+  animation: slack-installed-ring 0.7s ease-out 0.15s both;
+}
+.connection-card.just-connected .connection-card-status svg {
+  animation: slack-installed-check 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) 0.25s both;
+}
+.connection-card.just-connected .connection-card-status {
+  animation: slack-installed-text 0.35s ease-out 0.35s both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .connection-card.just-connected,
+  .connection-card.just-connected .connector-logo::after,
+  .connection-card.just-connected .connection-card-status,
+  .connection-card.just-connected .connection-card-status svg {
+    animation: none;
+  }
+}
 .connection-card[data-tone="warning"] .connection-card-status {
   color: var(--warning);
 }

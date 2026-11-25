@@ -82,6 +82,7 @@ export function connectionCard(
   const looks = ["connector-widget", "connection-card"];
   if (next === nothing && !at?.recheck && tone !== "error") looks.push("compact");
   if (tone === "success") looks.push("connected");
+  if (tone === "success" && at?.outcome === "success") looks.push("just-connected");
   return html`<div class=${looks.join(" ")} data-tone=${tone} role="group" aria-label=${name}>
     ${connectorLogo(service.id, service.logoUrl)}
     <span class="connector-widget-text">
