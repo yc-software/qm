@@ -72,7 +72,7 @@ backfill is needed; existing jobs remain controllable by process ID. Interrupted
 
 ## Routing
 
-The retired `sandbox_routing` table and its import marker are dropped by migration. A database whose routes were never imported refuses that migration; boot a release from before the removal first.
+The retired `sandbox_routing` table and its import marker are dropped by migration. Routes that were never imported are dropped with it; their scopes have no default until one is selected.
 
 Scoped commands require an explicit target or selected default. Disposable scratch computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
 

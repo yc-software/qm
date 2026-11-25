@@ -1222,9 +1222,9 @@ export function buildApp(
   pgArtifactMap.pool.registerMigration({
     id: "sandbox/retired-routing/0001-drop",
     statements: [
-      `DO $$ DECLARE stranded boolean; BEGIN IF to_regclass('sandbox_routing') IS NULL THEN RETURN; END IF; IF to_regclass('sandbox_resource_rollout') IS NULL THEN stranded := EXISTS (SELECT 1 FROM sandbox_routing); ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sandbox_routing' AND column_name = 'tenant_id') THEN stranded := EXISTS (SELECT 1 FROM sandbox_routing r WHERE NOT EXISTS (SELECT 1 FROM sandbox_resource_rollout m WHERE m.tenant_id = r.tenant_id AND m.id = 'explicit-defaults')); ELSE stranded := EXISTS (SELECT 1 FROM sandbox_routing) AND NOT EXISTS (SELECT 1 FROM sandbox_resource_rollout WHERE id = 'explicit-defaults'); END IF; IF stranded THEN RAISE EXCEPTION 'sandbox_routing holds routes that were never imported as sandbox resources; boot a release from before their removal first'; END IF; END $$`,
       ...["sandbox_routing", "sandbox_resource_rollout"].flatMap((table) => [
         `DROP TABLE IF EXISTS ${table}`,
+        `DROP FUNCTION IF EXISTS claim_${table}(), claim_${table}_tenants()`,
         `DELETE FROM durable_map_versions WHERE tbl = '${table}'`,
       ]),
       `DO $$ BEGIN IF to_regclass('tenants') IS NOT NULL THEN UPDATE tenants SET settings = settings - 'sandboxScopeBackends' WHERE settings ? 'sandboxScopeBackends'; END IF; END $$`,
