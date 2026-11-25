@@ -636,6 +636,52 @@ test("failed background registration kills its process and releases the resource
   assert.equal((await resources.get(record.id)).cleanupPending, false);
 });
 
+for (const [kind, waiting] of [
+  ["modal", "command"],
+  ["modal", "checkpoint"],
+  ["sprites", "command"],
+  ["sprites", "checkpoint"],
+] as const) {
+  test(`${kind} restart never queues behind an in-flight ${waiting}`, { timeout: 10000 }, async () => {
+    const { options, backend } = await fixture();
+    const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
+    const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
+    const record = await resources.create("alice", "personal:alice", kind);
+    await resources.setDefault("alice", "personal:alice", record.id);
+    const handle = await router.provision("personal:alice");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const hold = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    backend.teardown = hold;
+    backend.run = async (_handle, command) => {
+      if (probedCommand(command) === "long") await hold();
+      return { stdout: probedCommand(command), stderr: "", code: 0, timedOut: false };
+    };
+    const long = waiting === "command" ? router.run(handle, "long") : router.teardown(handle);
+    let restarted = false;
+    backend.restartComputer = async () => {
+      restarted = true;
+    };
+    try {
+      await entered.promise;
+      assert.equal((await router.run(handle, "responsive")).stdout, "responsive");
+      assert.equal((await resources.status("alice", record.id)).guestResponsive, true);
+      if (waiting === "command") await resources.restart("alice", record.id);
+      else await router.restartComputer!("personal:alice");
+      assert.equal(restarted, true);
+    } finally {
+      release.resolve();
+      await long;
+    }
+    await resources.setDefault("alice", "personal:alice", null);
+    await resources.retire("alice", record.id);
+    await assert.rejects(router.run(handle, "retired"), /retired/);
+  });
+}
+
 test(
   "Modal provisioning and destructive cleanup proceed while a command is in flight",
   { timeout: 10000 },
