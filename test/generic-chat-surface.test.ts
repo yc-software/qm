@@ -36,6 +36,7 @@ import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-
 import type { Run } from "../src/runs/run-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { mockHeldTurns } from "./support/mock-agent.ts";
 
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
 const tenantFor = async () => TEST_TENANT;
@@ -1332,9 +1333,8 @@ test("a react delivery adds the agent's reaction under the chat's own emoji name
 test("a person's reaction to the agent's message starts one turn, while the agent's own and reactions it has no stake in start none", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
-    await deliver(event({ body: "!post should the bot deploy", mentions: true, eventId: "ev-ask", messageId: "1002" }));
-    await settle(async () => genericChat.shown().length === 1);
-    const asked = genericChat.shown()[0]!.id;
+    await deliver(event({ body: "!hold live", mentions: true, eventId: "ev-ask", messageId: "1002" }));
+    await settle(async () => mockHeldTurns.get("live") !== undefined);
     const reaction = (eventId: string, reactor: "5" | "6" | "9", on: "agent" | "other") => {
       const base = event({ eventId, body: on === "agent" ? "should the bot deploy" : "is the bot around" });
       return {
@@ -1345,7 +1345,7 @@ test("a person's reaction to the agent's message starts one turn, while the agen
         reaction: { name: "white_check_mark", user: base.chat.members.find((m) => m.id === reactor) },
         message:
           on === "agent"
-            ? { ...base.message, id: asked, user: { id: "9", name: "QM", bot: true }, app_post: true }
+            ? { ...base.message, id: "1003", user: { id: "9", name: "QM", bot: true }, app_post: true }
             : { ...base.message, id: "1050" },
       };
     };
@@ -1360,12 +1360,11 @@ test("a person's reaction to the agent's message starts one turn, while the agen
       (await built.runs.list({ threadRef: `${CONTAINER}:1002` }))
         .map((run) => run.request.text)
         .filter((text) => text.startsWith("[Chat reaction]"));
-    await settle(async () => (await reactionTurns()).length > 0);
-    await new Promise((r) => setTimeout(r, 1_000));
     assert.deepEqual(await reactionTurns(), [
       '[Chat reaction] Ada Lovelace reacted with :white_check_mark: on your message: "should the bot deploy".',
     ]);
   } finally {
+    mockHeldTurns.release("live");
     await genericChat.close();
   }
 });
