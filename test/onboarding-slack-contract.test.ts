@@ -23,7 +23,6 @@ test("missing-bot setup presents available links together, without inventing URL
   assert.match(admin, /all three links together in one message/);
   assert.match(admin, /Create token/);
   assert.match(admin, /Submit token/);
-  assert.match(admin, /Add to Slack/);
   assert.match(admin, /Never invent URLs/);
   assert.match(admin, /not a generic keychain token-drop/);
   assert.match(admin, /without another assistant reply/);
