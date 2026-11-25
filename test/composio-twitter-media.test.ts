@@ -12,6 +12,7 @@ import { orgId } from "../src/config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { personalScope } from "../src/types.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -26,7 +27,7 @@ const cap: CapabilityClaims = {
   ...liveRunClaims("alice"),
   sessionId: "test-session",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
   exp: Date.now() + 60_000,
 };

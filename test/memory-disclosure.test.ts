@@ -9,6 +9,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };
@@ -76,16 +77,16 @@ function fixture() {
 test("Open memory continuity shares ordinary personal facts, not sensitive, restricted, unknown or incomplete siblings", async () => {
   const f = fixture();
   for (const label of ["ordinary", "sensitive", "restricted", "unknown"] as const)
-    f.put("personal:alice", label, label);
-  f.put("personal:alice", "incomplete", "ordinary", "personal:alice", true);
+    f.put(personalScope("alice"), label, label);
+  f.put(personalScope("alice"), "incomplete", "ordinary", personalScope("alice"), true);
   const view = disclosedMemory(f.raw, f.access);
-  assert.equal(await view.read("personal:alice"), "- (2026-01-02) ordinary");
+  assert.equal(await view.read(personalScope("alice")), "- (2026-01-02) ordinary");
   assert.deepEqual(
-    (await view.query("personal:alice", "ordinary")).map(({ text }) => text),
+    (await view.query(personalScope("alice"), "ordinary")).map(({ text }) => text),
     ["#1 (2026-01-02) ordinary"],
   );
-  assert.deepEqual(await view.query("personal:alice", "sensitive"), []);
-  assert.equal((await view.facts!("personal:alice")).length, 1);
+  assert.deepEqual(await view.query(personalScope("alice"), "sensitive"), []);
+  assert.equal((await view.facts!(personalScope("alice"))).length, 1);
 });
 
 test("copying a private fact to a readable notebook does not make its audience eligible", async () => {
@@ -102,45 +103,45 @@ test("copying a private fact to a readable notebook does not make its audience e
 
 test("private owner reads recheck original membership for copied sensitive facts", async () => {
   const f = fixture();
-  f.access.targetScope = "personal:alice";
-  f.access.nativeScopes = ["personal:alice"];
+  f.access.targetScope = personalScope("alice");
+  f.access.nativeScopes = [personalScope("alice")];
   f.access.audience = [actor];
-  f.put("personal:alice", "COPIED_SENTINEL", "sensitive", "group:source");
+  f.put(personalScope("alice"), "COPIED_SENTINEL", "sensitive", "group:source");
   const view = disclosedMemory(f.raw, f.access);
-  assert.match(await view.read("personal:alice"), /COPIED_SENTINEL/);
+  assert.match(await view.read(personalScope("alice")), /COPIED_SENTINEL/);
   f.revoke();
-  assert.equal(await view.read("personal:alice"), "");
-  assert.deepEqual(await view.query("personal:alice", "COPIED_SENTINEL"), []);
+  assert.equal(await view.read(personalScope("alice")), "");
+  assert.deepEqual(await view.query(personalScope("alice"), "COPIED_SENTINEL"), []);
 });
 
 test("opaque providers stay within their original audience, including routed queries", async () => {
   const f = fixture();
-  f.put("personal:alice", "LEGACY_SENTINEL", "unknown", "personal:alice", true);
+  f.put(personalScope("alice"), "LEGACY_SENTINEL", "unknown", personalScope("alice"), true);
   const opaque = { ...f.raw, facts: undefined };
   const routed = createRoutedMemoryService({
     providers: { opaque },
     routes: [{ provider: "opaque", scopes: ["personal"] }],
   });
   const shared = disclosedMemory(routed, f.access);
-  assert.equal(await shared.read("personal:alice"), "");
-  assert.deepEqual(await shared.recall("personal:alice"), []);
-  assert.deepEqual(await shared.query("personal:alice", "SENTINEL"), []);
+  assert.equal(await shared.read(personalScope("alice")), "");
+  assert.deepEqual(await shared.recall(personalScope("alice")), []);
+  assert.deepEqual(await shared.query(personalScope("alice"), "SENTINEL"), []);
   const own = disclosedMemory(routed, {
     ...f.access,
-    targetScope: "personal:alice",
-    nativeScopes: ["personal:alice"],
+    targetScope: personalScope("alice"),
+    nativeScopes: [personalScope("alice")],
     audience: [actor],
   });
-  assert.match(await own.read("personal:alice"), /LEGACY_SENTINEL/);
+  assert.match(await own.read(personalScope("alice")), /LEGACY_SENTINEL/);
   assert.deepEqual(
-    (await own.query("personal:alice", "SENTINEL")).map(({ text }) => text),
+    (await own.query(personalScope("alice"), "SENTINEL")).map(({ text }) => text),
     ["OPAQUE_SENTINEL"],
   );
 });
 
 test("empty audience and authorization lookup failures fail closed", async () => {
   const f = fixture();
-  f.put("personal:alice", "ORDINARY_SENTINEL", "ordinary");
+  f.put(personalScope("alice"), "ORDINARY_SENTINEL", "ordinary");
   for (const patch of [
     { audience: [], currentScopeMembers: async () => [] },
     { config: undefined },
@@ -152,30 +153,30 @@ test("empty audience and authorization lookup failures fail closed", async () =>
       },
     },
   ]) {
-    assert.equal(await disclosedMemory(f.raw, { ...f.access, ...patch }).read("personal:alice"), "");
+    assert.equal(await disclosedMemory(f.raw, { ...f.access, ...patch }).read(personalScope("alice")), "");
   }
 });
 
 test("source authorization requires every source, not merely the notebook owner", async () => {
   const f = fixture();
-  f.put("personal:alice", "MERGED_SENTINEL", "ordinary");
-  f.notebooks.get("personal:alice")![0]!.sources.push("group:source");
-  assert.equal(await disclosedMemory(f.raw, f.access).read("personal:alice"), "");
+  f.put(personalScope("alice"), "MERGED_SENTINEL", "ordinary");
+  f.notebooks.get(personalScope("alice"))![0]!.sources.push("group:source");
+  assert.equal(await disclosedMemory(f.raw, f.access).read(personalScope("alice")), "");
 });
 
 test("native org memory and private owner legacy memory retain their original visibility", async () => {
   const f = fixture();
   f.put("org:test", "ORG_SENTINEL", "unknown", "org:test", true);
   assert.match(await disclosedMemory(f.raw, f.access).read("org:test"), /ORG_SENTINEL/);
-  f.put("personal:alice", "LEGACY_SENTINEL", "unknown", "personal:alice", true);
+  f.put(personalScope("alice"), "LEGACY_SENTINEL", "unknown", personalScope("alice"), true);
   assert.match(
     await disclosedMemory(f.raw, {
       ...f.access,
-      targetScope: "personal:alice",
-      nativeScopes: ["personal:alice"],
+      targetScope: personalScope("alice"),
+      nativeScopes: [personalScope("alice")],
       audience: [actor],
       open: false,
-    }).read("personal:alice"),
+    }).read(personalScope("alice")),
     /LEGACY_SENTINEL/,
   );
 });
@@ -196,8 +197,8 @@ test("current destination members override an old audience snapshot on every rea
 test("unknown destination roster cannot authorize cross-context disclosure", async () => {
   const f = fixture();
   f.access.currentScopeMembers = async () => undefined;
-  f.put("personal:alice", "ORDINARY_SENTINEL", "ordinary");
-  assert.equal(await disclosedMemory(f.raw, f.access).read("personal:alice"), "");
+  f.put(personalScope("alice"), "ORDINARY_SENTINEL", "ordinary");
+  assert.equal(await disclosedMemory(f.raw, f.access).read(personalScope("alice")), "");
 });
 
 test("edits refuse hidden facts as missing and foreign notebooks as denied, without writing", async () => {
@@ -212,7 +213,7 @@ test("edits refuse hidden facts as missing and foreign notebooks as denied, with
     ]),
     (e: unknown) => e instanceof MemoryFactsMissing && e.ids.join() === "1",
   );
-  await assert.rejects(view.delete!("personal:bob", ["1"]), MemoryDisclosureDenied);
+  await assert.rejects(view.delete!(personalScope("bob"), ["1"]), MemoryDisclosureDenied);
   assert.deepEqual(f.edits, []);
   await view.delete!("group:room", ["#2"]);
   assert.deepEqual(f.edits, ["#2"]);
@@ -231,10 +232,10 @@ test("a structured provider's opaque query cannot resurrect denied source record
 test("each routed provider is filtered independently and a failure does not invoke a raw fallback", async () => {
   const first = fixture();
   const second = fixture();
-  first.put("personal:alice", "FIRST_PRIVATE_SENTINEL", "sensitive");
-  first.put("personal:alice", "FIRST_ORDINARY_SENTINEL", "ordinary");
-  second.put("personal:alice", "SECOND_PRIVATE_SENTINEL", "restricted");
-  second.put("personal:alice", "SECOND_ORDINARY_SENTINEL", "ordinary");
+  first.put(personalScope("alice"), "FIRST_PRIVATE_SENTINEL", "sensitive");
+  first.put(personalScope("alice"), "FIRST_ORDINARY_SENTINEL", "ordinary");
+  second.put(personalScope("alice"), "SECOND_PRIVATE_SENTINEL", "restricted");
+  second.put(personalScope("alice"), "SECOND_ORDINARY_SENTINEL", "ordinary");
   const broken: MemoryService = {
     ...first.raw,
     facts: async () => {
@@ -246,7 +247,7 @@ test("each routed provider is filtered independently and a failure does not invo
   };
   const routes = ["first", "second", "broken"].map((provider) => ({
     provider,
-    scopes: ["personal:alice"],
+    scopes: [personalScope("alice")],
     failOpen: true,
   }));
   const routed = createRoutedMemoryService({ providers: { first: first.raw, second: second.raw, broken }, routes });
@@ -254,11 +255,11 @@ test("each routed provider is filtered independently and a failure does not invo
   const wrapped = { ...routed, capture: async () => ++captures };
   const view = disclosedMemory(wrapped, first.access);
   assert.deepEqual(
-    (await view.query("personal:alice", "SENTINEL")).map(({ text }) => text),
+    (await view.query(personalScope("alice"), "SENTINEL")).map(({ text }) => text),
     ["#2 (2026-01-02) FIRST_ORDINARY_SENTINEL", "#2 (2026-01-02) SECOND_ORDINARY_SENTINEL"],
   );
-  assert.doesNotMatch(recallText(await view.recall("personal:alice")), /PRIVATE_SENTINEL/);
-  await view.capture("personal:alice", ["new fact"], 1);
+  assert.doesNotMatch(recallText(await view.recall(personalScope("alice"))), /PRIVATE_SENTINEL/);
+  await view.capture(personalScope("alice"), ["new fact"], 1);
   assert.equal(captures, 1);
 });
 
@@ -271,11 +272,11 @@ test("source decisions are shared within one read but never cached across reads"
       return "open";
     },
   };
-  for (let i = 0; i < 100; i++) f.put("personal:alice", `ORDINARY_${i}`, "ordinary");
+  for (let i = 0; i < 100; i++) f.put(personalScope("alice"), `ORDINARY_${i}`, "ordinary");
   const view = disclosedMemory(f.raw, f.access);
-  assert.match(await view.read("personal:alice"), /ORDINARY_99/);
+  assert.match(await view.read(personalScope("alice")), /ORDINARY_99/);
   assert.equal(checks, 2);
-  await view.read("personal:alice");
+  await view.read(personalScope("alice"));
   assert.equal(checks, 4);
 });
 
@@ -325,8 +326,8 @@ test("a recall-only routed provider still reaches prompt recall through disclosu
 
 test("semantic recall ranks only currently disclosed facts and rechecks membership on every recall", async () => {
   const f = fixture();
-  f.put("personal:alice", "hidden", "restricted");
-  f.put("personal:alice", "late ordinary fact", "ordinary");
+  f.put(personalScope("alice"), "hidden", "restricted");
+  f.put(personalScope("alice"), "late ordinary fact", "ordinary");
   const queries: string[][] = [];
   const semantic = createSemanticMemoryService(f.raw, async () => ({ id: "test", embed: async () => [[1, 0]] }), {
     async search(input) {
@@ -338,9 +339,9 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
     },
   });
   const view = disclosedMemory(semantic, f.access);
-  assert.match((await view.recall("personal:alice", { query: "recall" }))[0]!.text, /late ordinary fact/);
+  assert.match((await view.recall(personalScope("alice"), { query: "recall" }))[0]!.text, /late ordinary fact/);
   assert.deepEqual(queries, [["2"]]);
   f.access.currentScopeMembers = async () => [];
-  assert.deepEqual(await view.recall("personal:alice", { query: "recall" }), []);
+  assert.deepEqual(await view.recall(personalScope("alice"), { query: "recall" }), []);
   assert.deepEqual(queries, [["2"]]);
 });

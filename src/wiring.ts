@@ -1,6 +1,6 @@
 import type { LoadSample } from "./sandbox/load-probe.ts";
 import type { PromptSnapshot } from "./core/orchestrator/prompt-snapshot.ts";
-import { onTenantLoad, perTenant } from "./tenants/cache.ts";
+import { onTenantLoad } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -114,7 +114,7 @@ import {
   resolvePackAuth,
   type SkillPackFetcher,
 } from "./skills/pack-fetcher.ts";
-import { installSeedSkills } from "./skills/seed.ts";
+import { readSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
   createPostgresMapFactory,
@@ -147,15 +147,14 @@ import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from ".
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { PUBLISHED_ORIGIN_UPGRADE, PUBLISHED_ORIGIN_COMPLETE } from "./surfaces/published-upgrade.ts";
-import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import {
   BACKFILL_BOT_MARKER_MIGRATION,
   DROP_RETIRED_TRIGGER_FIELDS_MIGRATION,
   MARK_BOT_EDITED_CRONS_MIGRATION,
+  RERUN_BOT_MARKER_BACKFILL_MIGRATION,
 } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
-import { createLoopStore } from "./loops/loop-store.ts";
+import { createLoopStore, HOLD_BOT_LOOP_SHIPS_MIGRATION } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
 import { createInboxPass } from "./loops/verdict/pass.ts";
@@ -357,7 +356,7 @@ import {
 } from "./auth/capability-token.ts";
 import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
-import { ambientTenant, boundTenant, currentTenant, withTenant } from "./tenants/context.ts";
+import { ambientTenant, boundTenant, withTenant } from "./tenants/context.ts";
 import { claimThenBind } from "./tenants/claim.ts";
 import { expireStaleApprovals } from "./core/approval-requester.ts";
 import { inboundTenancy } from "./tenants/lookup.ts";
@@ -373,7 +372,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type BackgroundServices, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
@@ -442,6 +441,7 @@ import {
 } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
+  DEPLOYMENT_LAYER_CHANNEL,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
   type DeploymentLayerStore,
@@ -507,14 +507,12 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   drain: DrainController;
-  ownSharedState: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
-  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -741,20 +739,17 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  const skills: SkillStore = createSkillStore({
-    backing: artifactMap<Skill>("skills", ["scopeId"]),
-    advisoryLock,
-    ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
-  });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
   const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
   const decisions = createPostgresDecisionStore(databaseUrl);
+  const slackKeyMaterial = config.connectorSecretKey ?? randomBytes(32);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
-    config.connectorSecretKey ?? randomBytes(32),
+    slackKeyMaterial,
+    config.publicUrl ? { publicUrl: config.publicUrl } : undefined,
   );
   const deploymentLayer = config.deploymentLayerDir
     ? loadDeploymentLayer(config.deploymentLayerDir)
@@ -763,14 +758,27 @@ export function buildApp(
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
-  let ownsSharedState = false;
+  const layerChanges = createPostgresNotifyBus<Record<string, never>>(
+    databaseUrl,
+    DEPLOYMENT_LAYER_CHANNEL,
+    "deployment layer",
+  );
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: processMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
-    skills,
-    skillBundles,
-    scopeId: orgScope,
-    advisoryLock,
+    fallbackSkills:
+      config.seedSkills && layerSkillsDir
+        ? readSeedSkills(layerSkillsDir, LAYER_CREATED_BY, LAYER_REVIEWER).map((skill) => skill.manifest)
+        : [],
+    builtinSkills: config.seedSkills
+      ? [
+          ...readSeedSkills(config.skillsSeedDir, "system:skills-seed", "system:skills-reviewer"),
+          ...config.pluginSkillDirs
+            .filter((dir) => resolve(dir) !== layerSkillsDir)
+            .flatMap((dir) => readSeedSkills(dir, "system:plugin-skills", "system:plugin-skills-reviewer")),
+        ]
+      : [],
+    published: () => layerChanges.emit({}),
     auditPersisted: (record) =>
       auditLog.recordOnce!(ambientTenant(), `deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
@@ -779,60 +787,42 @@ export function buildApp(
         resource: record.contentHash,
         scopeLabel: orgScope,
       }),
-    ...(config.seedSkills && layerSkillsDir
-      ? {
-          seedFallback: async () => {
-            if (!ownsSharedState) return false;
-            await installSeedSkills(skills, {
-              dir: layerSkillsDir,
-              scopeId: orgScope,
-              createdBy: LAYER_CREATED_BY,
-              reviewer: LAYER_REVIEWER,
-            });
-            return true;
-          },
-        }
-      : {}),
   });
-  const layerTenants = new Set<string>();
-  const deploymentLayerReady = boundTenant() ? deploymentLayerStore.hydrate() : Promise.resolve(null);
-  const refreshLayerTenants = async (): Promise<void> => {
-    for (const tenant of layerTenants) await withTenant(tenant, () => deploymentLayerStore.hydrate());
-  };
-  const deploymentLayerRefresh = createUntrackedSweeper(refreshLayerTenants, 30_000, {
-    label: "deployment layer refresh",
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/skills/0002-delete-catalog-copies",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+      `DELETE FROM skills WHERE json ->> 'createdBy' IN ('system:skills-seed', 'system:plugin-skills', 'system:deployment-layer')
+         AND (json ->> 'status' = 'published' OR json ->> 'createdBy' = 'system:deployment-layer')
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(json -> 'approvals', '[]')) AS a(v) WHERE a.v NOT LIKE 'system:%')`,
+    ],
   });
-  const installCatalogs = async (): Promise<void> => {
-    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-    for (const dir of config.pluginSkillDirs) {
-      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-      await installSeedSkills(skills, {
-        dir,
-        scopeId: orgScope,
-        createdBy: "system:plugin-skills",
-        reviewer: "system:plugin-skills-reviewer",
-        respectArchived: true,
-      });
-    }
-  };
-  const seeded = perTenant<{ run?: Promise<void> }>(() => ({}));
-  const seedTenantSkills = (): Promise<void> => {
-    const state = seeded();
-    state.run ??= installCatalogs().catch((e: unknown) => {
-      state.run = undefined;
-      console.error("[seed] failed to install seed skills:", errMessage(e));
-    });
-    return state.run;
-  };
-  const stopLayerLoad = onTenantLoad(async () => {
-    layerTenants.add(currentTenant());
-    await deploymentLayerStore.hydrate();
-    if (config.seedSkills && ownsSharedState) await seedTenantSkills();
+  pgArtifactMap.pool.registerMigration({
+    id: "durable-map/skills/0003-delete-catalog-copies-restored-during-cutover",
+    statements: [
+      `DELETE FROM skills WHERE json ->> 'createdBy' IN ('system:skills-seed', 'system:plugin-skills', 'system:deployment-layer')
+         AND json ->> 'status' = 'published' AND json ->> 'version' = '1' AND json ->> 'scopeId' LIKE 'org:%'
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(json -> 'approvals', '[]')) AS a(v) WHERE a.v NOT LIKE 'system:%')`,
+    ],
   });
-  let skillsReady = deploymentLayerReady.then(
-    () => undefined,
-    (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-  );
+  const skills: SkillStore = createSkillStore({
+    backing: artifactMap<Skill>("skills", ["scopeId"]),
+    advisoryLock,
+    catalog: { scopeId: orgScope, skills: () => deploymentLayerStore.skills() },
+    ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
+  });
+  let deploymentLayerLoad: Promise<unknown> | null = null;
+  const deploymentLayerReady = (): Promise<unknown> => (deploymentLayerLoad ??= deploymentLayerStore.hydrate());
+  const refreshDeploymentLayer = (): void =>
+    void deploymentLayerStore
+      .hydrate()
+      .catch((error: unknown) => console.error("[deployment-layer] refresh failed:", errMessage(error)));
+  let stopLayerWatch: (() => void) | null = null;
+  const skillsReady = (): Promise<void> =>
+    deploymentLayerReady().then(
+      () => undefined,
+      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+    );
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -2077,13 +2067,12 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_UPGRADE);
-  pgArtifactMap.pool.registerMigration(PUBLISHED_ORIGIN_COMPLETE);
-  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RETIRED_TRIGGER_FIELDS_MIGRATION);
   pgArtifactMap.pool.registerMigration(BACKFILL_BOT_MARKER_MIGRATION);
   pgArtifactMap.pool.registerMigration(SPLIT_LINKED_BOTS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_BOT_EDITED_CRONS_MIGRATION);
+  pgArtifactMap.pool.registerMigration(RERUN_BOT_MARKER_BACKFILL_MIGRATION);
+  pgArtifactMap.pool.registerMigration(HOLD_BOT_LOOP_SHIPS_MIGRATION);
   pgArtifactMap.pool.registerMigration(STAMP_SWARM_COMPUTERS_MIGRATION);
   pgArtifactMap.pool.registerMigration(MARK_SWARM_FORUMS_PERSON_USED_MIGRATION);
   pgArtifactMap.pool.registerMigration(CLEAR_BOT_SET_DEFAULTS_MIGRATION);
@@ -2334,11 +2323,11 @@ export function buildApp(
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
-    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
+    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture, card: config.memoryCard },
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: () => skillsReady,
+    skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -3237,6 +3226,7 @@ export function buildApp(
     start(services = { resume() {}, standDown: async () => {} }) {
       if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
       releasing = null;
+      stopLayerWatch ??= layerChanges.subscribe(refreshDeploymentLayer, { onResync: refreshDeploymentLayer });
       flyTunnel?.monitor();
       renderBasePreparing = new AbortController();
       void renderBase
@@ -3250,7 +3240,8 @@ export function buildApp(
     async stop(opts) {
       stopTenantLoad();
       stopSettingsLoad();
-      stopLayerLoad();
+      stopLayerWatch?.();
+      stopLayerWatch = null;
       renderBasePreparing?.abort();
       const draining = drain.stop();
       await stopBackground();
@@ -3272,6 +3263,7 @@ export function buildApp(
           ledgerEventBus.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
+          layerChanges.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await agent.close?.();
@@ -3290,16 +3282,8 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    deploymentLayerReady,
-    deploymentLayerRefresh,
-    ownSharedState: async () => {
-      ownsSharedState = true;
-      if (!boundTenant()) return;
-      await deploymentLayerStore.hydrate().catch((error: unknown) => {
-        ownsSharedState = false;
-        throw error;
-      });
-      if (config.seedSkills) skillsReady = Promise.all([skillsReady, seedTenantSkills()]).then(() => undefined);
+    get deploymentLayerReady() {
+      return deploymentLayerReady();
     },
     sessions,
     runs,

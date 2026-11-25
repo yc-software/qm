@@ -12,6 +12,7 @@ import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 export function segmentEnvironment(segment: {
   recalled: Parameters<typeof memoryRecallDelta>[0];
+  cards: Parameters<typeof memoryRecallDelta>[5];
   continuation: { history: Item[] } | undefined;
   history: Item[];
   memoryView: { held: Parameters<typeof memoryRecallDelta>[2] };
@@ -35,6 +36,7 @@ export function segmentEnvironment(segment: {
 }) {
   const {
     recalled,
+    cards,
     continuation,
     history,
     memoryView,
@@ -62,6 +64,7 @@ export function segmentEnvironment(segment: {
     memoryView.held,
     context.memoryLabels,
     recallOutcomes,
+    cards,
   );
   const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rosterHistory, session.id, screenedPeople);
   const guidance = soulScopeId

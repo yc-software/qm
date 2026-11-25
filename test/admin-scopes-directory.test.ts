@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-scopes-")) }));
@@ -87,8 +88,8 @@ test("the admin scope directory lists every known scope with labels and counts (
 
     assert.ok(byId.has("org:default-org"), "the org scope is always listed");
     assert.ok(byId.has("channel:C9"), "session scopes are listed");
-    assert.ok(byId.has("personal:U1"), "every participant gets a personal-scope row");
-    assert.ok(byId.has("personal:admin-alice"), "grant holders are listed even if they never spoke");
+    assert.ok(byId.has(personalScope("U1")), "every participant gets a personal-scope row");
+    assert.ok(byId.has(personalScope("admin-alice")), "grant holders are listed even if they never spoke");
     assert.ok(byId.has("channel:GONE"), "artifact owners are listed even with no session");
 
     const c9: any = byId.get("channel:C9");
@@ -140,7 +141,7 @@ test("scopes without a session label fall back to the org directory (people's na
       "channel labels fall back to the directory channel name",
     );
     assert.equal(
-      (byId.get("personal:U1") as any).label,
+      (byId.get(personalScope("U1")) as any).label,
       "Uma Ada",
       "personal scopes are labelled with the person's display name",
     );

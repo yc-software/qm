@@ -12,7 +12,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -157,7 +157,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         action: "send the daily digest",
         owner: "U2",
         createdBy: "U2",
-        ownerScopeId: "personal:U2",
+        ownerScopeId: personalScope("U2"),
         destination: { type: "evil", target: "attacker" },
       },
       { "x-agent-capability": await capFor("U1") },
@@ -166,7 +166,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const { cron } = (await res.json()) as any;
     assert.equal(cron.owner, "U1");
     assert.equal(cron.createdBy, "U1");
-    assert.equal(cron.ownerScopeId, "personal:U1");
+    assert.equal(cron.ownerScopeId, personalScope("U1"));
     assert.equal(cron.destination.type, "slack");
     assert.equal(cron.destination.target, "D-U1");
     assert.equal(cron.action, "send the daily digest");
@@ -254,7 +254,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("creates a destination-less cron when the token carries no destination (nullable)", async () => {
     const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: "U9", scopeId: personalScope("U9"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
     const res = await post(
@@ -463,7 +463,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         .status,
       401,
     );
-    const expired = await mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 }, SECRET);
+    const expired = await mintCapabilityToken(
+      { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() - 1 },
+      SECRET,
+    );
     assert.equal(
       (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, { "x-agent-capability": expired }))
         .status,
@@ -564,7 +567,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         schedule: { everyMs: 60_000 },
         action: "x",
         destinationKey: "k-root",
-        destination: { type: "slack", target: "C", audienceScopeId: "personal:U1" },
+        destination: { type: "slack", target: "C", audienceScopeId: personalScope("U1") },
       },
       { "x-agent-capability": await capChannel("U1") },
     );
@@ -757,7 +760,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal((await patch(`/v1/crons/${cron.id}`, { action: "tweaked" }, teammate)).status, 403);
     const shared = await post(
       "/v1/share",
-      { type: "cron", id: cron.id, toScope: "personal:U2", permission: "write" },
+      { type: "cron", id: cron.id, toScope: personalScope("U2"), permission: "write" },
       { "x-agent-capability": await capChannelMembers("U1") },
     );
     assert.equal(shared.status, 200);
@@ -804,7 +807,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const owner = { "x-agent-capability": await capChannelMembers("U1") };
     const created = await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "standup notes" }, owner);
     const { cron } = (await created.json()) as any;
-    await post("/v1/share", { type: "cron", id: cron.id, toScope: "personal:U2", permission: "write" }, owner);
+    await post("/v1/share", { type: "cron", id: cron.id, toScope: personalScope("U2"), permission: "write" }, owner);
     const teammate = { "x-agent-capability": await capChannel("U2", { runId: "run-u2" }) };
     assert.equal((await patch(`/v1/crons/${cron.id}`, { title: "standup (renamed)" }, teammate)).status, 200);
     const bot = {
@@ -855,12 +858,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const webhooksBefore = await built.app.listWebhooks();
     const auditBefore = (await built.auditLog.events(testTenant)).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
-      for (const extra of [
-        {},
-        { personAuthority: false },
-        { personAuthority: true, botActor: true },
-        { personAuthority: true, internalAudience: false },
-      ]) {
+      for (const extra of [{}, { personAuthority: false }, { personAuthority: true, botActor: true }]) {
         const res = await post(
           "/v1/webhooks",
           { action: "handle the event", verification: { scheme: "hmac-sha256", secret: "secret" } },
@@ -897,7 +895,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         verification: { scheme: "github", secret: "gh-secret" },
         owner: "U2",
         createdBy: "U2",
-        ownerScopeId: "personal:U2",
+        ownerScopeId: personalScope("U2"),
         destination: { type: "evil", target: "attacker" },
       },
       await capFor("U1", scopeId("personal", "U1"), { personAuthority: true }),
@@ -906,7 +904,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const { webhook, url } = (await res.json()) as any;
     assert.equal(webhook.owner, "U1");
     assert.equal(webhook.createdBy, "U1");
-    assert.equal(webhook.ownerScopeId, "personal:U1");
+    assert.equal(webhook.ownerScopeId, personalScope("U1"));
     assert.equal(webhook.action, "triage the GitHub event");
     assert.equal(webhook.verification.scheme, "github");
     assert.equal(webhook.verification.secret, "gh-secret");
@@ -935,7 +933,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         action: "post deploys to the channel",
         verification: { scheme: "hmac-sha256", secret: "deploy-secret" },
         destinationKey: "k-root",
-        destination: { type: "slack", target: "C", audienceScopeId: "personal:U1" },
+        destination: { type: "slack", target: "C", audienceScopeId: personalScope("U1") },
       },
       await capChannel("U1", { personAuthority: true }),
     );

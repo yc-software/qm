@@ -101,6 +101,48 @@
     return `${head}, changes since last state (+ added, ~ changed):\n${o.tree || "(no changes)\n"}${removed}`;
   }
 
+  const CONDITIONS = { gone: "id", value: "id", window: "title", noWindow: "title" };
+
+  function expectation(expect) {
+    if (expect === undefined) return undefined;
+    if (!expect || typeof expect !== "object") throw new TypeError("expect must be an object such as {gone: 12}");
+    const { timeoutMs, equals, ...rest } = expect;
+    const keys = Object.keys(rest);
+    if (keys.length !== 1 || !Object.hasOwn(CONDITIONS, keys[0]))
+      throw new TypeError("expect needs exactly one of gone, value, window or noWindow");
+    const [key] = keys;
+    const arg = rest[key];
+    if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0))
+      throw new TypeError("expect.timeoutMs must be a whole number of milliseconds");
+    if ((key === "value") !== (equals !== undefined))
+      throw new TypeError("expect.value needs equals, and equals only goes with value");
+    let condition;
+    if (CONDITIONS[key] === "id") {
+      if (!Number.isInteger(arg) || arg < 0 || arg > 0xffffffff)
+        throw new TypeError(`expect.${key} must be an element id`);
+      condition =
+        key === "value" ? { type: "value", index: arg, equals: String(equals) } : { type: "gone", index: arg };
+    } else {
+      if (typeof arg !== "string" || !arg) throw new TypeError(`expect.${key} must be part of a window title`);
+      condition = { type: "window", title: arg, open: key === "window" };
+    }
+    return { condition, ...(timeoutMs === undefined ? {} : { timeout_ms: timeoutMs }) };
+  }
+
+  function windowLine(w, targeted) {
+    const role = w.subrole ?? w.role ?? "";
+    const kind = (role.startsWith("AX") ? role.slice(2) : role) || "Window";
+    const size = w.frame ? ` ${Math.round(w.frame.w)}x${Math.round(w.frame.h)}` : "";
+    const tags = [
+      targeted && "targeted",
+      w.focused && "focused",
+      w.main && "main",
+      w.minimized && "minimized",
+      w.parent && `sheet of ${w.parent}`,
+    ].filter(Boolean);
+    return `[${w.id}] ${kind} "${w.title}"${size}${tags.length ? ` (${tags.join(", ")})` : ""}`;
+  }
+
   const MODIFIERS = {
     cmd: "command",
     command: "command",
@@ -117,13 +159,14 @@
     #screenshotWindow = null;
     #appIdentity = null;
     #offset = { x: 0, y: 0 };
+    #window = null;
 
     constructor(name) {
       this.name = name;
     }
 
     async #observe(screenshot, diff, emit, tree = true) {
-      const o = await desk({ type: "observe", app: this.name, screenshot, diff });
+      const o = await desk({ type: "observe", app: this.name, screenshot, diff, tree, ...this.#selection() });
       this.#appIdentity = o.bundle_id ? `bundle:${o.bundle_id}` : `name:${o.app}`;
       if (!Number.isInteger(o.window_id) || o.window_id <= 0 || o.window_id > 0xffffffff) {
         observedWindows.delete(this.#appIdentity);
@@ -143,6 +186,7 @@
         }
       }
       if (emit && tree) say(stateText(o));
+      if (emit && o.screenshot_error) say(`[screenshot unavailable: ${o.screenshot_error}]`);
       if (o.screenshot) {
         const shot = o.screenshot.frame;
         if (!shot || ![shot.x, shot.y, shot.w, shot.h].every(Number.isFinite) || shot.w <= 0 || shot.h <= 0) {
@@ -163,6 +207,32 @@
       }
       if (emit) emitted.add(o);
       return o;
+    }
+
+    #selection() {
+      return this.#window === null ? {} : { window: this.#window };
+    }
+
+    async listWindows({ emit = true } = {}) {
+      const { windows } = await desk({ type: "windows", app: this.name });
+      if (emit) {
+        say(windows.map((w) => windowLine(w, w.id === this.#window)).join("\n") || "(no windows)");
+        emitted.add(windows);
+      }
+      return windows;
+    }
+
+    async useWindow(id, { emit = true } = {}) {
+      if (id !== null && (!Number.isInteger(id) || id <= 0 || id > 0xffffffff))
+        throw new TypeError("useWindow takes a window id from listWindows, or null for the app's focused window");
+      const previous = this.#window;
+      this.#window = id;
+      try {
+        return await this.#observe(false, false, emit);
+      } catch (error) {
+        this.#window = previous;
+        throw error;
+      }
     }
 
     getAXState({ disableDiffing = false, emit = true } = {}) {
@@ -187,12 +257,24 @@
       throw new Error("target must be an element index or [x, y] screenshot pixels");
     }
 
-    async #act(action) {
-      const reply = await desk({ type: "act", app: this.name, actions: [action], observe: false });
+    async #act(action, expect) {
+      const reply = await desk({
+        type: "act",
+        app: this.name,
+        actions: [action],
+        observe: false,
+        ...this.#selection(),
+        ...(expect ? { expect } : {}),
+      });
       if (reply.failure || reply.observation_failure) throw new Error(JSON.stringify(reply));
+      if (!reply.outcome) return undefined;
+      const outcome = { status: reply.outcome.status, detail: reply.outcome.detail };
+      say(`Outcome (${outcome.status}): ${outcome.detail}`);
+      emitted.add(outcome);
+      return outcome;
     }
 
-    click(target, { mouseButton = "left", clickCount = 1, key = "", durationMs = 0 } = {}) {
+    click(target, { mouseButton = "left", clickCount = 1, key = "", durationMs = 0, expect } = {}) {
       const modifiers = key
         .split("+")
         .filter(Boolean)
@@ -201,53 +283,71 @@
           if (!m) throw new Error(`unknown modifier ${k}`);
           return m;
         });
-      return this.#act({
-        type: "click",
-        target: this.#target(target),
-        button: mouseButton,
-        count: clickCount,
-        modifiers,
-        hold_ms: durationMs,
-      });
+      const check = expectation(expect);
+      return this.#act(
+        {
+          type: "click",
+          target: this.#target(target),
+          button: mouseButton,
+          count: clickCount,
+          modifiers,
+          hold_ms: durationMs,
+        },
+        check,
+      );
     }
 
-    drag(from, to) {
-      return this.#act({ type: "drag", from: this.#target(from).point, to: this.#target(to).point });
+    drag(from, to, { expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "drag", from: this.#target(from).point, to: this.#target(to).point }, check);
     }
 
-    scroll(target, direction, amount = 1) {
-      return this.#act({
-        type: "scroll",
-        ...(target === null || target === undefined ? {} : { target: this.#target(target) }),
-        direction,
-        amount: typeof amount === "number" ? { pages: amount } : { pixels: amount.pixels },
-      });
+    scroll(target, direction, amount = 1, { expect } = {}) {
+      const check = expectation(expect);
+      return this.#act(
+        {
+          type: "scroll",
+          ...(target === null || target === undefined ? {} : { target: this.#target(target) }),
+          direction,
+          amount: typeof amount === "number" ? { pages: amount } : { pixels: amount.pixels },
+        },
+        check,
+      );
     }
 
-    selectText(index, text, { prefix = "", suffix = "", selectionType = "text" } = {}) {
-      return this.#act({ type: "select_text", index, text, prefix, suffix, selection: selectionType });
+    selectText(index, text, { prefix = "", suffix = "", selectionType = "text", expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "select_text", index, text, prefix, suffix, selection: selectionType }, check);
     }
 
-    setValue(index, value, { submit } = {}) {
+    setValue(index, value, { submit, expect } = {}) {
       if (submit !== undefined && typeof submit !== "boolean")
         throw new TypeError("setValue submit must be true or false");
-      return this.#act({ type: "set_value", index, value: String(value), ...(submit === undefined ? {} : { submit }) });
+      const check = expectation(expect);
+      return this.#act(
+        { type: "set_value", index, value: String(value), ...(submit === undefined ? {} : { submit }) },
+        check,
+      );
     }
 
-    performSecondaryAction(index, action) {
-      return this.#act({ type: "perform", index, action });
+    performSecondaryAction(index, action, { expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "perform", index, action }, check);
     }
 
-    pressKey(key, { durationMs = 0 } = {}) {
-      return this.#act({ type: "press_key", key, hold_ms: durationMs });
+    pressKey(key, { durationMs = 0, expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "press_key", key, hold_ms: durationMs }, check);
     }
 
-    typeText(text) {
-      return this.#act({ type: "type_text", text: String(text) });
+    typeText(text, { expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "type_text", text: String(text) }, check);
     }
 
-    paste(text, { format = "text" } = {}) {
-      return this.#act({ type: "paste", text: String(text), format });
+    paste(text, { format = "text", expect } = {}) {
+      const check = expectation(expect);
+      return this.#act({ type: "paste", text: String(text), format }, check);
     }
 
     raise() {
@@ -283,38 +383,59 @@ computer.getApp(nameOrBundleIdOrFullPath) -> App. Opens an installed app in the 
 All apps are available subject to macOS permissions.
 
 Observation (each emits into the result; pass {emit: false} to only return the data):
-app.getAXState({disableDiffing}) the visible part of the focused window's accessibility tree. Lines read
-  [id] Role:Subrole "name" (description) = "value" placeholder "…" url "…" [focused disabled selected checked expanded settable] <Actions>
+app.getAXState({disableDiffing}) the visible part of the targeted window's accessibility tree (the focused window unless
+  useWindow chose another). Lines read
+  [id] Role:Subrole "name" (description) = "value" placeholder "…" url "…" [password focused disabled selected checked expanded settable] <Actions>
+  Password fields are marked [password] and their text is never read: setValue, selectText, paste and expect {value}
+  refuse them. Click the field and use typeText.
   Open menus and dialogs are listed first; Focus: and Selected text: lines follow the tree.
   Content scrolled out of view is summarised as "… N more offscreen; scroll to reveal".
   Ids stay stable across observations of the same window.
   By default only new (+) or changed (~) lines are shown, plus removed ids; when most lines changed, or with
   disableDiffing: true, the whole tree is shown.
-app.getScreenshot() a JPEG covering the window and its visible menus/panels. app.getAXStateAndScreenshot({disableDiffing}) both.
+app.getScreenshot() a JPEG covering the window and its visible menus/panels. It does not read the tree, so the next
+  getAXState still diffs against the last tree you saw. app.getAXStateAndScreenshot({disableDiffing}) both; if the
+  screenshot fails, it still emits the tree with a [screenshot unavailable: …] note.
   Screenshot pixel targets are translated automatically, including panels extending beyond the main window.
+app.listWindows() -> [{id, title, role, subrole, frame, focused, main, minimized, parent}] the app's windows; a sheet lists
+  the window it belongs to as parent.
+app.useWindow(id | null) targets that window for later observations and actions on this App and emits its tree; null
+  returns to the focused window.
 
-Observe the intended app before acting and use targets from its current state. Actions return after input is sent,
-not after the requested outcome is confirmed. Observe to verify each meaningful change, and stop once the requested
-result is visible. After an error, interruption or timeout, inspect the current state before retrying an action that
+Work in the background by default: the person is usually using their Mac while you act. setValue (navigate Chrome by
+setting its address bar with submit: true) and performSecondaryAction(id, "AXPress") on buttons and checkboxes do not
+raise the window. Use real clicks, keyboard input or raise() only when those cannot do the job, and tell the person first.
+
+Observe the intended app before acting and use targets from its current state. Actions return after input is sent and
+confirm the requested outcome only when given expect. Otherwise observe to verify each meaningful change, and stop once
+the requested result is visible. After an error, interruption or timeout, inspect the current state before retrying an action that
 may already have completed. Observations wait for accessibility events to settle, longer while a progress indicator shows.
-app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift", durationMs})
+Every action below takes expect in its options: one condition, checked before and after the action, with optional
+  timeoutMs (default 2000; the whole call must still finish within its deadline): {gone: id} {value: id, equals: "text"}
+  {window: "title text"} {noWindow: "title text"}. If it already holds, the action is not sent. The call emits and
+  returns {status, detail}: "verified" (it held after the action), "already" (it held before; nothing was sent) or
+  "unmet" (still false after timeoutMs; detail says what was found). Example: app.click(12, {expect: {gone: 40}})
+  reports that dialog 40 closed, was already closed, or stayed open. Without expect, actions return undefined.
+app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift", durationMs, expect})
   target is an element id from the tree or [x, y] in pixels of the latest screenshot.
   Ids in web content, rows and cells get a real click; other ids use the accessibility press action.
   A real click on an id scrolls it into view first and fails if it stays offscreen or something covers it.
   While a menu is open, click its items by id or press Escape; other clicks and pointer actions fail.
-  Input uses app-local activation rather than automatically bringing the app to the front.
+  Real clicks (pixel targets, drag, and ids in web content, rows and cells) and keyboard input (pressKey, typeText, paste)
+  can bring the target window in front of the person's work; keyboard input goes to the app's key window, which may
+  not be the window you targeted.
   If you use the target app yourself, actions on it wait for a quiet moment and then fail so it can be observed again.
-app.drag([x, y], [x, y]) screenshot pixels.
-app.scroll(target | null, up|down|left|right, pages = 1 | {pixels})
-app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) Use native text or an exact observed Markdown body excerpt without tree indentation; prefix/suffix pick among repeats.
-app.setValue(id, value, {submit}) writes the element's value directly, as a number or true/false when the element holds one.
-  It fails if the element is not settable or a text field keeps its old value. Only submit: true
+app.drag([x, y], [x, y], {expect}) screenshot pixels.
+app.scroll(target | null, up|down|left|right, pages = 1 | {pixels}, {expect})
+app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after, expect}) Use native text or an exact observed Markdown body excerpt without tree indentation; prefix/suffix pick among repeats.
+app.setValue(id, value, {submit, expect}) writes the element's value directly, as a number or true/false when the element holds one.
+  It fails if the element is not settable or does not read the requested value afterwards. Only submit: true
   confirms the field or presses Return; omission and false never submit.
-app.performSecondaryAction(id, action) runs an action the element lists, e.g. "ShowMenu", "Increment".
-app.pressKey("cmd+shift+t", {durationMs}) key names: letters, digits, punctuation, return, tab, space, delete, escape, arrows, home, end, pageup, pagedown, f1-f20, KP_Enter/KP_0/KP_Add and other keypad names. Modifier names support left/right forms such as Control_R.
-app.typeText(text) types with the keyboard. "\\n" presses Return and "\\t" presses Tab, so they can submit
+app.performSecondaryAction(id, action, {expect}) runs an action the element lists, e.g. "ShowMenu", "Increment".
+app.pressKey("cmd+shift+t", {durationMs, expect}) key names: letters, digits, punctuation, return, tab, space, delete, escape, arrows, home, end, pageup, pagedown, f1-f20, KP_Enter/KP_0/KP_Add and other keypad names. Modifier names support left/right forms such as Control_R.
+app.typeText(text, {expect}) types with the keyboard. "\\n" presses Return and "\\t" presses Tab, so they can submit
   a form or send a chat message; use paste for multi-line text.
-app.paste(text, {format: text|markdown|html}) pastes through the clipboard, then restores the user's clipboard once the
+app.paste(text, {format: text|markdown|html, expect}) pastes through the clipboard, then restores the user's clipboard once the
   field shows the text. If it cannot confirm that, it fails and leaves the text on the clipboard instead.
   Prefer it for long, multi-line or formatted text. Needs a focused text field.
 app.raise() explicitly brings the window to the front and takes focus.

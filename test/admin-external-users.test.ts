@@ -16,7 +16,7 @@ import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
@@ -568,7 +568,7 @@ test("the directory resolves participants without loading every participant row"
   const s = start();
   t.after(s.close);
   for (const thread of ["first", "second"]) {
-    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", "personal:alice");
+    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", personalScope("alice"));
     await s.built.sessions.addParticipant(session.id, "alice");
     await s.built.sessions.addParticipant(session.id, "inactive");
   }

@@ -2,7 +2,16 @@ import type { DeployAccessErrorCode } from "../deploy/deploy-service.ts";
 import type { AppInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
-import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId, type ScopeKind } from "../types.ts";
+import {
+  canonicalScopeId,
+  isSharedScope,
+  parseScopeId,
+  scopeId,
+  scopeLabel,
+  type Permission,
+  type ScopeId,
+  type ScopeKind,
+} from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
 
@@ -29,22 +38,15 @@ export function authorPublishesSkill(scope: ScopeId): boolean {
 
 export interface SkillEditor {
   personAuthority?: boolean;
-  internalAudience?: boolean;
   botActor?: boolean;
 }
 
 export function sharedSkillRefused(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
-  return isMultiMemberSkillScope(homeScope) && !internalPerson(editor);
+  return isMultiMemberSkillScope(homeScope) && !carriesPersonAuthority(editor);
 }
 
 export function carriesPersonAuthority(c: { personAuthority?: boolean; botActor?: boolean } | undefined): boolean {
   return c?.botActor !== true && c?.personAuthority === true;
-}
-
-export function internalPerson(
-  c: (Parameters<typeof carriesPersonAuthority>[0] & { internalAudience?: boolean }) | undefined,
-): boolean {
-  return carriesPersonAuthority(c) && c?.internalAudience === true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
@@ -79,7 +81,7 @@ export async function resolveShareTarget(
   if (scope) {
     if (scope === "org") return { kind: "ok", scope: scopeId("org", configOrgId()), label: "everyone in the org" };
     if (parseScopeId(scope).kind === null) return { kind: "invalid", message: hints.invalidScope(scope) };
-    return { kind: "ok", scope, label: scope };
+    return { kind: "ok", scope: canonicalScopeId(scope), label: scopeLabel(scope) };
   }
   if (recipient) {
     const r = await app.resolveRecipient(recipient);

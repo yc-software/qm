@@ -14,11 +14,14 @@ test("permission view renders checks, reacts to grants, and sends settings and d
   let ready = false;
   let dragged = false;
   let pane;
+  let moved = false;
   dom.window.permissions = {
     status: async () => ({
       name: "QM-cu",
       accessibility: ready,
       screen_recording: ready,
+      input_monitoring: ready,
+      misplaced: !ready,
       icon: "data:image/png;base64,AA==",
     }),
     settings: async (value) => {
@@ -26,6 +29,9 @@ test("permission view renders checks, reacts to grants, and sends settings and d
     },
     drag: () => {
       dragged = true;
+    },
+    move: async () => {
+      moved = true;
     },
   };
   try {
@@ -36,7 +42,10 @@ test("permission view renders checks, reacts to grants, and sends settings and d
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(errors, []);
     assert.match(document.querySelector("h1").textContent, /QM-cu/);
-    assert.equal(document.getElementById("accessibility-status").textContent, "Needs access");
+    assert.equal(document.getElementById("input_monitoring-status").textContent, "Needs access");
+    assert.equal(document.getElementById("location").hidden, false);
+    document.getElementById("move").click();
+    assert.equal(moved, true);
     document.querySelector('[data-settings="accessibility"]').click();
     assert.equal(pane, "accessibility");
     document.getElementById("drag").dispatchEvent(new dom.window.Event("dragstart", { cancelable: true }));
@@ -50,6 +59,7 @@ test("permission view renders checks, reacts to grants, and sends settings and d
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(document.getElementById("continue").hidden, false);
     assert.equal(document.getElementById("enable").hidden, true);
+    assert.equal(document.getElementById("location").hidden, true);
   } finally {
     dom.window.close();
   }

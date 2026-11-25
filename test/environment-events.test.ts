@@ -9,6 +9,7 @@ import {
 } from "../src/core/orchestrator/prompt-blocks.ts";
 import { type Item, storedItem } from "../src/sessions/items.ts";
 import type { Cron } from "../src/triggers/types.ts";
+import { personalScope } from "../src/types.ts";
 
 const member = (principalId: string, displayName = principalId.toLowerCase(), slackId?: string) => ({
   principalId,
@@ -74,7 +75,7 @@ test("the local time names the user's zone", () => {
 test("scheduled work lists every title with a readable timing and no ids, owners or task bodies", () => {
   const crons: Cron[] = Array.from({ length: 15 }, (_, i) => ({
     id: `cron-${i}`,
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "private-owner",
     createdBy: "U1",
     createdAt: 0,
@@ -105,7 +106,7 @@ test("scheduled work lists every title with a readable timing and no ids, owners
 test("schedules the short form can't express fall back to cronstrue's wording", () => {
   const cron = (expr: string): Cron => ({
     id: "c",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     createdAt: 0,
@@ -123,7 +124,7 @@ test("schedules the short form can't express fall back to cronstrue's wording", 
 test("standing obligations list a webhook by its title, falling back to its task", () => {
   const hook = {
     id: "wh-1",
-    ownerScopeId: "personal:u1" as const,
+    ownerScopeId: personalScope("u1"),
     owner: "u1",
     createdBy: "u1",
     createdAt: 0,
@@ -144,7 +145,7 @@ test("standing obligations list a webhook by its title, falling back to its task
 });
 
 const revision = (version: number, content: string, sessionId?: string) => ({
-  scopeId: "personal:u1" as const,
+  scopeId: personalScope("u1"),
   content,
   version,
   updatedAt: version,

@@ -6,6 +6,7 @@ import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vec
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { currentTenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 function fixture() {
   let now = 1000;
@@ -19,7 +20,7 @@ function fixture() {
       requests.push({ model, limit, dimensions, afterId });
       return [
         {
-          scope: "personal:a",
+          scope: personalScope("a"),
           factId: String(Number(afterId ?? 0) + 64),
           hash: "hash",
           text: afterId ? "good" : "bad",
@@ -163,7 +164,9 @@ test("indexer refuses malformed batches and never writes after losing its leader
 test("fact embeddings stay bounded and dimension probes are cached for ten minutes", async () => {
   const f = fixture();
   const calls: string[][] = [];
-  f.store.missing = async () => [{ scope: "personal:a", factId: "1", hash: "full-text-hash", text: "x".repeat(12000) }];
+  f.store.missing = async () => [
+    { scope: personalScope("a"), factId: "1", hash: "full-text-hash", text: "x".repeat(12000) },
+  ];
   f.embedder.embed = async (texts) => {
     calls.push(texts);
     return texts.map(() => [1, 0]);

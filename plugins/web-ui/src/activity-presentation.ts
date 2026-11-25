@@ -125,7 +125,6 @@ export function activityGroupSummary(
   let approvals = 0;
   let attempted = 0;
   for (const item of items) {
-    if (item.kind === "approval") approvals++;
     if (item.kind !== "tool") continue;
     const state = toolRowKind(item.row, status);
     if (state === "failed") failed++;

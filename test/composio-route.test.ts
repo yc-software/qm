@@ -13,7 +13,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
@@ -253,10 +253,12 @@ test("the catalog can be asked for one app, which costs one small request", asyn
     (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
     ["granola"],
   );
+  f.replies.push({ items: [] }, app("linear_mcp", "Linear MCP", "OAUTH2"));
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items[0]?.id, "linear_mcp");
   f.replies.push(new Response("down", { status: 500 }));
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);
-  assert.equal(f.calls.length, 4);
+  assert.equal(f.calls.length, 6);
 });
 
 test("ambiguous personal keys fail closed rather than switching to the company key", async () => {
@@ -622,7 +624,7 @@ const privateCap: CapabilityClaims = {
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
   internalAudience: true,
   personAuthority: true,
@@ -816,7 +818,7 @@ test("shared org connections recheck grants for every audience member", async ()
   await f.deps.acl!.grant(tenant, {
     ownerScopeId: org,
     ref: "service-cred:composio",
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "read",
     grantedBy: "admin",
   });

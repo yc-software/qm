@@ -7,7 +7,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult, personalScope } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -17,7 +17,7 @@ import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
 
-const SCOPE = "personal:U1";
+const SCOPE = personalScope("U1");
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
 
 function fakeSandbox() {

@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { loadTenant } from "../src/tenants/cache.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -17,7 +16,7 @@ const skills = [
   },
 ];
 
-test("each tenant gets the stored deployment layer's skills when it first loads", async () => {
+test("every tenant serves the stored deployment layer's skills without copying them into its own rows", async () => {
   const databaseUrl = testMigratedDatabaseUrl();
   const owner = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString() });
   const other = randomUUID();
@@ -26,9 +25,8 @@ test("each tenant gets the stored deployment layer's skills when it first loads"
   const org = [scopeId("org", "default-org")];
   try {
     await withTenant(TEST_TENANT, () => built.deploymentLayerStore.put({ contract: 1, tools: [], skills }, "test"));
-    assert.equal((await withTenant(other, () => built.skills.resolve("acme", org))).skill, null);
-    await withTenant(other, () => loadTenant());
     assert.equal((await withTenant(other, () => built.skills.resolve("acme", org))).skill?.status, "published");
+    assert.equal((await owner.query("SELECT count(*)::int AS n FROM skills")).rows[0].n, 0);
   } finally {
     await built.runtime.stop();
     await owner.end();

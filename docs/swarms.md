@@ -3,7 +3,7 @@
 A swarm coordinates ordinary QM sessions. The initiating session is its root;
 workers have their own durable transcripts, runs, identity, and editable JSON
 character/context. The existing authenticated session viewer lists worker sessions
-with a `Swarm worker` title. Worker transcripts remain read-only for ordinary messages in the web UI, but the requesting human can allow or deny pending approvals there. Discovery returns their session IDs and portal-relative
+with a `Swarm worker` title. Worker transcripts remain read-only for ordinary messages in the web UI, but the requesting human can approve or decline pending approvals there. Discovery returns their session IDs and portal-relative
 `sessionUrl` links. Session activity and results use the normal viewer and run APIs.
 
 ## Deployment
@@ -94,7 +94,7 @@ provider creation/retry loops.
 Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
-identity rules; a worker turn carries no person's live authority of its own. Session
+identity rules; a worker turn carries no person's authority of its own. Session
 grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.

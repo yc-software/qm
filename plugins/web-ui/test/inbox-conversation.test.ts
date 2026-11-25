@@ -7,7 +7,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
   try {
     await vite.ssrLoadModule("/src/shell.ts");
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
-    appState.me = { user: "taylor@example.com" };
+    appState.me = { user: "taylor@example.com", personalScope: "personal:taylor@example.com" };
     const { chatTpl, draftMessageTpl, toInboxItem, inboxState, resetInboxState } =
       await vite.ssrLoadModule("/src/inbox.ts");
     const { render, html } = await vite.ssrLoadModule("lit");

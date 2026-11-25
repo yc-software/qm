@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { personalScope } from "../src/types.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
@@ -38,14 +39,14 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
       host: "api.x.com",
       status: "ok",
       upstreamStatus: 200,
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       principalId: "U1",
     });
     s.built.credentialUsage.record(testTenant, {
       slug: "x-firehose",
       host: "api.x.com",
       status: "denied",
-      scopeLabel: "personal:U2",
+      scopeLabel: personalScope("U2"),
       principalId: "U2",
     });
 
@@ -65,7 +66,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
 
     const denied = d.records.find((x: any) => x.status === "denied");
     assert.equal(denied.allowed, false, "a denied broker call reads as not-allowed");
-    assert.equal(denied.scopeLabel, "personal:U2");
+    assert.equal(denied.scopeLabel, personalScope("U2"));
     const ok = d.records.find((x: any) => x.status === "ok");
     assert.equal(ok.allowed, true);
     assert.equal(ok.upstreamStatus, 200, "upstream status is surfaced");
@@ -87,7 +88,7 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       host: "api.x.com",
       status: "ok",
       upstreamStatus: 200,
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       principalId: "U1",
     });
     s.built.egressAudit.record(testTenant, {
@@ -98,7 +99,7 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       via: "connect",
       port: 443,
       peerIp: "1.2.3.4",
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
     });
 
     await settle(async () => (await s.built.credentialUsage.list(testTenant)).length >= 1);
@@ -128,14 +129,14 @@ test("egress: a scoped read returns only that scope's records, across both sourc
       slug: "a",
       host: "api.a.com",
       status: "ok",
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       principalId: "U1",
     });
     s.built.credentialUsage.record(testTenant, {
       slug: "b",
       host: "api.b.com",
       status: "ok",
-      scopeLabel: "personal:U2",
+      scopeLabel: personalScope("U2"),
       principalId: "U2",
     });
     s.built.egressAudit.record(testTenant, {
@@ -143,14 +144,14 @@ test("egress: a scoped read returns only that scope's records, across both sourc
       host: "fw.a.com",
       allowed: true,
       verdict: "ok",
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
     });
     s.built.egressAudit.record(testTenant, {
       source: "proxy",
       host: "fw.b.com",
       allowed: true,
       verdict: "ok",
-      scopeLabel: "personal:U2",
+      scopeLabel: personalScope("U2"),
     });
 
     await settle(async () => (await s.built.credentialUsage.list(testTenant)).length >= 2);
@@ -159,7 +160,7 @@ test("egress: a scoped read returns only that scope's records, across both sourc
     assert.equal(d.total, 2, "the broker + firewall rows for this scope, and nothing else");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
     assert.ok(
-      d.records.every((r: any) => r.scopeLabel === "personal:U1"),
+      d.records.every((r: any) => r.scopeLabel === personalScope("U1")),
       "both sinks are scope-filtered",
     );
     assert.deepEqual(d.records.map((r: any) => r.host).sort(), ["api.a.com", "fw.a.com"]);
@@ -206,8 +207,8 @@ test("egress-audit ingest: proxy-relayed decisions land as firewall rows in the 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         records: [
-          { host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1", principalId: "U1" },
-          { host: "pastebin.com", verdict: "host_denied", allowed: true, scopeLabel: "personal:U1" },
+          { host: "api.github.com", verdict: "ok", scopeLabel: personalScope("U1"), principalId: "U1" },
+          { host: "pastebin.com", verdict: "host_denied", allowed: true, scopeLabel: personalScope("U1") },
           { verdict: "ok" },
         ],
       }),
@@ -233,7 +234,7 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        records: [{ host: `${"a".repeat(600)}.attacker.example`, verdict: "denied", scopeLabel: "personal:U1" }],
+        records: [{ host: `${"a".repeat(600)}.attacker.example`, verdict: "denied", scopeLabel: personalScope("U1") }],
       }),
     });
     assert.deepEqual(await res.json(), { accepted: 1, rejected: 0 });
@@ -252,8 +253,8 @@ test("egress-audit ingest: a record naming a malformed tenant is rejected, the r
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         records: [
-          { host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1", tenant: "not-a-tenant" },
-          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+          { host: "api.github.com", verdict: "ok", scopeLabel: personalScope("U1"), tenant: "not-a-tenant" },
+          { host: "example.com", verdict: "ok", scopeLabel: personalScope("U1") },
         ],
       }),
     });
@@ -275,10 +276,10 @@ test("egress-audit ingest: a record naming a tenant that does not exist is rejec
           {
             host: "api.github.com",
             verdict: "ok",
-            scopeLabel: "personal:U1",
+            scopeLabel: personalScope("U1"),
             tenant: "7d1f0c52-3b8e-4f6a-9c2d-5e4b3a2f1c0d",
           },
-          { host: "example.com", verdict: "ok", scopeLabel: "personal:U1" },
+          { host: "example.com", verdict: "ok", scopeLabel: personalScope("U1") },
         ],
       }),
     });

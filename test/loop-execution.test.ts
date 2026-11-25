@@ -5,7 +5,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
@@ -14,8 +14,8 @@ const GATED = "rm -rf ./ship-target && printf shipped";
 for (const checkResult of ["passed", "failed", "missing", "gated"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
     const built = buildApp(testConfig());
-    const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-    await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const computer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "default");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
     const org = scopeId("org", "default-org");
     await built.serviceCreds.setServiceCredential(org, {
       slug: "error-source",

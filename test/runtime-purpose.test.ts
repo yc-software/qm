@@ -9,9 +9,10 @@ import type { RuntimeChoice } from "../src/agent/agent.ts";
 import { randomUUID } from "node:crypto";
 import { storedItem } from "../src/sessions/items.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const ORG = "org:default-org";
-const SCOPE = "personal:alice";
+const SCOPE = personalScope("alice");
 const fallback: RuntimeChoice = { modelId: "claude-opus-5" };
 const category: RuntimeChoice = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
@@ -142,7 +143,7 @@ test("runtime get uses job execution defaults, and handoffs survive retries", as
       authorizesCapabilityScope: async () => true,
     },
   );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000 } as const;
+  const claims = { actorId: "alice", scopeId: SCOPE, personAuthority: true, exp: Date.now() + 60_000 } as const;
   const explicit = { fastMode: false };
   const get = await service(claims, fallback, { action: "get" }, undefined, false, undefined, true, "cron", explicit);
   assert.ok(get.ok);

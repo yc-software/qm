@@ -15,6 +15,8 @@ type Post = (path: string, body: unknown) => Promise<unknown>;
 
 const windowId = crypto.randomUUID();
 const running = new Map<string, string>();
+const claiming = new Set<string>();
+const stopped = new Set<string>();
 const unlessGone = (error: unknown) => {
   if ((error as { status?: number }).status === 404) return null;
   throw error;
@@ -40,10 +42,21 @@ export function desktopTurnId(): string | undefined {
 }
 
 export async function answerDesktopCall(callId: string, post: Post, desk = desktop()): Promise<void> {
-  if (!desk) return;
+  if (!desk || claiming.has(callId) || running.has(callId)) return;
   const path = `/api/desktop/calls/${encodeURIComponent(callId)}`;
-  const claim = (await post(`${path}/claim`, { desktopClientId: windowId }).catch(unlessGone)) as Claim | null;
+  claiming.add(callId);
+  const claim = (await post(`${path}/claim`, { desktopClientId: windowId })
+    .catch(unlessGone)
+    .finally(() => claiming.delete(callId))) as Claim | null;
+  const stop = stopped.delete(callId);
   if (!claim) return;
+  if (stop) {
+    await post(`${path}/result`, {
+      desktopClientId: windowId,
+      result: { content: "The turn was stopped before the call started, so nothing ran on the Mac.", isError: true },
+    }).catch(unlessGone);
+    return;
+  }
   running.set(callId, claim.runId);
   const result = await desk
     .call(claim.args, claim.runId, claim.deadline)
@@ -64,6 +77,7 @@ export async function answerDesktopCall(callId: string, post: Post, desk = deskt
 export function stopDesktopCall(callId: string, desk = desktop()): void {
   const runId = running.get(callId);
   if (runId) void desk?.stop?.(runId);
+  else if (claiming.has(callId)) stopped.add(callId);
 }
 
 export function handleDesktopSignal(ui: { callId?: string; stop?: boolean }, post: Post): void {

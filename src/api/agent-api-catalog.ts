@@ -1,6 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { selfReadAudience } from "../auth/self-read-audience.ts";
-import { internalPerson } from "./artifact-share.ts";
+import { carriesPersonAuthority } from "./artifact-share.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
 interface AgentApiRoute {
@@ -125,6 +125,51 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "detaches an attached credential (owner, on a turn you sent)",
       },
       { method: "DELETE", path: "/v1/personas/:id", summary: "deletes it and detaches its credentials (owner)" },
+      {
+        method: "GET",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "dedicated Slack app status (org admin or persona owner): unconnected|pending_install|connected, hasOrgConfigToken, publicUrlConfigured, manifestCreateUrl, oauthAuthorizeUrl",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/slack/create",
+        summary:
+          "{configToken?,refreshToken?,orgDeploy?} creates a dedicated HTTP-Events Slack app via Slack's App Manifest API (uses saved org config token if omitted) and returns oauthAuthorizeUrl for one-click install (org admin or persona owner)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "{botToken,signingSecret,appId?} attaches an existing Slack app to this persona (org admin or persona owner)",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/personas/:id/slack",
+        summary: "{deleteRemote?} disconnects the persona's Slack app (org admin or persona owner)",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/slack-installation/create",
+        summary:
+          "org admin: {name?,description?,configToken?,refreshToken?,orgDeploy?} creates the base org Slack app via Slack App Manifest API",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: check whether a workspace Slack App Configuration Token is saved",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/slack-config-token",
+        summary:
+          "org admin: {refreshToken?,accessToken?} saves and auto-rotates the workspace Slack App Configuration Token from https://api.slack.com/apps",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: removes the saved workspace Slack App Configuration Token",
+      },
       {
         method: "PUT",
         path: "/v1/sessions/:id/persona",
@@ -515,7 +560,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => internalPerson(v.claims),
+    when: (v) => carriesPersonAuthority(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",
@@ -740,7 +785,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.role === "owner" && internalPerson(v.claims),
+    when: (v) => v.role === "owner" && carriesPersonAuthority(v.claims),
     guidance:
       "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, the org memory-brain registry, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
     routes: [
@@ -817,7 +862,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.isAdmin && v.role !== "owner" && internalPerson(v.claims),
+    when: (v) => v.isAdmin && v.role !== "owner" && carriesPersonAuthority(v.claims),
     guidance:
       "Admin plane: you act AS this org admin — authorized per call under their own standing (every turn carries its owner's authority, typed or fired), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations raise an approval card to the admin, and approving it runs that exact change; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
@@ -913,7 +958,7 @@ const FAMILIES: AgentApiFamily[] = [
 ];
 
 const WHOAMI_FOR_ALL: AgentApiFamily = {
-  when: (v) => !(v.isAdmin && internalPerson(v.claims)),
+  when: (v) => !(v.isAdmin && carriesPersonAuthority(v.claims)),
   routes: [
     { method: "GET", path: "/v1/admin/whoami", summary: "this user's org capabilities: {permissions, isAdmin, role?}" },
   ],

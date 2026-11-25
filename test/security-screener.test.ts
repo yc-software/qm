@@ -5,6 +5,7 @@ import { createSecurityClassifier } from "../src/core/orchestrator/security-scre
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -355,7 +356,7 @@ test("observed screening returns immediately and audits each verdict once it set
         tenant,
         JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]),
         "U1",
-        "personal:U1",
+        personalScope("U1"),
         undefined,
         {
           mode: "observe",

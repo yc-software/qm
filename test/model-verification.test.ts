@@ -238,7 +238,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     const beforeEdit = upstream.requests.length;
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
-    await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
+    await built.config.setRuntimeSelection(personalScope("admin-alice@default-org"), {
       modelId: spec.id,
     });
     await built.modelCredentials.set("openai", "rotated-test-key", "admin-alice");
@@ -511,6 +511,7 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

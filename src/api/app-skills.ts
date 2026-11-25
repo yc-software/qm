@@ -268,7 +268,6 @@ export function createSkillMethods(
     asOrgAdmin(deps, {
       actorId: principalId,
       botActor: opts?.botActor,
-      internalAudience: opts?.internalAudience,
       personAuthority: opts?.personAuthority,
       scopeId: skill.scopeId,
     });

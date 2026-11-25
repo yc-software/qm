@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { recallAcrossScopes, searchAcrossScopes } from "../src/memory/cross-scope.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -43,26 +43,26 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
   };
   await sql(
     "INSERT INTO memory_revisions(scope_id, seq, op, body, at, records) VALUES ($1, 1, 'capture', '', $2, $3)",
-    ["personal:U1", at, { ...records, records: [] }],
+    [personalScope("U1"), at, { ...records, records: [] }],
   );
   await sql(
     "INSERT INTO memory_revisions(scope_id, seq, op, body, at, records) VALUES ($1, 2, 'capture', '', $2, $3)",
-    ["personal:U1", at, records],
+    [personalScope("U1"), at, records],
   );
   await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
-    "personal:U2",
+    personalScope("U2"),
     "# Memory\n\nIntro paragraph\nthat wraps.\n- (2026-04-01) Owns billing\n<!-- consolidated: 2026-04-02 -->\n* Second fact\n## Projects\nWorks on search.\n- (2026-02-30) Bad date\n- (2026-10-01)\n",
     at,
   ]);
 
   const memory = createPostgresMemoryService(URL!);
-  const one = await memory.facts!("personal:U1");
+  const one = await memory.facts!(personalScope("U1"));
   assert.deepEqual(
     one.map(({ text, sensitivity, sources, sourceUnknown }) => ({ text, sensitivity, sources, sourceUnknown })),
     [{ text: "Prefers terse replies", sensitivity: "sensitive", sources: ["channel:C1"], sourceUnknown: false }],
   );
-  assert.equal(await memory.read("personal:U1"), "- (2026-05-01) Prefers terse replies");
-  const legacy = await memory.facts!("personal:U2");
+  assert.equal(await memory.read(personalScope("U1")), "- (2026-05-01) Prefers terse replies");
+  const legacy = await memory.facts!(personalScope("U2"));
   assert.deepEqual(
     legacy.map((fact) => fact.text),
     ["Intro paragraph\nthat wraps.", "Owns billing", "Second fact", "Works on search.", "Bad date"],
@@ -76,13 +76,13 @@ test("pg memory: notebooks written before the records column migrate into fact r
   await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
     op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, UNIQUE (scope_id, seq))`);
   await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
-    "personal:U3",
+    personalScope("U3"),
     "# Memory\n- (2026-04-01) Owns billing\n",
     at,
   ]);
   const memory = createPostgresMemoryService(URL!);
   assert.deepEqual(
-    (await memory.facts!("personal:U3")).map((fact) => fact.text),
+    (await memory.facts!(personalScope("U3"))).map((fact) => fact.text),
     ["Owns billing"],
   );
 });

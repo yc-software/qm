@@ -11,6 +11,7 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { personalScope } from "../src/types.ts";
 
 const sharedPool = testPgPool();
 
@@ -553,7 +554,7 @@ test("own JSON context stays separate from trusted identity and scoped audience"
     group: "feature",
     role: "worker",
     id: "forged",
-    scopeId: "personal:bob",
+    scopeId: personalScope("bob"),
     parentId: "forged",
   });
   const view = await service.inspect(worker);
@@ -601,7 +602,7 @@ test("unrelated sessions, forged capabilities, and revoked scope membership fail
   );
   await assert.rejects(service.inspect({ kind: "agent", claims: { ...caller.claims, actorId: "bob" } }), /denied/);
   await assert.rejects(
-    service.inspect({ kind: "agent", claims: { ...caller.claims, scopeId: "personal:bob" } }),
+    service.inspect({ kind: "agent", claims: { ...caller.claims, scopeId: personalScope("bob") } }),
     /capability/,
   );
   await assert.rejects(
@@ -756,7 +757,10 @@ test("sandbox reservation survives a crash after provisioning without creating a
   await createSwarmService(serviceOptions).sweep();
   assert.equal(provisioned.length, count);
   assert.equal((await service.inspect(caller)).peers[1]!.state, "ready");
-  await assert.rejects(sandboxes.create("bob", "personal:bob", "modal", "forged", worker!.id), /ownership mismatch/);
+  await assert.rejects(
+    sandboxes.create("bob", personalScope("bob"), "modal", "forged", worker!.id),
+    /ownership mismatch/,
+  );
 });
 
 test("slow provisioning does not accumulate overlapping outbox sweeps", async () => {
@@ -802,7 +806,7 @@ test("provisioning failure is bounded and rolls back owned resources without que
 test("explicit forum supplements private worker disks and remains scope-authorized", async () => {
   const { service, caller, sandboxes, sandbox, root } = await swarmFixture();
   const forum = await sandboxes.create("alice", root.scopeId, "modal", "Forum");
-  const other = await sandboxes.create("bob", "personal:bob", "modal", "Private");
+  const other = await sandboxes.create("bob", personalScope("bob"), "modal", "Private");
   await assert.rejects(
     service.spawn(caller, { requestId: "wrong", text: "Work", forumSandboxId: other.id }),
     /permission/,
@@ -990,7 +994,7 @@ test("the orchestrator sandbox path selects worker storage without changing the 
   assert.equal(handle.scopeId, root.scopeId);
   const forum = await sandboxes.create("alice", root.scopeId, "modal", "Forum");
   assert.equal((await turn.provisionResource(forum.id)).resourceId, forum.id);
-  const foreign = await sandboxes.create("bob", "personal:bob", "modal", "Other scope");
+  const foreign = await sandboxes.create("bob", personalScope("bob"), "modal", "Other scope");
   await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 

@@ -14,7 +14,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { scopeId, type PendingApprovalRecord, type TurnRequest } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord, type TurnRequest, personalScope } from "../src/types.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -810,7 +810,7 @@ test("shared-channel admin runtime mutations do not return a private cron prompt
   try {
     await s.built.config.setSharingPosture("channel:C1", "isolated");
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },

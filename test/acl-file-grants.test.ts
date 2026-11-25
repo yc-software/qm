@@ -10,10 +10,11 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { allGrants } from "./support/acl-grants.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 const entitledScopes = entitledScopesFor(false);
 
-const owner = "personal:alice";
-const recipient = "personal:bob";
+const owner = personalScope("alice");
+const recipient = personalScope("bob");
 const org = "org:default-org";
 const bob: Principal = { id: "bob", type: "internal", teamIds: [] };
 const grant: Grant = {

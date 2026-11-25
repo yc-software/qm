@@ -45,7 +45,8 @@ credential lifetime limits. Non-expiring bearer tokens increase exposure if leak
 keep the default unless background work requires longer access.
 
 A turn token carries `personAuthority` when the turn acts for a person: their own turn, a
-fire of a cron, loop, webhook or monitor they own, or a subagent of either. A background job
+fire of a cron, loop, webhook or monitor they own, or a subagent of either, when everyone who
+will see its output is inside the organization. A background job
 keeps its turn's authority until the token expires. Steps that need the person's sign-off
 raise an approval card instead of reading the token.
 

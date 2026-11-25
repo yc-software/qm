@@ -3,7 +3,7 @@ import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/depl
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, requirePersonAuthority } from "./shared.ts";
-import { scopeId } from "../../types.ts";
+import { scopeId, scopeLabel } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { isArtifactType, type ArtifactType } from "../artifact-share.ts";
 import { actionApproved, routeSignOff } from "../action-approval.ts";
@@ -49,7 +49,8 @@ function claimsOf(ctx: ApiCtx): CapabilityClaims | null {
 async function shareView(ctx: ApiCtx, type: ArtifactType, id: string, claims: CapabilityClaims) {
   const r = await ctx.deps.control.shareAccess(type, id, claims, tenantOf(ctx));
   if (!r.ok) return r;
-  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access };
+  const labels = Object.fromEntries([r.owner, ...r.access.map((g) => g.scope)].map((s) => [s, scopeLabel(s)]));
+  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access, labels };
   if (type !== "deploy") return view;
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, r.owner);
   return { ...view, public: (await ctx.app.getApp(r.id))?.public === true && externalSharing, externalSharing };

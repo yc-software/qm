@@ -60,7 +60,6 @@ import {
   ARTIFACT_TYPES,
   carriesPersonAuthority,
   authorPublishesSkill,
-  internalPerson,
   isArtifactType,
   SHARED_SKILL_REFUSAL,
   type SkillEditor,
@@ -81,15 +80,14 @@ function isGrant(b: unknown): b is Grant {
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (internalPerson(capability)) return null;
+  if (carriesPersonAuthority(capability)) return null;
   return SHARED_SKILL_REFUSAL;
 }
 
 function skillEditor(capability: ApiCtx["capability"]): SkillEditor {
-  if (!capability) return { personAuthority: true, internalAudience: true };
+  if (!capability) return { personAuthority: true };
   return {
     personAuthority: carriesPersonAuthority(capability),
-    internalAudience: capability.internalAudience === true,
     botActor: capability.botActor === true,
   };
 }
@@ -815,7 +813,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     else if (personaScope) {
       if (
         capability.memory?.write &&
-        internalPerson(capability) &&
+        carriesPersonAuthority(capability) &&
         (await ctx.app.managesScope(capability.actorId, personaScope))
       )
         write = personaScope;
@@ -887,7 +885,7 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
     memory,
     write,
     ids,
-    turnAuthority(capability.actorId, capability.memory, internalPerson(capability)),
+    turnAuthority(capability.actorId, capability.memory, carriesPersonAuthority(capability)),
     { ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}), approve },
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
   ).catch((error: unknown) => {
@@ -1367,7 +1365,8 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !internalPerson(ctx.capability)) return sendJson(ctx.res, 403, { error: "authority_required" });
+  if (ctx.capability && !carriesPersonAuthority(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
@@ -1420,7 +1419,8 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !internalPerson(ctx.capability)) return sendJson(ctx.res, 403, { error: "authority_required" });
+  if (ctx.capability && !carriesPersonAuthority(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   if (typeof ctx.body.on !== "boolean" && ctx.body.on !== null)

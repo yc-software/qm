@@ -527,6 +527,8 @@ test("pg directory: room membership follows a person's linked identities", { ski
   installPrincipalLinks({
     canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
     aliases: (key) => (key === "web-person" ? ["Slack-Person@Example.com"] : []),
+    userId: () => undefined,
+    claim: () => {},
   });
   try {
     assert.equal(await store.channelMembership("C-linked", "web-person"), true);

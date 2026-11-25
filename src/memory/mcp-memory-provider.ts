@@ -1,5 +1,13 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpCallError, mcpEnvelope, mcpResultText, providerCode, type McpClient } from "../mcp/mcp-client.ts";
+import {
+  CATALOG_MAX_TOOLS,
+  McpCallError,
+  mcpEnvelope,
+  mcpResultText,
+  providerCode,
+  toolListings,
+  type McpClient,
+} from "../mcp/mcp-client.ts";
 import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, attestedActorHeaders, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
@@ -27,6 +35,13 @@ const UNPUBLISHED_STATES = new Set(["conflict", "failed", "cancelled"]);
 function resultText(result: CallToolResult): string {
   if (result.content.some((block) => block.type === "text")) return mcpResultText(result);
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
+}
+
+export function lookupText(result: CallToolResult): string {
+  const warnings: unknown[] = Array.isArray(result._meta?.warnings) ? result._meta.warnings : [];
+  return [resultText(result), ...warnings.map((warning) => `warning: ${JSON.stringify(warning)}`)]
+    .filter(Boolean)
+    .join("\n");
 }
 
 interface ProviderFact {
@@ -70,8 +85,36 @@ export function createMcpMemoryProvider(opts: {
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
   forget?: McpMemoryOperation;
+  label?: string;
   attestActor?: boolean;
 }): MemoryService {
+  const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
+    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
+    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
+      throw new OutsideAudience("memory provider");
+    return { person, headers: opts.attestActor && person ? attestedActorHeaders(person) : undefined };
+  };
+
+  const listings = toolListings();
+  const memoryTools = new Set([opts.read.tool, opts.write?.tool, opts.forget?.tool]);
+  const lookupTools = async (scopeId: string, actorId: string | undefined, audienceScopeId: string | undefined) => {
+    const { person, headers } = attest(actorId, scopeId, audienceScopeId);
+    const listed = await listings.fetch(person!, {
+      context: {
+        label: `memory provider ${opts.label}: tools/list`,
+        list: async () =>
+          (
+            await opts.read.client.listTools({
+              headers: headers!,
+              maxTools: CATALOG_MAX_TOOLS,
+              signal: AbortSignal.timeout(opts.read.timeoutMs),
+            })
+          ).tools,
+      },
+    });
+    return (listed ?? []).filter((tool) => tool.annotations?.readOnlyHint === true && !memoryTools.has(tool.name));
+  };
+
   const call = async (
     op: Pick<McpMemoryOperation, "client" | "tool" | "timeoutMs">,
     args: Record<string, unknown>,
@@ -79,21 +122,17 @@ export function createMcpMemoryProvider(opts: {
     actorId: string | undefined,
     scopeId: string,
     audienceScopeId: string | undefined,
-    deadline = Date.now() + op.timeoutMs,
+    deadline: number | undefined,
   ) => {
-    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
-      throw new OutsideAudience("memory provider");
+    const { person, headers } = attest(actorId, scopeId, audienceScopeId);
     if (person && actorArg) args[actorArg] = person;
-    const headers = opts.attestActor && person ? attestedActorHeaders(person) : undefined;
-    const ms = deadline - Date.now();
-    if (ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
     const stop = new AbortController();
-    const result = await withTimeout(
-      () => op.client.callTool(op.tool, args, headers, stop.signal),
-      ms,
-      "memory provider",
-    ).finally(() => stop.abort());
+    const send = () => op.client.callTool(op.tool, args, headers, stop.signal);
+    const ms = deadline === undefined ? undefined : deadline - Date.now();
+    if (ms !== undefined && ms <= 0) throw new TimeoutError(`memory provider timed out after ${op.timeoutMs}ms`);
+    const result = await (ms === undefined ? send() : withTimeout(send, ms, "memory provider")).finally(() =>
+      stop.abort(),
+    );
     reportEnvelope(mcpEnvelope(result));
     return result;
   };
@@ -112,6 +151,7 @@ export function createMcpMemoryProvider(opts: {
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
+      Date.now() + op.timeoutMs,
     ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
@@ -182,6 +222,32 @@ export function createMcpMemoryProvider(opts: {
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),
+
+    ...(opts.attestActor
+      ? {
+          lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
+          lookup: async (scopeId, tool, args, by, context) => {
+            const actorArg = opts.read.actorArg ?? ACTING_USER;
+            const written = Object.hasOwn(args, actorArg);
+            const result = await call(
+              { ...opts.read, tool },
+              written ? { ...args, [actorArg]: undefined } : { ...args },
+              written ? actorArg : undefined,
+              by?.actorId,
+              scopeId,
+              context?.audienceScopeId,
+              context?.startedAt === undefined ? undefined : context.startedAt + opts.read.timeoutMs,
+            );
+            const { code } = mcpEnvelope(result);
+            if (code && DENIED_CODES.has(code))
+              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, {
+                code,
+                answered: true,
+              });
+            return result;
+          },
+        }
+      : {}),
 
     ...(opts.forget
       ? {
