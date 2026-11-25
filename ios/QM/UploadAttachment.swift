@@ -309,16 +309,6 @@ struct PickedMedia: Transferable {
   }
 }
 
-struct ImagePasteButton: View {
-  let onSelect: ([AttachmentSource]) -> Void
-
-  var body: some View {
-    PasteButton(supportedContentTypes: [.image]) { providers in
-      onSelect(providers.map(AttachmentSource.image))
-    }
-  }
-}
-
 struct AttachmentPicker: View {
   let uploading: Bool
   @Binding var error: String?
@@ -335,7 +325,9 @@ struct AttachmentPicker: View {
         Button("Take photo", systemImage: "camera") { showingCamera = true }
       }
       Button("Choose files", systemImage: "doc") { showingImporter = true }
-      ImagePasteButton(onSelect: onSelect)
+      PasteButton(supportedContentTypes: [.image]) { providers in
+        onSelect(providers.map(AttachmentSource.image))
+      }
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 15, weight: .medium))

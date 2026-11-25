@@ -29,8 +29,7 @@ struct ChatView: View {
   @State private var approvalSubmission: (id: String, approved: Bool)?
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
-  @FocusState private var composerFocused: Bool
-  @State private var clipboardHasImage = false
+  @State private var composerFocused = false
 
   init(
     model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
@@ -83,10 +82,6 @@ struct ChatView: View {
       if focused {
         showingAgents = false
       }
-      refreshClipboard()
-    }
-    .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
-      refreshClipboard()
     }
     .task(id: model.transcriptEntries.count) { await position(proxy) }
     .onChange(of: targetSequence) { _, target in
@@ -188,7 +183,6 @@ struct ChatView: View {
       }
     }
     .onChange(of: phase) { _, phase in
-      if phase == .active { refreshClipboard() }
       if phase == .background {
         showingAgents = false
         dictation.cancel()
@@ -788,10 +782,6 @@ struct ChatView: View {
       value: dictation.busy)
   }
 
-  private func refreshClipboard() {
-    clipboardHasImage = composerFocused && UIPasteboard.general.hasImages
-  }
-
   private func send(_ proxy: ScrollViewProxy) {
     showingAgents = false
     composerFocused = false
@@ -837,15 +827,6 @@ struct ChatView: View {
           )
           .disabled(model.sending)
           .transition(.opacity)
-          // The text field offers Paste only for text, so a copied image gets its own button.
-          if clipboardHasImage {
-            ImagePasteButton(onSelect: model.addAttachments)
-              .labelStyle(.iconOnly)
-              .buttonBorderShape(.circle)
-              .tint(QMTheme.ink)
-              .disabled(model.sending || model.uploading)
-              .transition(.opacity)
-          }
           if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
             modelSelector.transition(.opacity)
           }
@@ -922,17 +903,20 @@ struct ChatView: View {
   }
 
   private var composerTextField: some View {
-    TextField(
-      model.activeRunID == nil ? "Message QM" : "Queue a message", text: $model.draft,
-      axis: .vertical
+    let placeholder = model.activeRunID == nil ? "Message QM" : "Queue a message"
+    return ComposerField(
+      text: $model.draft, focused: $composerFocused, placeholder: placeholder,
+      maxLines: verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8,
+      onPasteImages: model.addAttachments
     )
-    .lineLimit(
-      1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
-    )
+    .overlay(alignment: .topLeading) {
+      if model.draft.isEmpty {
+        Text(placeholder).foregroundStyle(Color(uiColor: .placeholderText))
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+    }
     .padding(.horizontal, 8).padding(.top, 8)
-    .focused($composerFocused)
     .disabled(model.sending)
-    .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {
