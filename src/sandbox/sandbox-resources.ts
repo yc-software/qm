@@ -1,6 +1,6 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
@@ -334,7 +334,7 @@ export function createSandboxResources(opts: {
       createSandboxResources({
         ...opts,
         canUseScope: async (actorId, scopeId) =>
-          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+          withSpeakerMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     async defaultBackend() {
       const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });

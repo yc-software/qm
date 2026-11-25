@@ -65,8 +65,7 @@ async function resolveSurfaceTarget(
 
 async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery, "rateLimitRecipient">> {
   const cap = ctx.capability;
-  if (!cap?.liveActor || !internalPerson(cap) || cap.destination?.type !== "slack" || !cap.destination.target)
-    return {};
+  if (!cap || !internalPerson(cap) || cap.destination?.type !== "slack" || !cap.destination.target) return {};
   const member = await ctx.app.directoryMember(cap.actorId);
   return { rateLimitRecipient: { target: cap.destination.target, user: member?.slackId ?? cap.actorId } };
 }

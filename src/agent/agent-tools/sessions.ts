@@ -261,7 +261,7 @@ export function sessionTools(kit: ToolKit) {
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
       "send_message: a private note delivered to another session as internal context. wake:true (default) hands over work that needs a turn: it wakes the session if idle, otherwise the session gets it at its next step as a task. Send replies, status reports and completion notes with wake:false, an FYI that wakes nothing. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
-      "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
+      "Create new/forked sessions only when the person asks for one (they appear under their name).",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),

@@ -95,8 +95,7 @@ their handles in your keychain manifest and name them in `credentials` on every 
 (including `background:true`) that needs them. Never echo the values.
 
 **If the browser provider key is in neither your env nor your handles, don't dead-end on
-"no grant"** — the keychain has a path for every case, and a person-typed turn can use all
-of them (asks and drops are refused only on trigger-fired turns).
+"no grant"** — the keychain has a path for every case.
 
 1. See whether the credential is already registered to a participant:
    ```bash

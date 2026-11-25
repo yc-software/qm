@@ -263,7 +263,13 @@ test("self spend: capability token binds actor, defaults window, scopes shared r
       fetch(`${s.base}${path}`, {
         headers: {
           "x-agent-capability": await mintCapabilityToken(
-            { actorId: "alice", exp: Date.now() + CAPABILITY_TTL_MS, liveActor: true, triggered: true, ...claims },
+            {
+              actorId: "alice",
+              exp: Date.now() + CAPABILITY_TTL_MS,
+              personAuthority: true,
+              origin: "cron" as const,
+              ...claims,
+            },
             secret,
           ),
         },

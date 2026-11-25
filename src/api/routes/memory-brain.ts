@@ -15,7 +15,7 @@ import { sendJson } from "../http.ts";
 import { registryError, writeRegistry } from "./admin/memory-registry.ts";
 import { parseScopeId, scopeId } from "../../types.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
-import { adminStanding, audit, livePersonTurn, orgScope } from "./shared.ts";
+import { adminStanding, audit, requirePersonAuthority, orgScope } from "./shared.ts";
 
 const PRIVATE = "your memory brain's url and client id are private — ask the agent in a DM";
 
@@ -29,7 +29,7 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  if (!livePersonTurn(ctx)) return null;
+  if (!requirePersonAuthority(ctx)) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
     (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==

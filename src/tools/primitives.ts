@@ -87,7 +87,8 @@ import type {
   ControlOk,
   ControlErr,
 } from "../api/control-service.ts";
-import { internalPerson, type ShareArtifactRequest, type ShareArtifactResult } from "../api/artifact-share.ts";
+import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
+import { inTurnSignOff, signOffForget } from "./sign-off.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
 import type { WebhookPatch } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -546,7 +547,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
-  personTurn?: boolean;
+  personAuthority?: boolean;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -655,6 +656,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   const runId = deps.runId;
 
+  const signOff = inTurnSignOff(deps.authorizeCommand);
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
   ): Promise<R | ControlUnavailable> {
@@ -1137,11 +1139,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async setAppPublic(id: string, isPublic: boolean) {
-      const d = await deps.deploy.setAppPublic(id, isPublic, {
-        createdBy: deps.createdBy,
-        botActor: deps.botActor,
-        personAtKeyboard: internalPerson(deps.controlClaims),
-      });
+      const actor = { createdBy: deps.createdBy, botActor: deps.botActor, signOff };
+      const d = await deps.deploy.setAppPublic(id, isPublic, actor);
       return { id: d.id, ...(d.name ? { name: d.name } : {}), public: d.public === true };
     },
 
@@ -1204,12 +1203,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async memoryDelete(ids: string[], callId: string) {
       const write = deps.memoryAccess?.write;
       if (!memory?.delete || !write) return null;
+      const approve = (refs: string[]) => signOffForget(refs, signOff);
       return forgetFacts(
         memory,
         write,
         ids,
-        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personTurn),
-        deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {},
+        turnAuthority(deps.createdBy, deps.memoryAccess, deps.personAuthority),
+        { ...(deps.audienceScopeId ? { audienceScopeId: deps.audienceScopeId } : {}), approve },
         deps.sessionId && `${deps.sessionId}:${callId}`,
       );
     },
@@ -1360,7 +1360,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
     cronRun: (id) => controlOp((c, cl) => c.runCron(id, cl)),
     cronRetarget: (id, destinationKey) => controlOp((c, cl) => c.retargetCron(id, destinationKey, cl)),
-    webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl)),
+    webhookCreate: (req) => controlOp((c, cl) => c.createWebhook(req, cl, deps.webhookPublicUrl, signOff)),
     webhookList: () => controlOp((c, cl) => c.listWebhooks(cl)),
     webhookDisable: (id) => controlOp((c, cl) => c.disableWebhook(id, cl)),
     webhookUpdate: (id, patch) => controlOp((c, cl) => c.updateWebhook(id, patch, cl)),
@@ -1369,7 +1369,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.control.readSoul(deps.controlClaims);
     },
     soulWrite: (content, expectedVersion) => controlOp(async (c, cl) => c.writeSoul(content, cl, expectedVersion)),
-    shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl)),
+    shareArtifact: (req) => controlOp((c, cl) => c.shareArtifact(req, cl, signOff)),
 
     post: (text, opts, files, sandboxId) => surfaceOp((s) => s.post(text, opts, files, sandboxId)),
     reach: (text, target, files, sandboxId) => surfaceOp((s) => s.reach(text, target, files, sandboxId)),

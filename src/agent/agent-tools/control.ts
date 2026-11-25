@@ -6,6 +6,7 @@ import { errMessage } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { BOT_MODES } from "../../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
+import { NeedsApproval } from "../../tools/primitives.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { listOrder, pageOf, previewText } from "./listing.ts";
 
@@ -76,13 +77,19 @@ export function controlPlaneTools(kit: ToolKit) {
               true,
             );
           }
-          const r = await tc.webhookCreate({
-            ...(params.title !== undefined ? { title: params.title } : {}),
-            action: params.task,
-            verification: params.verification,
-            ...(params.filters?.length ? { filters: params.filters } : {}),
-            ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
-          });
+          const r = await tc
+            .webhookCreate({
+              ...(params.title !== undefined ? { title: params.title } : {}),
+              action: params.task,
+              verification: params.verification,
+              ...(params.filters?.length ? { filters: params.filters } : {}),
+              ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
+            })
+            .catch((e: unknown) => {
+              if (e instanceof NeedsApproval) return e;
+              throw e;
+            });
+          if (r instanceof NeedsApproval) return kit.blockOnApproval(callId, r, undefined, { tool: "webhook" });
           if (isUnavailable(r)) return unavailable(callId, "webhook");
           if (!r.ok)
             return recordResult(callId, { tool: "webhook", error: r.code }, text(`[error] ${r.message}`), true);

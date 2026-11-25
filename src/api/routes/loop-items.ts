@@ -157,7 +157,6 @@ async function loadItem(ctx: ApiCtx): Promise<{
   loop: Loop;
   item: LoopItem;
   actorId: string;
-  liveHuman: () => Promise<boolean>;
 } | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
@@ -172,7 +171,6 @@ async function loadItem(ctx: ApiCtx): Promise<{
     loop: loaded.loop,
     item,
     actorId: loaded.acting.actorId,
-    liveHuman: loaded.acting.liveHuman,
   };
 }
 
@@ -317,8 +315,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
-    if (ctx.capability)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "only a person can override triage" });
     const priority = LOOP_ITEM_PRIORITIES.find((value) => value === args.priority);
     if (kind === "prioritize" && !priority)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "priority must be urgent, high, normal, or low" });

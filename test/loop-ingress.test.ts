@@ -321,12 +321,13 @@ test("Gmail history pagination advances only after durable ingestion, and expire
   assert.equal((entries.at(-1) as any).sourcePayload.gmail.rfcMessageId, "<original>");
 });
 
-test("ingestion configuration rejects nonowners and unattended callers", async () => {
+test("ingestion configuration rejects nonowners and accepts its owner", async () => {
   const w = await world();
   const route = loopIngressRoutes.find((route) => "method" in route && route.method === "POST")!;
   for (const [actor, expected] of [
     ["mallory", 403],
     [null, 403],
+    ["alice", 201],
   ] as const) {
     let status = 0;
     await route.handle({
@@ -351,7 +352,7 @@ test("ingestion configuration rejects nonowners and unattended callers", async (
     } as unknown as ApiCtx);
     assert.equal(status, expected);
   }
-  assert.equal((await w.sources.all()).length, 0);
+  assert.equal((await w.sources.all()).length, 1);
 });
 
 test("new conversation input supersedes held outputs and preserves an edited draft", async () => {

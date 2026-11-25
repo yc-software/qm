@@ -84,8 +84,8 @@ plaintext credentials while a process is using them. An approval means a human
 accepted the displayed action under the information available at that time, not that
 the resulting behavior is safe.
 
-Sharing posture defaults to Isolated. Open is a deliberate disclosure tradeoff for live,
-authenticated internal human turns: core may expose the speaker's opted-in personal files,
+Sharing posture defaults to Isolated. Open is a deliberate disclosure tradeoff for
+authenticated internal turns that carry a person's authority: core may expose the speaker's opted-in personal files,
 artifacts, skills, and memory to an opted-in shared conversation, and may expose files and
 skills from up to 25 recent shared contexts in that speaker's DM after rechecking current
 membership. Included memories are loaded in full with source-scope labels and searchable through the active

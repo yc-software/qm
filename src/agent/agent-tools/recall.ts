@@ -5,6 +5,7 @@ import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
 import { RECALL_CHECKED } from "../../memory/cross-scope.ts";
 import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
+import { NeedsApproval } from "../../tools/primitives.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export function recallTools(kit: ToolKit) {
@@ -189,6 +190,7 @@ export function recallTools(kit: ToolKit) {
       } catch (e) {
         if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied || e instanceof MemoryForgetRefused)
           return fail(e.message);
+        if (e instanceof NeedsApproval) return kit.blockOnApproval(callId, e, undefined, { tool: "memory" });
         throw e;
       }
     },

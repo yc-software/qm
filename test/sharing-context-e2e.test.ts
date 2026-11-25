@@ -112,7 +112,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   return { ...built, cfg, turn, failure, skill, remove, file, filePath };
 }
 
-test("sharing e2e: personal files and memories follow the speaker, opt-out, and automation boundaries", async (t) => {
+test("sharing e2e: personal files and memories follow the speaker, opt-out, and bot boundaries", async (t) => {
   const b = await fixture(t);
   for (const [id, marker] of [
     ["U1", "ALICE_PAYLOAD"],
@@ -141,8 +141,14 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   await b.config.clearSharingPosture("personal:U1");
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
-  for (const extra of [{ origin: { kind: "automation" } }, { botActor: true }] as const)
-    assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", extra), /no file/);
+  assert.equal(
+    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
+    "NEW_PRIVATE_PAYLOAD",
+  );
+  assert.match(
+    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { botActor: true }),
+    /no file/,
+  );
   await b.config.setSoul("personal:U1", "OWN_SOUL_U1");
   await b.skill("personal:U1", "own-helper", "OWN_SKILL");
   for (const [name, granteeScopeId] of [
@@ -204,7 +210,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   assert.equal(await b.turn(`!attach file_id:${roomFile}`, true, "U1", { botActor: true }), "");
 });
 
-test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
+test("sharing e2e: a delegated turn shares its parent's access under current sharing permission", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "i".repeat(32) });
   await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
@@ -269,15 +275,14 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.equal(await childTurn("!run echo delegated"), "delegated");
   assert.ok(token);
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-  assert.equal(delegatedClaims?.liveAuthor, true);
-  assert.equal(delegatedClaims?.liveActor, true);
+  assert.equal(delegatedClaims?.personAuthority, true);
   const server = createServer(b.app, serverDeps(b.cfg, b));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;
   const brain = async (delegatingRunId?: string) => {
     let status = 0;
-    probe = async (live) => (status = (await fetch(url, { headers: { "x-agent-capability": live ?? "" } })).status);
+    probe = async (token) => (status = (await fetch(url, { headers: { "x-agent-capability": token ?? "" } })).status);
     await childTurn("!run true", "ok", child.threadRef, delegatingRunId);
     probe = undefined;
     return status;

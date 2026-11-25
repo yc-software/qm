@@ -9,11 +9,11 @@ export function refuseImpersonated(res: ServerResponse): void {
   sendJson(res, 403, { error: "forbidden", message: "Unavailable while impersonating." });
 }
 
-export const PERSON_REQUIRED =
-  "Only the person can take this step, from a turn they are in while it runs. A scheduled task, a bot, or a background job or script whose turn has ended can't take it. Ask them to do it themselves.";
+const PERSON_REQUIRED =
+  "This step needs a person's own authority, and this turn carries none: it is a bot's work, it has an external audience, or it is a conversation's own task.";
 
 export function refuseWithoutPerson(res: ServerResponse): void {
-  sendJson(res, 403, { error: "human_consent_required", message: PERSON_REQUIRED });
+  sendJson(res, 403, { error: "authority_required", message: PERSON_REQUIRED });
 }
 
 export function sendProblem(res: ServerResponse, status: number, problem: Record<string, unknown>): void {

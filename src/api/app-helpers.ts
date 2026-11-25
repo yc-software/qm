@@ -589,7 +589,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       privateChannel &&
       claims.botActor === true &&
       claims.internalAudience === true &&
-      claims.liveActor === true &&
       claims.members?.some((member) => member.id === claims.actorId && member.type === "internal") === true &&
       capabilityMembership !== true &&
       (await deps.users?.resolve([claims.actorId]))?.get(claims.actorId)?.kind === "app";

@@ -24,7 +24,7 @@ function sameAction(a: unknown, b: ApiAction): boolean {
   return canonicalJson(a ?? null) === canonicalJson(b);
 }
 
-export async function actionApproved(ctx: ApiCtx, card: { summary: string }): Promise<boolean> {
+export async function actionApproved(ctx: ApiCtx, card: { summary: string; shownBody?: unknown }): Promise<boolean> {
   const claims = ctx.capability;
   if (!claims) return true;
   const { deps, res } = ctx;
@@ -44,7 +44,7 @@ export async function actionApproved(ctx: ApiCtx, card: { summary: string }): Pr
     });
     return false;
   }
-  const command = approvalCallText(`${action.method} ${action.path}`, action.body);
+  const command = approvalCallText(`${action.method} ${action.path}`, card.shownBody ?? action.body);
   const approvalKey = toolCallApprovalKey(API_ACTION_TOOL, action);
   const requestId = commandApprovalId(claims.sessionId, command, approvalKey);
   if (!(await deps.approvals.get(requestId))) {
@@ -71,4 +71,13 @@ export async function actionApproved(ctx: ApiCtx, card: { summary: string }): Pr
       "This step needs the person's sign-off, so an approval card for this exact request was sent to them. Approving it runs this request as-is and continues the task; don't retry it.",
   });
   return false;
+}
+
+export function routeSignOff(ctx: ApiCtx) {
+  let held = false;
+  const signOff = async (summary: string) => {
+    held = !(await actionApproved(ctx, { summary }));
+    return !held;
+  };
+  return { signOff, held: () => held };
 }
