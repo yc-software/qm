@@ -40,14 +40,15 @@ export function lookupText(result: CallToolResult): string {
   return [mcpResultText(result), ...metaWarnings(result)].filter(Boolean).join("\n");
 }
 
-function refuseDenied(result: CallToolResult, tool: string): void {
+function refuseDenied(result: CallToolResult, tool: string, { quote }: { quote: boolean }): void {
   const { code } = mcpEnvelope(result);
-  if (code && DENIED_CODES.has(code))
-    throw new McpCallError(`memory provider refused ${tool} (${code}): ${mcpResultText(result)}`, {
-      code,
-      answered: true,
-      warnings: metaWarnings(result),
-    });
+  if (!code || !DENIED_CODES.has(code)) return;
+  if (!quote) throw new McpCallError(`memory provider refused ${tool} (${code})`, { code, answered: true });
+  throw new McpCallError(`memory provider refused ${tool} (${code}): ${mcpResultText(result)}`, {
+    code,
+    answered: true,
+    warnings: metaWarnings(result),
+  });
 }
 
 interface ProviderFact {
@@ -112,26 +113,32 @@ export function createMcpMemoryProvider(
     allowStale: boolean,
   ) => {
     const { person, headers } = attest(actorId, scopeId, audienceScopeId);
-    const listed = await listings.fetch(person!, {
-      allowStale,
-      context: {
-        label,
-        list: () =>
-          opts.read.client
-            .listTools({
-              headers: headers!,
-              maxTools: CATALOG_MAX_TOOLS,
-              signal: AbortSignal.timeout(opts.read.timeoutMs),
-            })
-            .then(
-              ({ tools }) => tools,
-              (error: unknown) => {
-                if (failedOutcome(error).outcome !== "denied") throw error;
-                return reportFailureAs(label, [])(error);
-              },
-            ),
-      },
-    });
+    const listed = await listings
+      .fetch(person!, {
+        allowStale,
+        context: {
+          label,
+          list: () =>
+            opts.read.client
+              .listTools({
+                headers: headers!,
+                maxTools: CATALOG_MAX_TOOLS,
+                signal: AbortSignal.timeout(opts.read.timeoutMs),
+              })
+              .then(
+                ({ tools }) => tools,
+                (error: unknown) => {
+                  if (failedOutcome(error).outcome !== "denied") throw error;
+                  return reportFailureAs(label, [])(error);
+                },
+              ),
+        },
+      })
+      .catch((error: unknown) => {
+        if (!allowStale) throw error;
+        listings.set(person!, []);
+        return [];
+      });
     return (listed ?? []).filter((tool) => tool.annotations?.readOnlyHint === true && !memoryTools.has(tool.name));
   };
 
@@ -178,7 +185,7 @@ export function createMcpMemoryProvider(
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
     if (mcpEnvelope(result).code === "actor_unlinked") return { content: [] };
-    refuseDenied(result, op.tool);
+    refuseDenied(result, op.tool, { quote: false });
     return result;
   };
 
@@ -231,6 +238,7 @@ export function createMcpMemoryProvider(
         refuseDenied(
           await call(op, args, [op.actorArg ?? ACTING_USER], actor, scopeId, context?.audienceScopeId, deadline),
           op.tool,
+          { quote: false },
         );
       }
       return facts.length;
@@ -259,7 +267,7 @@ export function createMcpMemoryProvider(
               context?.startedAt === undefined ? undefined : context.startedAt + opts.read.timeoutMs,
               context?.signal,
             );
-            refuseDenied(result, tool);
+            refuseDenied(result, tool, { quote: true });
             return result;
           },
         }

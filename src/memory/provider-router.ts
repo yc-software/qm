@@ -251,9 +251,11 @@ export function createRoutedMemoryService(opts: {
         const warnings = error instanceof McpCallError ? error.warnings : [];
         return new Error([problemLine(problem), quotedData([errMessage(error), ...warnings].join("\n"))].join("\n"));
       };
-      const listed = await provider.lookupTools!(scopeId, reader, { allowStale: false }).catch((error: unknown) => {
-        throw failed(error);
-      });
+      const listed = await provider.lookupTools!(scopeId, reader, { allowStale: context?.allowStale === true }).catch(
+        (error: unknown) => {
+          throw failed(error);
+        },
+      );
       if (!listed.some((tool) => tool.name === ref.ref))
         throw brainRefused(`${ref.ref} isn't a read-only tool ${route.provider} lists for this person.`);
       return provider.lookup!(scopeId, ref.ref, args, by, context).catch((error: unknown) => {

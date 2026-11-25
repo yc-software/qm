@@ -7,7 +7,7 @@ import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { boundedResponse } from "../util/bytes.ts";
-import { reportFailureAs, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
@@ -132,11 +132,10 @@ export function toolListings(): ToolListings {
     allowStale: true,
     ignoreFetchAbort: true,
     noDeleteOnFetchRejection: true,
-    fetchMethod: (_key, stale, { context, options }) =>
+    fetchMethod: (_key, _stale, { context, options }) =>
       context.list().catch((error: unknown) => {
-        if (!options.allowStale) throw error;
-        options.noUpdateTTL = true;
-        return reportFailureAs(context.label, stale ?? [])(error);
+        if (options.allowStale) reportFailure(context.label, error);
+        throw error;
       }),
   });
 }

@@ -74,23 +74,23 @@ test("mcp client caps a server's tool list and says so", async (t) => {
   assert.match(String(warned.mock.calls[0]?.arguments[0]), /lists more than 64 tools; QM keeps the first 64$/);
 });
 
-test("a failed brain listing leaves none for its minute, keeps an old list stale, and fails a caller that needs it fresh", async (t) => {
+test("a failed brain listing keeps an old list stale and fails a caller that needs it fresh, even one joining a refresh already asked", async (t) => {
   t.mock.method(console, "error", () => {});
   const listings = toolListings();
   const tool = { name: "query", description: "", inputSchema: {} };
-  let asked = 0;
   const fetch = (key: string, allowStale = true) =>
     listings.fetch(key, {
       allowStale,
-      context: { label: "brain", list: () => (asked++, Promise.reject(new Error("brain down"))) },
+      context: { label: "brain", list: () => sleep(20).then(() => Promise.reject(new Error("brain down"))) },
     });
-  assert.deepEqual([await fetch("a"), await fetch("a"), asked], [[], [], 1]);
+  await assert.rejects(fetch("a"), /brain down/);
   listings.set("b", [tool], { ttl: 1 });
   await sleep(5);
+  const [stale, fresh] = [fetch("b"), fetch("b", false)];
+  assert.deepEqual(await stale, [tool]);
+  await assert.rejects(fresh, /brain down/);
   assert.deepEqual(await fetch("b"), [tool]);
-  await sleep(5);
-  await assert.rejects(fetch("b", false), /brain down/);
-  assert.deepEqual(await fetch("b"), [tool]);
+  await sleep(30);
 });
 
 test("a JSON-RPC error carries the server's own code", async (t) => {
