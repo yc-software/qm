@@ -49,7 +49,7 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 | **Skill**                   | A named `SKILL.md` body plus optional text files, owned by a scope, with status `draft`, `reviewed`, `published` or `archived` and an HMAC signature.                                                | `src/skills/skill-store.ts`; table `skills`                                                                         |
 | **Skill pack, bundle**      | A git repository or MCP server skills are imported from, and the shared files of one pack.                                                                                                           | `src/skills/skill-pack-store.ts`, `skill-bundle-store.ts`; tables `skill_packs`, `skill_bundles`                    |
 | **Persona**                 | A scope `persona:<id>` with name, instructions and icon that a conversation wears. Roles: owner, write, read.                                                                                        | `src/personas/`; tables `personas`, `persona_access`, `persona_versions`; column `sessions.persona_id`              |
-| **Feature flag**            | A feature name with the scopes it is on for. On for a scope if the list holds that scope or the organization scope.                                                                                  | `src/feature-flags.ts`; table `feature_flags`                                                                       |
+| **Feature flag**            | A per-scope switch for one named feature; see [deployments](./deployments.md).                                                                                                                       | `src/feature-flags.ts`; table `feature_flags`                                                                       |
 | **Suggested activity**      | One of the prompts offered on the new-chat screen.                                                                                                                                                   | `src/suggestions/`; tables `suggested_activity_profiles`, `activity_seeds_configs`                                  |
 
 ## The parts
@@ -72,7 +72,7 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 
 ### Memory: `src/memory/`
 
-**Job.** Store facts, decide who may see each one, recall them, capture new ones, and optionally route all of that to external servers. About 4,400 lines; about half is external-provider machinery, and the notebook itself is about 600.
+**Job.** Store facts, decide who may see each one, recall them, capture new ones, and optionally route all of that to external servers. About half of the directory is external-provider machinery.
 
 **Key idea.** One interface, `MemoryService`, wrapped in layers built in `src/wiring.ts`: `createPostgresMemoryService` (the table), `createSemanticMemory` (vector ranking), `createRegistryMemoryService` (providers and routes), `withMemoryTidy`, `classifiedMemory` (sensitivity labels), and per turn `disclosedMemory` (audience filter).
 
@@ -101,7 +101,7 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 
 ### Personas: `src/personas/`
 
-**Job.** Store personas, roles and versions; resolve the persona for a turn; hand ownership to an admin when the last owner leaves. About 1,000 lines.
+**Job.** Store personas, roles and versions; resolve the persona for a turn; hand ownership to an admin when the last owner leaves.
 
 **Key idea.** A conversation wears a persona; it does not live in one. The conversation still decides who is present and where files and crons land. The persona adds a `## Persona: <name>` block after the standing instructions, its scope as an extra read-only source of skills and notes, and its keychain grants.
 
@@ -109,7 +109,7 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 
 ### Onboarding and suggestions: `src/onboarding/`, `plugins/onboarding/`, `src/suggestions/`
 
-**Job.** Greet a first-time user and propose things to do. About 60 and 300 lines of code plus one skill.
+**Job.** Greet a first-time user and propose things to do.
 
 **Key idea.** Neither has its own state machine. Onboarding status is a fact in the person's notebook (`Onboarding: completed v2 on <date>.`) written by the seeded `onboarding` skill. Suggestions are the last reply of a nightly managed cron that returns five JSON objects.
 

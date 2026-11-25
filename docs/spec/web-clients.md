@@ -48,7 +48,7 @@ Where other paths diverge:
 | Web events stream   | Server-sent events for one person: state changes, delivery nudges, UI signals, notices, inbox changes                                             | `src/api/routes/web-events.ts`; held in memory per core process; fed by Postgres notify and the `deliveries` table |
 | Session-state event | "This conversation is working / waiting for approval / idle / changed its details / has a UI signal / has a notice"                               | `src/runs/session-state-bus.ts`; not stored                                                                        |
 | UI state            | Small per-person JSON records keyed `<person>#<key>`: pane layout, chat preferences, canvases, pending client calls                               | table `web_ui_state`                                                                                               |
-| Feature flag        | A named feature switched on for a list of scopes (the organization, or single people)                                                             | table `feature_flags`; names in `src/feature-flags.ts`                                                             |
+| Feature flag        | A per-scope switch for one named feature; see [deployments](./deployments.md).                                                                    | table `feature_flags`; names in `src/feature-flags.ts`                                                             |
 | Permission          | A string in the `/me` answer that tells the page which views to show: `admin`, `owner`, `loops`, `inbox`, `notifications`                         | computed per request in `src/api/routes/web-me.ts`                                                                 |
 | UI canvas           | HTML, CSS and JavaScript the agent places inside a person's conversation page                                                                     | `web_ui_state`, key `canvas:<session>`                                                                             |
 | Client tool         | A tool whose call is carried out by a client program instead of core or a sandbox                                                                 | `src/agent/agent-tools/client.ts`                                                                                  |
@@ -79,7 +79,7 @@ Where other paths diverge:
 
 ### `src/api/browser-session.ts`
 
-**Job.** Map the page's paths to `/v1` routes and turn the session cookie into an identity. **Key idea.** `API_ALIASES` is an explicit list of about 170 entries, plus every `/v1/admin/` route marked `browser`. An alias resolves only if its target route is marked `browser` or is public. A path that is not listed does not exist for the page, even if a `/v1` route for it does. **Surprising.** `browser` has three values. `true` accepts same-origin writes only. `"embed"` also accepts writes from origins listed in `PORTAL_API_ALLOWED_ORIGINS`. `"self"` is same-origin and refuses a session in which an admin is impersonating someone. The lane applies only when the request has the cookie and neither a capability header nor a signature.
+**Job.** Map the page's paths to `/v1` routes and turn the session cookie into an identity. **Key idea.** `API_ALIASES` is an explicit list, plus every `/v1/admin/` route marked `browser`. An alias resolves only if its target route is marked `browser` or is public. A path that is not listed does not exist for the page, even if a `/v1` route for it does. **Surprising.** `browser` has three values. `true` accepts same-origin writes only. `"embed"` also accepts writes from origins listed in `PORTAL_API_ALLOWED_ORIGINS`. `"self"` is same-origin and refuses a session in which an admin is impersonating someone. The lane applies only when the request has the cookie and neither a capability header nor a signature.
 
 ### `src/api/routes/web-turns.ts`, `web-me.ts`, `web-events.ts`
 
@@ -115,7 +115,7 @@ Where other paths diverge:
 
 ### `plugins/chassis`
 
-**Job.** Dependency-free helpers importable by relative path from core, the portal, the auth broker and the web UI: HTTP helpers, error reporting, branding injection, the analytics and browser-error settings parsers, the `desktop` tool definition, the client-surface header. About 1,900 lines. **Surprising.** It never imports core, which is what lets browser code import it. Anything both the page and core must agree on belongs here.
+**Job.** Dependency-free helpers importable by relative path from core, the portal, the auth broker and the web UI: HTTP helpers, error reporting, branding injection, the analytics and browser-error settings parsers, the `desktop` tool definition, the client-surface header. **Surprising.** It never imports core, which is what lets browser code import it. Anything both the page and core must agree on belongs here.
 
 ### `plugins/portal`, as the front door uses it
 
