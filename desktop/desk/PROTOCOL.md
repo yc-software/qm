@@ -53,7 +53,7 @@ Example:
 ```
 Response { id: u64, reply: Reply }          // id 0 when the line could not be parsed
 
-Reply    = permissions { accessibility: bool, screen_recording: bool, binary: string, help: string }
+Reply    = permissions { accessibility: bool, screen_recording: bool, input_monitoring: bool, binary: string, help: string }
          | apps        { apps: [AppInfo] }
          | windows     { windows: [WindowInfo] }
          | observation { ...Observation }

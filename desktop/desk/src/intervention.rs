@@ -15,6 +15,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+const TAP_HELP: &str = "In System Settings > Privacy & Security, turn on QM under Input Monitoring and Accessibility, \
+then quit and reopen QM. If QM runs from Downloads, move it to Applications first.";
+
 type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
 type GetFrontProcess = unsafe extern "C" fn(*mut ProcessSerialNumber) -> i16;
 type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
@@ -153,7 +156,7 @@ impl Tap {
                 ),
             }
         }
-        .ok_or_else(|| "Could not create a focus-protection event tap".to_string())?;
+        .ok_or_else(|| format!("Could not create a focus-protection event tap. {TAP_HELP}"))?;
         let legacy = unsafe { CFMachPort::wrap_under_get_rule((&*port as *const objc2_core_foundation::CFMachPort).cast_mut().cast()) };
         let source = match legacy.create_runloop_source(0) {
             Ok(source) => source,
@@ -167,7 +170,7 @@ impl Tap {
         CGEvent::tap_enable(&port, true);
         let tap = Self { port, source, runloop, _context: callback };
         if !CGEvent::tap_is_enabled(&tap.port) {
-            return Err("Focus-protection event tap did not become enabled".into());
+            return Err(format!("Focus-protection event tap did not become enabled. {TAP_HELP}"));
         }
         Ok(tap)
     }

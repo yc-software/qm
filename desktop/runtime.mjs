@@ -84,8 +84,7 @@ function open() {
 
 async function evaluate(args, client, deadline) {
   if (cancelled.has(client) || Date.now() >= deadline) throw new Error("Desktop turn has ended");
-  if (owner && owner !== client)
-    throw new Error("Another desktop turn is using computer access; wait for it to finish");
+  if (owner !== client) close();
   owner = client;
   if (args.reset) close();
   const expected = generation;

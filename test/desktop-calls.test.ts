@@ -7,6 +7,7 @@ import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { desktopCallFor, NO_DESKTOP_TEXT } from "../src/surfaces/desktop-calls.ts";
+import { currentDesktopDownload } from "../src/api/routes/desktop-download.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -67,6 +68,11 @@ test("a call from any turn reaches the person's open desktop app, which claims a
   assert.equal(claim.status, 200);
   assert.deepEqual(((await claim.json()) as { args: unknown }).args, { code: "await computer.listApps()" });
   assert.equal((await post("c1/claim", { desktopClientId: windowB })).status, 404, "a second window loses");
+  assert.equal(
+    (await post("c1/claim", { desktopClientId: windowA })).status,
+    404,
+    "a duplicate announcement cannot run the call twice in the same window",
+  );
   const forged = await post("c1/result", { desktopClientId: windowB, result: { content: "forged" } });
   assert.equal(forged.status, 404);
   const answered = await post("c1/result", { desktopClientId: windowA, result: { content: "Calculator" } });
@@ -96,4 +102,24 @@ test("stopping the turn tells the desktop app to stop the running call", async (
   turn.abort();
   assert.equal(await pending, "cancelled");
   await announced("c4", true);
+});
+
+test("Download for Mac follows the desktop update feed to its current release", async () => {
+  const zip = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.7/QM-mac-arm64.zip";
+  const feed =
+    (body: unknown, status = 200) =>
+    async () =>
+      new Response(JSON.stringify(body), { status });
+  const current = { currentRelease: "0.1.7", releases: [{ version: "0.1.7", updateTo: { url: zip } }] };
+  assert.equal(await currentDesktopDownload(feed(current)), zip);
+  await assert.rejects(currentDesktopDownload(feed(current, 404)), /HTTP 404/);
+  await assert.rejects(
+    currentDesktopDownload(
+      feed({ ...current, releases: [{ version: "0.1.7", updateTo: { url: "https://example.com/x.zip" } }] }),
+    ),
+    /no download for 0.1.7/,
+  );
+  const response = await fetch(`${base}/api/desktop/download`, { redirect: "manual" });
+  assert.equal(response.status, 302);
+  assert.ok(response.headers.get("location")?.startsWith("https://github.com/yc-software/qm/releases"));
 });

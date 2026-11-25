@@ -311,7 +311,8 @@ fn menu_attribute_type(name: &str, expected: &str) -> Failure {
 pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
     active()?;
     let kids = |e: &El| attr(e, "AXChildren").map(list).unwrap_or_default();
-    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
+    let size = |e: &El| frame(e).map(|f| (f.w, f.h));
+    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]) && menu_shown(bool_attr(c, "AXHidden"), bool_attr(c, "AXExpanded"), size(c)))
         || attr(ax, "AXMenuBar").is_some_and(|bar| kids(&bar).iter().any(|item| bool_attr(item, "AXSelected") == Some(true)))
     {
         return Ok(true);
@@ -319,6 +320,9 @@ pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
     popup_menu_open(
         popups,
         |popup| {
+            if bool_attr(popup, "AXExpanded") == Some(false) {
+                return Ok(vec![]);
+            }
             let value = menu_attribute(popup, "AXChildren")?;
             if value.downcast::<CFArray>().is_none() {
                 return Err(menu_attribute_type("AXChildren", "an array"));
@@ -332,9 +336,13 @@ pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
             }
             let hidden =
                 menu_attribute(child, "AXHidden")?.downcast::<CFBoolean>().ok_or_else(|| menu_attribute_type("AXHidden", "a boolean"))?;
-            Ok(!bool::from(hidden))
+            Ok(menu_shown(Some(bool::from(hidden)), None, size(child)))
         },
     )
+}
+
+fn menu_shown(hidden: Option<bool>, expanded: Option<bool>, size: Option<(f64, f64)>) -> bool {
+    hidden != Some(true) && expanded != Some(false) && size.is_none_or(|(w, h)| w > 0.0 && h > 0.0)
 }
 
 pub(super) const MENU_OPEN: &str =
@@ -711,6 +719,17 @@ mod tests {
             assert!(check_menu_action(&action, |_| panic!("nonpointer action"), || panic!("nonpointer action")).is_ok());
         }
         assert!(check_menu_action(&click, |_| Ok(false), || Err(menu_unavailable())).is_err());
+    }
+
+    #[test]
+    fn only_menus_that_are_actually_shown_block_pointer_input() {
+        assert!(super::menu_shown(Some(false), None, Some((180.0, 240.0))));
+        assert!(super::menu_shown(None, None, None));
+        assert!(super::menu_shown(Some(false), Some(true), Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(true), None, Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(false), Some(false), Some((180.0, 240.0))));
+        assert!(!super::menu_shown(Some(false), None, Some((0.0, 0.0))));
+        assert!(!super::menu_shown(Some(false), None, Some((180.0, 0.0))));
     }
 
     #[test]

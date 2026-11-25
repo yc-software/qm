@@ -24,7 +24,9 @@ use core_graphics::geometry::{CGPoint, CGSize};
 use core_graphics::window::{copy_window_info, kCGWindowListOptionOnScreenOnly, kCGWindowNumber};
 use foreign_types::ForeignType;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbolicTraits, NSRunningApplication, NSWorkspace};
-use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+use objc2_core_graphics::{
+    CGPreflightListenEventAccess, CGPreflightScreenCaptureAccess, CGRequestListenEventAccess, CGRequestScreenCaptureAccess,
+};
 use objc2_foundation::{NSBundle, NSString};
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -1570,12 +1572,13 @@ fn permissions(prompt: bool) -> Reply {
         unsafe { AXIsProcessTrusted() }
     };
     let screen_recording = if prompt { CGRequestScreenCaptureAccess() } else { CGPreflightScreenCaptureAccess() };
+    let input_monitoring = if prompt { CGRequestListenEventAccess() } else { CGPreflightListenEventAccess() };
     let binary = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    let help = "System Settings > Privacy & Security > Accessibility and > Screen Recording: add the app that launches desk \
-(QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
+    let help = "System Settings > Privacy & Security > Accessibility, > Screen Recording and > Input Monitoring: \
+add the app that launches desk (QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
 `desk permissions --prompt` raises the system prompts."
         .to_string();
-    Reply::Permissions { accessibility, screen_recording, binary, help }
+    Reply::Permissions { accessibility, screen_recording, input_monitoring, binary, help }
 }
 
 impl Desk {
