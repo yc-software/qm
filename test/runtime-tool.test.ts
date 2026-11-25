@@ -153,30 +153,14 @@ test("cancellation during validation prevents a scope write", async () => {
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 
-test("cron fires may change their task runtime without changing saved defaults", async () => {
+test("cron fires change their task runtime only with their owner's authority", async () => {
   const { service, config } = await setup();
   const cronClaims = { ...claims, personAuthority: false };
-  const result = await service(
-    cronClaims,
-    active,
-    { action: "set", model: "Astra" },
-    undefined,
-    false,
-    undefined,
-    true,
-  );
+  const result = await service(claims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true);
   assert.deepEqual(result, { ok: true, handoff: { lifetime: "task", choice: { ...active, modelId: "gpt-6-astra" } } });
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
   assert.deepEqual(
-    await service(
-      cronClaims,
-      active,
-      { action: "set", model: "Astra", lifetime: "scope" },
-      undefined,
-      false,
-      undefined,
-      true,
-    ),
+    await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
     { ok: false, error: "authority_required" },
   );
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
@@ -184,7 +168,7 @@ test("cron fires may change their task runtime without changing saved defaults",
 
 test("cron task handoffs still enforce actor, access, model and account policy", async () => {
   const { service, config } = await setup();
-  const cronClaims = { ...claims, personAuthority: false };
+  const cronClaims = claims;
   assert.deepEqual(
     await service(
       { ...cronClaims, botActor: true },

@@ -43,8 +43,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
           "The current request or cron fire, including retries and runtime handoffs. Future requests and fires use their configured defaults.",
       };
     const lifetime = request.lifetime ?? "task";
-    const cronTask = cronFire && !claims.botActor && lifetime === "task";
-    if (!cronTask && !carriesPersonAuthority(claims)) return { ok: false, error: "authority_required" };
+    if (!carriesPersonAuthority(claims)) return { ok: false, error: "authority_required" };
     const candidates = snapshot.models;
     let modelId = request.model ?? active.modelId;
     if (!candidates.includes(modelId)) {
