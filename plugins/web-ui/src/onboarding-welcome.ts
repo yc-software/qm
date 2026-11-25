@@ -8,7 +8,7 @@ import {
   type ConnectionAttempt,
   ACCOUNT_ID,
 } from "./connection-return";
-import { LitElement, html, nothing, type TemplateResult } from "lit";
+import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
@@ -153,6 +153,10 @@ export class OnboardingWelcome extends LitElement {
     } catch {
       if (this.isConnected) this.workspaceRetry = setTimeout(() => void this.refreshWorkspace(), 3000);
     }
+  }
+  protected updated(changed: PropertyValues): void {
+    const moved = changed.get("toolkit") && this.widget === "apps" && this.toolkit;
+    if (moved && !this.services.some((service) => service.id === this.toolkit)) void this.loadCatalog();
   }
   protected firstUpdated(): void {
     void this.refreshWorkspace();
