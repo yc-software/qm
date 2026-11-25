@@ -77,7 +77,7 @@ The native audio track starts only when the user starts a call. Mute stops micro
 
 Unit tests cover the voice protocol and call lifecycle. Native audio, physical-device routing and production SSO need manual checks on a device.
 
-Choose a workspace from the welcome screen or use Change workspace in the account menu. The app remembers the selected HTTPS origin; Debug builds also accept local HTTP addresses. Changing origins signs out and clears local drafts for the previous account. Equivalent origins preserve the existing session.
+Choose a workspace from the welcome screen or use Change workspace in the account menu. The app remembers the selected HTTPS origin; Debug builds also accept local HTTP addresses. Each workspace keeps its own session and drafts, so switching back to one you have signed into needs no new sign-in. Equivalent origins are the same workspace.
 
 The bundled privacy manifest declares app-local UserDefaults access (`CA92.1`) for workspace and appearance settings, following [Apple’s required-reason API guidance](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api). This API declaration does not replace App Store Connect privacy answers: those must describe the target deployment’s handling of identity, chat content, attachments, and voice data before distribution. [`PRIVACY.md`](./PRIVACY.md) describes what the app itself sends and stores, which holds for any unmodified build; its Publisher section names who publishes the App Store build, and another distributor replaces that section with its own.
 

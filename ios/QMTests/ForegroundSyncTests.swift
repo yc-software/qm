@@ -201,7 +201,7 @@ final class ForegroundSyncTests: XCTestCase {
       configuration: configuration())
     let client = try XCTUnwrap(model.client)
     try client.saveSession("test")
-    defer { model.signOut() }
+    defer { client.signOut() }
     let key = client.url("api/sessions").absoluteString
     ForegroundSyncProtocol.held.withLock { $0[key] = 1 }
     let first = Task { await model.load() }

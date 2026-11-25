@@ -61,8 +61,11 @@ final class AppModel {
       throw QMError.message("That isn’t a valid workspace address. \(Self.workspaceAddressHint)")
     }
     if url == client?.baseURL { return }
-    signOut()
+    signIn.cancel()
+    client?.invalidate()
     client = APIClient(baseURL: url)
+    clearAccount()
+    error = nil
     defaults.set(url.absoluteString, forKey: "workspaceOrigin")
   }
 
@@ -414,6 +417,10 @@ final class AppModel {
 
   func resetAfterSessionLoss() {
     guard client?.hasSession != true else { return }
+    clearAccount()
+  }
+
+  private func clearAccount() {
     loadRevision = UUID()
     resetPaging()
     loading = false
