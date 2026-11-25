@@ -100,6 +100,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const signingSecret = typeof body.signingSecret === "string" ? body.signingSecret.trim() : "";
   const appId = typeof body.appId === "string" ? body.appId.trim() : undefined;
   try {
+    const before = await ctx.deps.slackInstallation.get();
     if (signingSecret && !appToken) {
       const prov = await ctx.deps.slackInstallation.attachHttpApp({
         botToken,
@@ -113,6 +114,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
         resource: "slack-installation",
         scopeLabel: scope,
       });
+      if (!before) wakeInstaller(ctx, actor.id, prov);
       return sendJson(ctx.res, 200, { ...prov, configured: true, managed: true, source: "admin" });
     }
     const workspace = await validateSlackInstallation(
@@ -122,6 +124,7 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
       ctx.deps.slackInstallationSocketAppId,
     );
     const status = await ctx.deps.slackInstallation.set({ botToken, appToken, ...workspace, updatedBy: actor.id });
+    if (!before) wakeInstaller(ctx, actor.id, workspace);
     audit(ctx, {
       principalId: actor.id,
       action: "slack-installation.update",
@@ -293,6 +296,14 @@ export async function createSlackInstallation(ctx: ApiCtx): Promise<void> {
   }
 }
 
+function wakeInstaller(ctx: ApiCtx, principal: string, team: { teamId?: string; teamName?: string }): void {
+  ctx.deps.connectionWake?.({
+    principal,
+    connector: team.teamName ? `the ${team.teamName} Slack workspace` : "the company Slack workspace",
+    linkId: `slack-workspace:${team.teamId ?? principal}`,
+  });
+}
+
 export async function slackOAuthCallback(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const slackErr = ctx.url.searchParams.get("error");
@@ -309,7 +320,9 @@ export async function slackOAuthCallback(ctx: ApiCtx): Promise<void> {
   const code = ctx.url.searchParams.get("code") ?? "";
   if (!code || !state) return redirectTo("slack_error=missing_oauth_params");
   try {
-    await ctx.deps.slackInstallation.completeOAuth({ code, state });
+    const before = await ctx.deps.slackInstallation.get();
+    const installed = await ctx.deps.slackInstallation.completeOAuth({ code, state });
+    if (!installed.personaId && !before) wakeInstaller(ctx, installed.updatedBy, installed);
     return redirectTo("slack=connected");
   } catch (error) {
     return redirectTo(`slack_error=${encodeURIComponent(errMessage(error))}`);

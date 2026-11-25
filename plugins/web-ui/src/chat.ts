@@ -2446,13 +2446,6 @@ export function createChatSurface(
     return `${url}${sep}returnTo=${encodeURIComponent(returnTo)}`;
   }
 
-  async function continueAfterConnection(name: string): Promise<void> {
-    const agent = chatState.agent;
-    if (!agent) return;
-    await ctx.composer.refreshRuntimeSelection(chatState.scopeId, agent);
-    await ctx.composer.sendSuggestedPrompt(`I connected ${name}. Please continue.`, agent);
-  }
-
   function connectorWidget(link: ConnectorLink): TemplateResult {
     if (link.provider === "slack-bot") return html`<qm-slack-setup></qm-slack-setup>`;
     return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo);
@@ -2515,7 +2508,6 @@ export function createChatSurface(
               .base=${withBase("")}
               .widget=${part.type === "setup" ? "apps" : part.type}
               .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
-              .onConnected=${continueAfterConnection}
               .returnKey=${`${returnKey}:${partIndex}`}
               .setupOnly=${true}
               .animateWelcome=${false}

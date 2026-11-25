@@ -84,6 +84,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
+import type { ConnectionWake } from "../connectors/connection-wake.ts";
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 import type { ModelRoutes } from "../model/model-route.ts";
 
@@ -215,6 +216,7 @@ export interface ServerDeps {
   appPageViews?: AppPageViewLog;
   scheduler?: Scheduler;
   webhookReceiver?: WebhookReceiver;
+  connectionWake?: ConnectionWake;
   loopIngress?: LoopIngressService;
   identity?: IdentityService;
   principalLinks?: PrincipalLinkService;

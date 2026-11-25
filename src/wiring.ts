@@ -183,6 +183,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/id
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
+import { createConnectionWake, type ConnectionWake } from "./connectors/connection-wake.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import {
   createDeployStore,
@@ -551,6 +552,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  connectionWake: ConnectionWake;
   genericChatEvents?: ServerDeps["genericChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
@@ -2971,6 +2973,7 @@ export function buildApp(
     reconcile: (id) => app.syncSkillPack(id),
     leaderLease,
   });
+  const connectionWake = createConnectionWake(triggerDeps);
   const webhookReceiver = createWebhookReceiver({
     webhooks,
     deliveries,
@@ -3341,6 +3344,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    connectionWake,
     ...(genericChatInbound ? { genericChatEvents: genericChatInbound.handle } : {}),
     loopIngress,
     admin,
@@ -3492,6 +3496,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    connectionWake: built.connectionWake,
     ...(built.genericChatEvents ? { genericChatEvents: built.genericChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,

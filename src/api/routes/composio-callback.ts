@@ -5,7 +5,7 @@ import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
-import { ACCOUNT_ID, composioUserId, credential, request } from "./composio.ts";
+import { ACCOUNT_ID, composioUserId, credential, request, wakeComposioLink } from "./composio.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -49,8 +49,8 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     });
   }
   const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
+  const saved = (await ctx.deps.composioReturns?.take(key)) ?? null;
+  wakeComposioLink(ctx, saved);
   audit(ctx, {
     principalId: access.principal,
     action: "composio.connected",
