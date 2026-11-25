@@ -9,7 +9,6 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
 import { resumeInterruptedToolCall, type BridgedTool } from "../src/agent/turn-support.ts";
 import { toolCallApprovalKey } from "../src/core/approval-id.ts";
@@ -31,6 +30,7 @@ import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };

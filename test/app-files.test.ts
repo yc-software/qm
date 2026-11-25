@@ -8,7 +8,6 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createOrchestrator } from "../src/core/orchestrator.ts";
 import { appSourceShown } from "../src/core/orchestrator/app-source.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -33,6 +32,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ENDPOINT: DeployEndpoint = { host: "body", port: 443, tls: true };
 const OWNER = "U1";

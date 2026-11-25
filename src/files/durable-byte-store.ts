@@ -15,7 +15,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { swallowAs } from "../util/errors.ts";
-import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
+import { asChunks, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
@@ -55,33 +55,6 @@ export class ByteSourceTooLargeError extends Error {
 
 const BLOB_KEY = /^files\/(?:[0-9a-f]{64}|uploads\/[0-9a-f]{32})$/;
 const keyFor = (sha256: string): string => `files/${sha256}`;
-
-function collect(source: ByteSource, maxBytes?: number): Promise<{ data: Buffer; sha256: string }> {
-  return collectBytes(source, {
-    ...(maxBytes != null ? { maxBytes } : {}),
-    tooLarge: () => new ByteSourceTooLargeError(),
-  });
-}
-
-export function createMemoryDurableByteStore(): DurableByteStore {
-  const blobs = new Map<string, Buffer>();
-  return {
-    async put(source, opts) {
-      const { data, sha256 } = await collect(source, opts?.maxBytes);
-      const blobKey = keyFor(sha256);
-      if (!blobs.has(blobKey)) blobs.set(blobKey, data);
-      return { blobKey, sizeBytes: data.length, sha256 };
-    },
-    async open(blobKey, range) {
-      const hit = blobs.get(blobKey);
-      if (!hit) return null;
-      return { sizeBytes: hit.length, stream: Readable.from(range ? hit.subarray(range.start, range.end + 1) : hit) };
-    },
-    async delete(blobKey) {
-      blobs.delete(blobKey);
-    },
-  };
-}
 
 export function createLocalDurableByteStore(dir: string): DurableByteStore {
   const base = join(dir, "files");

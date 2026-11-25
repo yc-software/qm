@@ -6,11 +6,7 @@ import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/typ
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
-import {
-  createMemoryBlobTransferStore,
-  collectBlob,
-  type BlobTransferStore,
-} from "../src/persistence/blob-transfer.ts";
+import { collectBlob, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
@@ -28,6 +24,7 @@ import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/co
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { createMemoryBlobTransferStore } from "./support/memory-byte-stores.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));

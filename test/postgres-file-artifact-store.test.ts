@@ -1,10 +1,10 @@
 import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres file-artifact-store tests";

@@ -2,7 +2,6 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveTurnContext } from "../src/resolution/turn-context.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Resolution, Session } from "../src/types.ts";
 import { renderRecall } from "../src/memory/cross-scope.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
@@ -13,6 +12,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());

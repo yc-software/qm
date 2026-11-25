@@ -4,7 +4,6 @@ import { createOrchestrator, type OrchestratorDeps, type OrchestratorInput } fro
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
@@ -22,6 +21,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { testSurfaces } from "./support/single-process.ts";
 import { orchestratorTestDeps } from "./support/orchestrator-deps.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const actor = { id: "U1", type: "internal" as const, displayName: "Alice" };

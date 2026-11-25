@@ -18,11 +18,3 @@ export function liveTurnOf(state: {
     pendingSend: state.pendingSend,
   });
 }
-
-export function isSessionWorking(o: {
-  serverWorking: boolean;
-  threadRef: string;
-  liveThreadRef: string | null;
-}): boolean {
-  return o.serverWorking || o.threadRef === o.liveThreadRef;
-}

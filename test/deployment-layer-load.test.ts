@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emptyDeploymentLayer, loadDeploymentLayer, replaceDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
-import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
+import { BASE_EPHEMERAL_CRED_LINKS, DURABLE_CREDENTIAL_PATHS } from "../cli/src/credential-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
 
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
@@ -147,7 +147,7 @@ const withCredentialPaths = (paths: Array<{ path: string; kind: "file" | "direct
 
 test("a credentialPath overlapping a built-in resident path is rejected (ancestors and descendants)", () => {
   const platformManaged = new Set<string>([
-    ...BASE_RESIDENT_AUTH_PATHS,
+    ...DURABLE_CREDENTIAL_PATHS,
     ...BASE_EPHEMERAL_CRED_LINKS.map((l) => l.rel),
   ]);
   for (const base of platformManaged) {

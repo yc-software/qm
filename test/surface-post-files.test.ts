@@ -10,8 +10,6 @@ import {
 } from "../src/core/attachments.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
-import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
@@ -21,6 +19,7 @@ import { testSurfaces } from "./support/single-process.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
 import { createGenericChatSurface } from "../src/surfaces/generic-chat/adapter.ts";
+import { createMemoryBlobTransferStore, createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {

@@ -7,10 +7,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(parts.join(""));
 }
 
-export function textToBase64(text: string): string {
-  return bytesToBase64(new TextEncoder().encode(text));
-}
-
 export function base64ToBytes(content: string): Uint8Array {
   const comma = content.startsWith("data:") ? content.indexOf(",") : -1;
   const binary = atob(comma >= 0 ? content.slice(comma + 1) : content);

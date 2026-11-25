@@ -149,10 +149,6 @@ export function agentDraftsOf(item: Pick<LoopItem, "proposal" | "agentDrafts">):
   return [...kept, item.proposal];
 }
 
-export function agentDraftOf(item: Pick<LoopItem, "proposal" | "agentDrafts">): LoopProposal | undefined {
-  return agentDraftsOf(item).at(-1);
-}
-
 function withAgentDraft(
   item: Pick<LoopItem, "proposal" | "agentDrafts" | "agentMentionKeys">,
   proposal: LoopProposal | undefined,

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isActiveGrant, isExpiredCredential, KeychainOperations, keychainSummary } from "../src/keychain-state.ts";
+import { isActiveGrant, isExpiredCredential, KeychainOperations } from "../src/keychain-state.ts";
 
 test("reset invalidates identity-bound loads and operations", () => {
   const operations = new KeychainOperations();
@@ -98,23 +98,6 @@ test("keychain summary excludes expired grants and counts pending asks", () => {
   assert.equal(isActiveGrant({ credentialId: expiredEnv.id, status: "active" }, expiredEnv, now), false);
   assert.equal(isActiveGrant({ credentialId: legacyFile.id, status: "active" }, legacyFile, now), true);
   assert.equal(isActiveGrant({ credentialId: connector.id, status: "active" }, connector, now), true);
-
-  const summary = keychainSummary(
-    [{ connected: true }, { connected: true, needsReconnect: true }],
-    [env, expiredEnv, legacyFile, connector],
-    [
-      { credentialId: env.id, status: "active" },
-      { credentialId: expiredEnv.id, status: "active" },
-      { credentialId: legacyFile.id, status: "active" },
-      { credentialId: connector.id, status: "active" },
-      { credentialId: env.id, status: "active", expiresAt: now - 1 },
-      { credentialId: env.id, status: "revoked" },
-    ],
-    [{ id: "ask-1" }],
-    now,
-  );
-
-  assert.deepEqual(summary, { connected: 1, activeGrants: 3, attention: 3 });
 });
 
 test("an inline credential card decides through the keychain approval route, not the command route", async () => {

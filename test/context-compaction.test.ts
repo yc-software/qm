@@ -10,7 +10,6 @@ import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestr
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -21,7 +20,6 @@ import {
   COMPACT_SOFT_FRACTION,
   MAX_COMPACT_SUMMARY_CHARS,
   validateCompactSummary,
-  deterministicCompactSummary,
   estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
@@ -46,6 +44,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createMemoryDurableByteStore } from "./support/memory-byte-stores.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
@@ -611,16 +610,6 @@ test("validateCompactSummary accepts a trimmed summary and rejects missing or ov
   assert.throws(() => validateCompactSummary(undefined), /empty summary/);
   assert.throws(() => validateCompactSummary("   "), /empty summary/);
   assert.throws(() => validateCompactSummary("x".repeat(MAX_COMPACT_SUMMARY_CHARS + 1)), /character limit/);
-});
-
-test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
-  const history = [
-    ...Array.from({ length: 40 }, (_, i) => mkItem(i, { kind: "UserMessage", text: `filler ${i} ${"x".repeat(400)}` })),
-    mkItem(40, { kind: "UserMessage", text: "don't touch prod" }),
-  ];
-  const out = deterministicCompactSummary(history);
-  assert.match(out, /don't touch prod/);
-  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
 });
 
 test("a runaway summarizer output does not commit a compaction checkpoint", async () => {

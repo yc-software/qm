@@ -40,10 +40,6 @@ export function layerToolProbeScript(files: readonly { to: string; mode: string;
   return `printf '%s\\n' ${lines} | sha256sum -c --status${executable}`;
 }
 
-export function layerToolContentSha(content: string): string {
-  return sha256(Buffer.from(content, "utf8"));
-}
-
 export function createLayerToolInstaller(files: () => readonly LayerInstallFile[]): LayerToolInstaller {
   return async (io, prepare) => {
     const wanted = staged(files());

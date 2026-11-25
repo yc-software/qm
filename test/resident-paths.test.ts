@@ -23,9 +23,8 @@ import {
   EPHEMERAL_CRED_DIR,
   credentialServiceForPath,
   ephemeralCredLinkPaths,
-  residentAuthPaths,
 } from "../src/credentials/resident-paths.ts";
-import { EPHEMERAL_CRED_PATHS, ephemeralCredLinkScript } from "../src/credentials/resident-paths.ts";
+import { ephemeralCredLinkScript } from "../src/credentials/resident-paths.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -90,11 +89,10 @@ test("custom single-segment credential files remain file links", () => {
   assert.doesNotMatch(script, /mkdir -p '\/tmp\/agent-creds\/\.acmerc'/);
 });
 
-test(".ssh and .git-credentials stay volume-durable: resident-captured but NEVER ephemeral-linked", () => {
+test(".ssh and .git-credentials stay volume-durable: NEVER ephemeral-linked", () => {
   const durable = [".ssh", ".git-credentials"];
   for (const rel of durable) {
-    assert.ok(residentAuthPaths().includes(rel), `${rel} stays in the publish-capture allowlist`);
-    assert.ok(!EPHEMERAL_CRED_PATHS.some((link) => link.rel === rel), `${rel} must not be ephemeral-linked`);
+    assert.ok(!ephemeralCredLinkPaths().some((link) => link.rel === rel), `${rel} must not be ephemeral-linked`);
   }
   const links = ephemeralCredLinkPaths([
     { path: ".ssh", kind: "directory" },
@@ -126,16 +124,11 @@ test("base ephemeral paths stay deduplicated when a layer declares them", () => 
   assert.deepEqual(links, ephemeralCredLinkPaths(), "built-in coverage is a no-op");
 });
 
-test("a layer-declared credential path becomes ephemeral and resident-mounted", () => {
+test("a layer-declared credential path becomes ephemeral", () => {
   const links = ephemeralCredLinkPaths([{ path: ".acmecli", kind: "directory" }]);
   assert.deepEqual(
     links.find((link) => link.rel === ".acmecli"),
     { rel: ".acmecli", kind: "dir" },
-  );
-  assert.ok(residentAuthPaths([{ path: ".acmecli", kind: "directory" }]).includes(".acmecli"));
-  assert.ok(
-    !residentAuthPaths().includes(".acmecli"),
-    "generic core does not capture deployment credentials by default",
   );
   assert.match(
     ephemeralCredLinkScript("/root", [{ path: ".acmecli", kind: "directory" }]),
@@ -197,9 +190,8 @@ test("the heal never fires on a target that is already usable as a directory", a
   assert.ok((await stat(join(elsewhere, "credentials"))).isFile(), "contents behind the symlink survive");
 });
 
-test(".config/glab is ephemeral-linked but NOT publish-captured (prod never baked glab creds into apps)", () => {
-  assert.ok(!residentAuthPaths().includes(".config/glab"));
-  assert.ok(EPHEMERAL_CRED_PATHS.some((link) => link.rel === ".config/glab" && link.kind === "dir"));
+test(".config/glab is ephemeral-linked as a directory", () => {
+  assert.ok(ephemeralCredLinkPaths().some((link) => link.rel === ".config/glab" && link.kind === "dir"));
 });
 
 test("prep never emits a command that could delete $HOME or a credential bundle", () => {
@@ -243,7 +235,7 @@ test("displaced credentials are quarantined out of $HOME's backup surface", () =
   const exclude = (path: string): boolean =>
     defaultExcludeAgentComputerExport(
       { area: "home", path },
-      EPHEMERAL_CRED_PATHS.map((link) => link.rel),
+      ephemeralCredLinkPaths().map((link) => link.rel),
     );
   assert.ok(exclude(`${DISPLACED_DIR_REL}/.config/gcloud/credentials.db`), "displaced bundles never reach a backup");
   assert.ok(exclude(`${DISPLACED_DIR_REL}/.netrc.1234`), "nor displaced single-file credentials");
@@ -394,7 +386,7 @@ test("quarantined credentials are pruned from the backup archive, not just filte
     },
     readAbsBytes: async () => Buffer.alloc(0),
     defaultHomeDir: "/home/agent",
-    ephemeralCredentialPrefixes: EPHEMERAL_CRED_PATHS.map((link) => link.rel),
+    ephemeralCredentialPrefixes: ephemeralCredLinkPaths().map((link) => link.rel),
   });
   await backup.exportFiles(
     { id: "box", rootDir: "/home/agent/workspace", homeDir: "/home/agent" },
