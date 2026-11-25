@@ -2,7 +2,7 @@ name: iOS TestFlight
 
 on:
   push:
-    branches: [main, ios-testflight-on-merge]
+    branches: [main]
     paths:
       - "ios/**"
       - "desktop/assets/becalmed-off-halfway-rock.webp"
