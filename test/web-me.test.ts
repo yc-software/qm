@@ -24,7 +24,6 @@ const webMe = webMeConfig({
   }),
   SENTRY_BROWSER_DSN: "https://public@sentry.example.com/1",
   SENTRY_RELEASE: "release-1",
-  WEB_UI_WELCOME_COHORT: " spring ",
   WEB_UI_SUGGESTED_ACTIVITIES: JSON.stringify(activities),
 });
 
@@ -71,7 +70,6 @@ test("/me describes the signed-in person, the company and the web app's settings
     modelAuthConnected: false,
     impersonatedBy: null,
     displayName: "Bob",
-    welcomeCohort: "spring",
     suggestedActivities: activities,
     permissions: [],
   });
