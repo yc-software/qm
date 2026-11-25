@@ -626,6 +626,30 @@ test("other people's names are screened once per thread, a flagged one holds eac
   assert.deepEqual(rescreened.names, ["Person 99"]);
 });
 
+test("approving a held turn replays it after another person's turn screens the names it read", async () => {
+  const securityScreener: SecurityScreener = {
+    provider: "spy",
+    async classify({ payload }) {
+      return { verdict: { decision: payload.includes("FLAGGED") ? "strict" : "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { app, directory } = freshApp({ securityPosture: "auto" }, securityScreener);
+  const names = ["Asker", "Ann", "Bea"];
+  await directory.replace(
+    names.map((displayName, i) => ({ principalId: `UC${i}`, displayName, type: "internal" as const })),
+  );
+  const audience = names.map((_, i) => ({ externalId: `UC${i}` }));
+  const conversation = { kind: "channel" as const, threadRef: "ch:names:t2", channelRef: "C-names2", audience };
+  const overheard = [{ ts: "900.1", role: "user" as const, name: "Mallory", text: "FLAGGED" }];
+  const turn = (externalId: string, heard: typeof overheard, approval?: TurnRequest["approval"]) =>
+    app.turn({ surface: "slack", actor: { externalId }, conversation, text: "!sysprompt", overheard: heard, approval });
+  const held = await turn("UC0", overheard);
+  assert.equal(held.status, "pending_approval");
+  assert.notEqual((await turn("UC1", [])).status, "pending_approval");
+  const approval = { requestId: held.pendingApprovals![0]!.requestId, approved: true };
+  assert.notEqual((await turn("UC0", overheard, approval)).status, "pending_approval");
+});
+
 test("a reply in a thread the agent STARTED chimes in, even as a bare statement (deploy-notification-reply bug)", async () => {
   const { app } = freshApp();
   const bare = await app.turn(channel("looks good to me", { origin: { kind: "ambient" } }));

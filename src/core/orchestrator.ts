@@ -704,11 +704,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const people = peopleToScreen(actor.id, rosterMembers, conversation.audience, previousNames);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
+      const heldPeople = new Set(approvalRecord?.people);
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(
-          screenedFields(approvalRecord.request, approvalRecord.homeChannel, approvalRecord.people ?? []),
-        ) === canonicalJson(screenedFields(input, homeChannel?.channelName, people));
+        people.every((name) => heldPeople.has(name)) &&
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel, [])) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName, []));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
