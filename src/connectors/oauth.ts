@@ -291,6 +291,32 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
     },
   },
 
+  microsoft: {
+    label: "Microsoft 365",
+    hosts: ["graph.microsoft.com"],
+    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    scopes: ["offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send", "Files.ReadWrite.All"],
+    clientIdEnv: "MICROSOFT_OAUTH_CLIENT_ID",
+    clientSecretEnv: "MICROSOFT_OAUTH_CLIENT_SECRET",
+    redirectPath: "microsoft/callback",
+    consentMode: "standard",
+    egressRule: ["graph.microsoft.com", "login.microsoftonline.com"],
+    setupGuide: {
+      console: "Microsoft Entra admin center → App registrations",
+      url: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+      steps: [
+        "Open the app registration people sign in with (or create a Web app registration).",
+        "Under Authentication, add the redirect URI shown below as a Web redirect URI.",
+        "Under API permissions, add the Microsoft Graph delegated permissions offline_access, User.Read, Mail.ReadWrite, Mail.Send and Files.ReadWrite.All.",
+        "Choose Grant admin consent so people connect at sign-in without a consent prompt.",
+        "Under Certificates & secrets, create a client secret, then paste the Application (client) ID + secret below.",
+      ],
+      scopesRationale:
+        "Mail.ReadWrite/Mail.Send back Outlook mail, Files.ReadWrite.All backs OneDrive and SharePoint files, offline_access keeps the connection after the session ends.",
+    },
+  },
+
   slack: {
     label: "Slack",
     hosts: ["slack.com"],

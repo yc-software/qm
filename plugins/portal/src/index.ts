@@ -76,6 +76,7 @@ import {
   type OidcConfig,
   type PrincipalRule,
   hostedDomainHint,
+  isMicrosoftIssuer,
 } from "./oidc.ts";
 import {
   proxyToApp,
@@ -564,10 +565,13 @@ async function handleSecretDrop(
   return void res.end(bodyText);
 }
 
-async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
+async function handleSelfConnect(
+  res: ServerResponse,
+  o: { provider: string; session: SessionClaims; returnTo: string },
+): Promise<void> {
   const errorPage = (detail: string) => connectErrorHtml(detail);
   const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
-  const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
+  const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: o.returnTo });
   const path = withSourceAuthNonce(
     `/v1/connectors/oauth/${encodeURIComponent(o.provider)}/start?${qs.toString()}`,
     CORE_SIGNING_SECRET,
@@ -1024,7 +1028,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const selfConnect = /^\/connect\/([^/]+)\/self-connect$/.exec(pathname);
   if (method === "GET" && selfConnect) {
     if (!session) return consentBounce();
-    return handleSelfConnect(res, { provider: decodeURIComponent(selfConnect[1] ?? ""), session });
+    const returnTo = url.searchParams.get("returnTo");
+    return handleSelfConnect(res, {
+      provider: decodeURIComponent(selfConnect[1] ?? ""),
+      session,
+      returnTo: returnTo ? sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN) : "/connectors",
+    });
   }
 
   if (isOAuthPublicPassthrough(method, pathname)) {
@@ -1612,11 +1621,34 @@ async function finishSignIn(
   }
   if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);
   setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
+  const next = sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN);
+  const connect = !principal.appOnly && (await microsoftUnconnected(principal.sub, tenant));
   res.writeHead(302, {
-    location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
+    location: connect ? `/connect/microsoft/self-connect?returnTo=${encodeURIComponent(next)}` : next,
     "cache-control": "no-store",
   });
   res.end();
+}
+
+async function microsoftUnconnected(sub: string, tenant: string | undefined): Promise<boolean> {
+  if (!isMicrosoftIssuer(OIDC.issuer)) return false;
+  const path = withSourceAuthNonce(
+    `/v1/connectors/oauth/status?${new URLSearchParams({ principalId: sub })}`,
+    CORE_SIGNING_SECRET,
+  );
+  try {
+    const r = await fetch(`${CORE}${path}`, {
+      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(sub, tenant) },
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const { providers } = (await r.json()) as {
+      providers?: { microsoft?: { configured?: boolean; connected?: boolean } };
+    };
+    return providers?.microsoft?.configured === true && providers.microsoft.connected !== true;
+  } catch (error) {
+    console.warn(`[portal] couldn't check the Microsoft 365 connection at sign-in: ${errMessage(error)}`);
+    return false;
+  }
 }
 
 export function bootChecks(): void {

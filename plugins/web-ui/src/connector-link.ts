@@ -25,6 +25,10 @@ export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> =
     name: "Dropbox",
     hosts: "Files & folders",
   },
+  microsoft: {
+    name: "Microsoft 365",
+    hosts: "Outlook mail & OneDrive",
+  },
   x: {
     name: "X (Twitter)",
     hosts: "Posts & profile",
@@ -109,6 +113,7 @@ export function connectorService(link: ConnectorLink): string {
     ["linear", /\blinear\b/],
     ["github", /\bgithub\b/],
     ["dropbox", /\bdropbox\b/],
+    ["microsoft", /\b(outlook|onedrive|microsoft 365)\b/],
     ["x", /\b(?:twitter|x)\b/],
   ];
   const matches = services.filter(([, pattern]) => pattern.test(label));

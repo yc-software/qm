@@ -118,6 +118,15 @@ const CONNECTOR_LOGOS: Record<string, Logo> = {
       ],
     ],
   },
+  microsoft: {
+    viewBox: "0 0 24 24",
+    paths: [
+      ["M1 1h10.5v10.5H1z", "#f25022"],
+      ["M12.5 1H23v10.5H12.5z", "#7fba00"],
+      ["M1 12.5h10.5V23H1z", "#00a4ef"],
+      ["M12.5 12.5H23V23H12.5z", "#ffb900"],
+    ],
+  },
   x: {
     viewBox: "0 0 24 24",
     paths: [

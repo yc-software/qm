@@ -63,6 +63,21 @@ guests included, whose verified email is outside the organization's domain. Leav
 unset; it is a Slack concept. Grant consent for the organization the first time an admin signs in so
 employees are not asked individually.
 
+## Outlook mail and OneDrive at sign-in
+
+The `microsoft` connector gives the agent the signed-in person's Outlook mail and OneDrive through Microsoft
+Graph (the `microsoft-365` skill). Reuse the same app registration:
+
+- **API permissions:** add the Microsoft Graph delegated permissions `offline_access`, `User.Read`,
+  `Mail.ReadWrite`, `Mail.Send` and `Files.ReadWrite.All`, then **Grant admin consent** for the organization.
+- **Authentication:** add the Web redirect URI `<public-url>/v1/connectors/oauth/microsoft/callback`.
+- Set `MICROSOFT_OAUTH_CLIENT_ID` and `MICROSOFT_OAUTH_CLIENT_SECRET` on core (or enter the client on the
+  Connectors admin page).
+
+When someone signs in with Microsoft and has not connected Microsoft 365 yet, the portal sends them through
+the connector once on the way in. With admin consent granted there is no prompt, so they arrive connected.
+Like every personal connector, the token reaches the agent only in that person's own DMs and web chats.
+
 ## Identity
 
 A Teams person is the email or user principal name on their Teams account. People in the bound tenant count

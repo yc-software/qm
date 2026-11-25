@@ -23,7 +23,7 @@ const GOOGLE_ISSUER = "https://accounts.google.com";
 const MICROSOFT_HOST = "login.microsoftonline.com";
 const VERIFIED_FLAGS: readonly unknown[] = [true, "true", 1, "1"];
 
-function isMicrosoftIssuer(issuer: string): boolean {
+export function isMicrosoftIssuer(issuer: string): boolean {
   try {
     return new URL(issuer).hostname === MICROSOFT_HOST;
   } catch {
