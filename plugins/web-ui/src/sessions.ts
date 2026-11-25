@@ -15,7 +15,6 @@ import {
   ChevronRight,
   Clock3,
   Cog,
-  CornerLeftUp,
   EllipsisVertical,
   Folder,
   Hash,
@@ -42,8 +41,9 @@ import {
   fetchSessionRow,
   fetchTranscript,
   currentEarlierCount,
-  detachSession,
   inheritedTranscript,
+  ApiError,
+  moveSessions,
   itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
@@ -99,6 +99,7 @@ import {
   contextsState,
   ensureContexts,
   openProjectDetail,
+  renderContexts,
   personalScopeId,
   renameProject,
   setProjectIcon,
@@ -128,6 +129,14 @@ import {
 import { liveTurnOf } from "./working-dot";
 import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
+import {
+  beginSessionMoveDrag,
+  endSessionMoveDrag,
+  runSessionMove,
+  projectDropHandlers,
+  registerSessionMoveHost,
+  sessionsToMove,
+} from "./session-move";
 
 export const sessionsState = {
   list: [] as CoreSession[],
@@ -382,7 +391,6 @@ export function renderList(): void {
   armMidnightRefresh();
   render(
     html`
-      ${detachDropZone()}
       ${
         pinned.length
           ? html`
@@ -500,10 +508,15 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   const childrenId = `recent-${item.scopeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const menuKey = projectMenuKey(item.scopeId);
   const menuOpen = sessionsState.openMenuId === menuKey;
+  const drop = projectOf(item.scopeId) ? projectDropHandlers(item.scopeId) : null;
   return html`
     <section
       class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
       aria-label=${`${name} ${personaId ? "bot" : "project"}`}
+      @dragenter=${drop?.dragenter}
+      @dragover=${drop?.dragover}
+      @dragleave=${drop?.dragleave}
+      @drop=${drop?.drop}
     >
       ${
         sessionsState.renamingId === menuKey
@@ -1308,15 +1321,13 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   `;
 }
 
-let draggingChildId: string | null = null;
-
 function liftForDragSnapshot(target: EventTarget | null): void {
   if (!(target instanceof HTMLElement)) return;
   target.classList.add("drag-snapshot");
   requestAnimationFrame(() => target.classList.remove("drag-snapshot"));
 }
 
-export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
+function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
     return;
@@ -1324,56 +1335,45 @@ export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
   liftForDragSnapshot(e.currentTarget);
-  draggingChildId = s.parentSessionId ? s.id : null;
-  appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
-  if (!draggingChildId) beginSessionDrag(s);
+  beginSessionMoveDrag(sessionsToMove(selection.ids, s.id));
+  beginSessionDrag(s);
 }
 
-export function endSessionDrag(): void {
-  draggingChildId = null;
-  appState.listEl?.classList.remove("detach-drop-target");
-  appState.listEl?.querySelector(".detach-drop-zone")?.classList.remove("over");
+function endSessionDrag(): void {
+  endSessionMoveDrag();
   endPaneDrag();
 }
 
-async function promoteSession(id: string): Promise<void> {
-  sessionsState.openMenuId = null;
-  endSessionDrag();
-  try {
-    await detachSession(id);
+async function moveSessionsToProject(ids: readonly string[], scopeId: string): Promise<void> {
+  const viewing = new Set(appState.currentView === "chats" ? openConversationIds() : []);
+  const { moved, toast } = await runSessionMove(ids, {
+    project: projectName(scopeId) ?? "the project",
+    title: (id) => sessionsState.list.find((s) => s.id === id)?.title?.trim() || "Untitled chat",
+    move: (ids, audience) => moveSessions(ids, scopeId, audience),
+    confirm: (question) => window.confirm(question),
+    reason: (error) => {
+      if (!(error instanceof ApiError)) reportHandledError("web:session_move", error);
+      return errMessage(error);
+    },
+  });
+  const opened = moved.find((session) => viewing.has(session.id)) ?? null;
+  for (const session of moved) if (viewing.has(session.id)) closeSessionSurfaces(session.id);
+  selection = emptySelection();
+  if (moved.length) {
+    sessionsState.collapsedProjectScopes.delete(scopeId);
     await refreshSessions({ silent: true });
-  } catch (error) {
-    canvasToast(errMessage(error));
-    renderList();
   }
+  redrawSelection();
+  if (opened) await openSession(opened, undefined, undefined, "replace");
+  else if (moved.length && appState.currentView === "contexts") await renderContexts();
+  if (toast) canvasToast(toast);
 }
 
-function detachDropZone(): TemplateResult {
-  return html`<div
-    class="detach-drop-zone"
-    @dragenter=${(e: DragEvent) => {
-      if (!draggingChildId) return;
-      e.preventDefault();
-      (e.currentTarget as HTMLElement).classList.add("over");
-    }}
-    @dragover=${(e: DragEvent) => {
-      if (!draggingChildId) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    }}
-    @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("over")}
-    @drop=${(e: DragEvent) => {
-      const id = draggingChildId;
-      (e.currentTarget as HTMLElement).classList.remove("over");
-      if (!id) return;
-      e.preventDefault();
-      endSessionDrag();
-      void promoteSession(id);
-    }}
-  >
-    ${icon(CornerLeftUp, 13)}<span>Drop to make a top-level session</span>
-  </div>`;
-}
+registerSessionMoveHost({
+  sessions: () => sessionsState.list,
+  movableFrom: (scopeId) => scopeId === personalScopeId() || Boolean(projectOf(scopeId)),
+  move: moveSessionsToProject,
+});
 
 const placeSessionMenu = (el?: Element): void => {
   if (!(el instanceof HTMLElement)) return;

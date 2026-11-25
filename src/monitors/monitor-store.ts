@@ -7,6 +7,9 @@ import {
   setTriggerEnabled,
   type CreateTriggerInput,
   ownedBy,
+  postsInto,
+  rehomeTriggers,
+  type ScopeMove,
 } from "../triggers/trigger-store.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
@@ -35,6 +38,7 @@ export interface MonitorStore {
   advance(id: string, fields: { cursor: number; tail?: string; firedAt?: number }): Promise<void>;
   update(id: string, fields: { instructions?: string; pattern?: string; cursor?: number }): Promise<void>;
   recordError(id: string, error: string): Promise<void>;
+  rehome(move: ScopeMove): Promise<string[]>;
 }
 
 export async function armedWatches(
@@ -122,6 +126,9 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     },
     async recordError(id, error) {
       await backing.merge(id, { lastError: error });
+    },
+    rehome(move) {
+      return rehomeTriggers(backing, move, (m, threadRefs) => threadRefs.has(m.threadRef) || postsInto(m, threadRefs));
     },
   };
 }

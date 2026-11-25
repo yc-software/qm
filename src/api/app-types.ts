@@ -33,6 +33,7 @@ import type { UserStore } from "../identity/user-store.ts";
 import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
+import type { LoopStore } from "../loops/loop-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
@@ -460,6 +461,13 @@ export interface App {
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; items: Item[] } | null>;
+  moveSessions(
+    tenant: Tenant,
+    principalId: string,
+    sessionIds: readonly string[],
+    targetScopeId: ScopeId,
+    opts?: { audience?: readonly string[] },
+  ): Promise<MoveSessionsResult>;
   listFilesForViewer(
     tenant: Tenant,
     principalId: string,
@@ -824,6 +832,7 @@ export interface AppDeps {
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
+  loops?: Pick<LoopStore, "retargetMovedDestinations">;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
   engaged?: EngagedRegistry;
@@ -958,3 +967,22 @@ interface SessionPageResult {
   next: { activity: number; id: string } | null;
   hasArchived?: boolean;
 }
+
+interface MoveAudienceMember {
+  principalId: string;
+  displayName: string;
+}
+
+export type HeldChat =
+  | { sessionId: string; reason: "job_running"; job: { purpose: string; chat?: string } }
+  | { sessionId: string; reason: "busy"; subagent?: { title?: string } }
+  | {
+      sessionId: string;
+      reason: "not_found" | "same_scope" | "unsupported_source" | "awaiting_approval";
+    };
+
+export type MoveSessionsResult =
+  | { outcome: "not_project" }
+  | { outcome: "forbidden" }
+  | { outcome: "confirm_audience"; gains: MoveAudienceMember[]; held: HeldChat[]; question: string }
+  | { outcome: "moved"; sessions: Session[]; held: HeldChat[]; stoppedLoops: { name: string; chat: string }[] };

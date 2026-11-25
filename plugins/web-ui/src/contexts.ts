@@ -45,6 +45,7 @@ import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./c
 import { tip } from "./tooltip";
 import { groupAvatarStackTpl } from "./group-avatars";
 import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
+import { projectDropHandlers } from "./session-move";
 
 interface ScopeFile {
   id: string;
@@ -412,8 +413,17 @@ function contextRow(c: CoreContext): TemplateResult {
   const meta = [c.project ? sub : "", count, c.lastActivityAt ? `active ${relTime(c.lastActivityAt)}` : ""]
     .filter(Boolean)
     .join(" · ");
+  const drop = c.project ? projectDropHandlers(c.scopeId) : null;
   return html`
-    <button class="context-row" type="button" @click=${() => selectContext(c.scopeId)}>
+    <button
+      class="context-row"
+      type="button"
+      @click=${() => selectContext(c.scopeId)}
+      @dragenter=${drop?.dragenter}
+      @dragover=${drop?.dragover}
+      @dragleave=${drop?.dragleave}
+      @drop=${drop?.drop}
+    >
       <span class="context-glyph">${projectIconTpl(c.project?.icon, 17) ?? icon(glyph, 15)}</span>
       <span class="context-row-title" dir="auto">${title}</span>
       ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
@@ -427,8 +437,15 @@ function detailTpl(c: CoreContext): TemplateResult {
   const { title, sub, glyph } = contextMeta(c);
   const sessions = sessionsIn(c.scopeId);
   const completelyEmpty = sessions.length === 0 && scopeResourcesEmpty(c.scopeId);
+  const drop = c.project ? projectDropHandlers(c.scopeId) : null;
   return html`
-    <div class="context-detail">
+    <div
+      class="context-detail"
+      @dragenter=${drop?.dragenter}
+      @dragover=${drop?.dragover}
+      @dragleave=${drop?.dragleave}
+      @drop=${drop?.drop}
+    >
       <button class="context-back" type="button" @click=${() => selectContext(null)}>
         ${icon(ArrowLeft, 15)}<span>Projects</span>
       </button>

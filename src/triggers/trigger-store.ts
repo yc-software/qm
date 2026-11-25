@@ -164,3 +164,52 @@ export const MARK_BOT_EDITED_CRONS_MIGRATION = {
     END $$`,
   ],
 };
+
+export interface ScopeMove {
+  threads: ReadonlyMap<string, ScopeId>;
+  to: ScopeId;
+}
+
+export function postsInto(trigger: Pick<TriggerBase, "destination">, threadRefs: ReadonlySet<string>): boolean {
+  return trigger.destination !== undefined && threadRefs.has(trigger.destination.target);
+}
+
+function rehomedTrigger<T extends TriggerBase>(trigger: T, move: ScopeMove): T {
+  const destination = trigger.destination;
+  const audienceMoves = destination?.audienceScopeId === trigger.ownerScopeId;
+  return {
+    ...trigger,
+    ownerScopeId: move.to,
+    ...(destination && audienceMoves
+      ? { destination: { ...withoutProject(destination), audienceScopeId: move.to } }
+      : {}),
+  };
+}
+
+function withoutProject({ project: _project, ...destination }: Destination): Destination {
+  return destination;
+}
+
+function threadsFrom(move: ScopeMove, scope: ScopeId): Set<string> {
+  return new Set([...move.threads].flatMap(([threadRef, from]) => (from === scope ? [threadRef] : [])));
+}
+
+export async function rehomeTriggers<T extends TriggerBase>(
+  backing: DurableMap<T>,
+  move: ScopeMove,
+  tied: (trigger: T, threadRefs: ReadonlySet<string>) => boolean,
+  adjust: (moved: T, before: T) => T = (moved) => moved,
+): Promise<string[]> {
+  const ids = (
+    await backing.selectEntries({
+      where: { field: "ownerScopeId" as Extract<keyof T, string>, anyOfFold: [...new Set(move.threads.values())] },
+    })
+  )
+    .filter(([, trigger]) => tied(trigger, threadsFrom(move, trigger.ownerScopeId)))
+    .map(([id]) => id);
+  if (ids.length)
+    await backing.mutateMany(
+      ids.map((id) => ({ id, apply: (trigger) => adjust(rehomedTrigger(trigger!, move), trigger!) })),
+    );
+  return ids;
+}

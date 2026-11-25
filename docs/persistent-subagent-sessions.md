@@ -14,7 +14,7 @@ Read access checks scope, current participant access, and audience visibility. S
 
 ## Parent changes and completion
 
-Subagents appear as clickable, draggable inline chips in their parent conversation’s collapsible tool rows, outside the sidebar session list. Dragging a chip into the sidebar detaches it and makes it a top-level session. The web UI does not offer reparenting onto other sessions. A child transcript links back to its current parent. The underlying parentage API rejects cycles, unauthorized changes, and cross-scope moves.
+Subagents appear as clickable inline chips in their parent conversation’s collapsible tool rows, outside the sidebar session list. The web UI does not offer detaching a subagent or reparenting it onto other sessions. A child transcript links back to its current parent. The underlying parentage API rejects cycles, unauthorized changes, and cross-scope moves.
 
 A terminal child run produces a deduplicated internal result for its current parent. When the delegating actor is internal, a Slack or spine parent also receives a durable, deduplicated completion wake so it can report the result after ending its dispatch turn. Other parents retain passive mailbox delivery without a new run. The immutable delegating run supplies the actor, authorization, and delivery destination; the current parent request supplies the audience. A freshly adopted parent without runtime context leaves completion pending until that context exists. Detached children produce no automatic parent return.
 

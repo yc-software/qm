@@ -36,7 +36,7 @@ import {
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
-import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { SideChatAnchorError, SoulUpdateDeniedError, type HeldChat, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { cardsShownInSession } from "../session-approval-cards.ts";
 import { sendJson, sendProblem } from "../http.ts";
@@ -218,6 +218,66 @@ async function forkSession(ctx: ApiCtx): Promise<void> {
   }
   if (!out) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, out);
+}
+
+const HELD_MESSAGES = {
+  not_found: "That conversation isn't available.",
+  same_scope: "That conversation is already in this project.",
+  unsupported_source: "Only your own web chats and project chats can be moved.",
+  busy: "Wait for the agent to finish before moving this chat.",
+  awaiting_approval: "This chat is waiting for an approval. Answer it, then move the chat.",
+} as const;
+
+function heldMessage(held: HeldChat): string {
+  if (held.reason === "busy" && held.subagent) {
+    const which = held.subagent.title ? `This chat's subagent "${held.subagent.title}"` : "A subagent of this chat";
+    return `${which} is still running. Stop it or wait for it to finish, then move the chat.`;
+  }
+  if (held.reason !== "job_running") return HELD_MESSAGES[held.reason];
+  const where = held.job.chat ? `in this chat's subagent "${held.job.chat}"` : "in this chat";
+  return `The background job "${held.job.purpose}" ${where} is still running. Stop it or wait for it to finish, then move the chat.`;
+}
+
+const stringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((id) => typeof id === "string");
+
+async function moveSessions(ctx: ApiCtx): Promise<void> {
+  const b = (isObj(ctx.body) ? ctx.body : {}) as {
+    principalId?: unknown;
+    sessionIds?: unknown;
+    scopeId?: unknown;
+    audience?: unknown;
+  };
+  if (typeof b.principalId !== "string" || !b.principalId || typeof b.scopeId !== "string" || !b.scopeId)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and scopeId required" });
+  if (!stringList(b.sessionIds) || !b.sessionIds.length)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "sessionIds must be a list of conversation ids" });
+  if (b.audience !== undefined && !stringList(b.audience))
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "audience must be a list of principal ids" });
+  const out = await ctx.app.moveSessions(
+    tenantOf(ctx),
+    b.principalId,
+    b.sessionIds,
+    b.scopeId as ScopeId,
+    b.audience ? { audience: b.audience } : {},
+  );
+  if (out.outcome === "not_project" || out.outcome === "forbidden")
+    return sendJson(ctx.res, out.outcome === "forbidden" ? 403 : 404, {
+      error: out.outcome,
+      message: out.outcome === "forbidden" ? "You're not a member of that project." : "That project isn't available.",
+    });
+  const held = out.held.map((h) => ({ ...h, message: heldMessage(h) }));
+  if (out.outcome === "confirm_audience")
+    return sendJson(ctx.res, 409, {
+      error: out.outcome,
+      gains: out.gains,
+      held,
+      message: out.question,
+    });
+  const notices = out.stoppedLoops.map(
+    (loop) => `The loop "${loop.name}" no longer posts to "${loop.chat}": its owner isn't a member of this project.`,
+  );
+  return sendJson(ctx.res, 200, { sessions: out.sessions, held, notices });
 }
 
 function agentConversation(session: Session) {
@@ -1524,6 +1584,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/sessions/:id/expand", browser: true, auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions", browser: true, auth: "source", handle: spawnWebSession },
     { method: "POST", path: "/v1/sessions/:id/fork", browser: true, auth: "source", handle: forkSession },
+    { method: "POST", path: "/v1/sessions/move", browser: true, auth: "source", handle: moveSessions },
     { method: "POST", path: "/v1/sessions/:id/detach", browser: true, auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", browser: true, auth: "source", handle: cancelSessionGoal },
     { method: "POST", path: "/v1/sessions/:id/goal/resume", browser: true, auth: "source", handle: resumeSessionGoal },

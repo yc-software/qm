@@ -414,6 +414,15 @@ export interface SessionStore {
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  participantsOfMany(tenant: Tenant, sessionIds: readonly string[]): Promise<Map<string, string[]>>;
+  rehome(
+    tenant: Tenant,
+    sessionIds: readonly string[],
+    target: { type: SessionType; scopeId: ScopeId; channelName: string },
+    memberIds: readonly string[],
+    spawnMeta: ReadonlyMap<string, SpawnMeta>,
+    titlesOf: { principalId: string; sessionIds: readonly string[] },
+  ): Promise<void>;
   setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
   setPersona(sessionId: string, personaId: string | null): Promise<void>;
   threadsWithPersona(personaId: string, threadRefs: readonly string[]): Promise<Set<string>>;
@@ -456,6 +465,7 @@ export interface SessionStore {
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
   inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
+  getManyForParticipant(tenant: Tenant, ids: readonly string[], principalId: string): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
   sameScopeAncestors(threadRefs: readonly string[]): Promise<Session[]>;
 

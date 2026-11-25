@@ -192,8 +192,6 @@ import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
 import {
   addPendingSession,
-  onSessionDragStart,
-  endSessionDrag,
   dropPendingSession,
   replacePendingSession,
   groupDmTitle,
@@ -3497,13 +3495,7 @@ export function createChatSurface(
     return html`<button
       class="subagent-chip"
       type="button"
-      title="Open subagent · Drag to the sidebar to make a top-level session"
-      draggable=${session ? "true" : "false"}
-      @dragstart=${(e: DragEvent) => {
-        if (session) onSessionDragStart(e, session);
-        else e.preventDefault();
-      }}
-      @dragend=${endSessionDrag}
+      title="Open subagent"
       @click=${(e: Event) => {
         e.preventDefault();
         e.stopPropagation();

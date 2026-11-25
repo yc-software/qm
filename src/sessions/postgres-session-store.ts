@@ -207,6 +207,52 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
     },
 
+    async participantsOfMany(tenant, sessionIds) {
+      const rows = await db
+        .forTenant(tenant)
+        .q("SELECT session_id, principal_id FROM participants WHERE tenant_id = $1 AND session_id = ANY($2::text[])", [
+          tenant.id,
+          [...sessionIds],
+        ]);
+      const out = new Map<string, string[]>(sessionIds.map((id) => [id, []]));
+      for (const row of rows) out.get(row.session_id as string)?.push(row.principal_id as string);
+      return out;
+    },
+
+    async rehome(tenant, sessionIds, target, memberIds, spawnMeta, titlesOf): Promise<void> {
+      await db.forTenant(tenant).q(
+        `WITH moved AS (
+           UPDATE sessions s SET scope_id = $3, type = $4, channel_name = $5, spawn_meta = COALESCE(m.meta, s.spawn_meta),
+                  title = CASE WHEN s.id = ANY($9::text[]) THEN COALESCE(
+                    (SELECT NULLIF(btrim(p.title), '') FROM participants p
+                      WHERE p.tenant_id = $1 AND p.session_id = s.id AND p.principal_id = $8), s.title) ELSE s.title END
+             FROM unnest($2::text[], $7::text[]) AS m(id, meta)
+            WHERE s.tenant_id = $1 AND s.id = m.id
+           RETURNING s.id
+         ), dropped AS (
+           DELETE FROM participants p USING moved
+            WHERE p.tenant_id = $1 AND p.session_id = moved.id AND NOT (p.principal_id = ANY($6::text[]))
+         )
+         INSERT INTO participants(tenant_id, session_id, principal_id)
+         SELECT $1, moved.id, member FROM moved CROSS JOIN unnest($6::text[]) AS member
+         ON CONFLICT (tenant_id, session_id, principal_id) DO NOTHING`,
+        [
+          tenant.id,
+          [...sessionIds],
+          target.scopeId,
+          target.type,
+          target.channelName,
+          [...memberIds],
+          sessionIds.map((id) => {
+            const meta = spawnMeta.get(id);
+            return meta ? JSON.stringify(meta) : null;
+          }),
+          titlesOf.principalId,
+          [...titlesOf.sessionIds],
+        ],
+      );
+    },
+
     async setRuntime(sessionId, runtime): Promise<void> {
       await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1 AND runtime IS DISTINCT FROM $2::jsonb", [
         sessionId,
@@ -294,6 +340,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [session.id],
       );
       return (rows[0]?.origin as SessionOrigin | undefined) ?? "conversation";
+    },
+
+    async getManyForParticipant(tenant, ids, principalId): Promise<Session[]> {
+      if (!ids.length) return [];
+      const rows = await db
+        .forTenant(tenant)
+        .q(participantSessionsSql(" AND s.tenant_id = $3 AND s.id = ANY($2::text[])"), [
+          rosterIds(principalId),
+          [...ids],
+          tenant.id,
+        ]);
+      return rows.map(rowToParticipantSession);
     },
 
     async listDescendantsForParticipant(rootId, principalId, limit): Promise<Session[]> {

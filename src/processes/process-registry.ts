@@ -49,6 +49,7 @@ export interface ProcessRegistry {
   register(rec: NewProcessRecord): Promise<ProcessRecord>;
   get(processId: string): Promise<ProcessRecord | null>;
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
+  runningJobsIn(tenant: Tenant, scopeIds: readonly string[], sessionRefs: readonly string[]): Promise<ProcessRecord[]>;
   runningJobStartedBy(
     starter: JobStarter,
     job: { scopeId: string; sandboxId: string; command: string },
@@ -225,6 +226,16 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async listByScope(scopeId) {
       return (await q("SELECT * FROM process_sessions WHERE scope_id = $1", [scopeId])).map(pgRowToRecord);
+    },
+    async runningJobsIn(tenant, scopeIds, sessionRefs) {
+      if (!scopeIds.length || !sessionRefs.length) return [];
+      await migrated();
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT * FROM process_sessions WHERE tenant_id = $1 AND scope_id = ANY($2::text[]) AND status = 'running'
+            AND kind = 'background' AND session_ref = ANY($3::text[])`,
+        [tenant.id, [...scopeIds], [...sessionRefs]],
+      );
+      return rows.map(pgRowToRecord);
     },
     async runningJobStartedBy({ tenant, actorId, botActor }, { scopeId, sandboxId, command }) {
       await migrated();

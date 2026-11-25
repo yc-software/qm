@@ -9,6 +9,8 @@ import type {
   ShipActionPolicy,
 } from "./types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { postsInto, type ScopeMove } from "../triggers/trigger-store.ts";
+import { samePerson } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -67,6 +69,7 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
+  retargetMovedDestinations(move: ScopeMove, members: readonly string[]): Promise<Loop[]>;
   claimTenants(): Promise<ClaimedRow[]>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
@@ -195,6 +198,24 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    async retargetMovedDestinations(move, members) {
+      const moved = new Set(move.threads.keys());
+      const tied = (await backing.entries()).filter(([, loop]) => postsInto(loop, moved));
+      const stays = (loop: Loop) => members.some((member) => samePerson(member, loop.owner));
+      if (tied.length)
+        await backing.mutateMany(
+          tied.map(([id]) => ({
+            id,
+            apply: (loop) => {
+              const { project: _project, ...destination } = loop!.destination!;
+              return stays(loop!)
+                ? { ...loop!, destination: { ...destination, audienceScopeId: move.to } }
+                : { ...loop!, destination: undefined };
+            },
+          })),
+        );
+      return tied.flatMap(([, loop]) => (stays(loop) ? [] : [loop]));
+    },
     claimTenants: () => backing.claimTenants(),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;

@@ -387,6 +387,37 @@ export async function forkSession(
   );
 }
 
+interface MoveAudienceMember {
+  principalId: string;
+  displayName: string;
+}
+
+export interface HeldSessionMove {
+  sessionId: string;
+  message: string;
+}
+
+export type SessionMoveResult =
+  | { sessions: CoreSession[]; held: HeldSessionMove[]; notices?: string[] }
+  | { confirm: MoveAudienceMember[]; question: string; held: HeldSessionMove[] };
+
+export async function moveSessions(
+  sessionIds: readonly string[],
+  scopeId: string,
+  audience: readonly string[],
+): Promise<SessionMoveResult> {
+  try {
+    return await api("/api/sessions/move", { method: "POST", body: JSON.stringify({ sessionIds, scopeId, audience }) });
+  } catch (error) {
+    const body =
+      error instanceof ApiError
+        ? (error.body as { error?: string; message?: string; gains?: MoveAudienceMember[]; held?: HeldSessionMove[] })
+        : null;
+    if (body?.error !== "confirm_audience") throw error;
+    return { confirm: body.gains ?? [], question: body.message ?? "", held: body.held ?? [] };
+  }
+}
+
 export function forkCutSeq(
   items: Item[],
   messages: readonly unknown[],
@@ -489,10 +520,6 @@ export async function suggestNextPrompt(id: string): Promise<{ enabled: boolean;
   return api<{ enabled: boolean; suggestion: string | null }>(`/api/sessions/${encodeURIComponent(id)}/next-prompt`, {
     method: "POST",
   });
-}
-
-export async function detachSession(id: string): Promise<{ detached: true }> {
-  return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
 }
 
 export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
