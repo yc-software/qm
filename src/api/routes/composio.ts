@@ -216,8 +216,14 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   if (cursor) query.set("cursor", cursor);
   try {
     let data = NO_COMPOSIO;
-    if (access.key && only) data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
-    else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
+    if (access.key && only) {
+      data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
+      const missing = !apps.some((app) => app.toolkit === only) && Array.isArray(data.items) && !data.items.length;
+      const found = missing
+        ? await request(ctx, access.key, `/toolkits?${new URLSearchParams({ search: only })}`)
+        : NO_COMPOSIO;
+      if (Array.isArray(found.items) && found.items.length === 1) data = found;
+    } else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (

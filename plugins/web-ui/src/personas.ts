@@ -174,7 +174,7 @@ export async function loadPersonas(): Promise<void> {
       notice = "";
       return;
     }
-    notice = errMessage(e, "Couldn't load personas.");
+    notice = errMessage(e, "Couldn't load bots.");
   }
 }
 
@@ -214,19 +214,19 @@ function drawPersonasPage(): void {
   const visible = personasState.list.filter(
     (persona) => !term || `${persona.name} ${persona.description}`.toLowerCase().includes(term),
   );
-  let empty = "No personas yet. Create one to give QM a reusable role you can chat with anywhere.";
-  if (loading && !personasState.list.length) empty = "Loading personas…";
-  else if (!personasState.enabled) empty = "Personas aren't turned on for you.";
-  else if (term && personasState.list.length) empty = "No personas match your search.";
+  let empty = "No bots yet. Create one to give QM a reusable role you can chat with anywhere.";
+  if (loading && !personasState.list.length) empty = "Loading bots…";
+  else if (!personasState.enabled) empty = "Bots aren't turned on for you.";
+  else if (term && personasState.list.length) empty = "No bots match your search.";
   render(
     listPageTpl({
-      title: "Personas",
+      title: "Bots",
       ...(personasState.enabled
         ? {
-            action: { label: "New persona", onClick: showNewPersonaForm },
+            action: { label: "New bot", onClick: showNewPersonaForm },
             search: {
               value: query,
-              placeholder: "Search personas",
+              placeholder: "Search bots",
               onInput: (value: string) => {
                 query = value;
                 drawPersonasPage();
@@ -324,7 +324,7 @@ function chatWithPersona(persona: PersonaView): Promise<void> {
 }
 
 function forkPersona(persona: PersonaView): void {
-  saveDraft(newChatDraftKey(appState.me?.user), `Fork the ${persona.name} persona for me.`);
+  saveDraft(newChatDraftKey(appState.me?.user), `Fork the ${persona.name} bot for me.`);
   switchView("chats");
   startNewChat();
 }
@@ -373,7 +373,7 @@ async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}
     showPersonaDetail(persona, flash, opts.push);
   } catch (e) {
     if (seq !== viewSeq) return;
-    notice = errMessage(e, "Couldn't open that persona.");
+    notice = errMessage(e, "Couldn't open that bot.");
     drawPersonasPage();
   }
 }
@@ -401,8 +401,8 @@ const LAST_OWNER = "The only owner. Make someone else an owner before changing t
 
 function flagOffNote(grant: PersonaGrant): string {
   return grant.scopeId.startsWith("personal:")
-    ? "Can't use personas until an admin turns on the Personas feature flag for them in Admin → Customize → Feature flags."
-    : "Personas is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
+    ? "Can't use bots until an admin turns on the Bots feature flag for them in Admin → Customize → Feature flags."
+    : "Bots is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
 }
 
 function accessRowTpl(persona: PersonaDetail, grant: PersonaGrant, lastOwner: boolean): TemplateResult {
@@ -493,7 +493,7 @@ function skillsSection(persona: PersonaDetail): TemplateResult {
       ${rowAction(
         "Ask QM",
         Sparkles,
-        () => void chatWithPrompt(persona, `Write a skill for the ${persona.name} persona that `),
+        () => void chatWithPrompt(persona, `Write a skill for the ${persona.name} bot that `),
       )}`
     : nothing;
   const body = persona.skills?.length
@@ -1010,7 +1010,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
       setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
       await openPersona(saved.persona.id, persona ? "Saved." : "");
     } catch (err) {
-      state.error = errMessage(err, "Couldn't save this persona.");
+      state.error = errMessage(err, "Couldn't save this bot.");
       state.saving = false;
       redraw();
     }
@@ -1026,7 +1026,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
         return null;
       },
     });
-  const submitLabel = persona ? "Save" : "Create persona";
+  const submitLabel = persona ? "Save" : "Create bot";
   return html`
     <form class="resource-form persona-form" @submit=${submit}>
       <div class="persona-form-identity">
@@ -1070,8 +1070,8 @@ function showNewPersonaForm(): void {
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
-        ${listBackLink("Personas", backToList)}
-        <h2>New persona</h2>
+        ${listBackLink("Bots", backToList)}
+        <h2>New bot</h2>
         ${personaFormTpl(null, state, draw)}
       </div>`,
       host,
@@ -1091,7 +1091,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
-        ${listBackLink("Personas", backToList)}
+        ${listBackLink("Bots", backToList)}
         <div class="resource-heading">
           <h2 class="persona-heading">
             <span class="persona-icon">${personaIconTpl(persona.icon, 22)}</span><span dir="auto">${persona.name}</span>
@@ -1149,7 +1149,7 @@ async function deletePersona(persona: PersonaView): Promise<void> {
 }
 
 export function personaName(personaId: string): string {
-  return personasState.list.find((p) => p.id === personaId)?.name ?? "Persona";
+  return personasState.list.find((p) => p.id === personaId)?.name ?? "Bot";
 }
 
 export function sessionPersonaChip(
@@ -1164,7 +1164,7 @@ export function sessionPersonaChip(
       class="session-persona-open"
       type="button"
       aria-label=${`View ${name}`}
-      ${tip(`Chatting as ${name}. Open persona`)}
+      ${tip(`Chatting as ${name}. Open bot`)}
       @pointerdown=${(e: Event) => e.stopPropagation()}
       @click=${(e: Event) => {
         e.stopPropagation();

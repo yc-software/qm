@@ -105,7 +105,7 @@ export class OnboardingWelcome extends LitElement {
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
-  private pickerState: PickerState = { query: "", expanded: false };
+  private pickerState: PickerState = { query: "" };
   private retryService: PreviewAttempt["service"] | null = null;
   declare about: boolean;
   declare connectionOutcome: ConnectionOutcome;
@@ -259,6 +259,7 @@ export class OnboardingWelcome extends LitElement {
         (service) => this.authorize(service, this.staleAccount(service.id)),
         this.pickerState,
         !this.seeded,
+        this.seeded ? 15 : 6,
       );
   }
   disconnectedCallback(): void {
@@ -453,7 +454,8 @@ export class OnboardingWelcome extends LitElement {
     try {
       const asked = this.widget === "apps" ? this.toolkit : "";
       let services = asked ? await load(asked) : [];
-      if (!services.some((service) => service.id === asked)) services = await load("");
+      if (services.length === 1) this.toolkit = services[0]!.id;
+      else if (!services.some((service) => service.id === asked)) services = await load("");
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -663,7 +665,7 @@ export class OnboardingWelcome extends LitElement {
       ${
         card || ["slack", "slack-account"].includes(this.widget)
           ? (card ?? nothing)
-          : html`<div class="welcome-beat" style="--welcome-delay:1300ms">
+          : html`<div class="welcome-beat welcome-apps" style="--welcome-delay:1300ms">
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error

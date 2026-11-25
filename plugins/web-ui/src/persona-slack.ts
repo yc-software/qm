@@ -155,7 +155,7 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
     if (current.busy) return;
     const prompt = deleteRemote
       ? "Disconnect and delete this Slack app from Slack?"
-      : "Disconnect this Slack app from the persona?";
+      : "Disconnect this Slack app from the bot?";
     if (!window.confirm(prompt)) return;
     current.busy = true;
     current.error = "";
@@ -223,7 +223,7 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
         </div>
       </div>`;
     }
-    return html`<div class="hint">Give this persona its own Slack bot user and @handle.</div>
+    return html`<div class="hint">Give this bot its own Slack bot user and @handle.</div>
       ${
         current.showSetup && status
           ? html`<div class="persona-slack-setup">
@@ -252,7 +252,7 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
                         isOrgAdmin
                           ? html`<label class="checkbox-row">
                               <input name="saveOrg" type="checkbox" checked ?disabled=${current.busy} />
-                              Save for this workspace so future persona apps are 1-click
+                              Save for this workspace so future bot apps are 1-click
                             </label>`
                           : nothing
                       }

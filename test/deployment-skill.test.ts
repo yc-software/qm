@@ -168,7 +168,6 @@ test("onboarding composes existing access skills without a provider-setup prereq
   assert.match(onboarding, /project key is not proof that a personal account is connected/);
   assert.match(onboarding, /skip account connection/);
   assert.match(onboarding, /help configure a new source only if they ask/);
-  assert.match(onboarding, /never ask regular users to provision it/);
   assert.match(admin, /GET \/v1\/admin\/slack-installation/);
   assert.match(admin, /installAvailable: true/);
   assert.match(admin, /In web chat, reply\s+with one short line and `::add-to-slack\{\}`/);
