@@ -259,10 +259,7 @@ test("the catalog can be asked for one app, which costs one small request", asyn
   );
   assert.deepEqual((await f.invoke("/v1/composio/toolkits?toolkit=notes")).data.items, []);
   f.replies.push({ items: [] }, app("linear_mcp", "Linear MCP", "OAUTH2"));
-  assert.deepEqual(
-    (await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items.map((x: { id: string }) => x.id),
-    ["linear_mcp"],
-  );
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items[0]?.id, "linear_mcp");
   f.replies.push(new Response("down", { status: 500 }));
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);

@@ -169,8 +169,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
-    if (path.startsWith("/api/composio/toolkits?cursor=&toolkit=granola"))
-      return Response.json({ items: [{ id: "granola_mcp", name: "Granola MCP", description: "Notes" }] });
+    if (path.endsWith("toolkit=granola")) return Response.json({ items: [{ id: "granola_mcp", name: "Granola MCP" }] });
     if (path.startsWith("/api/composio/toolkits"))
       return Response.json({ items: [{ id: "gmail", name: "Gmail", description: "Email" }], nextCursor: null });
     if (path.startsWith("/api/runtime-config")) {

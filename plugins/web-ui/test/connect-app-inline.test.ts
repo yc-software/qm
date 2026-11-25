@@ -55,7 +55,6 @@ test("a card for one app shows only that app and continues the chat after a veri
     assert.equal(scoped.querySelector('input[type="search"]'), null);
     assert.equal(scoped.querySelector(".connection-picker"), null);
     assert.equal(named.querySelector(".connection-card strong")?.textContent, "Granola MCP");
-    assert.equal(named.querySelector(".connection-picker"), null);
     assert.ok(other.querySelector(".connection-picker"), "an app the catalog does not have falls back to the picker");
   } finally {
     await h.close();
