@@ -9,6 +9,7 @@ import {
   processCredentialFiles,
   type ExecutionFileCredential,
 } from "../credentials/execute-files.ts";
+import { scrubGitRemotes } from "../credentials/git-remote-scrub.ts";
 import { disclosedMemory } from "../memory/disclosure.ts";
 import { lookupText } from "../memory/mcp-memory-provider.ts";
 import { MaskedExecutionError, executionSecretEnv, createExactSecretValueMasker } from "../security/secret-masking.ts";
@@ -940,7 +941,9 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
         },
         async () => {
-          credentialNote = await fileExecution?.finish();
+          const scrubNote = requested.length ? await scrubGitRemotes(deps.sandbox, handle) : undefined;
+          const fileNote = await fileExecution?.finish();
+          credentialNote = [scrubNote, fileNote].filter(Boolean).join("\n") || undefined;
         },
       ).catch((error: unknown) => {
         if (credentialNote) console.warn(`${credentialNote} The command itself failed.`);

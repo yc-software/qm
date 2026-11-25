@@ -1851,7 +1851,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`; git per the github-gitlab skill, never in a remote URL); proxy handles via the use-shared-credential skill.",
   ];
   const owners = [...groups.keys()].sort(
     (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),

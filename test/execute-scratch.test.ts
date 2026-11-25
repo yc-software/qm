@@ -280,7 +280,7 @@ test("execute refuses a credential that would override the computer's own enviro
   );
   assert.equal(ran, 0, "the command never runs with a redirected control plane");
   await ctx.execute("gh api user", { credentials: ["kc_fine12345678"] });
-  assert.equal(ran, 1);
+  assert.equal(ran, 2);
 });
 
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {

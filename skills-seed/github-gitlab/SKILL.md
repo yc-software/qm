@@ -23,6 +23,17 @@ a write, ask. Do not infer permission from a login merely being present on the c
 - **Personal login:** use the authorized `gh`, `glab`, or Git login. Check the active
   provider account (for example, `gh api user --jq .login`) and the Git transport's auth
   configuration; a CLI API identity alone does not prove which account Git will use.
+- **Personal token in the environment** (for example `GITHUB_TOKEN` from a selected
+  handle): give Git the token in the same command through environment config. Never
+  write it into a remote URL or `git config`; QM strips credentials from remote URLs
+  under the workspace after every credentialed command.
+
+  ```bash
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+    GIT_CONFIG_VALUE_0="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)" \
+    git push origin HEAD
+  ```
+
 - **Shared org credential:** if listed in the prompt, select its slug and use the
   core-hosted smart HTTP remote in the `use-shared-credential` skill. This uses
   the configured shared account, even when a personal OAuth connector is live.

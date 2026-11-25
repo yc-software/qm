@@ -65,8 +65,9 @@ test("credential resolution follows command policy and successful provisioning",
     credential(events, "unused"),
   ]);
   await ctx.execute("echo ready", { credentials: ["selected"] });
-  assert.deepEqual(events, ["policy", "provision", "resolve:selected", "commit:selected", "run"]);
+  assert.deepEqual(events, ["policy", "provision", "resolve:selected", "commit:selected", "run", "run"]);
   assert.deepEqual(runs[0]?.env, { TOKEN: "synthetic" });
+  assert.equal(runs[1]?.env, undefined, "the remote scrub runs without the command's credentials");
 });
 
 for (const stop of ["policy", "provision"] as const) {
@@ -155,6 +156,7 @@ test("single-use consumption follows all standing grant revalidation regardless 
     "commit:standing-b",
     "commit:once",
     "run",
+    "run",
   ]);
 });
 
@@ -186,7 +188,7 @@ test("newly available handles are resolved from the current catalog and revocati
   assert.ok(!events.includes("resolve:unselected"));
   available = [];
   await assert.rejects(ctx.execute("true", { credentials: ["new"] }), /not available/);
-  assert.equal(runs.length, 2);
+  assert.equal(runs.length, 3);
 });
 
 function scratchContext(events: string[], extra: Partial<ToolContextDeps> = {}) {
