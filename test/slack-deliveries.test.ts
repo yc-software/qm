@@ -239,21 +239,21 @@ for (const [label, destination, sourceThreadRef, webUiPublicUrl, footer] of [
     { persona: { id: "p 1", name: "Ada <&>" } },
     undefined,
     "https://agent.example/web-ui/",
-    "From <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
+    "Answered as <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
   ],
   [
     "a persona post without a web UI",
     { persona: { id: "p 1", name: "Ada <&>" } },
     undefined,
     undefined,
-    "From Ada &lt;&amp;&gt;",
+    "Answered as Ada &lt;&amp;&gt;",
   ],
   [
     "a persona's project cron post",
     { persona: { id: "p 1", name: "Ada <&>" }, project: { id: "j1", name: "Launch" } },
     "cron:c1:fire:123",
     "https://agent.example",
-    "From <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> in <https://agent.example/contexts?scope=group%3Aweb-project-j1|Launch> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
+    "Answered as <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> in <https://agent.example/contexts?scope=group%3Aweb-project-j1|Launch> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
   ],
 ] as const) {
   test(`${label} names where it came from in the footer`, async () => {
@@ -278,7 +278,7 @@ test("a persona post drops its origin when the thread's previous own message wor
     return (posts[0]!.blocks as Array<{ elements?: Array<{ text: string }> }> | undefined)?.at(-1)?.elements?.[0]?.text;
   };
   assert.equal(await footer("Ada"), undefined);
-  assert.equal(await footer("Bo"), "From Ada");
+  assert.equal(await footer("Bo"), "Answered as Ada");
   assert.deepEqual(reads[0], { container: "C1", sub: "100.200", self: true });
 });
 

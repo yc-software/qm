@@ -82,7 +82,7 @@ export function originContext(opts: {
         ]
       : []),
   ];
-  const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
+  const parts = origin.length ? [`Answered as ${origin.join(" in ")}`] : [];
   if (base && opts.source) {
     const title = escapeSlackText(opts.source.title?.trim() || (opts.source.page === "crons" ? "Cron" : "Webhook"));
     parts.push(`${title} · <${base}/${opts.source.page}/${encodeURIComponent(opts.source.id)}|Settings>`);
