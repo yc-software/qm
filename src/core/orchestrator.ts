@@ -104,7 +104,6 @@ import {
   approvalView,
   createApprovalDecisions,
   createApprovalLedger,
-  heldInputAllowedInPausedTurn,
   newApprovalRecord,
   resolveLiveApproval,
   withdrawCallApprovals,
@@ -658,6 +657,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(fields.kind !== "input" && releasedAttachments?.length
               ? { classifiedAttachments: releasedAttachments }
               : {}),
+            ...(fields.kind !== "input" && heldInputAllowedBy ? { allowedInputBy: heldInputAllowedBy } : {}),
           },
           input,
           resolution.approvalGrantModes,
@@ -705,11 +705,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           canonicalJson(screenedFields(input, homeChannel?.channelName));
       const approvalReplaysOwnRequest =
         !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
-      const replaysHeldInput =
+      const heldInputAllowedBy =
         approvalReplaysOwnRequest &&
-        (approvalRecord?.kind === "input" ||
-          (input.approval?.approved === true &&
-            (await heldInputAllowedInPausedTurn(deps.sessions, approvalSession.id, input, actor.id))));
+        input.approval?.approved === true &&
+        (approvalRecord?.kind === "input" || samePerson(approvalRecord?.allowedInputBy, actor.id))
+          ? actor.id
+          : undefined;
+      const replaysHeldInput = (approvalReplaysOwnRequest && approvalRecord?.kind === "input") || !!heldInputAllowedBy;
       const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;

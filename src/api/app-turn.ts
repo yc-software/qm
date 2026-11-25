@@ -592,7 +592,12 @@ export function createTurnMethods(
         const session = await deps.sessions.get(record.sessionId);
         if (!session || !(await approvalVisibleToViewer(session, viewer, record))) return null;
       }
-      const { call: _call, classifiedAttachments: _classifiedAttachments, ...view } = record;
+      const {
+        call: _call,
+        classifiedAttachments: _classifiedAttachments,
+        allowedInputBy: _allowedInputBy,
+        ...view
+      } = record;
       return { requestId, ...view, ...executesOnApprove(record) };
     },
 

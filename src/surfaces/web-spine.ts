@@ -4,7 +4,7 @@ import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { isShownReply, type Item, type NewItem } from "../sessions/items.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
-import { newestMessage, type SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
 import { personalScope, type Session } from "../types.ts";
 import { snippet } from "../util/text.ts";
 import type { TurnStream } from "../runs/turn-stream.ts";
@@ -40,6 +40,24 @@ export function postedWith(queued: NewItem[], result: NewItem): NewItem[] {
   return posted.map((post) => ({ ...post, body: { ...post.body, callId: result.callId } }));
 }
 
+const PAGE = 50;
+
+async function newestShownReply(
+  sessions: Pick<SessionStore, "getItems">,
+  sessionId: string,
+): Promise<Item | undefined> {
+  for (let beforeSeq: number | undefined; ;) {
+    const page = await sessions.getItems(sessionId, {
+      messagesOnly: true,
+      limit: PAGE,
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    });
+    const found = page.findLast(isShownReply);
+    if (found || page.length < PAGE) return found;
+    beforeSeq = page[0]!.seq;
+  }
+}
+
 export function webTranscript(
   spine: Pick<SpineState, "surfaceOutboundCount">,
   transcript: NewItem[],
@@ -71,7 +89,7 @@ export function webTranscript(
         : record(text, files ? { files } : {}),
     edit: async (ref: string, text: string): Promise<SurfacePostResult> => {
       if (!text.trim()) return { ok: false, message: "An edit needs the new text; nothing was changed." };
-      const latest = await newestMessage(sessions, sessionId, isShownReply);
+      const latest = await newestShownReply(sessions, sessionId);
       if (latest && String(latest.seq) === ref.trim()) return record(text, { supersedes: latest.seq });
       return {
         ok: false,
