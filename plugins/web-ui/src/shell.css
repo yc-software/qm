@@ -12715,6 +12715,9 @@ h3.ambient-field-label {
   background: var(--background);
   color: var(--muted-foreground);
 }
+.connection-picker > .connection-picker-search {
+  margin-top: 12px;
+}
 .connection-picker-search:focus-within {
   outline: 2px solid var(--muted-foreground);
   outline-offset: 2px;
@@ -12730,7 +12733,7 @@ h3.ambient-field-label {
   font-size: 12px;
 }
 .connection-picker-caption {
-  margin: 16px 0 8px;
+  margin: 0 0 8px;
   font-size: 11px;
   color: var(--muted-foreground);
 }
@@ -12760,10 +12763,6 @@ h3.ambient-field-label {
   border-color: var(--muted-foreground);
 }
 .connection-picker-app:focus-visible,
-.connection-picker-more:focus-visible {
-  outline: 2px solid var(--foreground);
-  outline-offset: 2px;
-}
 .connection-picker-app .connector-logo {
   flex: 0 0 24px;
   width: 24px;
@@ -12786,20 +12785,6 @@ h3.ambient-field-label {
 }
 .connection-picker-app:disabled .connection-picker-trailing {
   color: var(--success);
-}
-.connection-picker-more {
-  display: block;
-  width: 100%;
-  margin-top: 12px;
-  padding: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  cursor: pointer;
-}
-.connection-picker-more:hover {
-  color: var(--foreground);
 }
 .connection-picker-empty {
   padding: 18px 4px;
