@@ -69,8 +69,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     personAuthorityTurn,
     actAsActor,
   } = turn;
-  const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
-  const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
+  const sandboxTokenExpiry = Date.now() + SANDBOX_CAPABILITY_TTL_MS;
   const scopeAttestation = {
     ...(external ? { externalSlack: true as const } : {}),
     actorId: actor.id,

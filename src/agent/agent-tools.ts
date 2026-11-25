@@ -89,7 +89,6 @@ export interface AgentToolsOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
-  sandboxCapabilityTtlMs?: number;
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -126,7 +125,6 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
-    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
   };
 }
 

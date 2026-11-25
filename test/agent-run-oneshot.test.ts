@@ -96,7 +96,6 @@ test("agentConfigOptions and configRouteOptions map every Config knob the agent 
     execTimeoutMaxMs: 33_000,
     backgroundJobTtlMs: 44_000,
     backgroundJobTtlMaxMs: 55_000,
-    sandboxCapabilityTtlMs: 66_000,
   });
   assert.deepEqual(configRouteOptions(config), {
     defaultModelId: "model-base",
@@ -118,7 +117,6 @@ test("agentConfigOptions and configRouteOptions map every Config knob the agent 
     execTimeoutCeilingMs: 33_000,
     backgroundJobTtlMs: 44_000,
     backgroundJobTtlMaxMs: 55_000,
-    sandboxCapabilityTtlMs: 66_000,
   });
 });
 

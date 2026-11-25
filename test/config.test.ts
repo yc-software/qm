@@ -957,13 +957,6 @@ test("the spend export token is optional, strong, trimmed and never shared with 
   }
 });
 
-test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
-  assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
-  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
-  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
-  assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
-});
-
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
   const base = loadConfig({});
   assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1" }), "gpt-6.1-sol");
