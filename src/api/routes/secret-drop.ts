@@ -15,14 +15,12 @@ import {
   readRegistry,
   REGISTRY_ERRORS,
   setBrainSecret,
-  brainSecretName,
   type MemoryRegistry,
 } from "../../memory/registry.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
-import { discardUnusedSecret } from "./admin/memory-registry.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import {
   adminStanding,
@@ -318,8 +316,7 @@ async function saveBrainSecret(
   };
   const owner = canonicalPerson(drop.ownerId);
   const standing = await adminStanding(deps, tenantOf(ctx), owner);
-  let clientSecretRef: string | undefined;
-  const save = (record: MemoryRegistry) => {
+  const save = (record: MemoryRegistry, clientSecretRef?: string) => {
     const brain = record.brains.find(({ id }) => id === target.id);
     const refusal = brain && brainRefusal(record, brain, owner, standing);
     if (refusal) throw new MemoryRegistryError(403, lostBrainAccess(refusal));
@@ -333,12 +330,9 @@ async function saveBrainSecret(
     });
   };
   try {
-    if (registry.secrets) clientSecretRef = await registry.secrets.put(brainSecretName(target.id), secret);
-    await registry.update(save);
-    await discardUnusedSecret(registry, clientSecretRef);
+    await registry.update(save, { brainId: target.id, value: secret });
     if (!(await take())) return;
   } catch (error) {
-    await discardUnusedSecret(registry, clientSecretRef);
     if (!(error instanceof MemoryRegistryError)) throw error;
     return refuse(error.status, REGISTRY_ERRORS[error.status], error.message);
   }

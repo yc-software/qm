@@ -9,9 +9,6 @@ import {
   readRegistry,
   redactBrain,
   REGISTRY_ERRORS,
-  openBrainSecrets,
-  resolveMemoryRegistry,
-  brainSecretName,
   setMemberBrains,
   type MemoryRegistry,
   type MemoryRegistryStore,
@@ -53,7 +50,7 @@ async function view(record: MemoryRegistry, registry: MemoryRegistryStore, orgOn
     memberBrains: memberBrainsOn(scoped),
     brains: scoped.brains.map(redactBrain),
     bindings: scoped.bindings,
-    disabled: resolveMemoryRegistry(scoped, registry, await openBrainSecrets(scoped, registry)).disabled,
+    disabled: (await registry.resolve(scoped)).disabled,
     overlay: [...registry.overlayIds],
   };
 }
@@ -76,22 +73,24 @@ export async function writeRegistry(
   },
 ): Promise<void> {
   const { actor, registry } = write;
-  let clientSecretRef: string | undefined;
   try {
     const clientSecret = isObj(ctx.body) ? ctx.body.clientSecret : undefined;
-    if (registry.secrets && write.brainId && typeof clientSecret === "string" && clientSecret.trim())
-      clientSecretRef = await registry.secrets.put(brainSecretName(write.brainId), clientSecret);
-    const record = await registry.update((current) =>
-      write.apply(current, {
-        actor,
-        now: Date.now(),
-        overlayIds: registry.overlayIds,
-        key: registry.key,
-        ...(registry.secrets ? { secrets: registry.secrets } : {}),
-        ...(clientSecretRef ? { clientSecretRef } : {}),
-      }),
+    const secret =
+      write.brainId && typeof clientSecret === "string" && clientSecret.trim()
+        ? { brainId: write.brainId, value: clientSecret }
+        : undefined;
+    const record = await registry.update(
+      (current, clientSecretRef) =>
+        write.apply(current, {
+          actor,
+          now: Date.now(),
+          overlayIds: registry.overlayIds,
+          key: registry.key,
+          ...(registry.secrets ? { secrets: registry.secrets } : {}),
+          ...(clientSecretRef ? { clientSecretRef } : {}),
+        }),
+      secret,
     );
-    await discardUnusedSecret(registry, clientSecretRef);
     audit(ctx, {
       principalId: actor,
       action: write.action,
@@ -100,16 +99,8 @@ export async function writeRegistry(
     });
     return sendJson(ctx.res, 200, { ok: true, ...(await write.show(record)) });
   } catch (error) {
-    await discardUnusedSecret(registry, clientSecretRef);
     return registryError(ctx, error);
   }
-}
-
-export async function discardUnusedSecret(registry: MemoryRegistryStore, ref?: string): Promise<void> {
-  if (!registry.secrets || !ref) return;
-  const stored = readRegistry((await registry.current()).record);
-  if (stored.brains.some((brain) => brain.auth.clientSecretEnc === ref)) return;
-  await registry.secrets.delete(ref);
 }
 
 async function change(

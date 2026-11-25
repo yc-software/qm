@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createEncryptedSecretStore, type SecretStore } from "../src/credentials/secret-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStore,
+} from "../src/credentials/secret-store.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import type { KeychainCredential } from "../src/credentials/keychain.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
@@ -74,4 +78,18 @@ test("model keys: rotation deletes the old secret, and deleting the key deletes 
   await store.delete("anthropic", "admin");
   assert.equal(await store.resolve("anthropic"), null);
   assert.equal(secrets.values.size, 0);
+});
+
+test("deleteReplacedSecrets: logs and continues when a delete fails", async () => {
+  const deleted: string[] = [];
+  const store: SecretStore = {
+    put: async () => "",
+    get: async () => "",
+    async delete(ref) {
+      if (ref === "bad") throw new Error("vault unavailable");
+      deleted.push(ref);
+    },
+  };
+  await deleteReplacedSecrets(store, ["keep", "bad", "old"], ["keep"]);
+  assert.deepEqual(deleted, ["old"]);
 });

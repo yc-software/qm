@@ -1,4 +1,5 @@
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
+import { errMessage } from "../util/errors.ts";
 
 export interface SecretStore {
   put(name: string, value: string): Promise<string>;
@@ -25,5 +26,12 @@ export async function deleteReplacedSecrets(
   previous: readonly (string | undefined)[],
   next: readonly (string | undefined)[],
 ): Promise<void> {
-  for (const ref of previous) if (ref && !next.includes(ref)) await store.delete(ref);
+  for (const ref of previous) {
+    if (!ref || next.includes(ref)) continue;
+    try {
+      await store.delete(ref);
+    } catch (err) {
+      console.error(`[secret-store] failed to delete replaced secret ${ref}: ${errMessage(err)}`);
+    }
+  }
 }
