@@ -43,8 +43,10 @@ export function previousRoster(history: readonly Item[]): RosterSnapshot | undef
   return retainedSnapshot(history, rosterOf).previous;
 }
 
-const screenedBefore = (previous: RosterSnapshot | undefined, id: string, name: string): boolean =>
-  !!previous?.screened?.includes(id) && previous.roster.some((o) => o.id === id && o.name === name);
+function screenedNames(previous: RosterSnapshot | undefined): Map<string, string> {
+  const screened = new Set(previous?.screened);
+  return new Map((previous?.roster ?? []).filter((o) => screened.has(o.id)).map((o) => [o.id, o.name]));
+}
 
 export function peopleToScreen(
   actorId: string,
@@ -52,14 +54,14 @@ export function peopleToScreen(
   audience: readonly Principal[],
   previous: RosterSnapshot | undefined,
 ): string[] {
-  const left = roster ? (previous?.roster ?? []).filter((o) => !roster.some((m) => m.principalId === o.id)) : [];
+  const screened = screenedNames(previous);
+  const current = new Set(roster?.map((m) => m.principalId));
+  const left = roster ? (previous?.roster ?? []).filter((o) => !current.has(o.id)) : [];
   const names = [
     ...(roster ?? []).map((m) => ({ id: m.principalId, name: m.displayName })),
     ...audience.map((p) => ({ id: p.id, name: p.displayName })),
     ...left,
-  ].flatMap(({ id, name }) =>
-    name?.trim() && !samePerson(id, actorId) && !screenedBefore(previous, id, name) ? [name] : [],
-  );
+  ].flatMap(({ id, name }) => (name?.trim() && !samePerson(id, actorId) && screened.get(id) !== name ? [name] : []));
   return [...new Set(names)].sort();
 }
 
@@ -69,10 +71,9 @@ export function screenedRoster(
   previous: RosterSnapshot | undefined,
   passed: boolean,
 ): string[] {
+  const screened = screenedNames(previous);
   return (roster ?? [])
-    .filter(
-      (m) => screenedBefore(previous, m.principalId, m.displayName) || (passed && !samePerson(m.principalId, actorId)),
-    )
+    .filter((m) => screened.get(m.principalId) === m.displayName || (passed && !samePerson(m.principalId, actorId)))
     .map((m) => m.principalId)
     .sort();
 }
@@ -90,12 +91,13 @@ export function membershipEvent(
   const record = { roster, sessionId, ...(screened.length ? { screened: [...screened] } : {}) };
   const previous = previousRoster(history);
   if (!previous) return { text: "", record };
-  const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
+  const previousIds = new Set(previous.roster.map((o) => o.id));
+  const currentIds = new Set(roster.map((o) => o.id));
   const joined = current
-    .filter((m) => absentFrom(previous.roster, m.principalId))
+    .filter((m) => !previousIds.has(m.principalId))
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
     .map(memberLabel);
-  const left = previous.roster.filter((m) => absentFrom(roster, m.id)).map((m) => m.name);
+  const left = previous.roster.filter((m) => !currentIds.has(m.id)).map((m) => m.name);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",

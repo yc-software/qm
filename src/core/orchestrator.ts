@@ -760,6 +760,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audit,
         approvalGrantsFor,
       });
+      const screenedPeople = screenedRoster(actor.id, rosterMembers, previousNames, screenedClean);
       if (flaggedScreenedInput) {
         let type: SessionType = "channel";
         if (conversation.kind === "dm") type = "dm";
@@ -2274,7 +2275,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             context,
             recallOutcomes,
             rosterMembers,
-            screenedPeople: screenedRoster(actor.id, rosterMembers, previousNames, screenedClean),
+            screenedPeople,
             rawEntries,
             session,
             deps,
