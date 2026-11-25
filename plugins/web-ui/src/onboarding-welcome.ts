@@ -50,7 +50,6 @@ export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
     onIdea: { attribute: false },
-    ideasDisabled: { type: Boolean },
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
@@ -72,7 +71,6 @@ export class OnboardingWelcome extends LitElement {
   };
   declare me: Me | null;
   declare onIdea: ((prompt: string) => void) | undefined;
-  declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack" | "slack-account";
