@@ -786,7 +786,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
 
 test("a queued web turn runs on its own — the sender's client need never come back", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:unattended";
+  const threadRef = "web:U1:queued";
   const first = await built.app.turn(web("the long one", threadRef));
   const live = await built.runs.claimById(first.runId!, "w1", 30_000);
   const queued = await built.app.turn(web("the queued one", threadRef));

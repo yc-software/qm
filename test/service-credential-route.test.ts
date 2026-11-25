@@ -1110,7 +1110,7 @@ test("orchestrator vends a capability for only the requested org credential", as
   });
   const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
-  assert.equal(botClaims?.liveActor, true);
+  assert.equal(botClaims?.personAuthority, undefined);
   assert.deepEqual(botClaims?.members, [{ id: "B-LEGACY", type: "internal" }]);
 });
 

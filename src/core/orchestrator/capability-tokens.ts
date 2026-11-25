@@ -36,9 +36,7 @@ export interface CapabilityTurn {
   strictReadOnly: boolean;
   allInternal: boolean;
   internalAudience: boolean;
-  liveTurn: boolean;
-  liveAuthorTurn: boolean;
-  triggeredTurn: boolean;
+  personAuthorityTurn: boolean;
   actAsActor: boolean;
   useMemory: boolean;
   memoryPolicy: MemoryPolicy;
@@ -68,7 +66,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     external,
     strictReadOnly,
     internalAudience,
-    liveTurn,
+    personAuthorityTurn,
     actAsActor,
   } = turn;
   const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
@@ -81,7 +79,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
     ...(internalAudience ? { internalAudience: true } : {}),
-    ...(liveTurn ? { liveActor: true } : {}),
+    ...(personAuthorityTurn ? { personAuthority: true } : {}),
     ...(turn.session.ephemeral ? { ephemeral: true as const } : {}),
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
@@ -137,9 +135,7 @@ async function mintControlPlaneTokens(
     strictReadOnly,
     allInternal,
     internalAudience,
-    liveTurn,
-    liveAuthorTurn,
-    triggeredTurn,
+    personAuthorityTurn,
     useMemory,
     memoryPolicy,
     memoryScopeId,
@@ -161,7 +157,6 @@ async function mintControlPlaneTokens(
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
-  const presence = { ...(liveAuthorTurn ? { liveAuthor: true } : {}), ...(triggeredTurn ? { triggered: true } : {}) };
   const runBinding = {
     ...(input.runId ? { runId: input.runId } : {}),
     runAttempt: input.attempt,
@@ -171,7 +166,7 @@ async function mintControlPlaneTokens(
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && input.botActor !== true && internalAudience && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && internalAudience && personAuthorityTurn) {
       try {
         const status = await deps.admin.adminStatusOf(tenant, actor);
         actorIsOrgAdmin = status.isAdmin;
@@ -179,7 +174,7 @@ async function mintControlPlaneTokens(
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
-      if (actorIsOrgAdmin && liveTurn && !triggeredTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
+      if (actorIsOrgAdmin && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
     const fullMemoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
@@ -199,7 +194,6 @@ async function mintControlPlaneTokens(
         ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
-      ...presence,
       ...runBinding,
       sessionId: session.id,
       origin,
@@ -240,7 +234,6 @@ async function mintControlPlaneTokens(
       connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
         {
           ...scopeAttestation,
-          ...presence,
           ...runBinding,
           aud: OAUTH_CONSENT_AUD,
           exp: sandboxTokenExpiry,

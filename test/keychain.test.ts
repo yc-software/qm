@@ -1141,7 +1141,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
     const owner = "HANDLE_OWNER";
-    const cap = await capFor(owner, scopeId("personal", owner), { internalAudience: true, liveActor: true });
+    const cap = await capFor(owner, scopeId("personal", owner), { internalAudience: true, personAuthority: true });
     const saved = (await (
       await post(
         "/v1/keychain/credentials",
@@ -1319,9 +1319,13 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
     assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
   });
-  it("a scheduled run replaces its owner's saved login, but work a bot started cannot", async () => {
+  it("an owner's fire replaces their saved login, but work a bot started cannot", async () => {
     const owner = "RELOGIN_OWNER";
-    const later = await capFor(owner, undefined, { triggered: true, threadRef: "dm:live" });
+    const later = await capFor(owner, undefined, {
+      internalAudience: true,
+      personAuthority: true,
+      threadRef: "cron:relogin:fire:1",
+    });
     const save = (secret: string, cap: string) => post("/v1/keychain/credentials", { service: "gh", secret }, cap);
     const { credential } = (await (await save("first", later)).json()) as any;
     const secret = () => built.keychain!.readOwnSecret(owner, credential.id);
@@ -1337,7 +1341,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
 
   it("a credential's writer lease admits one holder until it is released or ends", async () => {
     const owner = "LEASE_OWNER";
-    const cap = await capFor(owner, undefined, { triggered: true });
+    const cap = await capFor(owner);
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "kernel-profile", envKey: "KERNEL_PROFILE", secret: "p" }, cap)
     ).json()) as any;

@@ -65,7 +65,7 @@ test("compressed capability envelopes reject malformed and oversized claims", as
     assert.equal(await verifyCapabilityToken(await mintSignedPayload(value, SECRET), SECRET), null);
   }
   await assert.rejects(mintCapabilityToken(claims({ threadRef: "x".repeat(1024 * 1024) }), SECRET), /size limit/);
-  for (const invalid of [{ timezone: "not-a-zone" }, { liveActor: "yes" }, { runAttempt: 0 }]) {
+  for (const invalid of [{ timezone: "not-a-zone" }, { personAuthority: "yes" }, { runAttempt: 0 }]) {
     const token = await mintSignedPayload(
       {
         encoding: "deflate-raw",

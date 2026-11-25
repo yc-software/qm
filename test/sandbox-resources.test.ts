@@ -951,7 +951,7 @@ test("concurrent routed commands hold no Postgres session connection while they 
   }
 });
 
-test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+test("a verified speaker's current turn can create only its own new scope computer without directory mutations", async () => {
   const { resources, router } = fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   await resources.initialize();
