@@ -1225,10 +1225,7 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
     { container, ts: "100.2", authorId: "U2", text: "same here, meetup page too", createdAt: 2 },
   ]);
   let signals: any[] = [];
-  for (const deadline = Date.now() + 5_000; !signals.length && Date.now() < deadline;) {
-    signals = await built.signals.takePending(live!.id);
-    if (!signals.length) await sleep(50);
-  }
+  await settle(async () => (signals = await built.signals.takePending(live!.id)).length > 0);
   assert.equal(signals.length, 1, "the second wake steered the live run");
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text!, /meetup page too/);
@@ -1461,12 +1458,7 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
     });
     await mirror.mirrorMessageEvent({ ...amazonQAlarm, channel: container, channel_type: "channel", files: [] }, {});
 
-    const deadline = Date.now() + 5_000;
-    let rows: any[] = [];
-    while (Date.now() < deadline && !rows.length) {
-      rows = await listFull(built.ambientJudgments!, { container });
-      if (!rows.length) await sleep(50);
-    }
+    const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.decision, "act");
     assert.match(
@@ -1489,12 +1481,7 @@ test("a batch with no readable text records an ignore without claiming a model c
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorName: "AlarmBot", bot: true, text: "   ", createdAt: 1 },
     ]);
-    const deadline = Date.now() + 5_000;
-    let rows: any[] = [];
-    while (Date.now() < deadline && !rows.length) {
-      rows = await listFull(built.ambientJudgments!, { container });
-      if (!rows.length) await sleep(50);
-    }
+    const rows = await judged(built.ambientJudgments!, container);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.decision, "ignore");
     assert.equal(rows[0]!.reason, "no readable text in new messages");
@@ -1665,6 +1652,29 @@ test("a judge call that throws is recorded in the admin error log instead of van
     await built.runtime.stop();
   }
 });
+for (const read of ["getOrgAmbientDurable", "containerState"] as const)
+  test(`a judgment whose ${read} read fails leaves its messages for the next judgment`, async () => {
+    const built = freshApp();
+    built.runtime.start();
+    try {
+      const container = `C-${read}-fails`;
+      await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+      const owner: any = read === "containerState" ? built.surfaceCache : built.config;
+      const real = owner[read];
+      owner[read] = async () => {
+        owner[read] = real;
+        throw new Error("read outage");
+      };
+      await built.app.ingestSurfaceEvents([{ container, ts: "1.0", authorId: "U1", text: "first", createdAt: 1 }]);
+      await settle(async () => owner[read] === real);
+      await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U2", text: "second", createdAt: 2 }]);
+      const [row] = await judged(built.ambientJudgments!, container);
+      assert.match(row!.prompt!, /<message id="1\.0"[^>]*trigger="true">first</);
+    } finally {
+      await built.runtime.stop();
+    }
+  });
+
 test("with an external Slack account configured, a scheduled check-in with no new messages still starts a worker from the channel's recorded source", async () => {
   const built = isolatedApp();
   built.runtime.start();

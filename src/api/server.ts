@@ -51,9 +51,8 @@ import {
 } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
-import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { internalLivePerson, internalPerson } from "./artifact-share.ts";
+import { carriesPersonAuthority } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
@@ -68,7 +67,7 @@ async function capabilityAdminDenied(
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (!internalLivePerson(claims)) {
+  if (!carriesPersonAuthority(claims)) {
     return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task a conversation owns, a swarm wake, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
@@ -77,7 +76,7 @@ async function capabilityAdminDenied(
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
     if (
       parseScopeId(target).kind !== "org" &&
-      (!internalLivePerson(claims) ||
+      (!carriesPersonAuthority(claims) ||
         (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
     ) {
       return "this admin read returns private content — ask the agent in a DM";
@@ -189,13 +188,7 @@ async function verifyCapability(
     });
     return null;
   }
-  return internalPerson(capability) && !(await runIsActive({ deps, capability }))
-    ? {
-        ...capability,
-        triggered: true,
-        ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined } } : {}),
-      }
-    : capability;
+  return capability;
 }
 
 const EPHEMERAL_READ_POST_PATHS = new Set(["/v1/search", "/v1/memory/search"]);

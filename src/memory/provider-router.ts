@@ -221,9 +221,7 @@ export function createRoutedMemoryService(opts: {
 
     async lookup(scopeId, tool, args, by, context) {
       if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
-        throw brainRefused(
-          "Only the person, on a turn they sent in their own DM with QM, can look things up in their brain.",
-        );
+        throw brainRefused("Only the person, in their own DM with QM, can look things up in their brain.");
       const ref = parseProviderRef(tool);
       const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
       if (!ref || !route) throw brainRefused(`${tool} isn't a tool of a brain connected to this conversation.`);
@@ -282,12 +280,14 @@ export function createRoutedMemoryService(opts: {
       });
       if (refs.length && !brainActsAsPerson(by, scopeId, context?.audienceScopeId))
         throw new MemoryForgetRefused(
-          "Only the person, on a turn they sent in their own DM with QM, can forget a brain fact, and only while that turn is running; a subagent, a turn a subagent's report starts, admin, maintenance, self-service, bot, automation and ambient changes, and a job or script that outlives its turn reach the notebook only. Nothing was changed.",
+          "Only the person, in their own DM with QM, can forget a brain fact; admin, maintenance, self-service, bot and ambient changes reach the notebook only. Nothing was changed.",
         );
       if (refs.length > MAX_FACTS_PER_WRITE)
         throw new MemoryForgetRefused(
           `A delete forgets at most ${MAX_FACTS_PER_WRITE} brain refs; send the rest in another delete. Nothing was changed.`,
         );
+      if (refs.length && context?.approve && !(await context.approve(refs.map(({ ref }) => ref))))
+        throw new MemoryForgetRefused("This forget waits on the person's approval card. Nothing was changed.");
       const notebookIds = ids.filter((id) => !parseProviderRef(id));
       const manager = notebookIds.length ? managerFor(scopeId) : undefined;
       if (notebookIds.length && !manager?.delete) throw new Error(`memory for ${scopeId} is not directly editable`);

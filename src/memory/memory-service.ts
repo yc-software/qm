@@ -57,6 +57,7 @@ export interface MemoryForgetContext extends MemoryOutcomeSink {
   audienceScopeId?: ScopeId;
   idempotencyKey?: string;
   startedAt?: number;
+  approve?: (refs: string[]) => Promise<boolean>;
 }
 
 export interface MemoryEdit {
@@ -67,7 +68,7 @@ export interface MemoryEdit {
 export interface MemoryAuthority {
   actorId: string;
   context: "conversation" | "self" | "admin" | "maintenance";
-  personTurn?: true;
+  personAuthority?: true;
 }
 
 export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
@@ -80,19 +81,21 @@ export function brainActsAsPerson(
   audienceScopeId: ScopeId | undefined,
 ): boolean {
   return (
-    !changesNotebookOnly(by) && by!.personTurn === true && ownPrivateConversation(by!.actorId, scopeId, audienceScopeId)
+    !changesNotebookOnly(by) &&
+    by!.personAuthority === true &&
+    ownPrivateConversation(by!.actorId, scopeId, audienceScopeId)
   );
 }
 
 export function turnAuthority(
   actorId: string,
   access: { notebookOnly?: true } | undefined,
-  personTurn?: boolean,
+  personAuthority?: boolean,
 ): MemoryAuthority {
   return {
     actorId,
     context: access?.notebookOnly ? "maintenance" : "conversation",
-    ...(personTurn ? { personTurn: true } : {}),
+    ...(personAuthority ? { personAuthority: true } : {}),
   };
 }
 

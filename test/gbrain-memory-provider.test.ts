@@ -313,7 +313,7 @@ test("a registry gbrain brain forgets a member's fact with the contract's forget
     memory,
     JORDAN,
     ["jordan-brain:41", "jordan-brain:42"],
-    { actorId: "U0JORDAN", context: "conversation", personTurn: true },
+    { actorId: "U0JORDAN", context: "conversation", personAuthority: true },
     { audienceScopeId: JORDAN },
     "session:call",
   );

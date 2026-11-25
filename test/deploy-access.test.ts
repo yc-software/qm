@@ -197,11 +197,12 @@ test("direct share paths notify only after successful grants; org, self and revo
   await f.share("read", scopeId("org", "acme"));
   const control = createControlService(f.app);
   const cap = (actorId: string) =>
-    ({ actorId, scopeId: person(actorId), internalAudience: true, liveActor: true }) as CapabilityClaims;
+    ({ actorId, scopeId: person(actorId), internalAudience: true, personAuthority: true }) as CapabilityClaims;
   const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
-  assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
+  const approved = async () => true;
+  assert.equal((await control.shareArtifact(request, cap(requester), approved)).ok, false);
   assert.deepEqual(await f.notices(), []);
-  assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
+  assert.equal((await control.shareArtifact(request, cap(owner), approved)).ok, true);
   await f.share("read");
   assert.equal((await f.notices()).length, 1);
   f.deliveries.enqueue = async () => {
@@ -226,16 +227,23 @@ companyTest("notify:false grants access on every direct share path without a DM 
     inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
   } as unknown as Parameters<typeof createApp>[0]);
   const control = createControlService(app);
-  const cap = { actorId: owner, scopeId: person(owner), internalAudience: true, liveActor: true } as CapabilityClaims;
+  const cap = {
+    actorId: owner,
+    scopeId: person(owner),
+    internalAudience: true,
+    personAuthority: true,
+  } as CapabilityClaims;
   const quiet = { notify: false };
+  const approved = async () => true;
   assert.equal(
-    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
+    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap, approved)).ok,
     true,
   );
   await app.shareApp(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
   const invited = await control.shareArtifact(
     { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
     cap,
+    approved,
   );
   assert.ok(invited.ok);
   assert.deepEqual(invited.invitation, {
@@ -249,7 +257,7 @@ companyTest("notify:false grants access on every direct share path without a DM 
   ]);
   assert.deepEqual(await f.notices(), []);
   assert.deepEqual(sent, []);
-  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap);
+  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap, approved);
   assert.equal((await f.notices()).length, 1);
 });
 

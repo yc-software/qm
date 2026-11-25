@@ -562,7 +562,17 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = await turn.tools.memoryDelete(ids, "forget").then(
           (forgot) => (forgot === null ? "(memory unavailable)" : `forgot ${forgot.forgotten}`),
-          (error: Error) => error.message,
+          (error: Error) => {
+            if (!(error instanceof NeedsApproval)) return error.message;
+            collected.push({
+              command: error.command,
+              reason: error.approvalReason,
+              kind: error.kind,
+              ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+              ...(error.grantModes ? { grantModes: error.grantModes } : {}),
+            });
+            return `[blocked] ${error.approvalReason}`;
+          },
         );
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();

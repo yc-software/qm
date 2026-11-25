@@ -209,12 +209,7 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
-  await built.app.updateOwnedSkill(
-    skill!.id,
-    ALICE,
-    { body: "Check tests last." },
-    { internalAudience: true, liveActor: true },
-  );
+  await built.app.updateOwnedSkill(skill!.id, ALICE, { body: "Check tests last." }, { personAuthority: true });
   assert.equal(await sees(BOB), true);
 });
 

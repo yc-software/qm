@@ -179,10 +179,10 @@ test("the person's own DM gets each brain's read-only tools through the connecto
   assert.doesNotMatch(run.texts[1]!, /morning meetings/);
 });
 
-test("turns the person didn't send in their own DM, and app-drawer chats, never list, find or call the brain's tools", async (t) => {
+test("turns without the person's authority in their own DM, and app-drawer chats, never list, find or call the brain's tools", async (t) => {
   const { acme, turn } = await brainApp(t);
   const others: Array<Partial<TurnRequest>> = [
-    { origin: { kind: "automation" } },
+    { origin: { kind: "automation" }, botActor: true },
     {
       conversation: {
         kind: "group",
@@ -204,6 +204,7 @@ test("turns the person didn't send in their own DM, and app-drawer chats, never 
   assert.equal(listings(acme), 0);
   assert.deepEqual(lookups(acme), []);
   assert.match((await turn([]))!.prompt, /\[acme\]/);
+  assert.match((await turn([], { origin: { kind: "automation" } }))!.prompt, /\[acme\]/);
   assert.equal(listings(acme), 1);
 });
 

@@ -170,7 +170,7 @@ const CAP = {
   scopeId: "personal:josh",
   audienceScopeId: "personal:josh",
   internalAudience: true,
-  liveActor: true,
+  personAuthority: true,
   exp: 0,
 };
 
@@ -936,7 +936,7 @@ test("ingest stores no classification flags; verdicts come only from the inbox p
   assert.equal(stored!.proposal!.data.body, ITEM.draft.body);
 });
 
-test("only a person overrides triage, and archiving a whole group resolves its members", async () => {
+test("the agent can override triage, and archiving a whole group from the portal resolves its members", async () => {
   const w = world();
   const { loop, item } = await seed(w);
   await call(w, {
@@ -952,14 +952,8 @@ test("only a person overrides triage, and archiving a whole group resolves its m
   await w.loops.items.setTriage(member.id, { groupId: item.id }, "agent");
   const path = `/v1/loops/${loop.id}/items/${item.id}/action`;
   const byAgent = await call(w, { method: "POST", path, body: { kind: "prioritize", args: { priority: "urgent" } } });
-  assert.equal(byAgent.status, 403);
-  const byPerson = await call(w, {
-    method: "POST",
-    path: `${path}?principalId=josh`,
-    body: { kind: "prioritize", args: { priority: "urgent" } },
-    capability: PORTAL,
-  });
-  assert.deepEqual((byPerson.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
+  assert.equal(byAgent.status, 200);
+  assert.deepEqual((byAgent.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
   await call(w, { method: "POST", path, body: { kind: "dismiss", args: { group: true } } });
   assert.equal((await w.loops.items.get(member.id))?.status, "ready");
   await call(w, { method: "POST", path, body: { kind: "reopen" } });

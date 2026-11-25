@@ -18,7 +18,7 @@ const SECRET = "test-capability-secret";
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "runtime-config-live-author-")),
+      dataDir: mkdtempSync(join(tmpdir(), "runtime-config-person-authority-")),
       orgId: "default-org",
       capabilitySecret: SECRET,
       seedSkills: false,
@@ -58,11 +58,11 @@ async function put(base: string, cap: string): Promise<Response> {
   });
 }
 
-test("runtime-config accepts a liveAuthor capability (a human replying in a thread)", async () => {
+test("runtime-config accepts a capability carrying a person's authority", async () => {
   const srv = start();
   try {
     await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    const res = await put(srv.base, await token({ internalAudience: true, liveAuthor: true }));
+    const res = await put(srv.base, await token({ internalAudience: true, personAuthority: true }));
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string; effortLevel: string; fastMode: boolean };
@@ -77,13 +77,13 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
   }
 });
 
-test("runtime-config still refuses an automated trigger with neither liveActor nor liveAuthor", async () => {
+test("runtime-config refuses a capability without a person's authority", async () => {
   const srv = start();
   try {
     await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    const res = await put(srv.base, await token({ triggered: true }));
+    const res = await put(srv.base, await token({}));
     assert.equal(res.status, 403);
-    assert.deepEqual(await res.json(), { error: "live_actor_required" });
+    assert.deepEqual(await res.json(), { error: "authority_required" });
   } finally {
     await srv.close();
   }

@@ -62,16 +62,13 @@ export async function personOrOwningBot(
   );
 }
 
-export type ActingClaims = Pick<
-  CapabilityClaims,
-  "actorId" | "botActor" | "internalAudience" | "liveActor" | "liveAuthor"
-> & {
+export type ActingClaims = Pick<CapabilityClaims, "actorId" | "botActor" | "personAuthority"> & {
   scopeId?: string;
 };
 
 export type ScopeAuthorizationClaims = Pick<
   CapabilityClaims,
-  "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "liveActor" | "members"
+  "actorId" | "scopeId" | "scopeVersion" | "botActor" | "internalAudience" | "personAuthority" | "members"
 >;
 
 export function scopeAuthorizationClaims(c: ScopeAuthorizationClaims): ScopeAuthorizationClaims {
@@ -81,7 +78,7 @@ export function scopeAuthorizationClaims(c: ScopeAuthorizationClaims): ScopeAuth
     ...(c.scopeVersion ? { scopeVersion: c.scopeVersion } : {}),
     ...(c.botActor ? { botActor: true } : {}),
     ...(c.internalAudience ? { internalAudience: true } : {}),
-    ...(c.liveActor ? { liveActor: true } : {}),
+    ...(c.personAuthority ? { personAuthority: true } : {}),
     ...(c.members ? { members: c.members } : {}),
   };
 }
@@ -111,7 +108,7 @@ export interface CapabilityClaims {
   drop?: string;
   memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[]; notebookOnly?: true };
   internalAudience?: boolean;
-  liveActor?: boolean;
+  personAuthority?: boolean;
   ephemeral?: true;
   runId?: string;
   sessionId?: string;
@@ -120,9 +117,7 @@ export interface CapabilityClaims {
   runLeaseToken?: string;
   deployment?: string;
   botActor?: boolean;
-  liveAuthor?: boolean;
   actAsActor?: boolean;
-  triggered?: boolean;
   threadRef?: string;
   surface?: string;
   liveReplies?: boolean;
@@ -205,10 +200,9 @@ export async function verifyCapabilityToken(
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.internalAudience !== undefined && typeof claims.internalAudience !== "boolean") return null;
-  if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
+  if (claims.personAuthority !== undefined && typeof claims.personAuthority !== "boolean") return null;
   if (claims.liveReplies !== undefined && typeof claims.liveReplies !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
-  if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;
   if (claims.actAsActor !== undefined && typeof claims.actAsActor !== "boolean") return null;
   if (claims.blob !== undefined && claims.blob?.dir !== "read" && claims.blob?.dir !== "write") return null;
   if (claims.drop !== undefined && typeof claims.drop !== "string") return null;
@@ -251,7 +245,6 @@ export async function asOrgAdmin(
   actor: ActingClaims,
 ): Promise<boolean> {
   if (actor.botActor === true) return false;
-  if (actor.scopeId !== undefined && !(actor.internalAudience === true && (actor.liveActor || actor.liveAuthor)))
-    return false;
+  if (actor.scopeId !== undefined && actor.personAuthority !== true) return false;
   return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }

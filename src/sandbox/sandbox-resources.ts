@@ -1,6 +1,6 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
@@ -147,7 +147,7 @@ export interface SandboxResources {
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
   retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
-  use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  use<T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
@@ -306,13 +306,15 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
+  const use = async <T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T> => {
     const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
     };
-    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
+    if (!lock) return guarded();
+    const key = `sandbox-resource:${id}`;
+    return lock === "shared" ? opts.lock.withSharedLock(key, guarded) : opts.lock.withLock(key, guarded);
   };
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
@@ -334,7 +336,7 @@ export function createSandboxResources(opts: {
       createSandboxResources({
         ...opts,
         canUseScope: async (actorId, scopeId) =>
-          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+          withSpeakerMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     async defaultBackend() {
       const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
@@ -427,7 +429,7 @@ export function createSandboxResources(opts: {
           await backend.restartComputer!(record.backingScopeId, memoryGb ?? record.memoryGb);
           if (memoryGb !== undefined) await opts.records.update(id, (current) => ({ ...current, memoryGb }));
         },
-        true,
+        "exclusive",
       );
     },
     async resolve(scopeId) {

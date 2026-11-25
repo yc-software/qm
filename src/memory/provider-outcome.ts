@@ -266,7 +266,7 @@ export async function forgetFacts(
   scope: ScopeId,
   ids: string[],
   by: MemoryAuthority,
-  context: Pick<MemoryForgetContext, "audienceScopeId">,
+  context: Pick<MemoryForgetContext, "audienceScopeId" | "approve">,
   call: string | undefined,
 ): Promise<MemoryForget> {
   const unique = [...new Set(ids)];

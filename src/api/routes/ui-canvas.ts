@@ -12,8 +12,8 @@ import {
 } from "../../surfaces/ui-canvas.ts";
 import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
-import { internalPerson } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
@@ -46,10 +46,10 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     });
     return null;
   }
-  if (cap.surface !== "web" || !cap.liveActor || !internalPerson(cap)) {
+  if (cap.surface !== "web" || !carriesPersonAuthority(cap)) {
     sendJson(res, 403, {
-      error: "not_live_web_turn",
-      message: "Only available during a turn the person started from the web UI.",
+      error: "not_web_turn",
+      message: "Only available on a web UI turn.",
     });
     return null;
   }

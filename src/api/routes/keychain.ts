@@ -8,6 +8,7 @@ import {
   type GrantMode,
 } from "../../credentials/keychain.ts";
 import { parseScopeId } from "../../types.ts";
+import { actionApproved } from "../action-approval.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
@@ -17,7 +18,7 @@ import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capabili
 import {
   audit,
   BOT_WORK_PERSON_CREDENTIAL,
-  livePersonTurn,
+  requirePersonAuthority,
   personalCapability,
   resolveCapabilityDestination,
 } from "./shared.ts";
@@ -230,8 +231,9 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
 
 const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
+  if (!(await actionApproved(ctx, { summary: `Delete saved credential ${id}` }))) return;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
@@ -246,7 +248,7 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
 
 const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });

@@ -142,8 +142,8 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
-    mcpTools: async (personTurn: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
-      const by = turnAuthority(input.actor.id, memoryAccess, personTurn);
+    mcpTools: async (personAuthority: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
+      const by = turnAuthority(input.actor.id, memoryAccess, personAuthority);
       const lookups =
         !input.external &&
         memoryAccess?.read.includes(memoryScopeId) &&

@@ -38,7 +38,7 @@ function harness(items: Item[] = [], headers: Record<string, string> = {}, body:
             surface: "cron",
             actor: { id: "owner@example.com", externalId: "owner@example.com" },
             conversation: { kind: "dm", threadRef: "cron:c1:k1", audience: [] },
-            origin: { kind: "automation", ownerFire: true },
+            origin: { kind: "automation", fire: true },
             text: "set the model",
           },
         }),

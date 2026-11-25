@@ -17,7 +17,7 @@ import { APP_CONNECTION_ROUTES } from "../../connectors/app-connection-routes.ts
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
-import { activeRun, audit } from "./shared.ts";
+import { audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -233,7 +233,6 @@ async function proxy(ctx: ApiCtx): Promise<void> {
   try {
     account = await pickAccount(ctx, access, input, toolkits);
     if (!account) return;
-    if (!(await activeRun(ctx))) return;
     const contentType = input.headers.find((h) => h.name.toLowerCase() === "content-type")?.value;
     const binaryBody =
       input.bodyBase64 ??
