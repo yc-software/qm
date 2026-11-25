@@ -20,6 +20,7 @@ export function mountConnectionPicker(
   onSelect: (service: ConnectionService) => void,
   state: { query: string; expanded: boolean } = { query: "", expanded: false },
   titled = true,
+  popular = 6,
 ): void {
   let query = state.query;
   const sorted = [...services].sort((a, b) => b.popularity - a.popularity || a.name.localeCompare(b.name));
@@ -29,7 +30,7 @@ export function mountConnectionPicker(
       const text = `${service.name} ${service.description}`.toLowerCase();
       return words.every((word) => text.includes(word));
     });
-    const shown = words.length ? matches : matches.slice(0, 6);
+    const shown = words.length ? matches : matches.slice(0, popular);
     render(
       html`<section class="connection-picker" aria-label="Connect your apps">
         ${

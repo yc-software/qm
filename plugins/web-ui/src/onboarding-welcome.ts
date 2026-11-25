@@ -264,6 +264,7 @@ export class OnboardingWelcome extends LitElement {
         (service) => this.authorize(service, this.staleAccount(service.id)),
         this.pickerState,
         !this.seeded,
+        this.seeded ? 15 : 6,
       );
   }
   disconnectedCallback(): void {

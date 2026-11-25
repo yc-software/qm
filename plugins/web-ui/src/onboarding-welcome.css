@@ -418,6 +418,7 @@ qm-onboarding-welcome {
 }
 .welcome-seeded .welcome-apps .connection-picker-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: none;
 }
 .welcome-seeded .welcome-apps .connection-picker > .connection-picker-search {
   width: min(100%, 240px);
