@@ -41,8 +41,10 @@ const contract = JSON.parse(
 
 const contractTools = [...contract.tools, ...contract.personal_tools.tools];
 
-const guide = readFileSync(new URL("../docs/memory-providers.md", import.meta.url), "utf8");
-const recipe = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(guide.split("\n## gbrain\n")[1] ?? "")?.[1] ?? "null") as {
+const guide = readFileSync(new URL("../docs/spec/context.md", import.meta.url), "utf8");
+const recipe = JSON.parse(
+  /```json\n([\s\S]*?)\n```/.exec(guide.split("\n### gbrain recipe\n")[1] ?? "")?.[1] ?? "null",
+) as {
   providers: Array<Record<string, unknown>>;
   routes: unknown[];
 };

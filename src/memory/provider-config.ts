@@ -74,7 +74,7 @@ function string(value: unknown, at: string): string {
 const PRIVATE_HOSTS = ["localhost", "127.0.0.1"];
 const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
 const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
-const URL_HELP = `Accepted: https://<host>, http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}, or http:// on an origin listed in PRIVATE_NETWORK_ALLOWED_ORIGINS; see docs/memory-providers.md#troubleshooting.`;
+const URL_HELP = `Accepted: https://<host>, http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}, or http:// on an origin listed in PRIVATE_NETWORK_ALLOWED_ORIGINS; see docs/spec/context.md#troubleshooting.`;
 
 const namedPrivateHost = (hostname: string): boolean =>
   PRIVATE_HOSTS.includes(hostname) || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
@@ -199,7 +199,7 @@ export function parseMemoryProviderConfig(
     const manage = typeof raw.manage === "boolean" ? raw.manage : provider === "default";
     if (manage && target?.type === "mcp" && target.attestActor)
       throw new Error(
-        `memory route ${i}: provider ${provider} sets attestActor, so it cannot manage a notebook; set "manage": false (docs/memory-providers.md#troubleshooting)`,
+        `memory route ${i}: provider ${provider} sets attestActor, so it cannot manage a notebook; set "manage": false (docs/spec/context.md#troubleshooting)`,
       );
     return {
       provider,
@@ -217,7 +217,7 @@ export function parseMemoryProviderConfig(
     const shared = route.scopes.filter((scope) => scope !== "personal" && parseScopeId(scope).kind !== "personal");
     if (target?.type === "mcp" && target.attestActor && shared.length)
       throw new Error(
-        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/memory-providers.md#attesting-the-member-attestactor)`,
+        `memory route ${i}: provider ${route.provider} sets attestActor, so it may serve only personal scopes, not ${shared.join(", ")}; an attested read returns that member's private memory, which a shared conversation would show to everyone in it (docs/spec/context.md#attesting-the-member-attestactor)`,
       );
   }
   const servers = new Map<string, { ids: Set<string>; names: string[] }>();
@@ -243,7 +243,7 @@ export function parseMemoryProviderConfig(
       (kinds.size === 1 && kinds.has("personal") && served.every((route) => !route.manage));
     if (scopes.length && !apart)
       throw new Error(
-        `memory provider ${names.join(" and ")}: no scopeArg, so the server cannot tell apart the scopes it serves (${scopes.join(", ")}); operations without scopeArg that call one server tool may serve only one scope, the org scope, or personal scopes on routes that do not manage a notebook, whose reads carry no member, so set scopeArg on read and write (docs/memory-providers.md#troubleshooting)`,
+        `memory provider ${names.join(" and ")}: no scopeArg, so the server cannot tell apart the scopes it serves (${scopes.join(", ")}); operations without scopeArg that call one server tool may serve only one scope, the org scope, or personal scopes on routes that do not manage a notebook, whose reads carry no member, so set scopeArg on read and write (docs/spec/context.md#troubleshooting)`,
       );
   }
   return { providers, routes };

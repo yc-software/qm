@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const docPath = new URL("../docs/deploy-directory.md", import.meta.url);
+const docPath = new URL("../docs/spec/deployments.md", import.meta.url);
 
 test("the onboarding guide uses the portal's implemented OIDC callback", () => {
   const guide = readFileSync(new URL("../docs/getting-started.md", import.meta.url), "utf8");

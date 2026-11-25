@@ -33,7 +33,6 @@
         "scripts/tenant.ts",
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
-        "docs/qa/resource-search-demo.mjs",
         "src/deploy/vendor/devbar.js"
       ],
       "ignoreDependencies": ["yaml"]

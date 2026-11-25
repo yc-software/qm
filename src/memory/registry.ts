@@ -234,7 +234,7 @@ function publicUrl(url: string): void {
   const { protocol, hostname } = new URL(url);
   if (protocol !== "https:" || isPrivateHost(hostname))
     throw invalid(
-      `url (${protocol}//${hostname}) must use HTTPS at a public address: QM never calls a registry brain on a private network (docs/memory-providers.md#memory-registry)`,
+      `url (${protocol}//${hostname}) must use HTTPS at a public address: QM never calls a registry brain on a private network (docs/spec/context.md#memory-registry)`,
     );
 }
 

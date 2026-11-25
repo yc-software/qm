@@ -100,7 +100,7 @@ and other durable state. The agent has a small, fixed tool surface; one of those
 where installed tools stay installed. Core also serves the public front door: sign-in, the optional built-in
 auth broker, and the web UI, whose browser bundle ships as a static release that `qm ui publish` can update
 without restarting core. These modules communicate with core over its HTTP API.
-See [the core-hosted front door](docs/combined-services.md) for configuration and migration;
+See [web UI and clients](docs/spec/web-clients.md) for how the front door is served;
 Slack is an optional in-process plugin that core starts
 and supervises through a direct service client.
 
@@ -111,7 +111,7 @@ The core itself is generic. Everything specific to one team — org config, cust
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
 [`qm` CLI](./cli/README.md) validates and deploys. Every substrate (session store,
 sandbox, memory) sits behind an interface. Memory can also be routed by scope to
-[external providers](./docs/memory-providers.md) while retaining the built-in notebook.
+[external providers](./docs/spec/context.md) while retaining the built-in notebook.
 
 ## Security and secrets
 
@@ -249,15 +249,12 @@ upstream source history to merge.
 ## Going deeper
 
 - [labs.ycombinator.com/qm](https://labs.ycombinator.com/qm/) — the documentation site
+- [`docs/SPEC.md`](./docs/SPEC.md) — the spec: north stars, deployment shapes, what is optional, and an area-by-area tour of the code under [`docs/spec/`](./docs/spec/)
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
-- [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
-- [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals
 - [`docs/porter.md`](./docs/porter.md) — running qm on Porter
 - [`docs/superserve.md`](./docs/superserve.md) — using Superserve for agent sandboxes
 - [`.env.example`](./.env.example) — every knob, documented in place
-- [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
-- [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
 - [`plugins/`](./plugins) — the surfaces core hosts (web UI, portal, auth broker)
 
 ## License

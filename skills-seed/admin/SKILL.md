@@ -102,7 +102,7 @@ confirmed absent, send one short message:
 
 - Composio (recommended): one project key covers most apps. Add it in Settings → Credentials
   as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
-  verification as described in QM's `docs/composio.md`. If they would rather paste the
+  verification as described in QM's `docs/spec/credentials.md` (Composio callback). If they would rather paste the
   key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
   `COMPOSIO_API_KEY`) and share its `url`.
   A dropped key enables Composio only for them; teammates need the org credential.

@@ -35,7 +35,7 @@ export class OutsideAudience extends Error {
 }
 
 export const UNATTESTABLE_ACTOR_FIX =
-  "Link this member to a principal id of 1 to 256 visible ASCII characters with POST /v1/admin/principal-links (docs/principal-links.md).";
+  "Link this member to a principal id of 1 to 256 visible ASCII characters with POST /v1/admin/principal-links (docs/spec/scopes.md).";
 
 export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;

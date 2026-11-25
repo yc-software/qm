@@ -254,7 +254,7 @@ slack-app-manifest.yml, slack-sso-manifest.yml (Slack OIDC only), deployment.md,
 
 **Spend and app export.** One token, `SPEND_EXPORT_TOKEN`, opens two read-only exports for an outside system: spend ([models](./models.md#contracts)) and a person's visible apps ([artifacts](./artifacts.md#contracts)).
 
-**Clause status.** `qm check --json` reports results under clause ids.
+**Clause status.** `qm check --json` reports results under clause ids. `test/deploy-directory-doc.test.ts` parses this table and requires every ENFORCED row to name code that exists.
 
 | Clause                            | Status         | Verifier                                                                         |
 | --------------------------------- | -------------- | -------------------------------------------------------------------------------- |

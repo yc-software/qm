@@ -199,6 +199,58 @@ A `memorable` provider runs its CLI with an allow-listed environment: `inject` o
 
 Routes run in this order: the env routes (or, with no env variable, one notebook route for every scope kind with automatic capture), then registry bindings. Only a conversation's own writes reach a provider other than the notebook: the `memory` tool's add, `POST /v1/memory/facts`, and post-turn capture. Admin writes, a member's own edits through `/v1/memory`, onboarding status and writes into another scope's notebook change the notebook alone.
 
+### gbrain recipe
+
+The one external provider this repository tests against is gbrain, through the vendored contract in `test/fixtures/gbrain/`. `test/gbrain-memory-provider.test.ts` loads this document as `MEMORY_PROVIDER_CONFIG` and checks the calls it produces against that contract, so change the two together.
+
+```json
+{
+  "providers": [
+    {
+      "id": "gbrain",
+      "type": "mcp",
+      "url": "https://gbrain.acme.example",
+      "attestActor": true,
+      "timeoutMs": 3000,
+      "read": {
+        "tool": "memory_recall",
+        "clientIdEnv": "GBRAIN_RO_CLIENT_ID",
+        "clientSecretEnv": "GBRAIN_RO_CLIENT_SECRET",
+        "maxCharsArg": "max_chars"
+      },
+      "write": {
+        "tool": "memory_write",
+        "clientIdEnv": "GBRAIN_RW_CLIENT_ID",
+        "clientSecretEnv": "GBRAIN_RW_CLIENT_SECRET",
+        "factsArg": "facts",
+        "idempotencyArg": "idempotency_key"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "provider": "default",
+      "scopes": ["personal", "channel", "group", "team", "org", "persona"],
+      "capture": "automatic"
+    },
+    {
+      "provider": "gbrain",
+      "scopes": ["personal"],
+      "capture": "explicit",
+      "manage": false,
+      "failOpen": true,
+      "label": "gbrain"
+    }
+  ]
+}
+```
+
+- Every scope kind keeps the notebook as its first route, with automatic capture. Only a person's own DM also calls the provider: recall through `memory_recall`, and explicit writes through `memory_write`.
+- `attestActor` sends the attested-actor headers, so the provider answers with that member's own facts and refuses a channel audience.
+- `failOpen: true` keeps turns answering from the notebook when the provider is down or slow. `timeoutMs` bounds recall only; writes get 30 seconds.
+- `manage: false` means forgetting or editing a fact changes the notebook alone. A provider connected through the memory registry forgets by ref instead.
+- To verify against a live provider: its tool list shows `memory_recall` taking `acting_user`, `max_chars` and `query`, and `memory_write` taking `acting_user`, `facts` and `idempotency_key`; a fact stated in a DM appears in the `memory` tool result's `outcomes` as `committed`; a new DM's user entry carries `payload.memoryRecallOutcomes` with outcome `ok` for the provider; and a channel turn's has no entry for it.
+
 ### MCP provider calls
 
 - **Read.** Arguments `query` and `acting_user` by default, plus `scopeArg` (the scope id) and `maxCharsArg` when mapped. On a turn a person wrote, the query is their message, cut to 2,000 characters; otherwise the recall query.
