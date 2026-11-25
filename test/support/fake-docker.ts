@@ -87,7 +87,9 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
-        return ok(JSON.stringify([c.running, c.imageId, c.args.includes("--cap-drop=CAP_NET_RAW") ? ["CAP_NET_RAW"] : []]));
+        return ok(
+          JSON.stringify([c.running, c.imageId, c.args.includes("--cap-drop=CAP_NET_RAW") ? ["CAP_NET_RAW"] : []]),
+        );
       }
       case "ps": {
         const name = rest.find((a) => a.startsWith("name="))!.slice("name=".length);
