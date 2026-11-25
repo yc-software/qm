@@ -29,11 +29,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
   };
   const element = document.createElement("qm-onboarding-slack");
   let installed = 0;
-  const byService: unknown[] = [];
-  element.addEventListener("slack-installed", (event) => {
-    installed++;
-    byService.push((event as CustomEvent<{ byService: boolean }>).detail.byService);
-  });
+  element.addEventListener("slack-installed", () => installed++);
   const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
   try {
     h.releaseSessions();
@@ -91,14 +87,13 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     assert.equal(submitted?.action, "https://slack-service.example/install/launch?ticket=test");
     assert.equal(popup.opener, null);
     assert.doesNotMatch(element.textContent ?? "", /QM added to Slack/);
-    status = { configured: true, updatedBy: "slack-service", setup: { connected: true } };
+    status = { configured: true, setup: { connected: true } };
     window.dispatchEvent(new window.Event("focus"));
     await settle();
     assert.match(element.textContent ?? "", /QM added to Slack/);
     assert.equal(element.querySelector("button"), null);
     assert.ok(element.querySelector(".welcome-slack.slack-installed"));
     assert.equal(installed, 1);
-    assert.deepEqual(byService, [true]);
     window.dispatchEvent(new window.Event("focus"));
     await settle();
     assert.equal(installed, 1);

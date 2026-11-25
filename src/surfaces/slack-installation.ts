@@ -161,7 +161,7 @@ export interface SlackInstallationStore {
   completeOAuth(input: {
     code: string;
     state: string;
-  }): Promise<{ personaId?: string; appId?: string; teamId?: string; teamName?: string; updatedBy: string }>;
+  }): Promise<{ personaId?: string; appId?: string; teamId?: string; teamName?: string }>;
   attachHttpApp(input: {
     personaId?: string;
     botToken: string;
@@ -770,7 +770,6 @@ export function createSlackInstallationStore(
         ...(rec.appId ? { appId: rec.appId } : {}),
         ...(teamId ? { teamId } : {}),
         ...(teamName ? { teamName } : {}),
-        updatedBy: rec.updatedBy,
       };
     },
 
