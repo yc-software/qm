@@ -78,7 +78,7 @@ const capFor = (actorId: string) =>
       scopeId: scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
       internalAudience: true,
-      liveActor: true,
+      personAuthority: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -358,7 +358,7 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
           scopeId: scopeId("channel", CH),
           aud: CONTROL_PLANE_AUD,
           internalAudience: true,
-          liveActor: true,
+          personAuthority: true,
           botActor: true,
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
@@ -426,7 +426,10 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
       name: "ambient-app",
     });
     await assert.rejects(republish, /not authorized/);
-    await assert.rejects(f.deploy.setAppPublic(own.id, true, { ...asBot, personAtKeyboard: true }), /only the owner/);
+    await assert.rejects(
+      f.deploy.setAppPublic(own.id, true, { ...asBot, signOff: async () => true }),
+      /only the owner/,
+    );
     await assert.rejects(f.deploy.shareApp(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
     assert.equal((await f.deploy.getApp(own.id))?.currentVersion, own.currentVersion);
     assert.deepEqual(await f.deploy.appGrantees(own.id), []);

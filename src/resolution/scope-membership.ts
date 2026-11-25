@@ -139,7 +139,7 @@ export function createIsCurrentSharedScopeMember(deps: ScopeMembershipDeps): IsC
   };
 }
 
-export function withLiveTurnMembership(
+export function withSpeakerMembership(
   stored: IsCurrentSharedScopeMember | undefined,
   turn: { actorId: string; scopeId: ScopeId; verified: boolean },
 ): IsCurrentSharedScopeMember {

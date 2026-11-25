@@ -144,9 +144,9 @@ describe("surface-context pulls", async () => {
     assert.equal((await asking).status, 200);
   });
 
-  it("only live capabilities supply the original requester target, ignoring body overrides", async () => {
+  it("only capabilities carrying a person's authority supply the original requester target, ignoring body overrides", async () => {
     for (const path of ["/v1/surface-context", "/v1/surface-file"]) {
-      for (const liveActor of [true, false]) {
+      for (const personAuthority of [true, false]) {
         const asking = post(
           path,
           {
@@ -154,10 +154,13 @@ describe("surface-context pulls", async () => {
             ts: "1700.1",
             rateLimitRecipient: { target: "SECRET", user: "OTHER" },
           },
-          { "x-agent-capability": await cap({ internalAudience: true, liveActor }) },
+          { "x-agent-capability": await cap({ internalAudience: true, personAuthority }) },
         );
         const query = await fulfillNext(() => ({ messages: [] }));
-        assert.deepEqual(query.rateLimitRecipient, liveActor ? { target: "C9:1700.0001", user: "U1" } : undefined);
+        assert.deepEqual(
+          query.rateLimitRecipient,
+          personAuthority ? { target: "C9:1700.0001", user: "U1" } : undefined,
+        );
         await asking;
       }
     }
@@ -295,7 +298,7 @@ describe("surface-context pulls", async () => {
         "x-agent-capability": await cap({
           botActor: true,
           internalAudience: true,
-          liveActor: true,
+          personAuthority: true,
           members: [{ id: "U1", type: "internal" }],
         }),
       },
@@ -316,7 +319,7 @@ describe("surface-context pulls", async () => {
     assert.equal(token!.aud, "blob-transfer");
     assert.deepEqual(token!.blob, { dir: "read", id: "blob-42" }, "the token moves this one blob, read-only");
     assert.equal(token!.botActor, true);
-    assert.equal(token!.liveActor, true);
+    assert.equal(token!.personAuthority, true);
     assert.deepEqual(token!.members, [{ id: "U1", type: "internal" }]);
   });
 

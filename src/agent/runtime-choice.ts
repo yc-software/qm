@@ -18,7 +18,7 @@ export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
 export function turnModelOptions(input: {
-  triggered: boolean;
+  automated: boolean;
   surface?: string;
   infrequentCron?: boolean;
   thinkingLevel?: string;
@@ -28,7 +28,7 @@ export function turnModelOptions(input: {
   fastMode?: boolean;
 } {
   const chatDefaults = infrequentCronTurn(input);
-  const nonInteractiveDefaults = input.triggered && !chatDefaults && turnRuntimePurpose(input) !== "cron";
+  const nonInteractiveDefaults = input.automated && !chatDefaults && turnRuntimePurpose(input) !== "cron";
   let thinkingLevel = input.thinkingLevel;
   if (!thinkingLevel && nonInteractiveDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;

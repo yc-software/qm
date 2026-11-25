@@ -27,7 +27,7 @@ const PRIV_MEMBER = "priv-member";
 const GROUP_MEMBER = "group-member";
 const PUB_MEMBER = "pub-member";
 const OUTSIDER = "outsider";
-const LIVE = { internalAudience: true, liveActor: true } as const;
+const LIVE = { internalAudience: true, personAuthority: true } as const;
 
 const PRIV = "C-priv";
 const PUB = "C-pub";
@@ -151,7 +151,7 @@ test("skills: a private-channel member may edit + delete a shared skill; provena
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, LIVE);
-  assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
+  assert.ok(edited && edited !== "authority_required", "a private-channel member edits the scope's skill");
   assert.equal((edited as { createdBy: string }).createdBy, OWNER, "createdBy is never rewritten on a member edit");
   assert.equal(await app.deleteOwnedSkill({ principalId: PRIV_MEMBER, id: planted.id, ...LIVE }), "deleted");
 });
@@ -167,7 +167,7 @@ test("skills: a member editing a normal shared skill auto-republishes it (stays 
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, LIVE);
-  assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
+  assert.ok(edited && edited !== "authority_required", "a private-channel member edits the scope's skill");
   assert.equal(
     (edited as { status: string }).status,
     "published",

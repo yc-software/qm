@@ -40,7 +40,7 @@ import {
   isDocumentAttachment,
 } from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { openGoal } from "../agent/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
 import { openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
@@ -156,7 +156,7 @@ import {
   turnFailureItem,
 } from "./turn-error.ts";
 import { ownPrivateConversation, personKey, rosterIds, samePerson } from "../directory/person.ts";
-import { personAtKeyboard } from "../api/artifact-share.ts";
+import { carriesPersonAuthority } from "../api/artifact-share.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -550,15 +550,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const delegatedOrigin = delegated?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
-      const personFireTurn =
-        (!sessionTurn || delegatedOrigin !== undefined) &&
-        isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
       const internalAudience = allInternal && !external;
-      const liveTurn = (authorizationOrigin.kind === "human" || personFireTurn) && internalAudience;
-      const liveAuthorTurn =
-        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !personFireTurn)) &&
-        internalAudience;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -580,6 +572,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botRequest = input.botActor;
       if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
         input = { ...input, botActor: true };
+      const personFireTurn =
+        (!sessionTurn || delegatedOrigin !== undefined) &&
+        isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
+      const speakerTurn =
+        (!sessionTurn && (humanTurn || authoredDetection)) ||
+        (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
+      const personAuthorityTurn = internalAudience && input.botActor !== true && (speakerTurn || personFireTurn);
       const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
       const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
       if (spineDm !== undefined && spineDm !== (input.surfaceTools === true))
@@ -659,10 +658,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return approvalView(requestId, record);
       };
       Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId });
-      const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
+      const isCurrentSharedScopeMember = withSpeakerMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
-        verified: liveAuthorTurn && internalAudience && conversation.kind !== "dm",
+        verified: speakerTurn && personAuthorityTurn && conversation.kind !== "dm",
       });
       const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
@@ -822,7 +821,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external && !appEdit && deps.mcp
           ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
           : undefined;
-      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -837,7 +835,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               input: input.text,
               surfaceName,
               runtimePurpose: turnRuntimePurpose(
-                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                { surface: input.surface, automated: automatedTurn, infrequentCron: input.infrequentCron },
                 !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
               ),
               ...(input.model ? { runtime: { modelId: input.model } } : {}),
@@ -900,8 +898,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         audience: conversation.audience,
         acl: deps.acl,
-        origin: authorizationOrigin,
-        trustedLiveHuman: livePersonTurn && internalAudience,
+        personAuthority: personAuthorityTurn,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -1241,7 +1238,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         internalAudience,
-        ownerAuthorityTurn: livePersonTurn || personFireTurn,
+        ownerAuthorityTurn: personAuthorityTurn || personFireTurn,
         scopeId,
         environmentId,
         resolution,
@@ -1317,9 +1314,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         strictReadOnly,
         allInternal,
         internalAudience,
-        liveTurn,
-        liveAuthorTurn: livePersonTurn,
-        triggeredTurn,
+        personAuthorityTurn,
         actAsActor,
         useMemory,
         memoryPolicy,
@@ -1421,7 +1416,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && ((livePersonTurn && internalAudience) || openOwnerKeychain),
+        openResourceAccess: !external && (personAuthorityTurn || openOwnerKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1732,7 +1727,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn: liveTurn && internalAudience && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
@@ -1741,8 +1735,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const runtimeClaims: CapabilityClaims = controlClaims ?? {
           ...scopeAttestation,
           exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(triggeredTurn ? { triggered: true } : {}),
+          ...(personAuthorityTurn ? { personAuthority: true } : {}),
         };
         const baseTools = createToolContext({
           tenant,
@@ -1830,7 +1823,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(personAtKeyboard(runtimeClaims) && internalAudience && !sessionTurn ? { personTurn: true } : {}),
+          ...(carriesPersonAuthority(runtimeClaims) ? { personAuthority: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -2461,7 +2454,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ) =>
                     deps.runtime!(
                       sessionTurn && request.lifetime === "scope"
-                        ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
+                        ? { ...runtimeClaims, personAuthority: false }
                         : runtimeClaims,
                       active,
                       request,

@@ -57,7 +57,7 @@ credentials or falls back to them on account or gateway errors.
 Code the agent runs in its sandbox reaches the company's models through core instead of holding a provider key.
 Internal turns outside strict posture get `MODEL_GATEWAY_URL`, which points at core's `/v1/sandbox-model` prefix, and
 `MODEL_GATEWAY_TOKEN`, a capability token bound to the turn's actor and conversation scope that expires with the turn's
-other sandbox tokens. The agent is told both are set. Scheduled and other unattended turns get them too, without a
+other sandbox tokens. The agent is told both are set. Scheduled and other background turns get them too, without a
 grant: the token authorizes model inference and nothing else. Strict posture issues neither. No provider or gateway
 key enters the sandbox.
 

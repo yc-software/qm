@@ -118,7 +118,7 @@ export async function swarmFixture(
       runLeaseToken: claim.leaseToken!,
       threadRef: root.threadRef,
       internalAudience: true,
-      liveActor: true,
+      personAuthority: true,
       exp: Date.now() + 60_000,
       ...(options.runtime?.botActor ? { botActor: true } : {}),
       ...options.claims,

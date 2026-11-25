@@ -307,7 +307,6 @@ export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
-  liveTurn?: boolean;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -1236,12 +1235,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
           const refusal = sidebarRefusal();
           if (refusal) return { ok: false, message: refusal };
-          const verb = input.fork ? "fork" : "new";
-          if (binding.liveTurn !== true)
-            return {
-              ok: false,
-              message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
-            };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
           if (binding.request.botActor)
             return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };

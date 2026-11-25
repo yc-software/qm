@@ -2554,7 +2554,7 @@ export function buildApp(
           ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
         }
       : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: artifactMap<{ lastJudgedAt: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,

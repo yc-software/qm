@@ -196,7 +196,7 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
     actorId: "test",
     scopeId: "personal:test" as const,
     internalAudience: true,
-    liveActor: true,
+    personAuthority: true,
     exp: Date.now() + 60_000,
   };
   for (const effort of ["adaptive", "default"]) {

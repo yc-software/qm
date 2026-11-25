@@ -12,7 +12,7 @@ export function selfReadAudience(
   const audience =
     capability.audienceScopeId ??
     capability.destination?.audienceScopeId ??
-    (capability.triggered === true ? undefined : capability.scopeId);
+    (capability.origin !== undefined && capability.origin !== "conversation" ? undefined : capability.scopeId);
   if (ownPrivateConversation(principalId, capability.scopeId, audience)) {
     return { inOwnPrivate: true };
   }

@@ -33,7 +33,7 @@ describe("agent conversations self-API", async () => {
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
+  const capFor = (actorId: string, scope = scopeId("personal", actorId), personAuthority = true) =>
     mintCapabilityToken(
       {
         actorId,
@@ -41,7 +41,7 @@ describe("agent conversations self-API", async () => {
         audienceScopeId: scope,
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
-        liveActor: live,
+        personAuthority,
       },
       SECRET,
     );

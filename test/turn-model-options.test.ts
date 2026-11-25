@@ -7,15 +7,15 @@ import {
 } from "../src/agent/runtime-choice.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 
-test("triggered turns default to extra-high thinking and non-fast mode", () => {
-  assert.deepEqual(turnModelOptions({ triggered: true }), {
+test("automated turns default to extra-high thinking and non-fast mode", () => {
+  assert.deepEqual(turnModelOptions({ automated: true }), {
     thinkingLevel: NON_INTERACTIVE_THINKING_LEVEL,
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
 });
 
-test("explicit turn model options win over triggered defaults", () => {
-  assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low", fastMode: true }), {
+test("explicit turn model options win over automated defaults", () => {
+  assert.deepEqual(turnModelOptions({ automated: true, thinkingLevel: "low", fastMode: true }), {
     thinkingLevel: "low",
     fastMode: true,
   });
@@ -34,11 +34,11 @@ test("web model controls are bounded by admin configuration", () => {
 });
 
 test("interactive turns do not force model options", () => {
-  assert.deepEqual(turnModelOptions({ triggered: false }), {});
+  assert.deepEqual(turnModelOptions({ automated: false }), {});
 });
 
-test("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
-  assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low" }), {
+test("an automated turn with an explicit low thinking level overrides the xhigh automated default", () => {
+  assert.deepEqual(turnModelOptions({ automated: true, thinkingLevel: "low" }), {
     thinkingLevel: "low",
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
