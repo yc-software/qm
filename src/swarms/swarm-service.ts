@@ -940,7 +940,14 @@ export function createSwarmService(deps: {
     },
     authorizes: async (claims) => {
       const run = claims.runId ? await runs.get(claims.runId) : null;
-      return deps.authorize(run ? { ...claims, members: run.request.conversation.audience } : claims);
+      if (!run) return deps.authorize(claims);
+      const { actorId, scopeId, scopeVersion } = claims;
+      return deps.authorize({
+        actorId,
+        scopeId,
+        ...(scopeVersion ? { scopeVersion } : {}),
+        members: run.request.conversation.audience,
+      });
     },
     botComputerRule,
     botMayUseComputer: async (computer, turn) => (await botComputerRule([])).botMayUseComputer(computer, turn),
