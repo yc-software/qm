@@ -2330,8 +2330,8 @@ export function createChatSurface(
             ${assistantFileList(deliveredFiles)}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
             ${workBelow && workView !== nothing ? html`<div class="slack-work">${workView}</div>` : nothing}
-            ${reactionChips(slackReactions.onMessage.get(message))} ${isStreaming ? nothing : messageMeta(message, index)}
-            ${replyVersionsPanel(versions, message)}
+            ${reactionChips(slackReactions.onMessage.get(message))}
+            ${isStreaming ? nothing : messageMeta(message, index)} ${replyVersionsPanel(versions, message)}
           </div>
         </article>
       `;

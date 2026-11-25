@@ -10,9 +10,7 @@ import { workSeconds } from "./work-duration.ts";
 interface ReplyVersions {
   earlier: Map<AgentMessage, AssistantWork[]>;
   superseded: Map<AgentMessage, number>;
-  /** Rows folded into a later rewritten reply; they render nothing of their own. */
   absorbed: Set<AgentMessage>;
-  /** The rewritten reply, carrying the work of every row it absorbed. */
   folded: Map<AgentMessage, AssistantWork>;
 }
 
