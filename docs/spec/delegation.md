@@ -1,6 +1,6 @@
 # Delegation: subagents, peer sessions and swarms
 
-_Verified against `main` at eb148f69d (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -68,7 +68,7 @@ Two other paths use the same parts:
 
 **Job.** Everything a turn may do to another session (`open`, `write`, `read`, `receive`, `acknowledge`, `list`, `search`, `start`), plus the tree helpers other modules import: `treeSessions`, `stopSessionRuns`, `stopSessionTree`, `runStopped`, `delegatedAuthorization`, `requiresDelegation`.
 
-**Key idea.** Authority is recomputed, never carried. Every call re-reads the caller's session, scope and membership. A child's request copies the parent's origin kind, so a child of a person's turn is stored with origin `human`; what marks it as delegated is the `sessionSenderId` and `delegatingRunId` pair. `delegatedAuthorization` then proves the chain: same actor, same scope, no wider audience, no read-only, swarm or plain-automation link, at most 32 hops. A chain that cannot be proven leaves the turn with plain automation authority. A turn counts as attended by a person only if no run in its chain had finished when the turn first started.
+**Key idea.** Authority is recomputed, never carried. Every call re-reads the caller's session, scope and membership. A child's request copies the parent's origin kind, so a child of a person's turn is stored with origin `human`; what marks it as delegated is the `sessionSenderId` and `delegatingRunId` pair. `delegatedAuthorization` then proves the chain: same actor, same scope, no wider audience, no read-only, swarm or plain-automation link, at most 32 hops. A chain that cannot be proven leaves the turn with plain automation authority.
 
 **Surprising.**
 

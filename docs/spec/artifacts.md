@@ -1,6 +1,6 @@
 # Artifacts: apps, files and sharing
 
-_Verified against `main` at eb148f69d (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -18,7 +18,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
    - _Two providers:_ `docker` runs a container on core's own host, publishes the port on `127.0.0.1` and mounts the files read-only; nothing the app writes survives a redeploy. `aws` starts a microVM, checks the commit out of a git bundle, can keep `/data` in object storage, and core dials it over TLS with a short-lived token header.
 5. **URL.** `appUrlOf` in `src/deploy/deploy-store.ts` picks the first that exists: `https://<handle>-dash.<apps domain>/`, the provider's own public URL, or `<PUBLIC_WEB_URL>/d/dash/`. The tool result gives that URL and says who can open the app.
 6. **Share.** Ada picks a channel in the web share dialog, which sends `POST /v1/shares/deploy/dash` (`changeShares` in `src/api/routes/sharing.ts`). Asking the agent instead runs the `apps` tool's `share` action (`controlPlaneTools` in `src/agent/agent-tools/control.ts`). Both end in `shareArtifact` in `src/api/control-service.ts`. It resolves the target (`resolveShareTarget` in `src/api/artifact-share.ts`), checks that Ada manages the app's home and belongs to the channel, and calls `grant` in `src/api/app-sessions.ts`, which writes one `acl_grants` row (Ada's scope, `deployment:<id>`, the channel, `read`) and an audit event.
-   - _Cron or webhook turn:_ app sharing is refused with `human_consent_required` unless the turn's token says a live person started it (`personAtKeyboard`). The master spec marks this attended/unattended split as transitional.
+   - _Cron or webhook turn:_ app sharing is refused with `human_consent_required` unless the turn's token says a live person started it (`internalPerson`). The master spec marks this attended/unattended split as transitional.
    - _Email or public link:_ an email address goes through `inviteToApp` in `src/api/app-published-apps.ts`, a public link through `setAppPublic`. Both need the `external_app_sharing` flag.
 7. **Open.** Bo, a member of the channel, opens the URL.
    - _With an apps domain:_ the portal (the sign-in front door, see [web clients](./web-clients.md)) sees a host under the apps domain and forwards the request to core (`proxyToAppHost` in `plugins/portal/src/proxy.ts`). `proxyAppSubdomain` in `src/api/routes/apps.ts` finds the organization from the host label, reads Bo's sign-in cookie (`portalSession` in `src/deploy/viewer-session.ts`) or sends him to sign in, and asks `effectiveAppPermission` in `src/api/app-helpers.ts`, which finds the channel grant and Bo's membership. `reachApp` then asks the provider for a live endpoint, waking or re-placing the app if it is gone, and `proxyReach` relays the request with the provider's headers and a signed `x-portal-identity` header that names Bo to the app. A row goes into `app_page_views`.
@@ -175,7 +175,7 @@ Two settings only tune: `DEPLOY_GIT_DIR` (default `<DATA_DIR>/deploy-git`) and `
 
 **Abstractions with one implementation.** `DeployStore`, `DeployGitStore`, `FileArtifactStore`, `FileUploadStore`, `AppPageViewLog` and `ResourceSearchStore` each have one Postgres-backed implementation. `createMemoryDurableByteStore` has no production caller.
 
-**Transitional code still present.** Provider-neutral settings keep AWS names (`AWS_DEPLOY_GATE_SECRET`, `awsDeploy.appsDomain`). `migrateArchive` moves base64 bundles to object storage one app at a time, as each is touched. `qm_tenant_for_app_host` falls back to routing a host that carries only an app name. `personAtKeyboard` gates app sharing.
+**Transitional code still present.** Provider-neutral settings keep AWS names (`AWS_DEPLOY_GATE_SECRET`, `awsDeploy.appsDomain`). `migrateArchive` moves base64 bundles to object storage one app at a time, as each is touched. `qm_tenant_for_app_host` falls back to routing a host that carries only an app name. `internalPerson` gates app sharing.
 
 **How far each type is from the master's goal** (shareable in one familiar dialog, versioned, tracked in Postgres or object storage):
 

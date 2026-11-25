@@ -1,6 +1,6 @@
 # Security: postures, approvals, screening and egress
 
-_Verified against `main` at eb148f69d (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
 
 ## In one paragraph
 

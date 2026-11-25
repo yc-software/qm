@@ -1,6 +1,6 @@
 # Identity, scopes and access
 
-_Verified against `main` at eb148f69d (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
+_Verified against `main` at d1de9e2d2 (2026-11-24). Statements were read in the code at that commit unless marked **[interpretation]**._
 
 ## In one paragraph
 
@@ -144,7 +144,7 @@ The master lists what every deployment has at [core and optional](../SPEC.md#cor
 - **Four doors through scope isolation.** Grants, the open sharing posture, admin roles, and the read-only organization and team scopes an internal turn gets. Only grants are rows that can be listed; an open-posture read and an admin read each leave an audit event instead (`sharing.cross_context_read`, `config.read`).
 - **Verbs × scope kinds.** Read, write, manage and "manages this artifact's home" are four predicates in `scope-membership.ts`, each with its own branch per scope kind and per channel privacy. `scopeMembershipSnapshot` loads the same facts in one batch for list endpoints; the master's Wall of shame records the per-row form of these reads under Performance.
 - **One setting, three accessors.** Most settings in `config-store.ts` have a cached getter, a `…Durable` getter that reads the database, and a setter, and each composes organization and scope values by its own rule.
-- **Transitional: the attended/unattended split.** `sharingSourcesForTurn` opens sharing only for a `human` or live ambient origin with `trustedLiveHuman`; `changeShares` gates app sharing on `livePersonTurn` and `personAtKeyboard` and fabricates `liveActor: true` for browser callers; `capabilityAdminDenied` uses `livePersonCapability`; `selfReadAudience` (`src/auth/self-read-audience.ts`) reads the token's `triggered` claim. The master spec's Background work paragraph says this split is being removed. Do not add to it.
+- **Transitional: the attended/unattended split.** `sharingSourcesForTurn` opens sharing only for a `human` or live ambient origin with `trustedLiveHuman`; `changeShares` gates app sharing on `livePersonTurn` and `internalPerson` and fabricates `liveActor: true` for browser callers; `capabilityAdminDenied` uses `internalLivePerson`; `selfReadAudience` (`src/auth/self-read-audience.ts`) reads the token's `triggered` claim. The master spec's Background work paragraph says this split is being removed. Do not add to it.
 - **Transitional: old shapes still read.** `verifySignedPayload` accepts a pre-JWS token format, and the first user migration still imports an older `principal_links` table.
 - **Interfaces with one implementation.** `GrantPersistence`, `AdminGrantPersistence`, `UserStore` and `DirectoryStore` each have a single Postgres implementation outside tests (`withSignInMembers` only wraps the last).
 - **God file.** `plugins/portal/src/index.ts` holds configuration, every sign-in entrance, proxying and boot checks in one module (God files lens).
