@@ -471,5 +471,5 @@ test("same-scope explicit execution prepares credentials only after provisioning
   });
   await f.tools.execute("pwd", { sandboxId: "personal-box", credentials: ["lazy"] });
   assert.deepEqual(events, ["policy", "resolve", "commit"]);
-  assert.equal(f.runs.at(-1)?.env?.TOKEN, "synthetic-command-secret");
+  assert.equal(f.runs[f.commands.indexOf("pwd")]?.env?.TOKEN, "synthetic-command-secret");
 });
