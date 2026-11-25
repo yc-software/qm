@@ -82,9 +82,11 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     const deliveries = [await deliver("7000"), await deliver("7001"), await deliver("7002"), await deliver("9999")];
     assert.deepEqual(deliveries, [200, 200, 404, 404]);
     assert.deepEqual(handledIn, [...db.tenants]);
-    const orgs = await Promise.all(db.tenants.map((t) => withTenant(t, () => lookup().boundExternalOrg(issuer))));
+    const orgs = await Promise.all(
+      db.tenants.map((t) => withTenant(t, (tenant) => lookup().boundExternalOrg(tenant, issuer))),
+    );
     assert.deepEqual(orgs, ["7000", "7001"]);
-    assert.equal(await withTenant(String(other!.id), () => lookup().boundExternalOrg(issuer)), undefined);
+    assert.equal(await withTenant(String(other!.id), (tenant) => lookup().boundExternalOrg(tenant, issuer)), undefined);
     assert.equal(await post("7000"), undefined);
     assert.ok((await post("7001"))?.refused);
     await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving": false}' WHERE id = $1`, [db.tenants[1]]);

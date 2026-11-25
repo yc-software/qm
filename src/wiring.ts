@@ -1422,7 +1422,7 @@ export function buildApp(
     ...(genericChat
       ? {
           organizationBearer: async () => {
-            const org = await sessions.tenantLookup.boundExternalOrg(genericChat.issuer);
+            const org = await sessions.tenantLookup.boundExternalOrg(ambientTenant(), genericChat.issuer);
             return org && genericChatOrganizationBearer(genericChat.secret, org);
           },
         }

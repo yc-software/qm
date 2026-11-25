@@ -116,8 +116,9 @@ const boundOrg = `CREATE OR REPLACE FUNCTION qm_bound_external_org(issuer text)
   $f$`;
 
 export const TENANT_EXTERNAL_ORG_LOOKUPS: PgMigrationDefinition = {
-  id: "0000-tenancy/external-org-lookups",
+  id: "0000-tenancy/external-orgs-lookups",
   statements: [
+    `SET LOCAL check_function_bodies = off`,
     `DO $lookup$ BEGIN EXECUTE format($sql$${orgTenant}$sql$, current_schema()); END $lookup$`,
     `DO $lookup$ BEGIN EXECUTE format($sql$${boundOrg}$sql$, current_schema()); END $lookup$`,
   ],
