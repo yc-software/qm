@@ -7,7 +7,6 @@ import {
   type SlackSessionStatus,
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -149,7 +148,6 @@ export interface SlackCoreClientDeps {
   taskAcknowledgements?: DurableMap<TaskAckState>;
   sessionStatus?: DurableMap<SlackSessionStatusState>;
   statusActivity?: SlackStatusActivity;
-  featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -188,16 +186,9 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           }),
         }
       : {}),
-    ...(deps.sessionStatus && deps.featureFlags
+    ...(deps.sessionStatus
       ? {
-          sessionStatus: createSlackSessionStatus(
-            deps.sessionStatus,
-            lease,
-            deps.runs,
-            deps.featureFlags,
-            Date.now,
-            deps.statusActivity,
-          ),
+          sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, Date.now, deps.statusActivity),
         }
       : {}),
     async externalSlackParticipants() {
