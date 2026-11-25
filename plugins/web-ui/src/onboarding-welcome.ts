@@ -102,15 +102,6 @@ export class OnboardingWelcome extends LitElement {
     if (!this.preview && !["slack", "slack-account"].includes(this.widget) && !document.hidden)
       void this.loadConnections();
   };
-  private connectingElsewhere: ConnectionService | null = null;
-  private continueOnce(key: string, name: string): void {
-    if (continuedAttempts.has(key)) return;
-    continuedAttempts.add(key);
-    this.onConnected?.(name);
-  }
-  private slackInstalled = () => {
-    if (this.setupOnly && this.returnKey) this.continueOnce(`${this.returnKey}:slack`, "Slack");
-  };
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
@@ -399,11 +390,6 @@ export class OnboardingWelcome extends LitElement {
       if (!this.isConnected || controller.signal.aborted) return;
       this.connections = accounts;
       this.connectionsChecked = true;
-      const elsewhere = this.connectingElsewhere;
-      if (elsewhere && accounts.some((account) => account.toolkit === elsewhere.id)) {
-        this.connectingElsewhere = null;
-        this.continueOnce(`${this.returnKey}:${elsewhere.id}`, elsewhere.name);
-      }
       if (this.realReturn) {
         const attempt = this.realReturn;
         const verified = accounts.some(
@@ -421,7 +407,10 @@ export class OnboardingWelcome extends LitElement {
           );
           if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
             this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
-          if (attempt.service.id === this.toolkit) this.continueOnce(attempt.state, attempt.service.name);
+          if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
+            continuedAttempts.add(attempt.state);
+            this.onConnected?.(attempt.service.name);
+          }
         }
       }
       await this.updateComplete;
@@ -489,8 +478,6 @@ export class OnboardingWelcome extends LitElement {
   private async authorize(service: ConnectionService, replaces?: string): Promise<void> {
     if (this.authorizing) return;
     if (service.connectUrl) {
-      if (service.id === this.toolkit && !this.connections.some((account) => account.toolkit === service.id))
-        this.connectingElsewhere = service;
       if (!(await openDesktopBrowser(service.connectUrl))) window.open(service.connectUrl, "_blank", "noopener");
       return;
     }
@@ -667,7 +654,6 @@ export class OnboardingWelcome extends LitElement {
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
               }}
-              @slack-installed=${this.slackInstalled}
             ></qm-onboarding-slack>`
           : nothing
       }
