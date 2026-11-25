@@ -568,6 +568,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
   const installation = await ctx.deps.slackInstallation?.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
+  if (ctx.capability && !workspaceInstalled) return sendJson(ctx.res, 200, { connected: false, workspaceInstalled });
   let nativeOAuth = false;
   const signedIn = ctx.actor && !ctx.actor.imp ? ctx.actor.p : undefined;
   const principal = ctx.capability ? ctx.capability.actorId : signedIn;
@@ -811,7 +812,7 @@ export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: (ctx) => slackReply(ctx, true),
   },
-  { method: "GET", path: "/v1/composio/slack", browser: true, actor: "person", auth: "source", handle: slackStatus },
+  { method: "GET", path: "/v1/composio/slack", browser: true, actor: "person", auth: "either", handle: slackStatus },
   {
     method: "POST",
     path: "/v1/composio/slack/complete",

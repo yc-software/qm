@@ -550,6 +550,14 @@ test("Slack connection links verified workspace identity to the web owner and pe
   }
 });
 
+test("Slack status tells an agent caller the workspace install is missing before checking its connections", async () => {
+  const f = fixture();
+  const agent = { actorId: "alice", scopeId: "personal:alice" } as CapabilityClaims;
+  const status = await f.invoke("/v1/composio/slack", undefined, null, agent);
+  assert.deepEqual([status.status, status.data], [200, { connected: false, workspaceInstalled: false }]);
+  assert.equal(f.calls.length, 0);
+});
+
 test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", async () => {
   const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
   const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
