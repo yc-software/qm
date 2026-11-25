@@ -35,8 +35,11 @@ before rolling back. Leaving the updated verifiers in place is the safe rollback
 
 Turn tokens handed to sandboxes (agent API, credential broker, egress proxy, OAuth
 consent) expire 48 hours after the turn starts, which bounds how long background jobs
-launched by that turn keep their access. The lifetime is fixed and every token carries
-an expiry; a token without one fails verification.
+launched by that turn keep their access. These are bearer credentials readable by any
+process in the sandbox, so the expiry is the bound on how long a leaked copy stays usable;
+48 hours is far above the background-job ceiling (one hour by default) and leaves room for
+a turn's jobs and follow-up work. The lifetime is fixed and every token carries an expiry;
+a token without one fails verification.
 
 A turn token carries `personAuthority` when the turn acts for a person: their own turn, a
 fire of a cron, loop, webhook or monitor they own, or a subagent of either, when everyone who
