@@ -17,7 +17,7 @@ import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
+import { errMessage, httpFailure, reportFailure, reportFailureAs } from "../../util/errors.ts";
 import { activePrincipal, audit, requirePersonAuthority } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
@@ -342,6 +342,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
     ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
     const accounts = data.items.filter((item) => usableAccount(item, userIds));
+    await wakeConfirmedLinks(ctx, accounts).catch(reportFailureAs("composio: connection wake", undefined));
     const configIds = [
       ...new Set(
         accounts
@@ -544,6 +545,30 @@ export interface ComposioReturn {
   url: string | null;
   toolkit: string;
   expiresAt: number;
+  wake?: { principal: string; accountId: string; sessionId: string | null };
+}
+
+export function wakeComposioLink(ctx: ApiCtx, saved: ComposioReturn | null): void {
+  if (saved?.wake)
+    ctx.deps.connectionWake?.({
+      principal: saved.wake.principal,
+      connector: saved.toolkit,
+      linkId: `composio:${saved.wake.accountId}`,
+      sessionId: saved.wake.sessionId,
+    });
+}
+
+async function wakeConfirmedLinks(
+  ctx: ApiCtx,
+  accounts: ReadonlyArray<{ id: string; user_id?: unknown }>,
+): Promise<void> {
+  const returns = ctx.deps.composioReturns;
+  if (!returns || !ctx.deps.connectionWake || !accounts.length) return;
+  const keys = new Map(accounts.map((account) => [account.id, `${String(account.user_id)}:${account.id}`]));
+  for (const pending of await returns.getMany([...keys.values()])) {
+    const key = pending.wake && keys.get(pending.wake.accountId);
+    if (key) wakeComposioLink(ctx, await returns.take(key));
+  }
 }
 
 async function identity(ctx: ApiCtx): Promise<void> {
@@ -780,6 +805,9 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
       user: slack.user ?? member.displayName,
       workspace: slack.team ?? slack.team_id!,
     });
+    await wakeConfirmedLinks(ctx, [{ id: proof.accountId, user_id: account.user_id }]).catch(
+      reportFailureAs("composio: connection wake", undefined),
+    );
     return sendJson(res, 200, { connected: true, user: slack.user, workspace: slack.team });
   } catch (error) {
     return sendJson(res, error instanceof PrincipalLinkError ? 409 : 502, {

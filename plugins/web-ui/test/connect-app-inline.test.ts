@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { connectWidget, harness, settle } from "./deep-link-boot-fixture.ts";
 
-test("a card for one app shows only that app and continues the chat after a verified return", async () => {
+test("a card for one app shows only that app and marks it connected after a verified return", async () => {
   const h = await harness({
     path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
     connectionReturn: true,
@@ -10,14 +10,12 @@ test("a card for one app shows only that app and continues the chat after a veri
   });
   try {
     await h.boot();
-    const connected: string[] = [];
     const other = Object.assign(document.createElement("qm-onboarding-welcome"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
       setupOnly: true,
       toolkit: "notion",
       returnKey: "reply:0:0:0",
-      onConnected: (name: string) => connected.push(`other:${name}`),
     });
     const scoped = Object.assign(document.createElement("qm-onboarding-welcome"), {
       me: { org: "test", user: "tester" },
@@ -25,7 +23,6 @@ test("a card for one app shows only that app and continues the chat after a veri
       setupOnly: true,
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
-      onConnected: (name: string) => connected.push(name),
     });
     const twin = Object.assign(document.createElement("qm-onboarding-welcome"), {
       me: { org: "test", user: "tester" },
@@ -33,16 +30,21 @@ test("a card for one app shows only that app and continues the chat after a veri
       setupOnly: true,
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
-      onConnected: (name: string) => connected.push(`twin:${name}`),
     });
     const g = Object.assign(document.createElement("qm-onboarding-welcome"), { widget: "apps", toolkit: "granola" });
     document.querySelector(".message-stack")!.append(other, scoped, twin, g);
     for (let i = 0; i < 100 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(connected, ["Gmail"]);
     assert.equal(scoped.querySelector(".connection-card strong")?.textContent, "Gmail");
     assert.equal(scoped.querySelector(".connection-card-status")?.textContent?.trim(), "Connected");
+    const reopened = connectWidget();
+    await settle(() => reopened.querySelector(".connection-card-status")?.textContent?.trim() === "Connected");
+    assert.deepEqual(
+      [scoped, reopened].map((card) => card.querySelector(".connection-card.just-connected") !== null),
+      [true, false],
+      "the card the person returned to celebrates; one that loads already connected does not",
+    );
     assert.deepEqual(
       [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
       ["Reconnect Gmail", "Disconnect Gmail"],

@@ -4,11 +4,20 @@ import { orgId } from "../../config.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
-import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
+import {
+  ACCOUNT_ID,
+  composioUnavailable,
+  composioUserId,
+  composioUserIds,
+  credential,
+  externalApps,
+  request,
+} from "./composio.ts";
+import { returnPathSession } from "../../connectors/connection-wake.ts";
 import { isToolkitId } from "../../mcp/connector-apps.ts";
 import { audit, isObj, requirePersonAuthority } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -73,6 +82,12 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
   }
   const userId = composioUserId(externalOrgId(), canonicalPerson(access.principal));
   try {
+    const linked = new URLSearchParams({
+      user_ids: composioUserIds(access.principal).join(","),
+      toolkit_slugs: toolkit,
+      statuses: "ACTIVE",
+      limit: "1",
+    });
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
       toolkits: { enable: [toolkit] },
@@ -81,16 +96,31 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
     });
     if (typeof session.session_id !== "string" || !/^trs_[a-zA-Z0-9_-]+$/.test(session.session_id))
       throw new Error("Invalid session");
-    const link = await request(ctx, access.key, `/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
-      toolkit,
-      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
-    });
+    const [link, earlier] = await Promise.all([
+      request(ctx, access.key, `/tool_router/session/${encodeURIComponent(session.session_id)}/link`, {
+        toolkit,
+        ...(callbackUrl ? { callback_url: callbackUrl } : {}),
+      }),
+      request(ctx, access.key, `/connected_accounts?${linked}`).catch(
+        reportFailureAs("composio: earlier links", { items: null }),
+      ),
+    ]);
     if (typeof link.connected_account_id !== "string" || !ACCOUNT_ID.test(link.connected_account_id))
       throw new Error("Invalid account");
     await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
       url: typeof callbackUrl === "string" ? callbackUrl : null,
       toolkit,
       expiresAt: Date.now() + 20 * 60_000,
+      ...(Array.isArray(earlier.items) && !earlier.items.length
+        ? {
+            wake: {
+              principal: access.principal,
+              accountId: link.connected_account_id,
+              sessionId:
+                ctx.capability?.sessionId ?? returnPathSession(typeof callbackUrl === "string" ? callbackUrl : null),
+            },
+          }
+        : {}),
     });
     const url = new URL(String(link.redirect_url));
     if (

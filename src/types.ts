@@ -174,6 +174,7 @@ export interface Session {
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   subagents?: { running: number; waiting: number };
   workingSince?: number;
+  workingRun?: string;
   purpose?: string;
 }
 

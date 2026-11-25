@@ -278,7 +278,7 @@ export function createSessionMethods(
   };
 
   const ownRunState = (run: Run | undefined) =>
-    run ? { working: true as const, workingSince: run.startedAt ?? run.createdAt } : {};
+    run ? { working: true as const, workingSince: run.startedAt ?? run.createdAt, workingRun: run.id } : {};
 
   async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
     const all = rows.map(withoutStoredFacts);

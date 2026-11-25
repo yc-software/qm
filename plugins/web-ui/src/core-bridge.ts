@@ -175,6 +175,7 @@ export interface CoreSession {
   surface?: string;
   subagents?: { running: number; waiting: number };
   workingSince?: number;
+  workingRun?: string;
   purpose?: string;
   personaId?: string;
 }
@@ -566,6 +567,7 @@ export interface ApprovalDecision {
 }
 export type AssistantWork = AssistantMessage & {
   persisted?: boolean;
+  runId?: string;
   streamingBaseline?: string;
   work?: WorkBlock;
   deliveredFiles?: DeliveredFile[];
@@ -674,6 +676,7 @@ export function resumeAnchor(): AgentMessage {
 export function continuableMessages(
   messages: AgentMessage[],
   input?: RunPoll["input"],
+  runId = input?.runId,
 ): { messages: AgentMessage[]; popped: AgentMessage[] } {
   const kept = messages.slice();
   const popped: AgentMessage[] = [];
@@ -708,7 +711,8 @@ export function continuableMessages(
   }
   while (kept.length && (kept[kept.length - 1] as { role?: string }).role === "assistant") {
     const last = kept.at(-1) as AssistantWork;
-    if (last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
+    const earlierRun = Boolean(runId && last.runId && last.runId !== runId);
+    if (earlierRun || last.stopReason === "aborted" || (!input && last.work && workPausedForApproval(last.work))) {
       kept.push(resumeAnchor());
       break;
     }
@@ -2319,6 +2323,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         return;
       }
     }
+    const runId = pending.at(-1)?.turnId ?? (entrySeqs.length ? turn.id : null);
     entrySeqs = [...entrySeqs, ...pending.map((item) => item.seq)];
     const lastText = pending.findLastIndex((item) => isNarration(item) && !retractedReason(item));
     if (lastText >= 0) {
@@ -2332,6 +2337,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     }
     const msg: AssistantWork = {
       persisted: true,
+      ...(runId ? { runId } : {}),
       ...(entrySeqs.length ? { entrySeqs } : {}),
       role: "assistant",
       content: [{ type: "text", text }],

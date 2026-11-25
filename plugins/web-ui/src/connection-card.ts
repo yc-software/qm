@@ -88,6 +88,7 @@ export function connectionCard(
     else localStorage.removeItem(lastSeen);
   }
   if (tone === "success") looks.push("connected");
+  if (tone === "success" && at.outcome === "success") looks.push("just-connected");
   if (pending) looks.push("pending");
   return html`<div
     class=${looks.join(" ")}

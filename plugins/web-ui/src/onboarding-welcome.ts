@@ -44,15 +44,12 @@ import {
   type PickerState,
 } from "./connection-preview";
 
-const continuedAttempts = new Set<string>();
-
 const HARNESS = "QM, your agent harness.";
 
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
     onIdea: { attribute: false },
-    onConnected: { attribute: false },
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
@@ -73,7 +70,6 @@ export class OnboardingWelcome extends LitElement {
   };
   declare me: Me | null;
   declare onIdea: ((prompt: string) => void) | undefined;
-  declare onConnected: ((name: string) => void) | undefined;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack" | "slack-account";
@@ -409,10 +405,6 @@ export class OnboardingWelcome extends LitElement {
           );
           if (replaced && !(await this.disconnect(replaced, attempt.service.name)))
             this.connectionError = `${attempt.service.name} is reconnected, but the old connection is still there. Disconnect it below.`;
-          if (attempt.service.id === this.toolkit && !continuedAttempts.has(attempt.state)) {
-            continuedAttempts.add(attempt.state);
-            this.onConnected?.(attempt.service.name);
-          }
         }
       }
       await this.updateComplete;

@@ -46,7 +46,14 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "approval"
+  | "model"
+  | "fastMode"
+  | "attachments"
+  | "infrequentCron"
+  | "memoryNotebookOnly"
+  | "botActor"
+  | "approval"
+  | "displayText"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -313,6 +320,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       actor: { externalId: actorId },
       conversation,
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
+      ...(spec.displayText ? { displayText: spec.displayText } : {}),
       origin: {
         kind: "automation",
         fire: true,

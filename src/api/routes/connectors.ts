@@ -30,6 +30,7 @@ import { sendJson, sendRedirect } from "../http.ts";
 import { audit, isObj, requirePersonAuthority, resolveSelfRead } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
+import { returnPathSession } from "../../connectors/connection-wake.ts";
 
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60_000;
 function oauthStateSecret(deps: ServerDeps, signingSecret: string | undefined): string {
@@ -194,6 +195,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
     const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    const linkedBefore = await principalHasProvider(deps, provider, state.principalId, (st) => st.connected);
     for (const host of hosts)
       await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(ctx, {
@@ -202,6 +204,13 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       resource: provider,
       scopeLabel: state.principalId,
     });
+    if (!linkedBefore)
+      deps.connectionWake?.({
+        principal: state.principalId,
+        connector: oauthProvider(provider)?.label ?? provider,
+        linkId: `oauth:${state.nonce}`,
+        sessionId: returnPathSession(state.returnTo),
+      });
     if (state.consentLinkId && deps.consentLinks) {
       await deps.consentLinks.redeem(state.consentLinkId).catch(swallowAs("connectors: redeem consent link", null));
     }
@@ -217,7 +226,12 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   }
 }
 
-async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
+async function principalHasProvider(
+  deps: ServerDeps,
+  provider: string,
+  principalId: string,
+  usable = (st: OAuthTokenStatus) => st.connected && !st.needsReconnect,
+): Promise<boolean> {
   const p = oauthProvider(provider);
   if (!p || !deps.connectorTokens) return false;
   for (const host of p.hosts) {
@@ -225,7 +239,7 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
       const st = await deps.connectorTokens
         .connectorTokenStatus(host, principalId, at)
         .catch(swallowAs("connectors: token status", { connected: false } as OAuthTokenStatus));
-      if (st.connected && !st.needsReconnect) return true;
+      if (usable(st)) return true;
     }
   }
   return false;

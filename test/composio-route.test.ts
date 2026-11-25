@@ -795,7 +795,7 @@ test("callback completion is browser-only and preserves the durable return URL",
   f.replies.push({ connected_account_id: "ca_test", toolkit_slug: "gmail" });
   const verified = await f.invoke("/v1/composio/callback?session_uri=opaque&user_id=bob");
   assert.deepEqual([verified.status, verified.location], [303, url]);
-  assert.deepEqual(JSON.parse(f.calls[2]!.init!.body as string), {
+  assert.deepEqual(JSON.parse(f.calls[3]!.init!.body as string), {
     session_uri: "opaque",
     user_id: composioUserId(orgId(), "alice"),
   });
@@ -1520,4 +1520,29 @@ test("native Slack links without files:write are asked to reconnect", async () =
     f.nativeCalls.some((c) => c.method === "chat.postMessage" || c.method === "files.completeUploadExternal"),
     false,
   );
+});
+
+test("a first link wakes the conversation it started from once; relinks and repeat checks do not", async () => {
+  const f = fixture();
+  await f.own();
+  const wakes: unknown[] = [];
+  f.deps.connectionWake = (connection) => wakes.push(connection);
+  const user = composioUserId(orgId(), "alice");
+  const active = (id: string) => ({ items: [{ id, user_id: user, status: "ACTIVE", toolkit: { slug: "gmail" } }] });
+  const connect = async (account: string, earlier: unknown[]) => {
+    f.link(account);
+    f.replies.push({ items: earlier });
+    assert.equal(
+      (await f.invoke("/v1/composio/authorize", { toolkit: "gmail", returnTo: "/s/chat", state: STATE })).status,
+      200,
+    );
+    f.replies.push(active(account), active(account));
+    await f.invoke("/v1/composio/connections");
+    await f.invoke("/v1/composio/connections");
+  };
+  await connect("ca_first", []);
+  const history = new URL(f.calls[2]!.url).searchParams;
+  assert.deepEqual([history.get("toolkit_slugs"), history.get("statuses")], ["gmail", "ACTIVE"]);
+  await connect("ca_again", [{ id: "ca_first" }]);
+  assert.deepEqual(wakes, [{ principal: "alice", connector: "gmail", linkId: "composio:ca_first", sessionId: "chat" }]);
 });
