@@ -137,7 +137,6 @@ import {
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
-import { realApprovalReason } from "./approval-call";
 import { approvalRecord } from "./approval-card";
 import {
   buildTimeline,
@@ -3674,13 +3673,9 @@ export function createChatSurface(
 
   function toolRow(row: ToolRowModel, work: WorkBlock, status: WorkBlock["status"], stale = false): TemplateResult {
     if (row.approval) {
-      const p = toolBody(row.approval);
       return html`<div class="tool-row tool-approval">
         <span class="tool-icon">${icon(Wrench, 13)}</span>
-        <span class="tool-label"
-          >Approval
-          needed${realApprovalReason(p.reason) ? html` <span class="tool-detail">${firstLine(p.reason!, 90)}</span>` : nothing}</span
-        >
+        <span class="tool-label">Approval needed</span>
       </div>`;
     }
     const call = toolBody(row.call);
@@ -3692,9 +3687,7 @@ export function createChatSurface(
     const kind = toolRowKind(row, status);
     let label = knownMeta ? meta.attempted : `Tried ${name}`;
     if (kind === "approval")
-      label = row.pending
-        ? `Waiting for approval${row.waiting && row.waiting > 1 ? ` · ${row.waiting} calls` : ""}`
-        : "Approval requested";
+      label = `${row.pending ? "Waiting for approval" : "Approval requested"}${row.waiting && row.waiting > 1 ? ` · ${row.waiting} calls` : ""}`;
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;

@@ -14479,10 +14479,7 @@ button:disabled .qm-switch {
 }
 .ac-card,
 .approval-record {
-  --ac-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --ac-tint: color-mix(in srgb, var(--foreground) 4.5%, var(--background));
-  --ac-soft: color-mix(in srgb, var(--foreground) 66%, var(--background));
-  --ac-quiet: color-mix(in srgb, var(--foreground) 84%, var(--background));
   --ac-rule: color-mix(in srgb, var(--border) 80%, transparent);
 }
 .ac-card {
@@ -14516,7 +14513,7 @@ button:disabled .qm-switch {
   flex: none;
   font-size: var(--font-12-5);
   font-weight: 500;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-batch .ac-eyebrow {
   font-size: var(--font-15);
@@ -14528,9 +14525,9 @@ button:disabled .qm-switch {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--ac-mono);
+  font-family: var(--font-mono);
   font-size: 11.5px;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-sep {
   margin: 0 3px;
@@ -14547,7 +14544,7 @@ button:disabled .qm-switch {
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
   cursor: pointer;
 }
 .ac-drop:hover:not(:disabled) {
@@ -14583,7 +14580,7 @@ button:disabled .qm-switch {
   white-space: nowrap;
   font-size: var(--font-12-5);
   line-height: calc(var(--font-13-5) * 1.5);
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-k-text > dt {
   padding-top: 9px;
@@ -14595,11 +14592,11 @@ button:disabled .qm-switch {
 .ac-row > dd {
   margin: 0;
   min-width: 0;
-  color: var(--ac-quiet);
+  color: var(--foreground);
   overflow-wrap: anywhere;
 }
 .ac-value.literal {
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-text {
   padding: 9px 12px;
@@ -14618,10 +14615,10 @@ button:disabled .qm-switch {
 .ac-note {
   margin-top: 8px;
   font-size: var(--font-12-5);
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-note > code {
-  font-family: var(--ac-mono);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 .ac-list {
@@ -14647,8 +14644,8 @@ button:disabled .qm-switch {
   padding: 9px 12px;
   border-radius: 10px;
   background: var(--ac-tint);
-  color: var(--ac-quiet);
-  font-family: var(--ac-mono);
+  color: var(--foreground);
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -14669,7 +14666,7 @@ button:disabled .qm-switch {
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
   font: inherit;
   cursor: pointer;
 }
@@ -14704,7 +14701,7 @@ button:disabled .qm-switch {
   background: var(--cta-hover);
 }
 .ac-pair-key {
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-pair {
   display: inline-flex;
@@ -14754,7 +14751,7 @@ button:disabled .qm-switch {
   width: 14px;
   font-size: var(--font-12-5);
   font-variant-numeric: tabular-nums;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 
 .ac-summary-top {
@@ -14785,14 +14782,14 @@ button:disabled .qm-switch {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-item summary > svg {
   flex: none;
   position: relative;
   top: 2px;
   margin-left: -6px;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
   transition: transform 0.15s ease;
 }
 .ac-item details[open] > summary > svg {
@@ -14808,11 +14805,11 @@ button:disabled .qm-switch {
   display: none;
 }
 .ac-untitled .ac-preview {
-  color: var(--ac-quiet);
+  color: var(--foreground);
 }
 .ac-untitled details[open] .ac-preview {
   display: block;
-  color: var(--ac-soft);
+  color: var(--muted-foreground);
 }
 .ac-item-body {
   padding: 2px 0 12px 24px;
@@ -14865,10 +14862,10 @@ button:disabled .qm-switch {
 }
 .ac-receipt[data-verdict="approved"] .ac-receipt-mark {
   border: 0;
-  background:
-    no-repeat center / 10px 10px
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 5.2 4.1 7.2 8 3'/%3E%3C/svg%3E"),
-    var(--success);
+  display: grid;
+  place-items: center;
+  color: white;
+  background: var(--success);
 }
 .ac-receipt-verdict {
   flex: none;

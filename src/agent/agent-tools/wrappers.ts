@@ -82,7 +82,7 @@ const CALL_LABEL_FIELD = "purpose";
 const CALL_LABEL_SCHEMA = Type.Optional(
   Type.String({
     description:
-      'One plain line saying what this call does and to whom, e.g. "Send Ada a Slack DM about the Friday meeting". Shown to the person if the call needs their approval; it does not change what runs.',
+      'What this call does, in one plain line, e.g. "Send Ada a Slack DM about the Friday meeting". Shown on the approval card; it does not change what runs.',
   }),
 );
 
@@ -130,7 +130,7 @@ export function withToolApprovalGate(
   const { ref, recordCall, recordResult } = kit;
   if (TOOL_APPROVAL_EXEMPT.has(tool.name)) return tool;
   const inner = tool.execute.bind(tool);
-  const labelledParameters = withCallLabelField(tool.parameters);
+  const labelledParameters = tool.needsApproval === undefined ? null : withCallLabelField(tool.parameters);
   return {
     ...tool,
     ...(labelledParameters ? { parameters: labelledParameters as ToolDefinition["parameters"] } : {}),

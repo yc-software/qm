@@ -464,8 +464,7 @@ async function declinePendingOnReply(turn: ApprovalDecisionTurn, decisions: Appr
   const { deps, actor, session } = turn;
   const rows = await deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [session.id] } });
   for (const [requestId, record] of rows) {
-    if (approvalRefusal(record, session.id, actor.id) || record.kind === "input" || record.blocksInput === false)
-      continue;
+    if (approvalRefusal(record, session.id, actor.id) || record.blocksInput === false) continue;
     await decideApproval(turn, decisions, { requestId, approved: false });
   }
 }

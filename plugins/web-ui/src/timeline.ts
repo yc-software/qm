@@ -263,23 +263,17 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
     const queue = pendingByCmd.get(cmd);
     if (queue?.length) item.row.pending = queue.shift();
   }
-  const leftover = [...pendingByCmd.values()].flat();
-  for (let i = collapsed.length - 1; i >= 0 && leftover.length; i--) {
-    const item = collapsed[i]!;
-    if (item.kind === "tool" && !item.row.pending && toolBody(item.row.result).blocked === "needs_approval")
-      item.row.pending = leftover.pop();
-  }
   const out: TimelineItem[] = [];
   for (const item of collapsed) {
     const prev = out[out.length - 1];
     if (
       item.kind === "tool" &&
-      item.row.pending &&
+      toolBody(item.row.result).blocked === "needs_approval" &&
       prev?.kind === "tool" &&
-      prev.row.pending &&
       toolBody(prev.row.result).blocked === "needs_approval"
     ) {
       prev.row.waiting = (prev.row.waiting ?? 1) + 1;
+      prev.row.pending ??= item.row.pending;
       continue;
     }
     out.push(item);

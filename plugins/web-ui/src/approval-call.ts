@@ -1,7 +1,5 @@
 import type { PendingApproval } from "./core-bridge.ts";
 
-export const BOILERPLATE_APPROVAL_REASON = "this tool asks for approval before each call";
-
 const SHORT_TEXT = 64;
 const MAX_DEPTH = 4;
 
@@ -178,8 +176,4 @@ export function approvalBatch(approvals: PendingApproval[]): ApprovalBatch | nul
     call: first,
     differing: flat.map((list) => argView(rebuild(list.filter((leaf) => differing.has(pathKey(leaf.path)))))),
   };
-}
-
-export function realApprovalReason(reason: string | undefined): string | undefined {
-  return reason && reason !== BOILERPLATE_APPROVAL_REASON ? reason : undefined;
 }

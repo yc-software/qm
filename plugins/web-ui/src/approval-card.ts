@@ -9,7 +9,6 @@ import {
   approvalCall,
   approvalHeading,
   argView,
-  realApprovalReason,
   type ApprovalCall,
   type ArgField,
   type ArgNode,
@@ -90,8 +89,9 @@ function commandBody(a: PendingApproval): TemplateResult {
 
 export function approvalBody(a: PendingApproval): TemplateResult {
   const call = approvalCall(a);
-  const reason = realApprovalReason(a.reason);
-  return html`${call ? argsView(argView(call.args)) : commandBody(a)}
+  if (call) return html`${argsView(argView(call.args))}`;
+  const reason = a.reason;
+  return html`${commandBody(a)}
   ${reason ? html`<div class="ac-note">${reason.charAt(0).toUpperCase() + reason.slice(1)}.</div>` : nothing}`;
 }
 
@@ -253,7 +253,7 @@ export interface ApprovalReceipt {
 
 export function approvalReceipt(r: ApprovalReceipt): TemplateResult {
   return html`<div class="ac-receipt" data-verdict=${r.verdict} role="status">
-    <span class="ac-receipt-mark" aria-hidden="true"></span>
+    <span class="ac-receipt-mark" aria-hidden="true">${r.verdict === "approved" ? icon(Check, 10) : nothing}</span>
     <span class="ac-receipt-verdict">${r.verdict === "approved" ? "Approved" : "Declined"}</span>
     <span class="ac-receipt-text" dir="auto">${r.text}</span>
   </div>`;
