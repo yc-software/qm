@@ -129,7 +129,7 @@ export async function runSurfaceTurn(
   let result: TurnResult;
   try {
     result = await callCore(
-      { ...body, origin: turnOrigin(turn) },
+      { ...body, origin: turnOrigin(turn), ...(turn.synthetic ? { midTurn: "queue" as const } : {}) },
       {
         deferDeliveryAck: true,
         ...(turn.synthetic
