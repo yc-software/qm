@@ -35,7 +35,7 @@ const sdkErrors = {
 export interface RenderSandboxInfo {
   id: string;
   status: string;
-  expiresAtMs?: number;
+  expiresAtMs: number;
 }
 
 export interface RenderLiveSandbox extends RenderSandboxInfo {
@@ -102,7 +102,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
   const normalizeInfo = (value: Awaited<ReturnType<typeof api.create>>): RenderSandboxInfo => ({
     id: value.id,
     status: value.status,
-    ...(value.timeoutSeconds ? { expiresAtMs: Date.parse(value.createdAt) + value.timeoutSeconds * 1000 } : {}),
+    expiresAtMs: value.timeoutSeconds ? Date.parse(value.createdAt) + value.timeoutSeconds * 1000 : Infinity,
   });
   const normalizeSnapshot = (value: Awaited<ReturnType<typeof api.snapshots.create>>): RenderSnapshot => ({
     id: value.id,

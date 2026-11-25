@@ -148,7 +148,7 @@ export function createFakeRender() {
       const info: RenderSandboxInfo = {
         id,
         status: "running",
-        ...(lifetimeSec ? { expiresAtMs: Date.now() + lifetimeSec * 1000 } : {}),
+        expiresAtMs: lifetimeSec ? Date.now() + lifetimeSec * 1000 : Infinity,
       };
       if (snapshotId) {
         if ((snapshots.get(snapshotId) ?? goldens.get(snapshotId))?.status !== "available")

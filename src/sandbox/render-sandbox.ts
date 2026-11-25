@@ -622,7 +622,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       processSessions: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
-        os: `Debian 12 — Render sandbox from the QM sandbox base image (it suspends after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and resumes on the next command with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
+        os: `Debian 12 — Render sandbox from the QM sandbox base image (it suspends after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and resumes at its next turn with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
         runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
         cpus: 2,
         memoryMb: 4096,
@@ -733,7 +733,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     async reapDeepIdle(idleMs) {
       let reaped = 0;
       const scratchDue = (scratch: StoredRenderScratch | null): boolean =>
-        !!scratch && (scratch.cleanupPending || (scratch.expiresAtMs ?? Infinity) <= Date.now());
+        !!scratch && (scratch.cleanupPending || scratch.expiresAtMs <= Date.now());
       await claimThenBind(scratchStore.claimTenants, async () => {
         for (const [name, scratch] of await scratchStore.entries())
           if (scratchDue(scratch))
