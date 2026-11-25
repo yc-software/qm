@@ -354,7 +354,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             }
           }
           try {
-            await session.terminate();
+            await session.terminate({ wait: true });
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
@@ -857,7 +857,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await snapshotHome(scopeId, session).catch((error: unknown) => {
               if (!(error instanceof ModalSandboxGoneError)) throw error;
             });
-          await session.terminate().catch((error: unknown) => {
+          await session.terminate({ wait: true }).catch((error: unknown) => {
             if (!(error instanceof ModalSandboxGoneError)) throw error;
           });
         }

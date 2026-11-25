@@ -364,7 +364,8 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
   await assert.rejects(client.create({ name: "taken" }), ModalNameConflictError);
   modalFault = { terminate: Object.assign(new Error("x"), { code: 5 }) };
   await session.terminate();
-  assert.deepEqual(modalTerminations.at(-1), { wait: true });
+  await session.terminate({ wait: true });
+  assert.deepEqual(modalTerminations.slice(-2), [undefined, { wait: true }]);
   await client.terminate("sb-native");
   modalPoll = new ModalInvalidError("malformed sandbox id");
   await assert.rejects(client.fromId("not-a-sandbox"), ModalSandboxGoneError, "an unknown id is a gone sandbox");
