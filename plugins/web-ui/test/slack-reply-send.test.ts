@@ -23,6 +23,8 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
     path: "/",
     api: (path, init) => {
       if (path.endsWith("/slack/reply-status")) return Response.json({ connected: true, user: "Alice" });
+      if (path.includes("/directory/resolve"))
+        return Response.json({ matches: [{ principalId: "tester", avatarUrl: "/a.png" }] });
       if (path.endsWith("/slack/reply")) {
         messages.push(JSON.parse(String(init?.body)));
         return succeed
@@ -68,6 +70,7 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
     assert.doesNotMatch(widget.textContent!, /Sending to Slack|Sent to Slack/);
     assert.equal(widget.querySelector('[role="alert"]'), null);
     assert.equal(messages.length, 2);
+    assert.equal(document.querySelectorAll("textarea, .empty-chat").length, 1);
     assert.equal(
       h.requests.some((path) => path === "/api/turn"),
       false,

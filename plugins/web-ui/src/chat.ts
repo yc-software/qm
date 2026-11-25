@@ -1698,6 +1698,7 @@ export function createChatSurface(
   function drawActiveChat(agent = chatState.agent, opts: { forceScroll?: boolean } = {}): void {
     const roSession = readOnly.session();
     if (
+      ctx.composerOnly ||
       !agent ||
       agent !== chatState.agent ||
       !chatState.host ||

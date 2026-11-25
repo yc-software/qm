@@ -34,6 +34,7 @@ class EmbeddedComposer extends AsyncDirective {
       this.key = key;
       const host: ConvHost = {
         pane: compact,
+        composerOnly: true,
         ownsUrl: false,
         container: () => this.element,
         claimContainer: () => this.element,
