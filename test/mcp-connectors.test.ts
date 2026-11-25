@@ -258,38 +258,18 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     ),
     /"needsApproval":true/,
   );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "send-message" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    true,
-  );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "find-record" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    false,
-  );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "search" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    false,
-  );
+  const ask = (args: Record<string, unknown>) =>
+    service.needsApproval("records", args, "alice@example.com", personalScope("alice@example.com"));
+  assert.equal(await ask({ operation: "invoke", tool: "send-message" }), true);
+  assert.equal(await ask({ operation: "invoke", tool: "find-record" }), false);
+  assert.equal(await ask({ operation: "invoke", tool: "send_message" }), false, "an invented name asks no question");
+  assert.equal(await ask({ operation: "search" }), false);
   await assert.rejects(
-    service.needsApproval(
+    service.call(
       "records",
       { operation: "invoke", tool: "send_message" },
       "alice@example.com",
+      undefined,
       personalScope("alice@example.com"),
     ),
     /Unknown Records tool: send_message\. Search for it first/,
