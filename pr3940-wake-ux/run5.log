@@ -1,0 +1,54 @@
+   7.6 reloaded: {
+ "rows": [
+  "user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.",
+  "assistant-row@215: Worked for 4s Use the cards below to connect Hun"
+ ],
+ "cards": [
+  "Deepgram Not connected Connect []@284",
+  "Hunter Not connected Connect []@364",
+  "AssemblyAI Not connected Connect []@444"
+ ],
+ "liveTop": null,
+ "anims": []
+}
+  17.9 +0ms {"rows":[],"cards":[],"liveTop":null,"anims":[]}
+  18.1 +179ms {"rows":["user-row@99: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@203: Worked for 4s Use the cards below to connect Hun"],"cards":["Connect [compact pending]@272","Connect [compact pending]@338","Connect [compact pending]@404"],"liveTop":null,"anims":[]}
+  18.4 +524ms {"rows":["user-row@99: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@203: Worked for 4s Use the cards below to connect Hun"],"cards":["Deepgram Connect [compact pending]@272","Connect [compact pending]@338","Connect [compact pending]@404"],"liveTop":null,"anims":[]}
+  18.5 +608ms {"rows":["user-row@99: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@203: Worked for 4s Use the cards below to connect Hun"],"cards":["Deepgram Connect [compact pending]@272","Connect [compact pending]@338","AssemblyAI Connect [compact pending]@404"],"liveTop":null,"anims":[]}
+  18.8 +878ms {"rows":["user-row@99: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@203: Worked for 4s Use the cards below to connect Hun"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@272","Connect [compact pending]@324","AssemblyAI Connect [compact pending]@390"],"liveTop":null,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  18.9 +958ms {"rows":["user-row@99: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@203: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@461: Thinking 0s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@272","Connect [compact pending]@324","AssemblyAI Connect [compact pending]@390"],"liveTop":461,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  19.0 +1050ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@473: Thinking 0s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Connect [compact pending]@336","AssemblyAI Connect [compact pending]@402"],"liveTop":473,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  19.3 +1391ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@488: Thinking 0s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Connect [compact pending]@336","AssemblyAI Not connected Connect []@402"],"liveTop":488,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  19.5 +1558ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@488: Thinking 1s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Connect [compact pending]@336","AssemblyAI Not connected Connect []@402"],"liveTop":488,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  20.5 +2558ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@488: Thinking 2s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Connect [compact pending]@336","AssemblyAI Not connected Connect []@402"],"liveTop":488,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  20.6 +2727ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 2s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  21.5 +3556ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 3s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  22.5 +4557ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 4s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  23.8 +5904ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 5s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  24.6 +6709ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 6s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  25.8 +7917ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 7s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  26.6 +8724ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 8s"],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  27.5 +9596ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row streaming@502: Thinking 9s Deepgram is connected. You asked me "],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":502,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  28.3 +10406ms {"rows":["user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.","assistant-row@215: Worked for 4s Use the cards below to connect Hun","assistant-row@502: Thought Deepgram is connected. You asked me not "],"cards":["Deepgram Connected Disconnect [compact connected just-connected]@284","Hunter Not connected Connect []@336","AssemblyAI Not connected Connect []@416"],"liveTop":null,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  34.7 after: {
+ "rows": [
+  "user-row latest-prompt@91: I'd like to try Hunter, Deepgram and AssemblyAI.",
+  "assistant-row@215: Worked for 4s Use the cards below to connect Hun",
+  "assistant-row@502: Thought Deepgram is connected. You asked me not "
+ ],
+ "cards": [
+  "Deepgram Connected Disconnect [compact connected just-connected]@284",
+  "Hunter Not connected Connect []@336",
+  "AssemblyAI Not connected Connect []@416"
+ ],
+ "liveTop": null,
+ "anims": [
+  "slack-installed-card",
+  "slack-installed-ring",
+  "slack-installed-text",
+  "slack-installed-check",
+  "slack-installed-text"
+ ]
+}
+  34.9 video: /tmp/pw/run5/page@ee66f0f0921450c5cb246cf1375d9dec.webm
+exit 0

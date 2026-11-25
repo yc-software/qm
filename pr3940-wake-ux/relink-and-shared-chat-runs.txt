@@ -1,0 +1,48 @@
+# Two cases on the dev instance at the build of the PR head c0d4cc975 (65091b36a = that head merged with the sibling card branch plus the dev-only patches)
+
+## A. Re-authorizing an app that is still connected (ACTIVE): no wake
+$ wake items in the database before: 27 ; items in chat c51d31f0 before: 28
+$ CHAT_ID=c51d31f0-b8f0-4a32-a8f2-337074f1fd67 TOOLKIT=exa node /tmp/pw/relink-active.mjs   (13:36:45Z; the script starts a link from the chat page the way the card does, completes the hosted form, returns)
+   5.8 signed in as: <dev account>
+   6.2 connections before: brave_search:ca_ztKaPa, deepgram:ca_LVy-QI, elevenlabs:ca_V8ynWV, exa:ca_LWyzkp, firecrawl:ca_T4ynl9, linkup:ca_HlRjmr, perplexityai:ca_s7w2eS, serpapi:ca_ADA6_k, slack:ca_IwMxJl, tavily:ca_mk5W2u
+   6.7 POST /api/composio/authorize -> 200 new account ca_HQIvJ7…
+  12.6 hosted page host: dashboard.composio.dev | fields: 1
+  14.7 returned to the chat: true /s/c51d31f0-b8f0-4a32-a8f2-337074f1fd67 ?composioReturn,status,connected_account_id
+  18.0 connections after: brave_search:ca_ztKaPa, deepgram:ca_LVy-QI, elevenlabs:ca_V8ynWV, exa:ca_HQIvJ7, exa:ca_LWyzkp, firecrawl:ca_T4ynl9, linkup:ca_HlRjmr, perplexityai:ca_s7w2eS, serpapi:ca_ADA6_k, slack:ca_IwMxJl, tavily:ca_mk5W2u
+  38.2 a live turn appeared within 20 s of the return: false
+$ wake items in the database after: 27 ; items in chat c51d31f0 after: 28
+$ the dev-only trace line (printed whenever a pending link carrying a wake is claimed) did not print for exa
+(the second exa account was disconnected afterwards)
+
+## B. An app card in a shared-scope web chat: nothing is written there; the wake runs in the personal web conversation
+$ the shared chat (a project chat created through the web API): id | surface | scope
+24d12bff-a86b-4d71-a49f-fd97a6df038b | web | group:web-project-a1725b94-7cb8-4838-ad3a-c033c1ff978f
+$ org sharing posture was "isolated": the card tool refused in the shared chat ("Couldn't check the app catalog (HTTP 403: Use your connected apps in your own conversation…")). It was set to "open" for this run and put back afterwards.
+$ asked for a Tavily card in the shared chat; card shown: ["Tavily Connected Disconnect"]
+$ shared chat items before: 8 (max seq 7) ; wake items in the database before: 27
+$ CHAT=…/s/24d12bff-… APP=Tavily node /tmp/pw/disconnect-reconnect.mjs   (13:39:23Z)
+   7.7 bundle: main-DETLQ4gl.js main-Df8yKPKH.css
+   8.0 dialog: confirm "Disconnect Tavily? QM will lose access to it until you connect it again."
+   8.5 request: POST /api/composio/disconnect -> 200
+  20.5 server connections after disconnect: brave_search, deepgram, elevenlabs, exa, firecrawl, linkup, perplexityai, serpapi, slack
+  21.1 request: POST /api/composio/authorize -> 200
+  28.2 hosted page: https://dashboard.composio.dev/link/<id> fields: 1
+  29.2 request: POST /api/v3.1/internal/connected_accounts/link/<id> -> 200
+  50.4 wake turn seen: false
+exit 0
+  30.4 return+0ms {"rows":[],"cards":[],"errors":[],"liveTop":null,"anims":[]}
+  30.6 return+152ms {"rows":["user-row@99: Show me the connect card for Hunter, nothing","assistant-row@162: Failed Card Couldn't check the app catalog (","user-row@285: Show me the connect card for Tavily, nothing","assistant-row@347: Card Here's the Tavily connect card. Connect"],"cards":["Connect [compact pending] h=50"],"err
+  31.0 return+575ms {"rows":["user-row@99: Show me the connect card for Hunter, nothing","assistant-row@162: Failed Card Couldn't check the app catalog (","user-row@285: Show me the connect card for Tavily, nothing","assistant-row@347: Card Here's the Tavily connect card. Tavily "],"cards":["Tavily Connected Disconnect [compact 
+  31.1 return+678ms {"rows":["user-row@99: Show me the connect card for Hunter, nothing","assistant-row@162: Failed Card Couldn't check the app catalog (","user-row@285: Show me the connect card for Tavily, nothing","assistant-row@347: Card Here's the Tavily connect card. Tavily "],"cards":["Tavily Connected Disconnect [compact 
+$ shared chat items after (count | max seq):
+8 | 7
+$ user messages in the shared chat (seq | text):
+0 | Show me the connect card for Hunter, nothing else.
+4 | Show me the connect card for Tavily, nothing else.
+$ newest connection wake items: session | surface | scope | seq | UTC | connector
+745fc354-f976-4791-bed5-0dce506ee112 | web | personal:<dev account> | 23 | 13:39:54 | connector="tavily"
+745fc354-f976-4791-bed5-0dce506ee112 | web | personal:<dev account> | 20 | 13:31:32 | connector="deepgram"
+$ the person's most recent personal web conversation by own activity:
+745fc354-f976-4791-bed5-0dce506ee112
+$ dev-only trace line:
+[qa-wake-trace] tavily ca_yFvcag… /v1/composio/connections

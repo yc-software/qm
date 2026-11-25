@@ -1,0 +1,11 @@
+# Composio accounts for the dev user and the firecrawl toolkit, read from backend.composio.dev between the two runs
+# before run11 (12:23Z attempt abandoned on the hosted page; run11 connected at 12:51Z on a build of 801fcd407):
+firecrawl ca_7k0E8a… ACTIVE | status_reason: null
+firecrawl ca_Sxkd-j… EXPIRED | status_reason: "Authorization was started but not completed within 10 minutes"
+# run11 result: card came back Connected with the animation, and no wake item was written (newest wake item stayed connector="exa" at 12:31:18Z).
+# then the ACTIVE account was disconnected (run12), leaving only the EXPIRED record, the build was moved to a1c0a0141, and run13 connected again:
+before run13: ca_Sxkd-j… EXPIRED (Authorization was started but not completed within 10 minutes)
+# run13 result, newest wake items:
+c51d31f0 | 23 | 13:06:30 | connector="elevenlabs"
+c51d31f0 | 18 | 13:00:27 | connector="firecrawl"
+c51d31f0 | 11 | 12:31:18 | connector="exa"

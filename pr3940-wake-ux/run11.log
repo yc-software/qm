@@ -1,0 +1,46 @@
+   7.7 reloaded: {
+ "rows": [
+  "user-row latest-prompt stuck pin-condensed@83: I want to try Perplexity, Exa and Firecrawl. Sho",
+  "assistant-row@-305: Worked for 4s Here are the connect cards for Per",
+  "assistant-row@-24: Thought Perplexity is now connected. You told me",
+  "assistant-row@359: Worked for 14s Exa is reconnected. You asked me "
+ ],
+ "cards": [
+  "Perplexity AI Connected Disconnect [compact connected]@-214",
+  "Firecrawl Not connected Connect []@-162",
+  "Exa Connected Disconnect [compact connected]@-82"
+ ],
+ "liveTop": null,
+ "anims": []
+}
+  19.0 +0ms {"rows":[],"cards":[],"liveTop":null,"anims":[]}
+  19.2 +146ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@476: Thought Perplexity is now connected. You told me","assistant-row@859: Worked for 14s Exa is reconnected. You asked me "],"cards":["Connect [compact pending]@273","Connect [compact pending]@339","Connect [compact pending]@405"],"liveTop":null,"anims":[]}
+  19.6 +654ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@476: Thought Perplexity is now connected. You told me","assistant-row@859: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connect [compact pending]@273","Connect [compact pending]@339","Exa Connect [compact pending]@405"],"liveTop":null,"anims":[]}
+  19.7 +756ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@476: Thought Perplexity is now connected. You told me","assistant-row@859: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connect [compact pending]@273","Firecrawl Connect [compact pending]@339","Exa Connect [compact pending]@405"],"liveTop":null,"anims":[]}
+  19.8 +855ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@462: Thought Perplexity is now connected. You told me","assistant-row@845: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connected Disconnect [compact connected]@273","Firecrawl Connect [compact pending]@325","Exa Connect [compact pending]@391"],"liveTop":null,"anims":[]}
+  20.1 +1064ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@449: Thought Perplexity is now connected. You told me","assistant-row@831: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connected Disconnect [compact connected]@273","Firecrawl Connected Disconnect [compact connected just-connected]@326","Exa Connect [compact pending]@377"],"liveTop":null,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  20.2 +1167ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@449: Thought Perplexity is now connected. You told me","assistant-row@831: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connected Disconnect [compact connected]@273","Firecrawl Connected Disconnect [compact connected just-connected]@325","Exa Connect [compact pending]@377"],"liveTop":null,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  20.5 +1467ms {"rows":["user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho","assistant-row@182: Worked for 4s Here are the connect cards for Per","assistant-row@435: Thought Perplexity is now connected. You told me","assistant-row@818: Worked for 14s Exa is reconnected. You asked me "],"cards":["Perplexity AI Connected Disconnect [compact connected]@273","Firecrawl Connected Disconnect [compact connected just-connected]@325","Exa Connected Disconnect [compact connected]@377"],"liveTop":null,"anims":["slack-installed-card","slack-installed-ring","slack-installed-text","slack-installed-check","slack-installed-text"]}
+  35.7 after: {
+ "rows": [
+  "user-row@99: I want to try Perplexity, Exa and Firecrawl. Sho",
+  "assistant-row@182: Worked for 4s Here are the connect cards for Per",
+  "assistant-row@435: Thought Perplexity is now connected. You told me",
+  "assistant-row@818: Worked for 14s Exa is reconnected. You asked me "
+ ],
+ "cards": [
+  "Perplexity AI Connected Disconnect [compact connected]@273",
+  "Firecrawl Connected Disconnect [compact connected just-connected]@325",
+  "Exa Connected Disconnect [compact connected]@377"
+ ],
+ "liveTop": null,
+ "anims": [
+  "slack-installed-card",
+  "slack-installed-ring",
+  "slack-installed-text",
+  "slack-installed-check",
+  "slack-installed-text"
+ ]
+}
+  35.9 video: /tmp/pw/run11/page@df05abe1f2e5da1bac8ad41619a45a28.webm
+exit 0

@@ -1,0 +1,23 @@
+**Crop 1**
+(a) There is a card, but it is the pre-connect version. It shows a plug icon and a "Connect" button in a slate-grey fill, which looks somewhat muted or dimmed. It does not say "SerpApi".
+(b) There is no status line or timer.
+(c) There is no reply text below the card. The "Here's the SerpApi connect card." line sits above it.
+(d) The only identifying text is the product name "SerpApi". The user message is cut off. I see no names, emails, accounts or URLs.
+
+**Crop 2**
+(a) The card reads "SerpApi" with a small logo and nothing else. There is no "Connected" or "Disconnect" text. It looks dimmed or faded, which suggests it is mid-animation.
+(b) The status line is "Thinking 0s". It sits below the card and below the "Here's the SerpApi connect card." text.
+(c) There is no reply text below the card.
+(d) The only identifying text is "SerpApi". I see no names, emails, accounts or URLs.
+
+**Crop 3**
+(a) The card reads "SerpApi ✓ Connected Disconnect". It has a green-tinted border and looks full strength.
+(b) The status line is "Thinking 2s". It sits below the card and below the earlier reply line.
+(c) There is no reply text below the card.
+(d) The only identifying text is "SerpApi". I see no names, emails, accounts or URLs.
+
+**Crop 4**
+(a) The card reads "SerpApi ✓ Connected Disconnect". It has a green-tinted border and looks full strength.
+(b) There is no live "Thinking" line. Instead there is a collapsed "Worked for 35s >" line. It sits below the card and above the new reply text.
+(c) The reply below begins "The SerpApi connect card worked, but the connection can't run searches yet. SerpApi rej…" (cut off). Further down are "What I checked (nothing was changed):" and a bullet starting "Connection: it shows up as connected to your account, and no permissions are miss…" (cut off).
+(d) The only identifying text is "SerpApi". The phrase "your account" appears, but no actual account name. I see no names, emails or URLs.

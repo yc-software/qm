@@ -1,0 +1,35 @@
+# A link issued from a non-web session (cron surface), run on the dev instance at the build of a1c0a0141
+
+$ cat /tmp/pw/agent-link.mjs   (mints a capability naming the cron session, then calls core the way an agent run in that session does)
+import { mintCapabilityToken } from "/home/user/workspace/qm/src/auth/capability-token.ts";
+const claims = { actorId: "<dev account>", scopeId: "personal:<dev account>", sessionId: process.env.FROM_SESSION, surface: "cron", personAuthority: true, ownerConnections: true, exp: Date.now() + 10 * 60_000 };
+const token = await mintCapabilityToken(claims, process.env.CAPABILITY_SECRET);
+const r = await fetch("http://127.0.0.1:8081/v1/composio/authorize", { method: "POST", headers: { "content-type": "application/json", "x-agent-capability": token }, body: JSON.stringify({ toolkit: process.env.TOOLKIT }) });
+const j = await r.json().catch(() => ({}));
+console.log(JSON.stringify({ status: r.status, hasUrl: typeof j.url === "string", accountId: typeof j.accountId === "string" ? j.accountId.slice(0, 9) + "…" : null, error: j.error ?? null }));
+if (typeof j.url === "string") (await import("node:fs")).writeFileSync("/tmp/pw/agent-link.url", j.url, { mode: 0o600 });
+
+$ the session the link was issued from: id | surface | scope | top_level
+5fb37ed9-ba8e-4035-a996-0780874d838d | cron | personal:<dev account> | t
+
+$ FROM_SESSION=5fb37ed9-ba8e-4035-a996-0780874d838d TOOLKIT=elevenlabs node /tmp/pw/agent-link.mjs     (13:06:0xZ)
+{"status":200,"hasUrl":true,"accountId":"ca_V8ynWV…","error":null}
+
+$ node /tmp/pw/open-agent-link.mjs   (opens the returned URL in Chromium, fills the hosted key form with a dummy key, submits)
+   7.2 hosted page host: dashboard.composio.dev | fields: 1
+  16.3 after submit host: dashboard.composio.dev | page says: Successfully connected Composio to ElevenLabs You can close this window now.
+
+$ curl http://127.0.0.1:8113/api/composio/connections   (the next connections listing by the same person), then the dev-only trace line core printed
+[qa-wake-trace] elevenlabs ca_V8ynWV… /v1/composio/connections
+
+$ items in the cron session: 6 (max seq 5) before the run. After the run: count | max seq
+6 | 5
+
+$ connection wake items written on 2026-11-25 after 13:00Z: session | session surface | seq | written at (UTC) | connector
+c51d31f0-b8f0-4a32-a8f2-337074f1fd67 | web | 18 | 13:00:27 | connector="firecrawl"
+c51d31f0-b8f0-4a32-a8f2-337074f1fd67 | web | 23 | 13:06:30 | connector="elevenlabs"
+
+$ the person's personal top-level web conversations, most recent own activity first (top 3)
+c51d31f0-b8f0-4a32-a8f2-337074f1fd67 | Connect Perplexity, Exa, Firecrawl cards
+745fc354-f976-4791-bed5-0dce506ee112 | Connect cards for Hunter, Deepgram, Assembly
+4a194b7c-cce4-45b1-b179-a2c15bcbce98 | Connect cards for brave_search, hunter, link
