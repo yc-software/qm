@@ -2206,11 +2206,11 @@ a.chat-row-open {
   color: color-mix(in srgb, var(--success) 75%, var(--muted-foreground));
 }
 .approval-record-detail {
-  font-size: var(--font-13);
+  font-size: inherit;
   line-height: 1.5;
 }
 .approval-record-detail .ac-text {
-  font-size: var(--font-13);
+  font-size: 1em;
 }
 .system-note-text {
   font-style: italic;
@@ -14486,7 +14486,7 @@ button:disabled .qm-switch {
   display: block;
   min-width: 0;
   color: var(--foreground);
-  font-size: var(--font-13-5);
+  font-size: calc(var(--chat-font-size) * var(--text-scale));
   line-height: 1.5;
   transition: opacity 0.18s ease;
   animation: ac-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -14511,12 +14511,12 @@ button:disabled .qm-switch {
 }
 .ac-eyebrow {
   flex: none;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
   font-weight: 500;
   color: var(--muted-foreground);
 }
 .ac-batch .ac-eyebrow {
-  font-size: var(--font-15);
+  font-size: 1.11em;
   font-weight: 600;
   color: var(--foreground);
 }
@@ -14526,7 +14526,7 @@ button:disabled .qm-switch {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 0.85em;
   color: var(--muted-foreground);
 }
 .ac-sep {
@@ -14557,7 +14557,7 @@ button:disabled .qm-switch {
 }
 .ac-title {
   margin: 8px 0 12px;
-  font-size: var(--font-19);
+  font-size: 1.4em;
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.011em;
@@ -14578,7 +14578,7 @@ button:disabled .qm-switch {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
   line-height: calc(var(--font-13-5) * 1.5);
   color: var(--muted-foreground);
 }
@@ -14603,7 +14603,7 @@ button:disabled .qm-switch {
   border-radius: 10px;
   background: var(--ac-tint);
   color: var(--foreground);
-  font-size: var(--font-14);
+  font-size: 1.04em;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -14614,12 +14614,12 @@ button:disabled .qm-switch {
 .ac-empty,
 .ac-note {
   margin-top: 8px;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
   color: var(--muted-foreground);
 }
 .ac-note > code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.89em;
 }
 .ac-list {
   display: grid;
@@ -14646,7 +14646,7 @@ button:disabled .qm-switch {
   background: var(--ac-tint);
   color: var(--foreground);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 0.93em;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -14657,7 +14657,7 @@ button:disabled .qm-switch {
   display: flex;
   gap: 6px;
   margin: 10px 0 0 -6px;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
 }
 .ac-scopes button,
 .ac-dismiss,
@@ -14716,7 +14716,7 @@ button:disabled .qm-switch {
 }
 .ac-dismiss {
   margin: -4px -6px 0 auto;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
 }
 .ac-item {
   display: grid;
@@ -14749,7 +14749,7 @@ button:disabled .qm-switch {
 .ac-index {
   flex: none;
   width: 14px;
-  font-size: var(--font-12-5);
+  font-size: 0.93em;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
 }
@@ -14769,7 +14769,7 @@ button:disabled .qm-switch {
 .ac-summary-top .ac-tool {
   flex: none;
   margin-left: auto;
-  font-size: 11px;
+  font-size: 0.81em;
 }
 .ac-item-title {
   flex: 0 1 auto;
@@ -14825,7 +14825,7 @@ button:disabled .qm-switch {
   padding: 0 14px;
   border-radius: 999px;
   font: inherit;
-  font-size: var(--font-13-5);
+  font-size: calc(var(--chat-font-size) * var(--text-scale));
   font-weight: 550;
   white-space: nowrap;
   animation: ac-in 180ms ease-out;
@@ -14848,7 +14848,7 @@ button:disabled .qm-switch {
   gap: 8px;
   overflow: hidden;
   padding: 0 8px;
-  font-size: var(--font-13);
+  font-size: calc(var(--chat-font-size) * var(--text-scale) * 0.96);
   color: var(--muted-foreground);
   animation: ac-settle 2600ms ease forwards;
 }
