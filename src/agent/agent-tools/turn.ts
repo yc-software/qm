@@ -105,7 +105,9 @@ export function turnTools(kit: ToolKit) {
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),
-      lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
+      lifetime: opts?.ephemeral
+        ? Type.Optional(Type.Literal("task"))
+        : Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
     }),
     async execute(callId, params) {
       const request = params as RuntimeRequest;
@@ -120,10 +122,15 @@ export function turnTools(kit: ToolKit) {
           true,
         );
       }
+      const runtimeReq =
+        opts?.ephemeral && request.action === "set" ? { ...request, lifetime: "task" as const } : request;
       const result =
         opts?.readOnly && request.action !== "get"
           ? { ok: false as const, error: "read_only" }
-          : ((await ref.current?.runtime?.(request, ref.abortSignal)) ?? { ok: false, error: "runtime_unavailable" });
+          : ((await ref.current?.runtime?.(runtimeReq, ref.abortSignal)) ?? {
+              ok: false,
+              error: "runtime_unavailable",
+            });
       const handoff = result.ok ? result.handoff : undefined;
       const ret = await recordCoreAuthoredResult(
         callId,

@@ -9,6 +9,7 @@ interface Canvas {
   panes: () => number;
   tiles: () => number;
   newChat: () => boolean;
+  temporaryChat: () => Conversation;
   tabCounts: () => number[];
   activeTabs: () => number[];
   cycleTab: (step: number) => void;
@@ -155,6 +156,10 @@ async function withCanvas(
       },
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,
+      temporaryChat: () => {
+        appState.me!.suggestedActivities = [{ id: "a", title: "A", prompt: "A", icon: "✨" }];
+        return sessions.startTemporaryChat();
+      },
       seededChat: (threadRef) => sessions.startNewChat(null, null, threadRef),
       scopedChat: (scopeId) => {
         contextsState.list.push({ scopeId, kind: "channel", name: "eng" });
@@ -336,17 +341,19 @@ test("splitting does not dispose a first turn waiting for its session ID", async
   });
 });
 
-test("app edit chats suppress the general welcome and suggestions", async () => {
+test("app edit and hidden chats suppress the general welcome and suggestions", async () => {
   await withCanvas((canvas) => {
     const conv = canvas.seededChat("web:tester:app-edit:example");
     assert.ok(conv?.state.agent);
     const shell = document.querySelector(".app-edit-chat");
     assert.ok(shell);
-    assert.equal(shell.querySelector(".chat-cta"), null);
-    assert.equal(shell.querySelector("qm-onboarding-welcome"), null);
-    assert.equal(shell.querySelector(".suggested-activities"), null);
+    assert.equal(shell.querySelector(".chat-cta, qm-onboarding-welcome, .suggested-activities"), null);
     assert.ok(shell.querySelector(".composer-wrap"));
     assert.deepEqual(conv.state.agent.state.messages, []);
+    assert.equal(canvas.temporaryChat().state.ephemeral, true);
+    const hidden = document.querySelector(".custom-chat-shell.empty-chat")!;
+    assert.equal(hidden.querySelector(".chat-topbar, .suggested-activities"), null);
+    assert.match(hidden.querySelector(".ephemeral-empty")?.textContent ?? "", /Cleared when you leave/);
   });
 });
 

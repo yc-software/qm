@@ -89,7 +89,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
-import { chatWithPersonaId, personaEditable, personaGlyph, personaSeeds, viewPersona } from "./personas";
+import { chatWithPersonaId, personaEditable, personaGlyph, personaName, personaSeeds, viewPersona } from "./personas";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
@@ -125,7 +125,7 @@ import {
   splitInterceptsOpen,
   splitState,
 } from "./split";
-import { liveTurnThreadRef } from "./working-dot";
+import { liveTurnOf } from "./working-dot";
 import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
@@ -278,7 +278,7 @@ export function resetSessionsState(): void {
 }
 
 function projectSeedsForRecents() {
-  return [...sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity), ...personaSeeds()];
+  return sidebarProjectSeeds(contextsState.list, sessionsState.groupByActivity, personaSeeds());
 }
 
 function recentItemActivity(item: RecentItem): number {
@@ -610,6 +610,18 @@ function toggleRecentProject(scopeId: string): void {
   renderList();
 }
 
+export function startTemporaryChat(): Conversation {
+  closeSidebarOnNarrowView();
+  const navigation = beginNavigation();
+  try {
+    const conv = mainConversation();
+    conv.newTemporaryChat();
+    return conv;
+  } finally {
+    if (endNavigation(navigation)) syncUrlFromState(null, "replace");
+  }
+}
+
 export function startNewChat(
   scopeId: string | null = null,
   name: string | null = null,
@@ -924,18 +936,17 @@ export const syncWorkingPulse = (el?: Element): void => {
 function liveThreads(): ReadonlySet<string> {
   const live = new Set<string>();
   for (const conv of allConversations()) {
-    const ref = liveTurnThreadRef({
-      mountedThreadRef: conv.state.threadRef,
-      isStreaming: Boolean(conv.state.agent?.state.isStreaming),
-      pendingSend: conv.state.pendingSend,
-    });
+    const ref = liveTurnOf(conv.state);
     if (ref) live.add(ref);
   }
   return live;
 }
 
+export const workingMark = (): TemplateResult =>
+  html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>`;
+
 function statusMarks(ind: RowIndicators): TemplateResult {
-  return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
+  return html`${ind.working ? workingMark() : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }`;
 }
@@ -1140,6 +1151,11 @@ function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   return chatSurfaceMark(s, 12, "surface-glyph");
 }
 
+function personaRowGlyph(s: CoreSession): TemplateResult | typeof nothing {
+  if (!sessionsState.groupByActivity || !s.personaId) return nothing;
+  return html`<span class="surface-glyph" ${tip(personaName(s.personaId))}>${personaGlyph(s.personaId, 12)}</span>`;
+}
+
 function rowContext(s: CoreSession): string | null {
   let label = projectName(s.scopeId) ?? sharedContextLabel(s.scopeId, s.channelName ?? null);
   if (surfaceOf(s) === "chat") label = s.type === "group" ? groupDmText(s.channelName) : channelLabel(s);
@@ -1241,7 +1257,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(ind)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
+          ${statusMarks(ind)}${surfaceGlyph(s)}${personaRowGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
           >${backgroundChip(s, ind)}${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
@@ -1894,7 +1910,7 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-function openConversationIds(): string[] {
+export function openConversationIds(): string[] {
   const opening = sessionsState.openingKey ? [sessionsState.openingKey] : [];
   return [...opening, ...allConversations().flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []))];
 }

@@ -112,21 +112,28 @@ function channelContainer(scope: string): string | undefined {
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
 
+export const PURPOSE_RUNTIME_RESOURCES: readonly {
+  id: string;
+  purpose: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  name: string;
+  label?: string;
+}[] = [
+  { id: "cron-runtime", purpose: "cron", name: "Cron model" },
+  { id: "subagent-runtime", purpose: "subagent", name: "Subagent model" },
+  { id: "fallback-runtime", purpose: "fallback", name: "Fallback model" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    name: "App edit model",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
+
 const RUNTIME_RESOURCES: {
   id: string;
   purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
   label?: string;
-}[] = [
-  { id: "runtime" },
-  { id: "cron-runtime", purpose: "cron" },
-  { id: "subagent-runtime", purpose: "subagent" },
-  { id: "fallback-runtime", purpose: "fallback" },
-  {
-    id: "app-edit-runtime",
-    purpose: "appEdit",
-    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
-  },
-];
+}[] = [{ id: "runtime" }, ...PURPOSE_RUNTIME_RESOURCES];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {

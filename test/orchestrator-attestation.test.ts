@@ -490,7 +490,7 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     actor: alice,
     conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire" },
     text: "!run echo fire",
-    origin: { kind: "automation", ownerFire: true },
+    origin: { kind: "automation" },
     ...extra,
   });
 
@@ -509,14 +509,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-
-  captured.opts = undefined;
-  const unmarked = await app.turn(
-    fire({ origin: { kind: "automation" }, conversation: { kind: "dm", threadRef: "dm:admin-alice:not-a-fire" } }),
-  );
-  assert.equal(unmarked.status, "ok");
-  claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "an automation turn no trigger produced carries no authority");
 });
 
 test("an org admin's turn carries org-notebook write (token claim + prompt hint); a regular user's does not", async () => {
@@ -612,6 +604,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.liveAuthor, true, "an author-live detection turn attests authorship");
+  assert.equal(claims!.internalAudience, true, "an all-internal roster attests an internal audience");
   const threadPrompt = await app.turn({
     surface: "test",
     actor: admin,
@@ -667,7 +660,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
     "ok",
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveAuthor, undefined, "an unattested room must not attest authorship");
+  assert.equal(claims!.internalAudience, undefined, "an unattested room must not attest an internal audience");
 
   captured.opts = undefined;
   assert.equal(
@@ -706,7 +699,8 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
     "ok",
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "guest-audience turns must not attest liveness");
+  assert.equal(claims!.internalAudience, undefined, "a guest in the room means no internal audience");
+  assert.equal(claims!.liveActor, undefined, "a guest room mints no presence claims");
   assert.equal(claims!.liveAuthor, undefined);
   assert.equal(claims!.memory?.orgWrite, undefined);
 
@@ -731,7 +725,7 @@ test("admin reach rides live, all-internal turns — direct, detection and guest
       "ok",
     );
     claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-    assert.equal(claims!.liveActor, undefined, "unknown room membership must not attest liveness");
+    assert.equal(claims!.internalAudience, undefined, "unknown room membership must not attest an internal audience");
     if (publishMembers === undefined) {
       assert.equal(
         claims!.members,

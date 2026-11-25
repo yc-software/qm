@@ -31,6 +31,7 @@ export interface ConvHost {
   onDensityChange(handler: () => void): void;
   ensureDeliveryStream(): void;
   inbox?: { context(): AssistantSidebarContext };
+  composerOnly?: boolean;
   onState?(state: PaneState): void;
   onExpand?(): void;
 }
@@ -46,6 +47,7 @@ interface ChatState {
   normalStreamFn: Agent["streamFn"] | null;
   host: HTMLElement | null;
   threadRef: string | null;
+  ephemeral: boolean;
   sessionId: string | null;
   scopeId: string | null;
   contextName: string | null;
@@ -77,6 +79,7 @@ export interface ChatSurface {
   currentTurnOptions(): TurnOptions;
   turnRuntime(): TurnRuntime | null;
   newChat(context?: { scopeId: string; name: string | null }, threadRef?: string): string;
+  newTemporaryChat(): string;
   teardown(): void;
   resetChatState(): void;
   mountContinuable(

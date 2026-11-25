@@ -182,7 +182,7 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
         ${tool("skills", Box, "Skills")} ${tool("memory", Brain, "Memory")}
         ${tool("keychain", KeyRound, "Your keychain")}
       </div>
-      <div class="topbar-actions form-menu-control session-tools-more" data-align="right" data-drop="down">
+      <div class="topbar-actions menu-control form-menu-control session-tools-more" data-align="right" data-drop="down">
         <button
           class="icon-btn menu-button session-tools-more-btn"
           type="button"

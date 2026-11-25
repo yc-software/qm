@@ -23,7 +23,6 @@ describeTwoTenants("mail wakes, memory indexing and job computers bind each row'
             senderId: "child",
             actor: { id: "internal:U1", type: "internal" },
             text: "hi",
-            audience: [],
             createdAt: Date.now(),
             wake: true,
           });

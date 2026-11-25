@@ -1,16 +1,16 @@
 import { swallow } from "../util/errors.ts";
+import type { WornPersona } from "../types.ts";
 
 export interface AckPresenter {
-  onFirstBlock(text: string): void;
+  onFirstBlock(text: string, persona?: WornPersona): void;
   onSurfacePosted(): void;
   postedAck(): string | undefined;
-  emoji(): Promise<string>;
   drain(): Promise<void>;
   settle(): Promise<void>;
 }
 
 export function createAckPresenter(deps: {
-  postAck(text: string): Promise<void>;
+  postAck(text: string, persona?: WornPersona): Promise<void>;
   addReaction(emoji: string): Promise<void>;
   removeReaction(emoji: string): Promise<void>;
   emojiCandidates: readonly string[];
@@ -52,14 +52,14 @@ export function createAckPresenter(deps: {
     enqueue(() => deps.removeReaction(emoji));
   };
   return {
-    onFirstBlock(text) {
+    onFirstBlock(text, persona) {
       if (sawFirstBlock || settled) return;
       sawFirstBlock = true;
       const ack = text.trim();
       if (!ack) return;
       clearReaction();
       enqueue(async () => {
-        await deps.postAck(ack);
+        await deps.postAck(ack, persona);
         ackPosted = ack;
       });
     },
@@ -67,10 +67,6 @@ export function createAckPresenter(deps: {
       clearReaction();
     },
     postedAck: () => ackPosted,
-    async emoji() {
-      await Promise.race([deps.emojiPick, new Promise((done) => setTimeout(done, delayMs))]);
-      return choose();
-    },
     async drain() {
       await chain;
     },

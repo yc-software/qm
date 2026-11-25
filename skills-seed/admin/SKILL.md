@@ -22,9 +22,18 @@ require the owner to do that work. An owner-only API denial does not revoke sepa
 authorized administrative access; verify it before taking another route. Acting under the
 admin's own authority is not impersonation or circumvention.
 
-Preserve credential grants, provider permissions, explicit restrictions, and mutation approvals.
-Admin status alone supplies no provider credentials. Do not borrow another user's identity,
-use ungranted credentials, or bypass the portal-only actions below. Check the provider
+## Full authority over everyone's state
+
+An org admin has full authority over the whole system. Their own tools work on anyone's
+state with no owner hand-off: the ordinary cron, webhook, loop, skill, app and sharing calls
+accept an admin on any person's or scope's artifact by id (a cron task an admin rewrites keeps
+its owner, so it still runs with the owner's credentials). Ordinary lists still show only the
+admin's own; find others' ids with `/v1/admin/crons`, `/v1/admin/apps` or `/v1/admin/skills`. To use another person's linked
+credential, grant it to this conversation with
+`POST /v1/admin/keychain/grants {"credentialId","purpose","scope"?}`
+(ids from `GET /v1/admin/keychain`; scope defaults to this conversation), then name its
+handle in `execute.credentials`. Credential grants and most edits are audited.
+Confirm mutations with the admin first. Check the provider
 account and target, keep changes attributed to the admin, and disclose only what this
 conversation's audience may see. For cloud operations, also load cloud-cli.
 
@@ -49,10 +58,10 @@ Limits the API enforces (don't offer what it will refuse):
   can read on the admin plane what the admin's own typed turn could, audited as the owner
   and re-checked on every call (revoking their admin grant closes it). The audience
   rule still applies to private-content reads, so such a fire must live in the owner's
-  DM or an Open conversation. Admin changes need the admin at the keyboard: a fire that
-  wants one reports it where the run delivers. On a typed turn, mutations work anywhere;
-  the room sees what changed, by design.
+  DM or an Open conversation. Mutations work anywhere, including from the admin's own
+  fires; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
+- **`owner` vs `org_admin`**: an `owner` can manage org-wide configuration, org memory, org memory-brain registry config, models, connectors, spend, retention, the user roster/external invites, and access-only member removal/reactivation (cannot remove an `org_admin` or the last owner), but cannot access other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, user detail/reset, persona/cron handovers, principal links, or impersonation).
 - Bulk configuration import is not supported. Use the individual configuration resources instead.
 
 All calls share one shape — only method/path/body vary:
@@ -64,7 +73,7 @@ curl -fsS -H "x-agent-capability: $AGENT_API_TOKEN" "$AGENT_API_URL/v1/admin/...
 Anyone can check admin status (this is also how you answer "am I an admin?"):
 
 ```bash
-GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
+GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin"|"owner","scopeId":"org:…"} or {"isAdmin":false}
 ```
 
 ## Check connector sources
@@ -311,9 +320,8 @@ run with that person's standing, not the original admin's.
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
 - `403 … carry a person's own authority — this turn runs with none` — a bot actor, an
-  external audience, a cron or loop whose task an automated turn wrote (its owner
-  restores their authority by rewriting it on a turn they send) or that a conversation
-  owns, or a session message whose authorization chain could not be verified. Report it
+  external audience, a cron or loop that a conversation owns, or a session message whose
+  authorization chain could not be verified. Report it
   where the run delivers — never finish silently.
 - `403 admin changes need the admin at the keyboard …` — a fire tried to change
   something. Report the change you would make where the run delivers; the admin

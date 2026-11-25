@@ -11,13 +11,15 @@ export interface CreateTriggerInput {
   owner: string;
   createdBy: string;
   destination?: Destination;
-  ownerConsentedAt?: number;
   botActor?: boolean;
-  taskAuthor?: "automation";
 }
 
 export function contentPart(value: unknown): string {
   return canonicalJson(value);
+}
+
+export function normalizeTitle(title: string | undefined): string | undefined {
+  return title?.trim().replace(/\s+/g, " ") || undefined;
 }
 
 export function createDeduped<T extends { id: string }>(
@@ -28,9 +30,9 @@ export function createDeduped<T extends { id: string }>(
   return backing.putIfAbsent(contentId, build(contentId));
 }
 
-export function assertNoEscalation(input: { owner: string; createdBy: string; ownerConsentedAt?: number }): void {
-  if (!samePerson(input.owner, input.createdBy) && !input.ownerConsentedAt) {
-    throw new Error("assigning a different owner requires that owner's consent");
+export function assertNoEscalation(input: { owner: string; createdBy: string }): void {
+  if (!samePerson(input.owner, input.createdBy)) {
+    throw new Error("a trigger's owner must be the person who creates it");
   }
 }
 
@@ -43,9 +45,7 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
     enabled: true,
     createdAt,
     ...(input.destination ? { destination: input.destination } : {}),
-    ...(input.ownerConsentedAt ? { ownerConsentedAt: input.ownerConsentedAt } : {}),
     ...(input.botActor ? { botActor: true } : {}),
-    ...(input.taskAuthor ? { taskAuthor: input.taskAuthor } : {}),
   };
 }
 
@@ -63,11 +63,12 @@ export async function ownedBy<T extends TriggerBase>(backing: DurableMap<T>, sco
   return rows.filter((row) => row.ownerScopeId === scopeId);
 }
 
-export const DROP_RECIPIENT_CONSENT_MIGRATION = {
-  id: "durable-map/triggers/0001-drop-recipient-consent",
-  statements: ["crons", "webhooks", "loops"].flatMap((table) => [
+export const DROP_RETIRED_TRIGGER_FIELDS_MIGRATION = {
+  id: "durable-map/triggers/0002-drop-retired-fields",
+  statements: ["crons", "webhooks", "loops", "monitors"].flatMap((table) => [
     `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-    `UPDATE ${table} SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'`,
+    `UPDATE ${table} SET json = json - 'recipientConsent' - 'taskAuthor' - 'ownerConsentedAt'
+       WHERE json ?| ARRAY['recipientConsent', 'taskAuthor', 'ownerConsentedAt']`,
   ]),
 };
 

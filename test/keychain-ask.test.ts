@@ -185,10 +185,6 @@ test("personal cron asks deduplicate recurring fires without combining jobs or r
     k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:three" }),
     (e: KeychainError) => e.status === 409,
   );
-  const revived = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "cron:first:fire:four" });
-  const waiting = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:five" });
-  assert.equal(waiting.ask.id, revived.ask.id);
-  await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
   assert.equal((await k.getAsk(second.ask.id))?.status, "pending");
   now += ASK_TTL_MS + 1;
   await assert.rejects(
@@ -198,7 +194,7 @@ test("personal cron asks deduplicate recurring fires without combining jobs or r
 });
 
 for (const outcome of ["declined", "expired"] as const) {
-  test(`task ${outcome} decisions survive pruning and a later approval supersedes them`, async () => {
+  test(`task ${outcome} decisions survive pruning and keep refusing that task's asks`, async () => {
     let now = 1_000_000;
     const k = kcAt(() => now++);
     const credential = await k.save(GH);
@@ -208,7 +204,6 @@ for (const outcome of ["declined", "expired"] as const) {
       requesterScopeId: "personal:U_ALICE" as const,
       requesterThreadRef: "cron:retained:fire:first",
       purpose: "scheduled check",
-      triggered: true,
     };
     const { ask } = await k.createAsk(input);
     if (outcome === "declined") await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
@@ -218,20 +213,14 @@ for (const outcome of ["declined", "expired"] as const) {
     now += ASK_PRUNE_AFTER_MS + 1;
     await sweep(now);
     assert.equal((await k.getAsk(ask.id))?.status, outcome);
-    await assert.rejects(
-      k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:later" }),
-      (e: KeychainError) => e.status === 409,
-    );
-    const revived = await k.createAsk({ ...input, triggered: false });
-    await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "retry it" });
-    await sweep(now);
-    now += ASK_PRUNE_AFTER_MS + 1;
-    await sweep(now);
-    assert.equal(await k.getAsk(ask.id), null);
-    assert.equal((await k.getAsk(revived.ask.id))?.status, "approved");
-    const next = await k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:next" });
-    assert.equal(next.existing, false);
-    assert.equal(next.ask.status, "pending");
+    for (const requesterThreadRef of ["cron:retained:fire:later", "cron:retained:fire:first"])
+      await assert.rejects(
+        k.createAsk({ ...input, requesterThreadRef }),
+        (e: KeychainError) => e.status === 409 && /isn't asked again/.test(e.message),
+      );
+    const other = await k.createAsk({ ...input, requesterThreadRef: "cron:other:fire:first" });
+    assert.equal(other.existing, false);
+    assert.equal(other.ask.status, "pending");
   });
 }
 
@@ -1047,7 +1036,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   it("the removed chat-approval routes are gone; background requests may still ask", async () => {
     const creds = (await (await get("/v1/keychain/credentials", await capFor("U_ALICE"))).json()) as any;
     const gh = creds.credentials.find((c: any) => c.service === "github");
-    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { liveActor: true });
+    const liveOwner = await capFor("U_ALICE", "channel:C_INFRA", { internalAudience: true, liveActor: true });
     const registered = keychainRoutes.flatMap((r) => ("path" in r ? [`${r.method} ${r.path}`] : []));
     assert.ok(registered.includes("POST /v1/keychain/asks"));
     for (const removed of ["POST /v1/keychain/grants", "POST /v1/keychain/asks/:id/decline"])
@@ -1278,7 +1267,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   }
 
   it("a scheduled personal request can be declined without granting access", async () => {
-    const live = await capFor("U_ALICE", "personal:U_ALICE", { liveActor: true });
+    const live = await capFor("U_ALICE", "personal:U_ALICE", { internalAudience: true, liveActor: true });
     const token = await capFor("U_ALICE", "personal:U_ALICE", { triggered: true });
     const { credential } = (await (
       await post(

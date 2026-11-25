@@ -71,12 +71,12 @@ export class WelcomeAbout extends LitElement {
       </div>
       <div class="W-figs welcome-beat" style="--welcome-delay:120ms">
         <figure>
-          <div class="dwin slack"></div>
           <figcaption>A virtual employee in Slack</figcaption>
+          <div class="dwin slack"></div>
         </figure>
         <figure>
-          <div class="dwin web"></div>
           <figcaption>Multiplayer work on web, desktop and iOS</figcaption>
+          <div class="dwin web"></div>
         </figure>
       </div>
       <div class="welcome-beat" style="--welcome-delay:240ms">${aboutTiles()}</div>

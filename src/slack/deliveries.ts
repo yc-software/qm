@@ -1,4 +1,3 @@
-import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey } from "../surfaces/approval-cards.ts";
@@ -9,6 +8,8 @@ import { errMessage, errText, swallow, swallowAs } from "../util/errors.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
+  originContext,
+  slackPersonaReplyArgs,
   createDeliveryTracker,
   createThreadTracker,
   deliverWithRetry,
@@ -37,7 +38,6 @@ import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
-import { projectScopeId } from "../projects/project-store.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
 
@@ -98,30 +98,24 @@ export function createSlackDeliverer(deps: {
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
-    const base = trimTrailingSlashes(deps.webUiPublicUrl?.trim() ?? "");
-    const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
+    const p = d.provenance;
+    let source: { page: "crons" | "webhooks"; id: string; title?: string } | undefined;
+    const cronId = p?.trigger === "cron" ? cronIdOf(p.sourceThreadRef) : null;
+    if (cronId) source = { page: "crons", id: cronId, title: p?.sourceTitle };
+    else if (p?.trigger === "webhook" && p.sourceId)
+      source = { page: "webhooks", id: p.sourceId, title: p.sourceTitle };
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = [
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
-    const { persona, project } = d.destination;
-    const linked = (name: string, path: string) => {
-      const label = escapeSlackText(name);
-      return base ? `<${base}/${path}|${label}>` : label;
-    };
-    const origin = [
-      ...(persona ? [linked(persona.name.trim() || "Persona", `personas/${encodeURIComponent(persona.id)}`)] : []),
-      ...(project
-        ? [linked(project.name.trim() || "Project", `contexts?scope=${encodeURIComponent(projectScopeId(project.id))}`)]
-        : []),
-    ];
-    const parts = origin.length ? [`From ${origin.join(" in ")}`] : [];
-    if (base && id) {
-      const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
-      parts.push(`${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`);
-    }
-    return parts.length ? [...attribution, { type: "mrkdwn", text: parts.join(" · "), verbatim: true }] : attribution;
+    const origin = originContext({
+      persona: d.destination.persona,
+      project: d.destination.project,
+      webUiPublicUrl: deps.webUiPublicUrl,
+      ...(source ? { source } : {}),
+    });
+    return origin ? [...attribution, origin] : attribution;
   }
 
   const deliveryTracker = createDeliveryTracker();
@@ -287,7 +281,12 @@ export function createSlackDeliverer(deps: {
               throwIfRateLimited(err);
               console.error("%s", `[slack-plugin] delivery ${d.id} attachment upload failed:`, errMessage(err));
               await client.chat
-                .postMessage(slackReplyArgs(channel, uploadFailureNote(err), root, { persona: d.destination.persona }))
+                .postMessage(
+                  slackPersonaReplyArgs(channel, uploadFailureNote(err), root, {
+                    persona: d.destination.persona,
+                    webUiPublicUrl: deps.webUiPublicUrl,
+                  }),
+                )
                 .catch(swallowAs("slack: post upload-failure note", undefined));
             }
           };
@@ -443,8 +442,9 @@ export function createSlackDeliverer(deps: {
           if (uploadError) {
             await client.chat
               .postMessage(
-                slackReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
+                slackPersonaReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
                   persona: d.destination.persona,
+                  webUiPublicUrl: deps.webUiPublicUrl,
                 }),
               )
               .catch(swallowAs("slack: post principal upload-failure note", undefined));

@@ -1,5 +1,5 @@
 import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/sandbox.ts";
-import type { ProcessRecord, ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
+import type { JobStarter, ProcessRecord, ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess } from "../sandbox/process-poll.ts";
@@ -15,9 +15,9 @@ export interface BackgroundExecBrokerDeps {
   provisionSandbox?: (id: string) => Promise<SandboxHandle>;
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   scopeId: string;
-  livePersonTurn?: boolean;
   sessionRef?: string;
   runId?: string;
+  starter?: JobStarter;
   ttlMs?: number;
   ttlMaxMs?: number;
   pollMs?: number;
@@ -105,9 +105,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
     await deps.onExit?.(handle, processId);
   };
   const assertSteerable = async (rec: ProcessRecord) => {
-    if (deps.livePersonTurn || !rec.credentialsPending) return;
-    if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.live))
-      throw new Error("a background job that saves a live sign-in takes input and stop only from a person's live turn");
+    if (deps.starter?.botActor !== true || !rec.credentialsPending) return;
+    if ((await deps.registry.credentialFiles(rec.processId))?.sources.some((source) => source.writeback))
+      throw new Error("a bot's turn can't send input to or stop a background job that saves a sign-in");
   };
   return {
     async handleFor(processId) {
@@ -129,14 +129,12 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const redacted = redactCommand(normalized, handle.env);
 
       let processId =
-        redacted === normalized && !credentials
-          ? ((await deps.registry.listByScope(deps.scopeId)).find(
-              (r) =>
-                r.kind === "background" &&
-                r.command === redacted &&
-                r.status === "running" &&
-                r.sandboxId === sandboxId,
-            )?.processId ?? null)
+        redacted === normalized && !credentials && deps.starter
+          ? await deps.registry.runningJobStartedBy(deps.starter, {
+              scopeId: deps.scopeId,
+              sandboxId,
+              command: redacted,
+            })
           : null;
 
       if (processId) {

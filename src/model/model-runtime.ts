@@ -16,7 +16,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-responses";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
-import { claudeSubscriptionBetas } from "./claude-subscription.ts";
+import { claudeSubscriptionBetas, claudeSubscriptionHeaders } from "./claude-subscription.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "./gateway-models.ts";
 import {
   customModelsJson,
@@ -369,8 +369,9 @@ export function applyFastSpeed<T>(payload: T, fast: boolean | undefined, api?: s
 export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean, apiKey?: string): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
   if (api.startsWith("openai") || !direct) return model;
+  const identity = claudeSubscriptionHeaders(apiKey);
   const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
-  if (!betas.length) return model;
+  if (!betas.length) return identity ? { ...model, headers: { ...model.headers, ...identity } } : model;
   const prior = model.headers?.["anthropic-beta"];
   const beta = [
     ...new Set([
@@ -379,7 +380,7 @@ export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boo
       ...betas,
     ]),
   ].join(",");
-  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+  return { ...model, headers: { ...model.headers, ...identity, "anthropic-beta": beta } };
 }
 
 export function zeroUsage(): Usage {

@@ -21,13 +21,15 @@ export function recallTools(kit: ToolKit) {
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
       "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal("search"),
-        Type.Literal("read"),
-        Type.Literal("add"),
-        Type.Literal("edit"),
-        Type.Literal("delete"),
-      ]),
+      action: opts?.ephemeral
+        ? Type.Union([Type.Literal("search"), Type.Literal("read")])
+        : Type.Union([
+            Type.Literal("search"),
+            Type.Literal("read"),
+            Type.Literal("add"),
+            Type.Literal("edit"),
+            Type.Literal("delete"),
+          ]),
       query: Type.Optional(Type.String({ description: "search: words to look for (all must match)." })),
       limit: Type.Optional(Type.Integer({ description: "search: max facts (default 20)." })),
       scope: Type.Optional(
@@ -78,7 +80,7 @@ export function recallTools(kit: ToolKit) {
           true,
         );
       }
-      if (opts?.readOnly && action !== "search" && action !== "read") {
+      if ((opts?.readOnly || opts?.ephemeral) && action !== "search" && action !== "read") {
         return recordResult(
           callId,
           { tool: "memory", action, readOnly: true },

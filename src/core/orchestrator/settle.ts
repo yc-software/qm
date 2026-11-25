@@ -1,6 +1,5 @@
 import type { Tenant } from "../../tenants/context.ts";
 import type { AgentTurnResult } from "../../agent/agent.ts";
-import type { MemoryProvenance } from "../../memory/facts.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import { isAgentReply, type Item } from "../../sessions/items.ts";
@@ -31,7 +30,6 @@ export function startMemoryCapture(turn: {
   cancelStopped: boolean;
   personConversationTurn: boolean;
   useMemory: boolean;
-  captureDependencies: () => MemoryProvenance[];
   turnInput: string;
   reply: string;
   spine: SpineState;
@@ -52,7 +50,6 @@ export function startMemoryCapture(turn: {
     cancelStopped,
     personConversationTurn,
     useMemory,
-    captureDependencies,
     turnInput,
     reply,
     spine,
@@ -73,7 +70,6 @@ export function startMemoryCapture(turn: {
           scopeId: memoryScopeId,
           conversationScopeId: scopeId,
           ...(audienceScopeId ? { audienceScopeId } : {}),
-          inheritedFacts: captureDependencies(),
           input: turnInput,
           reply,
           actorId: actor.id,
@@ -123,6 +119,7 @@ export async function selectTurnResult(turn: {
     requestId: string,
     fields: Omit<PendingApprovalRecord, "createdAt" | "request" | "homeChannel">,
   ) => Promise<PendingApproval>;
+  refuseApproval?: (command: string, reason: string) => TurnResult;
   withManagedRosterVersion: <T>(work: () => Promise<T>) => Promise<T>;
 }): Promise<TurnResult> {
   const {
@@ -144,9 +141,11 @@ export async function selectTurnResult(turn: {
     emittedEntries,
     approvalSummary,
     issueApproval,
+    refuseApproval,
     withManagedRosterVersion,
   } = turn;
   let finalResult: TurnResult;
+  const blockedStep = result.pendingApprovals?.[0] ?? quarantineReleaseApprovals[0];
   const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
   const sourceUserSeq = turnUserSeq;
   const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
@@ -162,6 +161,8 @@ export async function selectTurnResult(turn: {
     finalResult = heldReply(true, false)!;
   } else if (replyOptional && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
     finalResult = { status: "silent", sessionId: session.id };
+  } else if (refuseApproval && blockedStep) {
+    finalResult = refuseApproval(blockedStep.command, blockedStep.reason);
   } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
     const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
     const turnApprovals: Array<
@@ -210,6 +211,7 @@ export async function selectTurnResult(turn: {
           sessionId: session.id,
           reply,
           pendingApprovals: approvals,
+          ...(wornPersona ? { persona: wornPersona } : {}),
           ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
           ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
           ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

@@ -1734,6 +1734,53 @@ test("a shared thread keeps one byte-identical system prompt until compaction; c
   assert.equal((await turn(teammate)).system, compacted.system);
 });
 
+test("a message sent from a different app than the session's first one says where it came from", async () => {
+  const { orchestrator } = buildOrchestrator({});
+  const turn = async (clientSurface: "desktop" | "browser") => {
+    const result = await orchestrator.handleTurn({
+      surface: "web",
+      actor,
+      conversation: { kind: "dm", threadRef: "web:U1:clients", audience: [actor] },
+      text: "!sysprompt",
+      origin: { kind: "human" },
+      clientSurface,
+    });
+    const reply = result.reply ?? "";
+    const system = reply.split("\n\n<environment>")[0]!;
+    return { system, environment: reply.slice(system.length) };
+  };
+  const desktop = await turn("desktop");
+  assert.match(desktop.system, /^Sent from the QM desktop app\.$/m);
+  assert.doesNotMatch(desktop.environment, /Changed since the system prompt/);
+  const browser = await turn("browser");
+  assert.equal(browser.system, desktop.system);
+  assert.match(
+    browser.environment,
+    /Removed from "Where you are":\nSent from the QM desktop app\.\nAdded to "Where you are":\nSent from a web browser\./,
+  );
+});
+
+test("every turn declares the desktop tool, whichever app or trigger sent it", async (t) => {
+  const requests = recordRequests(t);
+  const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", actorKey: "test-actor-key" };
+  const routes = createModelRoutes({
+    defaultModelId: "claude-haiku-4-5",
+    modelGateway: { ...gateway, models: { "claude-haiku-4-5": "m" } },
+  });
+  const { orchestrator } = buildOrchestrator({ agent: createAgent({ routes }) });
+  const tools = async (input: OrchestratorInput) => {
+    await orchestrator.handleTurn(input);
+    const body = JSON.parse(requests.findLast((request) => request.headers.get("x-qm-purpose") === "turn")!.body);
+    return body.tools.map((tool: { name: string }) => tool.name);
+  };
+  for (const input of [
+    slackDm("slack:D1:desktop-tool", "hi", { origin: { kind: "human" } }),
+    dm("cron:c1:desktop-tool", "tick", { origin: { kind: "automation" } }),
+    dm("web:U1:desktop-tool", "hi", { surface: "web", origin: { kind: "human" }, clientSurface: "browser" }),
+  ])
+    assert.ok((await tools(input)).includes("desktop"), input.conversation.threadRef);
+});
+
 test("a live turn in an app edit chat gets a small prompt of its own and six tools, whatever prompt that chat had saved", async (t) => {
   const requests = recordRequests(t);
   const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", actorKey: "test-actor-key" };

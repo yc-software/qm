@@ -26,9 +26,9 @@ import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./conte
 import { openSession, renderList, replacePendingSession, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
-import { switchView } from "./shell";
+import { renderSidebarTop, switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
-import { contextModelSection, loadContextModel } from "./context-model";
+import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
@@ -104,6 +104,7 @@ function groupPersonasByRole(
 
 function setPersonaList(list: PersonaView[]): void {
   personasState.list = list;
+  renderSidebarTop();
   renderList();
 }
 
@@ -201,6 +202,7 @@ function drawPersonasPage(): void {
   viewSeq++;
   syncPersonaUrl(null);
   resetPicker();
+  resetContextModel();
   if (!pageHost || pageHost.parentElement !== appState.mainEl) {
     pageHost = document.createElement("div");
     pageHost.className = "pane personas-page";
@@ -251,7 +253,7 @@ function personaActions(persona: PersonaView, opts: { edit: boolean }): Template
   return html`
     ${rowAction("Chat", MessageSquare, () => void chatWithPersona(persona))}
     ${rowAction("Fork", GitFork, () => forkPersona(persona))}
-    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id)) : nothing}
+    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id, "", { push: true })) : nothing}
     ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void openGranteePicker(persona.id, "people")) : nothing}
   `;
 }
@@ -263,7 +265,7 @@ function personaRow(persona: PersonaView): TemplateResult {
         class="persona-row-main"
         type="button"
         aria-label=${`Open ${persona.name}`}
-        @click=${() => void openPersona(persona.id)}
+        @click=${() => void openPersona(persona.id, "", { push: true })}
       >
         <span class="persona-icon">${personaIconTpl(persona.icon, 18)}</span>
         <span class="persona-row-text">
@@ -349,22 +351,24 @@ export function routePersonasHistory(personaId: string | null): void {
   else drawPersonasPage();
 }
 
-function syncPersonaUrl(personaId: string | null): void {
+function syncPersonaUrl(personaId: string | null, push = false): void {
   if (appState.currentView !== "personas") return;
   const next = deepLinkPath(UI_BASE, "personas", null, null, personaId);
-  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
 }
 
 async function fetchPersona(id: string): Promise<PersonaDetail> {
   return (await api<{ persona: PersonaDetail }>(`/api/personas/${encodeURIComponent(id)}`)).persona;
 }
 
-async function openPersona(id: string, flash = ""): Promise<void> {
+async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
     if (seq !== viewSeq || appState.currentView !== "personas") return;
-    showPersonaDetail(persona, flash);
+    showPersonaDetail(persona, flash, opts.push);
   } catch (e) {
     if (seq !== viewSeq) return;
     notice = errMessage(e, "Couldn't open that persona.");
@@ -849,7 +853,7 @@ async function openGranteePicker(personaId: string, kind: PickerKind): Promise<v
   picker = { personaId, kind, query: "", people: [], channels: [], searching: false, searched: false, error: "" };
   const shown = appState.mainEl?.firstElementChild;
   if (shown instanceof HTMLElement && shown.dataset.persona === personaId) redrawDetail();
-  else await openPersona(personaId);
+  else await openPersona(personaId, "", { push: true });
   focusPicker();
 }
 
@@ -1058,6 +1062,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
 function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
+  resetContextModel();
   const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
   const draw = () =>
     render(
@@ -1072,10 +1077,10 @@ function showNewPersonaForm(): void {
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
-function showPersonaDetail(persona: PersonaDetail, flash: string): void {
+function showPersonaDetail(persona: PersonaDetail, flash: string, push = false): void {
   const host = paneHost(persona.id);
   if (!host) return;
-  syncPersonaUrl(persona.id);
+  syncPersonaUrl(persona.id, push);
   actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
@@ -1119,6 +1124,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   redrawDetail = draw;
   draw();
   if (editable) void loadContextModel(`persona:${persona.id}`, draw);
+  else resetContextModel();
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {

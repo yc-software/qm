@@ -55,7 +55,6 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
     const { loop } = await store.create({
       owner,
       createdBy: owner,
-      taskAuthor: "automation",
       ownerScopeId: scopeId("personal", owner),
       name,
       surface: `inbox:${source}`,

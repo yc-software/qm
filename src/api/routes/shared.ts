@@ -1,5 +1,6 @@
 import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
-import { scopeId, type Principal } from "../../types.ts";
+import type { AdminRole } from "../../admin/admin-grant-store.ts";
+import { parseScopeId, scopeId, type Principal } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
@@ -7,11 +8,12 @@ import { canonicalPerson, samePerson } from "../../directory/person.ts";
 import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "./route.ts";
+import { selfReadAudience, type SelfReadAudience } from "../../auth/self-read-audience.ts";
 import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { internalPerson } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -70,8 +72,30 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   return false;
 }
 
+export function resolveSelfRead(
+  ctx: ApiCtx,
+  opts?: { allowBot?: boolean; botMessage?: string; privateOnlyMessage?: string },
+): (SelfReadAudience & { principalId: string }) | null {
+  const { res, url, capability } = ctx;
+  if (!opts?.allowBot && capability?.botActor) {
+    sendJson(res, 403, { error: "forbidden", message: opts?.botMessage ?? "bot turns cannot access this endpoint" });
+    return null;
+  }
+  const principalId = capability ? capability.actorId : (url.searchParams.get("principalId") ?? "").trim();
+  if (!principalId) {
+    sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+    return null;
+  }
+  const audience = selfReadAudience(capability, principalId);
+  if (opts?.privateOnlyMessage && !audience.inOwnPrivate) {
+    sendJson(res, 403, { error: "forbidden", message: opts.privateOnlyMessage });
+    return null;
+  }
+  return { principalId, ...audience };
+}
+
 export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
-  if (!ctx.capability || personAtKeyboard(ctx.capability)) return true;
+  if (!ctx.capability || internalPerson(ctx.capability)) return true;
   refuseWithoutPerson(ctx.res);
   return false;
 }
@@ -92,16 +116,20 @@ export async function adminStanding(
   deps: ServerDeps,
   tenant: Tenant,
   principalId: string,
-): Promise<"inactive" | "admin" | "member"> {
+): Promise<"inactive" | "org_admin" | "owner" | "member"> {
   const id = canonicalPerson(principalId);
   if (!(await activePrincipal(deps, id))) return "inactive";
-  return adminStatusFromGrants((await deps.admin?.listGrants(tenant)) ?? [], id).isAdmin ? "admin" : "member";
+  return adminStatusFromGrants((await deps.admin?.listGrants(tenant)) ?? [], id).role ?? "member";
+}
+
+export interface AuthorizedAdmin extends Principal {
+  role: AdminRole;
 }
 
 export async function authorizeAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "tenant">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "tenant" | "adminAccess">,
   scope: string,
-): Promise<Principal | null> {
+): Promise<AuthorizedAdmin | null> {
   const { res, deps } = ctx;
   if (!deps.admin) {
     sendJson(res, 404, { error: "not_found" });
@@ -113,12 +141,17 @@ export async function authorizeAdmin(
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
   }
-  if (actor && standing === "admin") {
-    Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId: scope });
-    return actor;
+  if (!actor || standing === "member") {
+    sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
+    return null;
   }
-  sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
-  return null;
+  const ownerAllowed = ctx.adminAccess?.owner === true && parseScopeId(scope).kind === "org";
+  if (standing === "owner" && !ownerAllowed) {
+    sendJson(res, 403, { error: "forbidden", message: "org admin access required" });
+    return null;
+  }
+  Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId: scope });
+  return { ...actor, role: standing };
 }
 
 export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
@@ -128,8 +161,8 @@ export async function activePrincipal(deps: ServerDeps, principalId: string): Pr
 }
 
 export async function requireScopedAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "url">,
-): Promise<{ actor: Principal; scope: string } | null> {
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "url" | "tenant" | "adminAccess">,
+): Promise<{ actor: AuthorizedAdmin; scope: string } | null> {
   const scope = ctx.url.searchParams.get("scope") ?? "";
   if (!scope) {
     sendJson(ctx.res, 400, { error: "bad_request", message: "scope required" });

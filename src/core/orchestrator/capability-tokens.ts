@@ -10,6 +10,7 @@ import {
   mintCapabilityToken,
   type CapabilityClaims,
 } from "../../auth/capability-token.ts";
+import type { AdminRole } from "../../admin/admin-grant-store.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
 import type { EgressPolicy, ScopeId, Session } from "../../types.ts";
@@ -34,6 +35,7 @@ export interface CapabilityTurn {
   external: boolean;
   strictReadOnly: boolean;
   allInternal: boolean;
+  internalAudience: boolean;
   liveTurn: boolean;
   liveAuthorTurn: boolean;
   triggeredTurn: boolean;
@@ -65,6 +67,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     resolution,
     external,
     strictReadOnly,
+    internalAudience,
     liveTurn,
     actAsActor,
   } = turn;
@@ -77,12 +80,14 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
     ...(audienceScopeId ? { audienceScopeId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
+    ...(internalAudience ? { internalAudience: true } : {}),
     ...(liveTurn ? { liveActor: true } : {}),
+    ...(turn.session.ephemeral ? { ephemeral: true as const } : {}),
     ...(input.botActor ? { botActor: true } : {}),
     ...(actAsActor ? { actAsActor: true } : {}),
   };
   const tenant = ambientTenant();
-  const { actorIsOrgAdmin, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
+  const { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims } = await mintControlPlaneTokens(
     tenant,
     turn,
     scopeAttestation,
@@ -105,6 +110,7 @@ export async function mintTurnCapabilities(turn: CapabilityTurn) {
   };
   return {
     actorIsOrgAdmin,
+    actorAdminRole,
     orgMemoryWritable,
     tenant,
     controlClaims,
@@ -130,6 +136,7 @@ async function mintControlPlaneTokens(
     external,
     strictReadOnly,
     allInternal,
+    internalAudience,
     liveTurn,
     liveAuthorTurn,
     triggeredTurn,
@@ -150,6 +157,7 @@ async function mintControlPlaneTokens(
   } = turn;
   const securityPolicy = resolution.securityPolicy;
   let actorIsOrgAdmin = false;
+  let actorAdminRole: AdminRole | undefined;
   let orgMemoryWrite: ScopeId | undefined;
   const orgMemoryWritable = useMemory && memoryPolicy.capture !== "off" && resolution.orgScopeId !== memoryScopeId;
   let controlClaims: CapabilityClaims | undefined;
@@ -163,22 +171,25 @@ async function mintControlPlaneTokens(
   if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
     const destination = defaultDestination;
     connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
-    if (deps.admin && input.botActor !== true && (liveAuthorTurn || liveTurn)) {
+    if (deps.admin && input.botActor !== true && internalAudience && (liveAuthorTurn || liveTurn)) {
       try {
-        actorIsOrgAdmin = (await deps.admin.adminStatusOf(tenant, actor)).isAdmin;
+        const status = await deps.admin.adminStatusOf(tenant, actor);
+        actorIsOrgAdmin = status.isAdmin;
+        actorAdminRole = status.role;
       } catch (e) {
         swallow("orchestrator: admin status for turn", e);
       }
       if (actorIsOrgAdmin && liveTurn && !triggeredTurn && orgMemoryWritable) orgMemoryWrite = resolution.orgScopeId;
     }
-    const memoryClaim = memoryAccess
+    const fullMemoryClaim = memoryAccess
       ? { ...memoryAccess, read: baseRecallScopes, ...(orgMemoryWrite ? { orgWrite: orgMemoryWrite } : {}) }
       : undefined;
+    const memoryClaim = turn.session.ephemeral && memoryAccess ? { read: baseRecallScopes } : fullMemoryClaim;
     const turnSurface = input.surface === "web" ? "web" : (session.surface ?? input.surface);
     controlClaims = {
       ...scopeAttestation,
       aud: CONTROL_PLANE_AUD,
-      ...(!external && allInternal && ownCredentialsAllowed ? { ownerConnections: true } : {}),
+      ...(internalAudience && ownCredentialsAllowed ? { ownerConnections: true } : {}),
       exp: sandboxTokenExpiry,
       ...(turnTimezone ? { timezone: turnTimezone } : {}),
       ...(destination ? { destination } : {}),
@@ -186,12 +197,6 @@ async function mintControlPlaneTokens(
       ...(delivery.defaultKey ? { defaultDestinationKey: delivery.defaultKey } : {}),
       ...(!external && conversation.kind !== "dm"
         ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
-        : {}),
-      ...(conversation.kind === "dm" ||
-      conversation.kind === "group" ||
-      conversation.isPrivate === true ||
-      conversation.isMpim === true
-        ? { privateScope: true }
         : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...presence,
@@ -221,7 +226,7 @@ async function mintControlPlaneTokens(
         deps.capabilitySecret ?? deps.signingSecret,
       );
     }
-    if (allInternal && securityPolicy.posture !== "strict") {
+    if (allInternal && securityPolicy.posture !== "strict" && (sessionAuth?.account ?? "company") === "company") {
       connectorEnv.MODEL_GATEWAY_URL = `${trimTrailingSlashes(deps.apiBaseUrl)}${SANDBOX_MODEL_PREFIX}`;
       connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
         { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
@@ -231,17 +236,18 @@ async function mintControlPlaneTokens(
       turnContextBlocks["Model access"] =
         "## Model access\nSandbox code can call this company's models through core at `$MODEL_GATEWAY_URL` with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`; `GET $MODEL_GATEWAY_URL/v1/models` lists them. The token expires with this turn; never send it anywhere but `$MODEL_GATEWAY_URL`.";
     }
-    connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
-      {
-        ...scopeAttestation,
-        ...presence,
-        ...runBinding,
-        aud: OAUTH_CONSENT_AUD,
-        exp: sandboxTokenExpiry,
-      },
-      deps.capabilitySecret ?? deps.signingSecret,
-      deps.capabilityTokenCompression,
-    );
+    if (!turn.session.ephemeral)
+      connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
+        {
+          ...scopeAttestation,
+          ...presence,
+          ...runBinding,
+          aud: OAUTH_CONSENT_AUD,
+          exp: sandboxTokenExpiry,
+        },
+        deps.capabilitySecret ?? deps.signingSecret,
+        deps.capabilityTokenCompression,
+      );
   }
-  return { actorIsOrgAdmin, orgMemoryWritable, controlClaims };
+  return { actorIsOrgAdmin, actorAdminRole, orgMemoryWritable, controlClaims };
 }

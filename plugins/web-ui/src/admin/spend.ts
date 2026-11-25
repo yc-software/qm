@@ -117,7 +117,9 @@ export async function mount(page: AdminPage) {
         ["Person", ...COLUMNS],
         (d.people || []).map((row: any) => [
           {
-            node: html`<a href=${userHref(page, row)}>${row.displayName || row.principalId}</a>`,
+            node: page.fullAdmin
+              ? html`<a href=${userHref(page, row)}>${row.displayName || row.principalId}</a>`
+              : html`${row.displayName || row.principalId}`,
             cls: "mono",
           },
           ...amounts(row),
@@ -139,11 +141,17 @@ export async function mount(page: AdminPage) {
         ["Cron", "Total", "Tokens", "Cache hit"],
         (d.crons || []).map((row: any) => [
           {
-            node: html`<a
-                href=${page.href("history", { scope: row.info?.ownerScopeId ?? row.scopeId, kind: "cron", cron: row.cronId })}
-                >${row.info?.title || row.info?.message || row.cronId}</a
-              >
-              <div class="subline">${row.scopeName || row.scopeId}${row.info ? "" : " · deleted"}</div>`,
+            node: html`${
+                page.fullAdmin
+                  ? html`<a
+                      href=${page.href("history", { scope: row.info?.ownerScopeId ?? row.scopeId, kind: "cron", cron: row.cronId })}
+                      >${row.info?.title || row.info?.message || row.cronId}</a
+                    >`
+                  : html`${row.info?.title || row.info?.message || "Private cron"}`
+              }
+              <div class="subline">
+                ${row.scopeName || row.scopeId}${page.fullAdmin && !row.info ? " · deleted" : ""}
+              </div>`,
             cls: "mono",
           },
           { text: usd(row.costUsd), cls: "num" },

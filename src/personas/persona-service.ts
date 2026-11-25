@@ -15,9 +15,10 @@ import {
   type PersonaAccess,
   type PersonaFields,
   type PersonaStore,
+  type PersonaSummary,
   type PersonaVersionPage,
 } from "./persona-store.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
 
 const personaScope = (id: string): ScopeId => scopeId("persona", id);
 
@@ -47,6 +48,7 @@ export interface PersonaService {
   roles(principalId: string): Promise<Map<string, PersonaRole>>;
   role(principalId: string, personaId: string, contextScope?: ScopeId): Promise<PersonaRole | null>;
   list(principalId: string): Promise<PersonaResult<PersonaView[]>>;
+  summaries(tenant: Tenant, principalId: string, contextScope?: ScopeId): Promise<PersonaSummary[]>;
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
   create(principalId: string, input: unknown): Promise<PersonaResult<PersonaView>>;
   update(principalId: string, id: string, input: unknown): Promise<PersonaResult<PersonaView>>;
@@ -116,8 +118,8 @@ export function createPersonaService(deps: {
   const { store } = deps;
   const enabledFor = (principalId: string) => deps.flags.enabled("personas", scopeId("personal", principalId));
 
-  async function granteeScopes(principalId: string, contextScope?: ScopeId): Promise<ScopeId[]> {
-    const teams = (await deps.teams?.forTurn(ambientTenant(), "", [principalId])) ?? [];
+  async function granteeScopes(principalId: string, contextScope?: ScopeId, tenant?: Tenant): Promise<ScopeId[]> {
+    const teams = (await deps.teams?.forTurn(tenant ?? ambientTenant(), "", [principalId])) ?? [];
     return [
       ...personIds(principalId).map((id) => scopeId("personal", id)),
       deps.orgScope,
@@ -184,6 +186,13 @@ export function createPersonaService(deps: {
     async list(principalId) {
       if (!(await enabledFor(principalId))) return { status: "disabled" };
       return { status: "ok", value: await store.listFor(await granteeScopes(principalId)) };
+    },
+    async summaries(tenant, principalId, contextScope) {
+      const [enabled, grantees] = await Promise.all([
+        enabledFor(principalId),
+        granteeScopes(principalId, contextScope, tenant),
+      ]);
+      return enabled ? store.summariesFor(tenant, grantees) : [];
     },
     detail(principalId, id) {
       return guarded<PersonaDetail>(principalId, id, "read", async (persona, held) => {
@@ -365,11 +374,12 @@ export async function routedPersonaTurn(
   contextScope: ScopeId,
 ): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
   const current = await personas.forTurn(personaId, actorId, contextScope);
-  if (!routed?.persona || routed.persona === personaId) return { turn: current };
-  if (current && typeof current === "object")
+  const currentId = current && typeof current === "object" ? current.persona.id : personaId;
+  if (!routed?.persona || routed.persona === currentId) return { turn: current };
+  if (current && typeof current === "object" && (current.pinned || actsAsScope(actorId, current.scope)))
     return {
       turn: current,
-      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence.`,
+      note: `The decision rule ${routed.ruleId} picked the persona ${routed.persona} for this message, but this conversation already wears ${current.persona.name}${current.pinned ? ", pinned here," : ""} which takes precedence. PUT /v1/sessions/:id/persona switches to another persona.`,
     };
   const picked = await personas.forTurn(routed.persona, actorId, contextScope);
   if (picked && typeof picked === "object")

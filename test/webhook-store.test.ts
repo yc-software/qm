@@ -38,13 +38,6 @@ test("create rejects filters that could silently weaken or suppress the webhook"
   );
 });
 
-test("anti-escalation: a different owner requires that owner's consent", async () => {
-  const store = createWebhookStore(testMap(), testMap());
-  await assert.rejects(store.create({ ...base, owner: "U2", createdBy: "U1" }), /consent/);
-  const wh = await store.create({ ...base, owner: "U2", createdBy: "U1", ownerConsentedAt: Date.now() });
-  assert.equal(wh.owner, "U2");
-});
-
 test("setEnabled disables a webhook", async () => {
   const store = createWebhookStore(testMap(), testMap());
   const wh = await store.create(base);

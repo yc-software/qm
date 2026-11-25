@@ -121,6 +121,7 @@ function spaCsp(env: NodeJS.ProcessEnv, frameAncestors: string): string {
     `script-src 'self' 'wasm-unsafe-eval'${scriptOrigins.map((origin) => ` ${origin}`).join("")}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
+    "media-src 'self' blob:",
     "font-src 'self' data:",
     `connect-src 'self'${connectOrigins.map((origin) => ` ${origin}`).join("")}${browserErrors ? ` ${new URL(browserErrors.dsn).origin}` : ""}`,
     "frame-src 'self' data: https:",

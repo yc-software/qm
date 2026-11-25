@@ -1,5 +1,6 @@
 import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errorAlreadyReported, markErrorReported } from "../util/errors.ts";
+import { isProviderDecision } from "../core/turn-error.ts";
 import type { ScopeId } from "../types.ts";
 import { ambientTenant, boundTenant, type Tenant } from "../tenants/context.ts";
 
@@ -24,7 +25,8 @@ export interface ErrorLog {
 
 function reportErrorEvent(event: Omit<ErrorEvent, "ts">, error?: unknown): void {
   if (errorAlreadyReported(error)) return;
-  reportBackendError(error ?? new Error(event.message), `${event.category}:${event.code}`, { ...event });
+  if (!isProviderDecision(error))
+    reportBackendError(error ?? new Error(event.message), `${event.category}:${event.code}`, { ...event });
   markErrorReported(error);
 }
 

@@ -56,17 +56,19 @@ const github: Verifier = {
   },
 };
 
-const SLACK_TS_TOLERANCE_SECONDS = 60 * 5;
+const UNIX_TS_TOLERANCE_SECONDS = 60 * 5;
+
+function freshUnixSeconds(raw: string): boolean {
+  const ts = Number(raw);
+  return raw.trim() !== "" && Number.isFinite(ts) && Math.abs(Date.now() / 1000 - ts) <= UNIX_TS_TOLERANCE_SECONDS;
+}
 
 const slack: Verifier = {
   verify({ secret, headers, rawBody }) {
     if (!secret) return false;
     const sig = header(headers, "x-slack-signature");
     const ts = header(headers, "x-slack-request-timestamp");
-    if (!sig || !ts) return false;
-    const tsSeconds = Number(ts);
-    if (!Number.isFinite(tsSeconds)) return false;
-    if (Math.abs(Date.now() / 1000 - tsSeconds) > SLACK_TS_TOLERANCE_SECONDS) return false;
+    if (!sig || !ts || !freshUnixSeconds(ts)) return false;
     return constantTimeEqual(sig, `v0=${hmacHex(secret, `v0:${ts}:${rawBody}`)}`);
   },
   deliveryId({ rawBody }) {
@@ -88,7 +90,7 @@ const stripe: Verifier = {
     const parts = sig.split(",").map((p) => p.split("=") as [string, string]);
     const t = parts.find(([k]) => k === "t")?.[1];
     const v1s = parts.filter(([k, v]) => k === "v1" && v).map(([, v]) => v);
-    if (!t || v1s.length === 0) return false;
+    if (!t || v1s.length === 0 || !freshUnixSeconds(t)) return false;
     const expected = hmacHex(secret, `${t}.${rawBody}`);
     return v1s.some((v1) => constantTimeEqual(v1, expected));
   },

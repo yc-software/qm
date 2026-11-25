@@ -49,6 +49,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "nodemailer": "^10.2.1"
+    "nodemailer": "^10.2.1",
+    "yaml": "^2.9.0"
   }
 }

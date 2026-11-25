@@ -30,7 +30,6 @@ function deliveryOutcome(
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
   const delegateWork = opts?.delegateWork === true;
-  const sidebarSessions = opts?.surfaceName === "web";
   const subagentTool = defineTool({
     name: "subagents",
     label: "subagents",
@@ -44,7 +43,7 @@ export function sessionTools(kit: ToolKit) {
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
         : "Subagents are for parallel work: don't run just one unless the user asked; pursue a single workstream yourself, switching your own model/runtime if needed. wait: block up to 60s for messages. Keep working meanwhile; don't answer until the request's work is done. ") +
       "Internal messages are coordination, not user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. Give the user one combined result or a real blocker." +
-      (sidebarSessions ? " For sidebar conversations use sessions." : ""),
+      " For other conversations use sessions.",
     parameters: Type.Object({
       timeoutMs: Type.Optional(
         Type.Integer({ minimum: 0, maximum: 60_000, description: "wait: ms to wait (default 60000)." }),
@@ -258,7 +257,7 @@ export function sessionTools(kit: ToolKit) {
     name: "sessions",
     label: "sessions",
     description:
-      "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
+      "Work with sessions, other conversations you can access (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
       "send_message: a private note delivered to another session as internal context. wake:true (default) hands over work that needs a turn: it wakes the session if idle, otherwise the session gets it at its next step as a task. Send replies, status reports and completion notes with wake:false, an FYI that wakes nothing. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
@@ -387,5 +386,5 @@ export function sessionTools(kit: ToolKit) {
     },
   });
 
-  return { subagentTool, sessionTool, sidebarSessions };
+  return { subagentTool, sessionTool };
 }

@@ -196,7 +196,8 @@ test("direct share paths notify only after successful grants; org, self and revo
   await f.share("read", person(owner));
   await f.share("read", scopeId("org", "acme"));
   const control = createControlService(f.app);
-  const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
+  const cap = (actorId: string) =>
+    ({ actorId, scopeId: person(actorId), internalAudience: true, liveActor: true }) as CapabilityClaims;
   const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
   assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
   assert.deepEqual(await f.notices(), []);
@@ -225,7 +226,7 @@ companyTest("notify:false grants access on every direct share path without a DM 
     inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
   } as unknown as Parameters<typeof createApp>[0]);
   const control = createControlService(app);
-  const cap = { actorId: owner, scopeId: person(owner), liveActor: true } as CapabilityClaims;
+  const cap = { actorId: owner, scopeId: person(owner), internalAudience: true, liveActor: true } as CapabilityClaims;
   const quiet = { notify: false };
   assert.equal(
     (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,

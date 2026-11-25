@@ -1,4 +1,4 @@
-import { desktopTurnId, serveDesktopRun, webClientSurface } from "./desktop-computer.ts";
+import { desktopTurnId, webClientSurface } from "./desktop-computer.ts";
 import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
@@ -576,7 +576,10 @@ export type AssistantWork = AssistantMessage & {
   droppedAttachmentIds?: string[];
   continuing?: string;
   via?: string;
+  viaTitle?: string;
+  viaId?: string;
   personaId?: string;
+  supersedes?: number;
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -622,6 +625,18 @@ export interface TurnOptions {
   fastMode?: boolean;
   scopeId?: string | null;
   channelName?: string | null;
+  ephemeral?: boolean;
+}
+
+export async function deleteEphemeralSession(threadRef: string, keepalive = false): Promise<void> {
+  const path = `/api/ephemeral?threadRef=${encodeURIComponent(threadRef)}`;
+  if (keepalive) {
+    void webFetch(withBase(path), { method: "DELETE", keepalive: true }).catch(() => {});
+    return;
+  }
+  await api<{ deleted?: boolean }>(path, { method: "DELETE" }).catch((e) =>
+    swallow("web-ui: delete ephemeral session", e),
+  );
 }
 
 export interface ActiveRun {
@@ -979,14 +994,6 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     const msg = details?.message ?? details?.reason ?? details?.error ?? `HTTP ${r.status}`;
     throw new ApiError(msg, r.status, body);
   }
-  if (path === "/api/turn" && typeof init?.body === "string") {
-    const request = JSON.parse(init.body) as { desktopClientId?: string };
-    const response = body as { runId?: string } | null;
-    if (request.desktopClientId && response?.runId)
-      void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
-        reportHandledError("desktop-computer", error),
-      );
-  }
   return body as T;
 }
 
@@ -1187,9 +1194,12 @@ export interface LocatedRun {
   run: RunPoll;
 }
 
-export async function resolveApproval(decision: ApprovalDecision): Promise<string | null> {
+export type ApprovalSubmission =
+  { status: "gone" } | { status: "settled" } | { status: "queued" } | { status: "resumed"; runId: string };
+
+export async function resolveApproval(decision: ApprovalDecision): Promise<ApprovalSubmission> {
   if (decision.requestId.startsWith("keychain:")) {
-    if (resolvedCredentialApprovals.has(decision.requestId)) return "";
+    if (resolvedCredentialApprovals.has(decision.requestId)) return { status: "settled" };
     const id = decision.requestId.slice("keychain:".length);
     let choice = "deny";
     if (decision.approved) choice = decision.scope === "always" ? "standing" : "once";
@@ -1200,9 +1210,9 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     if (!["approved", "declined", "expired"].includes(result.ask?.status))
       throw new Error("The credential request is still pending. Please try again.");
     resolvedCredentialApprovals.add(decision.requestId);
-    return "";
+    return { status: "settled" };
   }
-  const submit = await api<{ runId?: string; steered?: boolean }>(
+  const submit = await api<{ status?: string; runId?: string; steered?: boolean }>(
     `/api/approvals/${encodeURIComponent(decision.requestId)}`,
     {
       method: "POST",
@@ -1212,10 +1222,11 @@ export async function resolveApproval(decision: ApprovalDecision): Promise<strin
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
   });
-  if (!submit) return null;
+  if (!submit) return { status: "gone" };
+  if (!submit.runId && submit.status === "queued") return { status: "queued" };
   if (!submit.runId) throw new Error("Could not continue after the approval.");
   if (submit.steered) decidedDuringRunApprovals.add(decision.requestId);
-  return submit.runId;
+  return { status: "resumed", runId: submit.runId };
 }
 
 export async function runApprovalTurn(
@@ -1336,6 +1347,7 @@ function turnRequestBody(
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(turnOptions.ephemeral ? { ephemeral: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -1739,12 +1751,15 @@ export async function pollRun(
   }
 }
 
+import type { ReplyNotice } from "./notifications";
+
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
+  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui" | "notify";
   at: number;
   ui?: unknown;
+  notice?: ReplyNotice;
 }
 
 export interface InboxItemEvent {
@@ -2419,11 +2434,15 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         ...(typeof workFinishedAt === "number" ? { finishedAt: workFinishedAt } : {}),
       };
       const stopped = e.body.stopped === true;
+      const before = out.length;
       if (typeof e.body.via === "string" && text.trim()) {
         spillHeldPosts();
         flushWork("", e.createdAt);
         flushWork(text, e.createdAt, true, timing, stopped, [e.seq]);
-        (out.at(-1) as AssistantWork).via = e.body.via;
+        const delivered = out.at(-1) as AssistantWork;
+        delivered.via = e.body.via;
+        if (typeof e.body.sourceTitle === "string") delivered.viaTitle = e.body.sourceTitle;
+        if (typeof e.body.sourceId === "string" && e.body.sourceId) delivered.viaId = e.body.sourceId;
       } else if (text || pending.length || heldPosts.size || stopped) {
         spillHeldPosts();
         if (posted && text) {
@@ -2434,6 +2453,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         }
       }
       tagPersona(e, out.slice(turn.start));
+      if (typeof e.body.supersedes === "number" && out.length > before)
+        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes;
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

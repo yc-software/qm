@@ -39,7 +39,7 @@ test("a replayed steer on a scheduled turn's subagent keeps where its answer goe
       actor: { id: "U1", type: "internal" },
       conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ id: "U1", type: "internal" }] },
       text: "work",
-      origin: { kind: "automation", screenData: "work", destination, useOwnerKeychain: true },
+      origin: { kind: "automation", screenData: "work", destination },
     },
   });
   const claimed = await built.runs.claimById(run.id, "worker", 60_000);
@@ -51,7 +51,7 @@ test("a replayed steer on a scheduled turn's subagent keeps where its answer goe
   );
   assert.deepEqual(
     replays.map((replay) => replay.request.origin),
-    [{ kind: "automation", screenData: "also check the launch", destination, useOwnerKeychain: true }],
+    [{ kind: "automation", screenData: "also check the launch", destination }],
   );
 });
 

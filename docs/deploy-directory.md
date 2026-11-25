@@ -194,7 +194,9 @@ apps cannot borrow connectors, and an app that borrows them cannot be made publi
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
 a teammate or a shared home, withdraws it as the app moves, and an app outside that library
-can't borrow again until it moves back; `[]` still withdraws. While the app borrows
+can't borrow again until it moves back; `[]` still withdraws. The broker checks the app's
+home on every call too, so a loan still recorded on an app outside that library is refused
+and the app lists no connectors. While the app borrows
 connectors, only the publisher can share it with anyone else. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
@@ -260,7 +262,7 @@ An exact `--candidate` deployment consumes its digest-pinned images without chan
 When `securityScreen.mode` is not `off`, the classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output — under every security posture. Posture only caps enforcement: Dangerous scopes observe, and Auto and Strict follow the deployment mode. Scope posture changes cannot turn screening off; they keep their own tool approvals and private-network policy.
 
 - `observe` classifies in the background and never delays a turn, quarantines, prompts, or adds untrusted-content markers. Each observation is bounded by `SECURITY_SCREEN_TIMEOUT_MS`, the same deadline enforce uses; there is no separate concurrency cap. Observed model screens are not charged to the user's budget.
-- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. A triggered run with no webhook receiver for its approvals, such as a cron, monitor or loop stage, fails closed instead, and the run's note gives the approval's reason, for flagged input as well as input too long to read. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
+- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. Human-owned background runs (crons, loops, webhooks, monitors, and credential resumes) surface their approval card to the owner via Slack DM (or generic chat when targeted there) and on the session's web page, while runs on a web or swarm thread keep their approval inline on that thread. Runs without a human approver — bot-authored triggers and scope-actor runs — fail closed instead. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
 
 Every classification writes one `security_screen.classify` audit record with status `allow`, `block`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
 

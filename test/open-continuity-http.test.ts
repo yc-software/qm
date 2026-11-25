@@ -90,6 +90,7 @@ async function fixture(t: TestContext) {
         actorId,
         scopeId,
         members,
+        internalAudience: true,
         liveActor: true,
         exp: Date.now() + 600_000,
         destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
@@ -259,7 +260,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   );
 });
 
-test("HTTP a cron may refresh its owner's saved login token cache, and only the owner's live turn changes the rest", async (t) => {
+test("HTTP every run of its owner writes a saved login back, cron fires and typed turns alike", async (t) => {
   const b = await fixture(t);
   const keychain = b.keychain!;
   const encode = (text: string) => Buffer.from(text).toString("base64");
@@ -282,9 +283,9 @@ test("HTTP a cron may refresh its owner's saved login token cache, and only the 
       ]),
     );
   const owner = await b.cap("alice");
-  for (const [session, config, expected] of [
-    [token("https://alice.example", "t1"), "[profile cron]", token("https://alice.example", "t1")],
-    [token("https://other.example", "t2"), "[profile cron]", token("https://alice.example", "t1")],
+  for (const [session, config] of [
+    [token("https://alice.example", "t1"), "[profile cron]"],
+    [token("https://other.example", "t2"), "[profile cron2]"],
   ]) {
     const created = await b.request("POST", "/v1/crons", owner, {
       title: "Refresh proof",
@@ -293,7 +294,7 @@ test("HTTP a cron may refresh its owner's saved login token cache, and only the 
     });
     assert.equal((await b.request("POST", `/v1/crons/${created.body.cron.id}/run`, owner, {})).status, 200);
     await b.awaitFire(created.body.cron.id, owner);
-    assert.deepEqual(await saved(), { ".aws/config": "[profile alice]", ".aws/sso/cache/session.json": expected });
+    assert.deepEqual(await saved(), { ".aws/config": config, ".aws/sso/cache/session.json": session });
   }
   await b.turn(proof(token("https://other.example", "t3"), "[profile live]"), "alice");
   assert.deepEqual(await saved(), {

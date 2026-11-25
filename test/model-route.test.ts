@@ -251,7 +251,7 @@ test("a summary that fails everywhere names each route it tried and why", async 
         (e: unknown) => e,
       );
       assert.ok(error instanceof ProviderTurnError);
-      assert.equal(error.code, "model_budget");
+      assert.equal(error.code, "auth");
       assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
       assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
     },

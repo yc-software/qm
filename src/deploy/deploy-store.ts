@@ -1,6 +1,6 @@
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { scopeId, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
@@ -10,6 +10,7 @@ import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/ap
 import { msOf } from "../sessions/items.ts";
 import {
   createDeployGitStore,
+  type DeployGitBlobRef,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
@@ -126,6 +127,16 @@ export interface PublishedApp {
   versions: AppVersion[];
 }
 
+export function inPublisherLibrary(d: Pick<PublishedApp, "ownerScopeId" | "createdBy">): boolean {
+  return d.ownerScopeId === scopeId("personal", d.createdBy);
+}
+
+export function lentConnectors(
+  d: Pick<PublishedApp, "ownerScopeId" | "createdBy" | "connectors" | "public">,
+): string[] {
+  return !d.public && inPublisherLibrary(d) ? (d.connectors ?? []) : [];
+}
+
 export interface AppDraft {
   deploymentId: string;
   commit: string;
@@ -185,7 +196,7 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(id: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;

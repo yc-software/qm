@@ -15,6 +15,7 @@ import {
   parseLifecycleEvent,
   parseMessageEvent,
   parseReactionEvent,
+  slackBotName,
 } from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import { slackMessageContent } from "./message-content.ts";
@@ -164,7 +165,7 @@ export function registerSlackEvents(
           rawText: content.text,
           subtype: e.subtype ?? "",
           ...(e.bot_id ? { botId: e.bot_id } : {}),
-          ...(e.bot_profile?.name || e.username ? { authorName: String(e.bot_profile?.name || e.username) } : {}),
+          ...(slackBotName(e) ? { authorName: slackBotName(e) } : {}),
           files: content.files,
           threadTs: e.thread_ts,
           ts: e.ts,
@@ -292,7 +293,7 @@ export function registerSlackEvents(
             userId: identity.userId,
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_id ? { botId: m.bot_id } : {}),
-            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            ...(slackBotName(m) ? { authorName: slackBotName(m) } : {}),
             rawText: content.text,
             subtype: m.subtype ?? "",
             files: content.files,
@@ -340,7 +341,7 @@ export function registerSlackEvents(
             userId: identity.userId,
             ...(identity.actor ? { actor: identity.actor } : {}),
             ...(m.bot_id ? { botId: m.bot_id } : {}),
-            ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+            ...(slackBotName(m) ? { authorName: slackBotName(m) } : {}),
             rawText: content.text,
             subtype: m.subtype ?? "",
             files: content.files,

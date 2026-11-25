@@ -25,6 +25,7 @@
         "scripts/dev/twin-instance.ts",
         "scripts/dev/twin-multiws-check.ts",
         "scripts/dev/twin-pump.ts",
+        "scripts/backfill-memory-sensitivity.ts",
         "scripts/migrate-principals-to-email.mjs",
         "scripts/mine-slack-scenarios.ts",
         "scripts/skills-materialize-smoke.ts",
@@ -34,7 +35,8 @@
         "superserve/templates/verify-qm-agent.ts",
         "docs/qa/resource-search-demo.mjs",
         "src/deploy/vendor/devbar.js"
-      ]
+      ],
+      "ignoreDependencies": ["yaml"]
     },
     "desktop": {
       "entry": [
@@ -58,6 +60,7 @@
     "plugins/web-ui": {
       "entry": [
         "src/shared-session.ts",
+        "public/sw.js",
         "src/lazy-katex.ts",
         "src/lazy-hljs.ts",
         "src/hljs-lang-stub.ts",

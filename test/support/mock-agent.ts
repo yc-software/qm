@@ -823,6 +823,7 @@ export function createMockAgent(): Agent {
 
       if (turn.onDelta) for (const chunk of streamChunks(reply)) turn.onDelta(chunk);
 
+      if (!silent) reply = turn.closingReply?.(reply) ?? reply;
       await record({ kind: "AgentMessage", text: reply });
       const modelCalls = usedTool ? 2 : 1;
       const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));
@@ -886,7 +887,7 @@ export function createMockAgent(): Agent {
             else if (/^(my|i'm|i am|i prefer|i work|i use|i like|call me)\b/i.test(sentence)) facts.push(sentence);
           }
         }
-        return Promise.resolve(facts.length ? facts.map((fact) => `- ${fact}`).join("\n") : "NONE");
+        return Promise.resolve(JSON.stringify(facts.map((text) => ({ text, sensitivity: "ordinary" }))));
       }
       return Promise.resolve(`mock one-shot reply to: ${prompt.slice(0, 200)}`);
     },

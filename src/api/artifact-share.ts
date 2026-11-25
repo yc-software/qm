@@ -27,8 +27,14 @@ export function authorPublishesSkill(scope: ScopeId): boolean {
   return kind !== null && AUTHOR_PUBLISHED_SKILL_KINDS[kind];
 }
 
-export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {
-  return isMultiMemberSkillScope(homeScope) && !liveActor;
+export interface SkillEditor {
+  liveActor?: boolean;
+  internalAudience?: boolean;
+  botActor?: boolean;
+}
+
+export function triggerBlocksSharedSkill(homeScope: ScopeId, editor: SkillEditor | undefined): boolean {
+  return isMultiMemberSkillScope(homeScope) && !internalLivePerson(editor);
 }
 
 export function livePersonCapability(
@@ -41,6 +47,18 @@ export function personAtKeyboard(
   c: { liveActor?: boolean; liveAuthor?: boolean; botActor?: boolean; triggered?: boolean } | undefined,
 ): boolean {
   return livePersonCapability(c) && c?.triggered !== true;
+}
+
+export function internalLivePerson(
+  c: (Parameters<typeof livePersonCapability>[0] & { internalAudience?: boolean }) | undefined,
+): boolean {
+  return livePersonCapability(c) && c?.internalAudience === true;
+}
+
+export function internalPerson(
+  c: (Parameters<typeof personAtKeyboard>[0] & { internalAudience?: boolean }) | undefined,
+): boolean {
+  return personAtKeyboard(c) && c?.internalAudience === true;
 }
 
 export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
