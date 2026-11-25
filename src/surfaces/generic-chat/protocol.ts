@@ -112,6 +112,10 @@ export function parseGenericChatAccount(account: string): { id: string; origin?:
     : null;
 }
 
+export function genericChatOrganizationBearer(secret: string, org: string): string {
+  return `qmorg1.${org}.${hmacHex(secret, `qm-org-bearer:v1:${org}`)}`;
+}
+
 export function signGenericChat(secret: string, timestamp: string, rawBody: string): string {
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }

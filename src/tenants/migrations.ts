@@ -7,7 +7,7 @@ import {
   TENANT_APP_HOSTS_BY_HANDLE,
   TENANT_APP_HOSTS_LEGACY_NAMES,
 } from "./app-handle.ts";
-import { TENANT_EXTERNAL_ORG_ACCOUNT, TENANT_EXTERNAL_ORGS } from "./external-orgs.ts";
+import { TENANT_EXTERNAL_ORG_ACCOUNT, TENANT_EXTERNAL_ORG_LOOKUPS, TENANT_EXTERNAL_ORGS } from "./external-orgs.ts";
 
 const TENANCY_BASE: PgMigrationDefinition = {
   id: "0000-tenancy/base",
@@ -98,6 +98,7 @@ export const TENANCY: readonly PgMigrationDefinition[] = [
   SERVING_TENANTS,
   TENANT_EXTERNAL_ORGS,
   TENANT_EXTERNAL_ORG_ACCOUNT,
+  TENANT_EXTERNAL_ORG_LOOKUPS,
 ];
 
 interface TenantKey {

@@ -462,7 +462,7 @@ import { genericChatSender } from "./surfaces/generic-chat/outbound.ts";
 import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
 import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
 import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
-import { GENERIC_CHAT } from "./surfaces/generic-chat/protocol.ts";
+import { GENERIC_CHAT, genericChatOrganizationBearer } from "./surfaces/generic-chat/protocol.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -1415,9 +1415,18 @@ export function buildApp(
     scopeId("org", config.orgId),
     config.brokerCredentials ?? [],
   );
+  const genericChat = config.genericChat;
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    ...(genericChat
+      ? {
+          organizationBearer: async () => {
+            const org = await sessions.tenantLookup.boundExternalOrg(ambientTenant(), genericChat.issuer);
+            return org && genericChatOrganizationBearer(genericChat.secret, org);
+          },
+        }
+      : {}),
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -2706,6 +2715,9 @@ export function buildApp(
   };
   const genericChatNotices = config.genericChat ? createGenericChatNotices({ deliveries }) : null;
   const genericChatClient = config.genericChat ? createGenericChatClient(config.genericChat) : null;
+  const genericChatIssuer = config.genericChat?.issuer;
+  const genericChatAccountTenant =
+    genericChatIssuer && ((account: string) => sessions.tenantLookup.externalOrgTenant(genericChatIssuer, account));
   const genericChatTurns = genericChatClient
     ? createGenericChatTurns({
         app,
@@ -2717,9 +2729,10 @@ export function buildApp(
       })
     : null;
   const genericChatInbound =
-    genericChatNotices && genericChatClient && genericChatTurns && config.genericChat
+    genericChatNotices && genericChatClient && genericChatTurns && genericChatAccountTenant && config.genericChat
       ? createGenericChatInbound({
           secret: config.genericChat.secret,
+          accountTenant: genericChatAccountTenant,
           client: genericChatClient,
           stageBlob: slackCore.stageBlob,
           app,
@@ -2742,10 +2755,11 @@ export function buildApp(
         })
       : null;
   const genericChatDelivery =
-    genericChatClient && genericChatTurns
+    genericChatClient && genericChatTurns && genericChatAccountTenant
       ? createDeliveryRelay(deliveries, {
           type: GENERIC_CHAT,
           send: genericChatSender({
+            accountTenant: genericChatAccountTenant,
             client: genericChatClient,
             blobs: slackCore,
             app,

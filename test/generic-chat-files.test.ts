@@ -13,7 +13,7 @@ import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
-const tenantFor = async () => TEST_TENANT;
+const accountTenant = async () => TEST_TENANT;
 
 function chatHost(respond: (path: string, body: Record<string, unknown>) => Response) {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -38,13 +38,13 @@ test("files attached to a chat message reach the turn as staged attachments, and
   const inbound = createGenericChatInbound({
     registerGroup: async () => {},
     secret: SECRET,
+    accountTenant,
     client,
     onAction: async () => {},
     stageBlob: async (bytes) => ({ blobId: `blob-${Buffer.from(bytes).toString()}` }),
     storageFetch: async (url) =>
       String(url).endsWith("/31") ? new Response("deck bytes") : new Response("gone", { status: 403 }),
     app: {
-      tenantFor,
       ingestSurfaceEvents: async () => ({ upserted: 1 }),
       onContextRequestCreated: () => () => {},
       turn: async (request: TurnRequest) => (turns.push(request), { runId: "r1" }),
@@ -103,9 +103,9 @@ function sending(respond: Parameters<typeof chatHost>[0]) {
   const host = chatHost(respond);
   const stored: Array<{ url: string; fields: Record<string, string> }> = [];
   const send = genericChatSender({
+    accountTenant,
     client: host.client,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async () => ({ upserted: 1 }),
