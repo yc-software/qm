@@ -69,11 +69,6 @@ git clone --filter=blob:none https://<host>/<repo-path>.git
 git push origin HEAD:refs/heads/codex/small-change
 ```
 
-Some hosts, such as GitLab with a committer check, reject pushed commits whose committer email
-is not the pushing account's. Keep the requester as author and commit as the shared account: read
-its name and commit email from the host's API (GitLab: `GET /api/v4/user` returns `name` and
-`commit_email`) and set `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` when committing.
-
 The same credential policy applies: the slug must be listed in your prompt, its allowed methods
 must include its requests (`GET` for discovery and `POST` for upload-pack/fetch or receive-pack/push), and the repo path
 must be inside its allowed path prefixes.
