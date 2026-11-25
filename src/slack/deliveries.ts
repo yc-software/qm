@@ -354,7 +354,7 @@ export function createSlackDeliverer(deps: {
           );
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
-          const by = d.provenance?.sourceRunId ?? runDeliveryId(d);
+          const by = d.provenance?.sourceRunId;
           if (by && threadTs && res.ts && !res.parts)
             void deps
               .card?.(channel, threadTs)
