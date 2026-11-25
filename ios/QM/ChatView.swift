@@ -45,6 +45,9 @@ struct ChatView: View {
     _inheritedExpanded = State(initialValue: initialSequence != nil)
   }
 
+  /// How the transcript moves when the bottom bar resizes: the panel spring's duration, no bounce.
+  private static let barGlide = Animation.smooth(duration: 0.42)
+
   private var canSend: Bool {
     (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !model.attachments.isEmpty)
@@ -63,9 +66,19 @@ struct ChatView: View {
       TranscriptGeometry(
         contentHeight: geometry.contentSize.height, viewportHeight: geometry.containerSize.height,
         nearLatest: geometry.contentSize.height + geometry.contentInsets.bottom
-          - geometry.visibleRect.maxY <= 44)
+          - geometry.visibleRect.maxY <= 44,
+        bottomInset: geometry.contentInsets.bottom)
     } action: { previous, current in
-      if followsLatest, !current.nearLatest, current.sizeChanged(since: previous) {
+      if followsLatest, !current.nearLatest, !composerFocused,
+        current.bottomInset != previous.bottomInset
+      {
+        // The bar grew under the latest message (the dictation panel opening, its transcript
+        // gaining a line): glide the text up with the panel instead of snapping or losing
+        // the bottom. The keyboard moves the text on its own, so focus is left alone.
+        withAnimation(reduceMotion ? nil : Self.barGlide) {
+          proxy.scrollTo("transcript", anchor: .bottom)
+        }
+      } else if followsLatest, !current.nearLatest, current.sizeChanged(since: previous) {
         proxy.scrollTo("transcript", anchor: .bottom)
       } else {
         followsLatest = current.nearLatest
@@ -124,6 +137,9 @@ struct ChatView: View {
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        // Any re-anchoring as the dictation panel opens or closes rides the panel's timing,
+        // without its bounce, so the text moves up in step instead of jumping.
+        .animation(reduceMotion ? nil : Self.barGlide, value: dictation.busy)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
         }
@@ -972,6 +988,7 @@ private struct TranscriptGeometry: Equatable {
   let contentHeight: CGFloat
   let viewportHeight: CGFloat
   let nearLatest: Bool
+  let bottomInset: CGFloat
 
   func sizeChanged(since previous: Self) -> Bool {
     contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
