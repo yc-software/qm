@@ -41,7 +41,7 @@ const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
 function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
-  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const webhooks = tracked(createWebhookStore(testMap(), testMap(), testMap()));
   const deliveries = tracked(createDeliveryStore());
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
@@ -418,4 +418,105 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+function restartable() {
+  const webhooks = tracked(createWebhookStore(testMap(), testMap(), testMap()));
+  const deliveries = tracked(createDeliveryStore());
+  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
+  const idempotency = tracked(createIdempotencyStore(testMap()));
+  const calls: TurnRequest[] = [];
+  const boot = (result: () => TurnResult) =>
+    createWebhookReceiver({
+      webhooks,
+      deliveries,
+      idempotency,
+      identity,
+      run: async (req) => {
+        calls.push(req);
+        return result();
+      },
+    });
+  return { webhooks, deliveries, calls, boot };
+}
+
+const restartDest = { type: "slack" as const, target: "D1", audienceScopeId: scopeId("personal", "U1") };
+const createRestartHook = (webhooks: ReturnType<typeof restartable>["webhooks"]) =>
+  webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "watch the deploy",
+    verification: { scheme: "github", secret: SECRET },
+    destination: restartDest,
+  });
+
+test("a fire cut off by a restart posts no warning and is re-driven to deliver the resumed turn's reply once", async () => {
+  const { webhooks, deliveries, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  const before = boot(() => ({ status: "queued", runId: "r1" }));
+  assert.equal((await before.deliver(wh.id, githubReq("{}", "d-restart"))).status, 202);
+  await flush();
+  assert.equal((await deliveries.pending("slack")).length, 0);
+  assert.equal((await webhooks.unsettledFires(Date.now())).length, 1);
+
+  const after = boot(() => ({ status: "ok", reply: "Shipped: the deploy is live" }));
+  await after.redrive(Date.now());
+  await flush();
+  assert.equal(calls.length, 1, "a fire younger than the re-drive window is left to its first attempt");
+
+  const later = Date.now() + 2 * 60_000;
+  await after.redrive(later);
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.idempotencyKey, calls[0]?.idempotencyKey);
+  assert.equal(calls[1]?.text, calls[0]?.text);
+  const pending = await deliveries.pending("slack");
+  assert.deepEqual(
+    pending.map((d) => d.text),
+    ["Shipped: the deploy is live"],
+  );
+  assert.equal((await webhooks.unsettledFires(later)).length, 0);
+
+  await after.redrive(later + 2 * 60_000);
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal((await deliveries.pending("slack")).length, 1);
+});
+
+test("a re-driven fire whose resumed turn fails still posts the warning", async () => {
+  const { webhooks, deliveries, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  await boot(() => ({ status: "queued", runId: "r1" })).deliver(wh.id, githubReq("{}", "d-fail"));
+  await flush();
+  await boot(() => ({ status: "failed", reason: "boom" })).redrive(Date.now() + 2 * 60_000);
+  await flush();
+  const pending = await deliveries.pending("slack");
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]?.text ?? "", /did not complete/i);
+});
+
+test("an unsettled fire whose webhook was disabled is dropped instead of re-driven", async () => {
+  const { webhooks, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  await boot(() => ({ status: "queued", runId: "r1" })).deliver(wh.id, githubReq("{}", "d-off"));
+  await flush();
+  await webhooks.setEnabled(wh.id, false);
+  const later = Date.now() + 2 * 60_000;
+  await boot(() => ({ status: "ok", reply: "x" })).redrive(later);
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal((await webhooks.unsettledFires(later)).length, 0);
+});
+
+test("a completed fire leaves nothing to re-drive", async () => {
+  const { webhooks, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  const receiver = boot(() => ({ status: "ok", reply: "done" }));
+  await receiver.deliver(wh.id, githubReq("{}", "d-done"));
+  await flush();
+  assert.equal((await webhooks.unsettledFires(Date.now())).length, 0);
+  await receiver.redrive(Date.now() + 2 * 60_000);
+  await flush();
+  assert.equal(calls.length, 1);
 });

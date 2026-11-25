@@ -182,7 +182,7 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
+import { createWebhookStore, type WebhookFire, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import {
   createDeployStore,
@@ -2145,6 +2145,7 @@ export function buildApp(
   const webhooks = createWebhookStore(
     inboundMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
+    artifactMap<WebhookFire>("webhook_fires"),
   );
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
@@ -2913,6 +2914,16 @@ export function buildApp(
     crons,
     scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
   });
+  const webhookReceiver = createWebhookReceiver({
+    webhooks,
+    deliveries,
+    idempotency,
+    identity,
+    run: runTriggered,
+    directory,
+    currentScopeMembers,
+    resolveRecipient,
+  });
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
@@ -2925,6 +2936,7 @@ export function buildApp(
     ...triggerDeps,
     leaderLease,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
+    redriveTriggerFires: (now) => webhookReceiver.redrive(now),
     jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
     sweepAsks: async (now) => {
       if (!ingressMaintenance)
@@ -2970,16 +2982,6 @@ export function buildApp(
     fetcher: skillFetcher,
     reconcile: (id) => app.syncSkillPack(id),
     leaderLease,
-  });
-  const webhookReceiver = createWebhookReceiver({
-    webhooks,
-    deliveries,
-    idempotency,
-    identity,
-    run: runTriggered,
-    directory,
-    currentScopeMembers,
-    resolveRecipient,
   });
   const deploymentKey = config.backgroundDeploymentId ?? config.buildSha;
   const instanceRegistry: InstanceRegistry =

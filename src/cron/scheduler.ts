@@ -23,6 +23,7 @@ import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { TransientTurnFailure } from "../core/turn-error.ts";
+import { redriveHandedOffFires } from "../triggers/redrive.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
 const CRON_FIRE_REPLY_MAX_CHARS = 2000;
@@ -86,6 +87,7 @@ export interface SchedulerDeps {
     list(): Promise<DirectoryMember[]>;
   };
   sweepAsks?: (now: number) => Promise<void>;
+  redriveTriggerFires?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
   sessions?: NonNullable<TriggerDeps["sessions"]>;
   cronOrigin?: (cron: Cron) => Promise<CronOrigin>;
@@ -395,28 +397,33 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
 
   let lastRedrive = 0;
-  const redriveHandedOffFires = async (t: number): Promise<void> => {
+  const redriveHandedOff = async (t: number): Promise<void> => {
     if (t - lastRedrive < REPAIR_INTERVAL_MS) return;
     lastRedrive = t;
     try {
       await claimThenBind(deps.crons.claimTenants, async () => {
-        for (const entry of await deps.crons.runningFires(t)) {
-          if (stopped) return;
-          if (entry.firedAt > t - REPAIR_INTERVAL_MS || (await deps.idempotency.committed(entry.fireKey))) continue;
-          const cron = await deps.crons.get(entry.cronId);
-          if (!cron || cron.loopId) continue;
-          track(
-            withWork(() =>
-              deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
-                fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
-              ),
-            ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
-          );
-        }
+        await redriveHandedOffFires(await deps.crons.runningFires(t), {
+          now: t,
+          idempotency: deps.idempotency,
+          stopped: () => stopped,
+          refire: async (entry) => {
+            const cron = await deps.crons.get(entry.cronId);
+            if (!cron || cron.loopId) return;
+            track(
+              withWork(() =>
+                deps.advisoryLock.tryWithLock(`cron-lifecycle:${cron.id}`, () =>
+                  fire(cron, entry.firedAt, entry.fireKey, entry.scheduledAt),
+                ),
+              ).then(() => undefined, reportFailureAs("scheduler: fire re-drive", undefined, `cron=${cron.id}`)),
+            );
+          },
+        });
       });
     } catch (e) {
       reportFailure("scheduler: fire re-drive", e);
     }
+    if (!stopped)
+      await deps.redriveTriggerFires?.(t).catch(reportFailureAs("scheduler: trigger fire re-drive", undefined));
   };
 
   let lastFireGc = 0;
@@ -470,7 +477,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     await withWork(() =>
       leaderLease.hold(TICK_LEASE_KEY, async () => {
         await fireDue(t, observed);
-        await redriveHandedOffFires(t);
+        await redriveHandedOff(t);
         await sweepStranded(t);
         await gcFires(t);
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
@@ -563,7 +570,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function maintain(): Promise<void> {
-    await redriveHandedOffFires(now());
+    await redriveHandedOff(now());
     await sweepStranded(now());
     await gcFires(now());
     await deps.sweepAsks?.(now()).catch(reportFailureAs("scheduler: ask sweep", undefined));

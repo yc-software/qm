@@ -22,7 +22,7 @@ test("cron store enforces the shared anti-escalation guard at create time", asyn
 });
 
 test("webhook store enforces the shared anti-escalation guard at create time", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const base = {
     ownerScopeId: scopeId("personal", "U1"),
     action: "triage",
