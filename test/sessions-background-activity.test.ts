@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-bg-activity-"));
@@ -23,9 +24,9 @@ test("background output selects the recorded private resource and fails closed w
   const built = buildApp(testConfig({}));
   try {
     const root = await built.app.turn(dm("Start", "output"));
-    const resource = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Worker");
-    const fallback = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Default");
-    await built.sandboxResources.setDefault("U1", "personal:U1", fallback.id);
+    const resource = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Worker");
+    const fallback = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Default");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), fallback.id);
     await built.processes!.register({ ...registryRow("job", "output"), sandboxId: resource.id, scopeId: "channel:C2" });
     let selected: string | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
@@ -59,7 +60,7 @@ function registryRow(
 ) {
   return {
     processId,
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     kind: over.kind ?? ("background" as const),
     command: "sleep 600",
     sandboxId: "sandbox-1",
@@ -73,7 +74,7 @@ function watchInput(
   over: Partial<{ expiresAt: number; pattern: string; instructions: string }> = {},
 ) {
   return {
-    ownerScopeId: "personal:U1" as const,
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     processId: "p-watch",
@@ -154,7 +155,7 @@ test("readSessionBackgroundOutput binds the job to the conversation, not just th
 
 function cronInput(target: string | undefined, action: string) {
   return {
-    ownerScopeId: "personal:U1" as const,
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     schedule: { everyMs: 60_000 },

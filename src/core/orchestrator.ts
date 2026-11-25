@@ -56,7 +56,7 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope, scopeLabel } from "../types.ts";
 import {
   desktopClientForTurn,
   introducesUser,
@@ -1041,7 +1041,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
       if (otherSkillSources.length)
-        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
+        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.map(scopeLabel).join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);

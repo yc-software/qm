@@ -20,7 +20,7 @@ import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
-import { personalScope, scopeId, type Permission } from "../../types.ts";
+import { personalScope, scopeId, type Permission, parseScopeId } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -1021,8 +1021,8 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       sendJson(res, 404, { error: "not_found" });
       return true;
     }
-    const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
-    const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
+    const owner = parseScopeId(d.ownerScopeId);
+    const ownerId = owner.kind === "personal" && owner.ref ? owner.ref : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
     const day = Math.floor(Date.now() / 86_400_000);
     try {
@@ -1329,8 +1329,10 @@ async function listApps(ctx: ApiCtx): Promise<void> {
   const viewer = capability ?? { actorId: principalId };
   const visible = await app.listAppsForViewer(tenantOf(ctx), viewer);
   const baseUrl = gitUrlBase(ctx);
-  const ownerOf = (d: { ownerScopeId?: string }) =>
-    d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
+  const ownerOf = (d: { ownerScopeId?: string }) => {
+    const { kind, ref } = parseScopeId(d.ownerScopeId ?? "");
+    return kind === "personal" ? ref : undefined;
+  };
   const names = await createPersonNames({ users: ctx.deps.users, directory: ctx.deps.directory }).labels(
     visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
   );
@@ -1349,6 +1351,7 @@ async function listApps(ctx: ApiCtx): Promise<void> {
         canShare,
         ...(owner ? { ownerName: names.get(owner)! } : {}),
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
+        ...(d.createdBy && d.ownerScopeId === personalScope(d.createdBy) ? { ownedByCreator: true } : {}),
       };
       if (!secret) return named;
       const git = await app.appGitUrlFor(d.id, viewer, { secret, baseUrl });

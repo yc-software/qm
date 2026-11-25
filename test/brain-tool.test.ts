@@ -22,6 +22,7 @@ import { connectorTool } from "../src/mcp/mcp-tool-service.ts";
 import { withBrainTools } from "../src/resolution/turn-context.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 type Row = Record<string, unknown>;
 type Step = { search: string } | { call: { server?: string; tool: string; args?: Row } } | "revoke" | "crash";
@@ -279,8 +280,8 @@ test("a brain sharing a connector's id stays hidden, a tool whose cleaned name r
 test("a lookup checks the person and the live binding when it runs, and sends nothing otherwise", async (t) => {
   const { built, acme, turn } = await brainApp(t);
   await assert.rejects(
-    built.memory.lookup!("personal:U1", "acme:whois", { query: "Priya Raman" }, turnAuthority("U1", undefined), {
-      audienceScopeId: "personal:U1",
+    built.memory.lookup!(personalScope("U1"), "acme:whois", { query: "Priya Raman" }, turnAuthority("U1", undefined), {
+      audienceScopeId: personalScope("U1"),
     }),
     /^Error: \[brain_refused\] Only the person/,
   );
@@ -336,10 +337,10 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {
   const { built, acme, turn } = await brainApp(t);
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await built.config.setSecurityPosture(personalScope("U1"), "strict");
   assert.match((await turn([whois]))!.texts[0]!, /needs human approval/);
   assert.deepEqual(lookups(acme), [VOLUNTEER]);
-  await built.config.setSecurityPosture("personal:U1", "dangerous");
+  await built.config.setSecurityPosture(personalScope("U1"), "dangerous");
   assert.match((await turn([whois]))!.texts[0]!, /"query":"Priya Raman"/);
 });
 

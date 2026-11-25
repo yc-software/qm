@@ -217,7 +217,9 @@ test("two tenants keep separate rosters and links under the login that does not 
     await withTenant(b, () => users.record({ id: "quinn@b.test", source: "turn", at: 1 }));
     await withTenant(a, () => users.markOffboarded("pat@a.test", "admin@a.test"));
     const linked = async (tenant: string) =>
-      (await withTenant(tenant, () => users.links())).map((l) => [l.principalId, l.canonicalId]);
+      (await withTenant(tenant, () => users.links()))
+        .filter((l) => l.principalId !== l.canonicalId)
+        .map((l) => [l.principalId, l.canonicalId]);
     assert.deepEqual(await linked(a), [["U1", "pat@a.test"]]);
     assert.deepEqual(await linked(b), [["U1", "quinn@b.test"]]);
     const roster = async (tenant: string) => (await withTenant(tenant, () => users.list())).map((u) => u.principalId);

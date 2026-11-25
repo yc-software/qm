@@ -6,6 +6,7 @@ import type { AdminPage } from "./sections.ts";
 import { page, draw } from "./settings.ts";
 import { SettingState } from "./setting-state.ts";
 import { html } from "lit";
+import { loadScopeLabels, scopePerson } from "../scope-labels.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 type Data = Record<string, any>;
@@ -81,7 +82,7 @@ export class CredentialState extends SettingState {
         org,
         people: org
           ? ""
-          : (c.grantees || []).map((g: string) => (g.startsWith("personal:") ? g.slice(9) : g)).join(", "),
+          : (c.grantees || []).map((g: string) => (g.startsWith("personal:") ? scopePerson(g) : g)).join(", "),
       };
     }
     this.baseline = JSON.stringify(this.collect());
@@ -218,7 +219,7 @@ function label(grantee: string) {
     const name = credentialState.channels.find((c) => "channel:" + c.channelId === grantee)?.name;
     return name ? "#" + name.replace(/^#/, "") + " (" + grantee + ")" : grantee;
   }
-  const id = grantee.startsWith("personal:") ? grantee.slice("personal:".length) : grantee;
+  const id = grantee.startsWith("personal:") ? scopePerson(grantee) : grantee;
   const member = credentialState.directory.find((m) => m.principalId === id || m.slackId === id);
   return member ? member.displayName + " (" + id + ")" : grantee;
 }
@@ -237,6 +238,7 @@ function show(view: AdminPage, data: Data) {
   s.rows = usageRows = data.serviceCredentials || [];
   if (!s.open) s.baseline = JSON.stringify(s.collect());
   draw();
+  void loadScopeLabels(s.rows.flatMap((c: Data) => c.grantees || [])).then(draw);
   void loadUsage(view);
 }
 async function loadUsage(view: AdminPage) {

@@ -18,6 +18,7 @@ import { testTenant } from "./support/test-tenant.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -36,7 +37,7 @@ function signed(method: string, path: string, body = ""): Record<string, string>
 }
 
 function claims(actorId: string): CapabilityClaims {
-  return { actorId, scopeId: `personal:${actorId}`, exp: Date.now() + 60_000 };
+  return { actorId, scopeId: personalScope(actorId), exp: Date.now() + 60_000 };
 }
 
 async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scopeVersion?: string): Promise<string> {

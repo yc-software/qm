@@ -1272,7 +1272,7 @@ export async function boot(): Promise<void> {
     return;
   }
   const sessions = refreshSessions({ showLoading: true });
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = appState.me.personalScope;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);

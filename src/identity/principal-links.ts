@@ -41,14 +41,23 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
   const links = perTenant(() => ({
     byAlias: new Map<string, UserLink>(),
     byCanonical: new Map<string, UserLink[]>(),
+    userOf: new Map<string, string>(),
+    primaryOf: new Map<string, string>(),
     refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
   }));
 
   function index(rows: UserLink[]): void {
-    const { byAlias, byCanonical } = links();
+    const { byAlias, byCanonical, userOf, primaryOf } = links();
     byAlias.clear();
     byCanonical.clear();
+    userOf.clear();
+    primaryOf.clear();
     for (const row of rows) {
+      userOf.set(foldPrincipalId(row.principalId), row.userId);
+      if (row.principalId === row.canonicalId) {
+        primaryOf.set(row.userId, row.canonicalId);
+        continue;
+      }
       byAlias.set(foldPrincipalId(row.principalId), row);
       const key = foldPrincipalId(row.canonicalId);
       const list = byCanonical.get(key) ?? [];
@@ -61,7 +70,11 @@ export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryL
 
   return {
     canonical(key) {
-      return links().byAlias.get(key)?.canonicalId;
+      return links().byAlias.get(key)?.canonicalId ?? links().primaryOf.get(key);
+    },
+    userId(key) {
+      const { userOf, primaryOf } = links();
+      return userOf.get(key) ?? (primaryOf.has(key) ? key : undefined);
     },
     aliases(key) {
       return (links().byCanonical.get(key) ?? []).map((row) => row.principalId);

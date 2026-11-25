@@ -8,7 +8,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult, personalScope } from "../src/types.ts";
 import { type DirectoryStore } from "../src/directory/directory-store.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
@@ -1680,7 +1680,7 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
     action: "check status",
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     runtime,
   });
   await scheduler.tick(cron.nextFireAt!);
@@ -1706,14 +1706,14 @@ test("daily-or-less crons mark their fires infrequent; frequent ones do not", as
     action: "daily digest",
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
   });
   const polling = await crons.create({
     schedule: { everyMs: 60_000 },
     action: "check status",
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
   });
   await runNowSettled(scheduler, daily.id);
   await runNowSettled(scheduler, polling.id);

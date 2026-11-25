@@ -753,7 +753,7 @@ export function createChatSurface(
     if (runningSince !== undefined) void resumeTrackedRun(agent, threadRef, normalStreamFn, onWork, runningSince);
     drawActiveChat(agent, { forceScroll: true });
     const me = appState.me;
-    if (!sessionId && me && (scopeId === null || scopeId === `personal:${me.user}`)) {
+    if (!sessionId && me && (scopeId === null || scopeId === me.personalScope)) {
       void loadGeneratedActivities(me, () => {
         if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
       });
@@ -1722,7 +1722,7 @@ export function createChatSurface(
       !glanceTier &&
       (!ctx.pane || tier === "full") &&
       !chatState.sessionId &&
-      (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
+      (chatState.scopeId === null || chatState.scopeId === appState.me?.personalScope) &&
       !agent.state.isStreaming;
     const me = appState.me;
     const redrawSuggestions = () => {

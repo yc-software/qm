@@ -8,7 +8,13 @@ test("personal Slack linking appears beneath the confirmed company installation"
   let installed = false;
   globalThis.fetch = async (input, init) => {
     if (String(input) === "/me")
-      return Response.json({ user: "tester", org: "test", welcome: welcomeSeeds, permissions: ["admin"] });
+      return Response.json({
+        user: "tester",
+        personalScope: "personal:tester",
+        org: "test",
+        welcome: welcomeSeeds,
+        permissions: ["admin"],
+      });
     if (String(input) === "/api/composio/slack")
       return Response.json({ connected: false, workspaceInstalled: installed });
     if (String(input) === "/api/admin/slack-installation")

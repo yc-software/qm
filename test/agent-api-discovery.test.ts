@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -315,7 +315,9 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
     assert.ok(
       (await j("/v1/skills?principalId=U2", cronTok)).skills.some((sk: any) => sk.name === "my-personal-skill"),
     );
-    assert.ok((await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === "personal:U1"));
+    assert.ok(
+      (await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === personalScope("U1")),
+    );
     assert.deepEqual(
       (await j("/v1/directory/channels?principalId=U2", cronTok)).channels.map((c: any) => c.channelId).sort(),
       ["C1", "P1"],

@@ -29,7 +29,7 @@ import type { Tenant } from "../tenants/context.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { canonicalScopeId, parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import {
@@ -252,7 +252,7 @@ async function gate(
   let body: unknown = {};
   if (raw) {
     try {
-      body = JSON.parse(raw);
+      body = canonicalScopes(JSON.parse(raw));
     } catch {
       sendJson(res, 400, {
         error: "bad_request",
@@ -359,8 +359,29 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
 
 const requestTenants = new WeakMap<IncomingMessage, Tenant>();
 
-function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
+const SCOPE_KEYS = new Set(["scope", "scopeId", "scopeIds", "toScope", "grantees", "granteeScopeId", "ownerScopeId"]);
+
+function canonicalScopes(value: unknown, scoped = false): unknown {
+  if (typeof value === "string") return scoped ? canonicalScopeId(value as ScopeId) : value;
+  if (Array.isArray(value)) return value.map((item) => canonicalScopes(item, scoped));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, canonicalScopes(item, SCOPE_KEYS.has(key))]),
+  );
+}
+
+function requestUrl(req: IncomingMessage): URL {
   const url = new URL(req.url ?? "/", "http://localhost");
+  for (const key of ["scope", "scopeId"]) {
+    const values = url.searchParams.getAll(key);
+    url.searchParams.delete(key);
+    for (const value of values) url.searchParams.append(key, canonicalScopeId(value as ScopeId));
+  }
+  return url;
+}
+
+function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
+  const url = requestUrl(req);
   const tenant = requestTenants.get(req);
   return {
     req,
@@ -482,7 +503,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   });
 
   const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const url = new URL(request.raw.url ?? "/", "http://localhost");
+    const url = requestUrl(request.raw);
     const raw = rawBodies.get(request.raw) ?? "";
     const result = await gate(
       request.raw,

@@ -18,9 +18,15 @@ test("generation coalesces requests, honors empty fallback, and stays disabled b
   const vite = await testViteServer();
   try {
     const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
-    await loadGeneratedActivities({ user: "off", org: "test" });
+    await loadGeneratedActivities({ user: "off", personalScope: "personal:off", org: "test" });
     assert.equal(calls, 0);
-    const me = { user: "alice", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: [] };
+    const me = {
+      user: "alice",
+      personalScope: "personal:alice",
+      org: "test",
+      suggestedActivitiesGeneration: true,
+      suggestedActivities: [],
+    };
     await Promise.all([loadGeneratedActivities(me), loadGeneratedActivities(me)]);
     assert.equal(calls, 1);
     assert.deepEqual(me.suggestedActivities, activities);
@@ -29,7 +35,12 @@ test("generation coalesces requests, honors empty fallback, and stays disabled b
     await loadGeneratedActivities(me);
     assert.deepEqual(me.suggestedActivities, []);
     assert.equal(calls, 2);
-    await loadGeneratedActivities({ user: "bob", org: "test", suggestedActivitiesGeneration: true });
+    await loadGeneratedActivities({
+      user: "bob",
+      personalScope: "personal:bob",
+      org: "test",
+      suggestedActivitiesGeneration: true,
+    });
     assert.equal(calls, 3);
   } finally {
     globalThis.fetch = oldFetch;
@@ -49,7 +60,13 @@ test("a pending refresh displays its cached result and then publishes the comple
   try {
     const { loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const me = { user: "alice", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: [] };
+    const me = {
+      user: "alice",
+      personalScope: "personal:alice",
+      org: "test",
+      suggestedActivitiesGeneration: true,
+      suggestedActivities: [],
+    };
     const seen: unknown[] = [];
     const pending = loadGeneratedActivities(me, () => seen.push(structuredClone(me.suggestedActivities)));
     await new Promise(setImmediate);

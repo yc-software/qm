@@ -17,7 +17,7 @@ import {
   registerDeployAccessActions,
 } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
+import { scopeId, type ActorAssertion, type Permission, personalScope } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -125,7 +125,7 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     "{}",
     JSON.stringify({ ...request, permission: "write" }),
     JSON.stringify({ ...request, deploymentId: "mysite" }),
-    JSON.stringify({ ...request, requesterId: "personal:bob" }),
+    JSON.stringify({ ...request, requesterId: personalScope("bob") }),
     JSON.stringify({ ...request, requesterId: "<@everyone>" }),
     JSON.stringify({ ...request, requesterId: "bob\n" }),
     JSON.stringify({ ...request, requesterId: 42 }),

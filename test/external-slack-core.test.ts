@@ -10,7 +10,7 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { externalTools } from "../src/core/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -59,7 +59,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   });
   await b.config.setSharingPosture("org:default-org", "open");
   await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
-  await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
+  await b.memory.capture(personalScope("U1"), ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });
@@ -211,7 +211,7 @@ test("external broker requires the current run lease and both external-safe and 
     { credentials: ["confidential"] },
     { runLeaseToken: "stale" },
     { actorId: "U2" },
-    { scopeId: "personal:U1" },
+    { scopeId: personalScope("U1") },
     { runAttempt: run.attempts + 1 },
   ])
     assert.equal(

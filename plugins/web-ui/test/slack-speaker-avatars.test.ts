@@ -69,7 +69,12 @@ test("a Slack channel transcript groups a speaker's run and shows the Slack app 
     listSessions: [session],
     api: (path) =>
       path === "/me"
-        ? Response.json({ user: "tester", org: "test", slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png" })
+        ? Response.json({
+            user: "tester",
+            personalScope: "personal:tester",
+            org: "test",
+            slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png",
+          })
         : undefined,
     items: [
       said("UserMessage", 1, "deploys broke", { name: "Pete", overheard: true }),

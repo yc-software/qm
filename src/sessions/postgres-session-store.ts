@@ -1,3 +1,4 @@
+import { rosterIds } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -159,7 +160,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         principalId === undefined
           ? `SELECT s.* FROM sessions s WHERE ${forks} AND ${asked} ORDER BY s.created_at`
           : participantSessionsSql(` AND ${forks} AND (${asked} OR ${queued}) ORDER BY s.created_at`),
-        principalId === undefined ? [sessionId] : [principalId, sessionId],
+        principalId === undefined ? [sessionId] : [rosterIds(principalId), sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
@@ -300,7 +301,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (!ids.length) return [];
       const rows = await q(
         participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
-        [principalId, ids],
+        [rosterIds(principalId), ids],
       );
       return rows.map(rowToParticipantSession);
     },

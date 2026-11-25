@@ -36,6 +36,7 @@ import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-dat
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { isAgentReply } from "../src/sessions/items.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const asMember = { actorId: "member" };
 const asOwner = { actorId: "owner" };
@@ -106,9 +107,9 @@ test("batched loop administration preserves scope rules and observes membership 
     const project = await built.projects.create({ name: "Shared", ownerId: "owner" });
     await built.projects.addMember(project.id, "owner", "member");
     const cases = [
-      { owner: "member", ownerScopeId: "personal:member" },
-      { owner: "U_MEMBER", ownerScopeId: "personal:U_MEMBER" },
-      { owner: "other", ownerScopeId: "personal:other" },
+      { owner: "member", ownerScopeId: personalScope("member") },
+      { owner: "U_MEMBER", ownerScopeId: personalScope("U_MEMBER") },
+      { owner: "other", ownerScopeId: personalScope("other") },
       { owner: "owner", ownerScopeId: projectScopeId(project.id) },
       { owner: "other", ownerScopeId: "channel:C_PRIVATE" },
       { owner: "other", ownerScopeId: "channel:C_PUBLIC" },
@@ -555,13 +556,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     canReadScope: (principalId, scopeId) => built.app.belongsToScope(principalId, scopeId),
   });
   const publishedApp = await deploy.deploy({
-    ownerScopeId: "personal:owner",
+    ownerScopeId: personalScope("owner"),
     createdBy: "owner",
     entrypoint: "node server.js",
     files: [{ path: "server.js", data: "console.log('ready')" }],
   });
   await deployAcl.grant(tenant, {
-    ownerScopeId: "personal:owner",
+    ownerScopeId: personalScope("owner"),
     ref: `deployment:${publishedApp.id}`,
     granteeScopeId: scope,
     permission: "read",
@@ -1193,7 +1194,7 @@ test("a project can add a signed-in principal on an app whose directory is never
       emailAuthPrincipals: ["dana@acme.com"],
     }),
   );
-  const session = await built.sessions.getOrCreateByThread("web:rex", "dm", "personal:rex@acme.com");
+  const session = await built.sessions.getOrCreateByThread("web:rex", "dm", personalScope("rex@acme.com"));
   await built.sessions.addParticipant(session.id, "rex@acme.com");
 
   const project = (await built.app.createProject("dana@acme.com", "demo"))!;

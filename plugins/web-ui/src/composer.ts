@@ -98,8 +98,7 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
 let threadModelPicks = loadThreadPicks();
 function runtimeScopeKey(scopeId: string | null): string | null {
   if (scopeId) return scopeId;
-  const user = appState.me?.user;
-  return user ? `personal:${user}` : null;
+  return appState.me?.personalScope ?? null;
 }
 
 if (typeof window !== "undefined") {

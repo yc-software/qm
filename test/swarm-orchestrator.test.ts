@@ -17,6 +17,7 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 import { isUserItem } from "../src/sessions/items.ts";
+import { personalScope } from "../src/types.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -66,8 +67,8 @@ for (const kind of ["command", "security-screen"] as const) {
         : {}),
     };
     try {
-      const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
-      await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+      const rootComputer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Root");
+      await built.sandboxResources.setDefault("U1", personalScope("U1"), rootComputer.id);
       await built.app.turn({
         ...request,
         text: "Initialize",
@@ -297,8 +298,8 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     }
   };
   try {
-    const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
-    await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const computer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "HTTP test root");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
     const body = JSON.stringify({
       surface: "web",
       actor: { externalId: "U1" },
@@ -440,8 +441,8 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
-  const sandbox = await built.sandboxResources.create("U1", "personal:U1", "sprites");
-  await built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id);
+  const sandbox = await built.sandboxResources.create("U1", personalScope("U1"), "sprites");
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), sandbox.id);
   const request: TurnRequest = {
     surface: "web",
     actor: { externalId: "U1" },
@@ -553,8 +554,8 @@ test("disabled swarms park queued notifications once without running the model o
 test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
   try {
-    const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
-    await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+    const rootComputer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Root");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), rootComputer.id);
     const rootTurn = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },
@@ -594,8 +595,8 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
 test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
   try {
-    const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
-    await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+    const rootComputer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Root");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), rootComputer.id);
     const rootTurn = await built.app.turn({
       surface: "test",
       actor: { externalId: "U1" },
@@ -638,8 +639,8 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
   try {
-    const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
-    await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+    const rootComputer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "Root");
+    await built.sandboxResources.setDefault("U1", personalScope("U1"), rootComputer.id);
     const human = (text: string) =>
       built.app.turn({
         surface: "test",

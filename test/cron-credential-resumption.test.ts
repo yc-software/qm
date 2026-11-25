@@ -11,6 +11,7 @@ import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -18,7 +19,7 @@ const automationOrigin = (request?: { origin?: TurnOrigin }) =>
 const recipient: Destination = {
   type: "principal",
   target: "U_BOB",
-  audienceScopeId: "personal:U_BOB",
+  audienceScopeId: personalScope("U_BOB"),
   onBehalfOf: "U_ALICE",
 };
 
@@ -27,7 +28,7 @@ async function fixture() {
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
-    ownerScopeId: "personal:U_ALICE",
+    ownerScopeId: personalScope("U_ALICE"),
     schedule: { everyMs: 60_000 },
     action: "read the dummy account and report the result",
     destination: recipient,
@@ -50,7 +51,7 @@ async function fixture() {
     ownerId: "U_ALICE",
     requesterId: "U_ALICE",
     orgId: "test",
-    requesterScopeId: "personal:U_ALICE",
+    requesterScopeId: personalScope("U_ALICE"),
     requesterThreadRef: `cron:${cron.id}:fire:123456789abc`,
     requesterDestination: recipient,
     purpose: cron.action!,
@@ -67,7 +68,7 @@ test("cron credential approval resumes the original fire once and delivers to th
   const destination: Destination = {
     type: "principal",
     target: "U_CAROL",
-    audienceScopeId: "personal:U_CAROL",
+    audienceScopeId: personalScope("U_CAROL"),
     onBehalfOf: "U_ALICE",
   };
   await f.crons.setDestination(f.cron.id, destination);
@@ -98,7 +99,7 @@ for (const changed of ["missing", "archived", "scope", "owner"] as const) {
     else {
       const current: Cron = {
         ...f.cron,
-        ...(changed === "scope" ? { ownerScopeId: "personal:U_BOB" as const } : { owner: "U_BOB" }),
+        ...(changed === "scope" ? { ownerScopeId: personalScope("U_BOB") } : { owner: "U_BOB" }),
       };
       f.deps.getCron = async () => current;
     }

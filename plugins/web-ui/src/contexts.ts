@@ -243,12 +243,9 @@ export function resolveProjectScope(contexts: readonly CoreContext[], slug: stri
   if (isSharedScopeId(slug)) {
     return contexts.some((context) => context.scopeId === slug) ? slug : null;
   }
-  const normalized = slug.toLowerCase();
-  const matches = contexts.filter((context) => {
-    const match = /^personal:([^@]+)@/.exec(context.scopeId);
-    return match?.[1]?.toLowerCase() === normalized;
-  });
-  return matches.length === 1 ? matches[0]!.scopeId : null;
+  const me = appState.me;
+  const own = me && contexts.some((context) => context.scopeId === me.personalScope);
+  return own && /^([^@]+)@/.exec(me.user)?.[1]?.toLowerCase() === slug.toLowerCase() ? me.personalScope : null;
 }
 
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {

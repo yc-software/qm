@@ -285,7 +285,11 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     brokerAny: 200,
     memory: ["U1"],
   };
-  installPrincipalLinks({ canonical: (key) => (key === "u1@example.test" ? "U1" : undefined), aliases: () => [] });
+  installPrincipalLinks({
+    canonical: (key) => (key === "u1@example.test" ? "U1" : undefined),
+    aliases: () => [],
+    userId: () => undefined,
+  });
   t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
     {

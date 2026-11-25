@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -324,7 +324,7 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
   const s = start(store);
   try {
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
+      ownerScopeId: personalScope("alice"),
       owner: "alice",
       createdBy: "alice",
       schedule: { everyMs: 3_600_000 },
@@ -336,7 +336,7 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
     const json = await getJson(s.base, `/v1/admin/spend?${query}`);
     assert.deepEqual(
       json.crons.map((c: any) => [c.cronId, c.scopeId, c.costUsd, c.info.action]),
-      [[cron.id, "personal:alice", 3, "check the build"]],
+      [[cron.id, personalScope("alice"), 3, "check the build"]],
     );
     const r = await get(s.base, `/v1/admin/spend?${query}&breakdown=cron&format=csv`);
     assert.equal(r.status, 200);
@@ -353,7 +353,7 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
       cron.id,
       "",
       "alice",
-      "personal:alice",
+      personalScope("alice"),
       "0",
       "3",
       "3",

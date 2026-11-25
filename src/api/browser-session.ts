@@ -143,6 +143,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["GET /api/contexts/:scope/ambient-policy", "/v1/contexts/:scope/ambient-policy"],
   ["PUT /api/contexts/:scope/ambient-policy", "/v1/contexts/:scope/ambient-policy"],
   ["GET /api/directory/resolve", "/v1/directory/resolve"],
+  ["GET /api/scope-labels", "/v1/scope-labels"],
   ["POST /api/suggested-activities", "/v1/suggested-activities"],
   ["POST /api/suggested-activities/dismiss", "/v1/suggested-activities/dismiss"],
   ["POST /api/connectors/:provider/start", "/v1/connectors/oauth/:provider/start"],

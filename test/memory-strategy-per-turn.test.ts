@@ -7,6 +7,7 @@ import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { personalScope } from "../src/types.ts";
 
 const SCOPE = "user:U1";
 
@@ -131,8 +132,8 @@ test("turns of one session answered to different audiences are captured apart, e
     memory: wrapped,
     captureQuietMs: 30,
   });
-  const turn = { scopeId: "personal:U1", actorId: "U1", sessionId: "session-1", reply: "answer" };
-  await strategy.onTurnEnd!({ ...turn, audienceScopeId: "personal:U1", input: "private question" });
+  const turn = { scopeId: personalScope("U1"), actorId: "U1", sessionId: "session-1", reply: "answer" };
+  await strategy.onTurnEnd!({ ...turn, audienceScopeId: personalScope("U1"), input: "private question" });
   await strategy.onTurnEnd!({ ...turn, input: "question answered to a channel" });
   await settle(async () => captures.length === 2);
 
@@ -141,7 +142,7 @@ test("turns of one session answered to different audiences are captured apart, e
       .map(([, , , , context]) => ({ input: context?.input, audienceScopeId: context?.audienceScopeId }))
       .sort((x, y) => String(x.input).localeCompare(String(y.input))),
     [
-      { input: "private question", audienceScopeId: "personal:U1" },
+      { input: "private question", audienceScopeId: personalScope("U1") },
       { input: "question answered to a channel", audienceScopeId: undefined },
     ],
   );
