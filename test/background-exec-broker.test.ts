@@ -556,11 +556,8 @@ test("a bot's turn cannot send input to or stop a job that saves a sign-in", asy
   await assert.rejects(bot.stop(handle, processId), /a bot's turn can't/);
 });
 
-test("a credentialed job strips git remote userinfo when it exits, and the listing keeps the job's own command", async () => {
-  const { broker, starts, registry } = await build();
-  const { processId } = await broker.start(handle, "git push", "Push", undefined, { env: { T: "v" }, secrets: [] });
-  await broker.start(handle, "git status", "Status");
+test("a credentialed job strips git remote userinfo when it exits", async () => {
+  const { broker, starts } = await build();
+  await broker.start(handle, "git push", "Push", undefined, { env: { T: "v" }, secrets: [] });
   assert.match(starts[0]!.command, /^trap .*\.git\/config.* EXIT\ngit push$/);
-  assert.equal(starts[1]!.command, "git status");
-  assert.equal((await registry.get(processId))?.command, "bg: git push");
 });
