@@ -240,7 +240,6 @@ export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
     backend: "porter",
     writablePersistence: "resident_disk",
     processSessions: true,
-    takesImage: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     sizesMemory: true,
     spec: {

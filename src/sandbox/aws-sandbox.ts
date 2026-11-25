@@ -324,7 +324,6 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     backend: "aws-microvm",
     writablePersistence: "snapshot_to_workspace",
     processSessions: true,
-    takesImage: true,
     parksOnTeardown: true,
     egressEnforcement: "none",
     spec: {

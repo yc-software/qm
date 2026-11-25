@@ -782,5 +782,4 @@ test("a computer's chosen image is the template its fresh sandbox is created fro
   await s.provision(scope);
   await s.provision(scopeId("personal", "other"));
   assert.deepEqual(templates, ["toolchain", undefined]);
-  assert.equal(s.profile.takesImage, true);
 });

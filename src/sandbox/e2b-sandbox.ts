@@ -284,7 +284,6 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     backend: "e2b",
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
-    takesImage: true,
     parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {

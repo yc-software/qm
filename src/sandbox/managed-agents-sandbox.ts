@@ -352,7 +352,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     backend: "do-managed-agents",
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
-    takesImage: true,
     parksOnTeardown: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {

@@ -459,7 +459,6 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
-    takesImage: true,
     egressEnforcement: "none",
     spec: {
       os: "Debian 12, Agent37 sandbox (the whole disk persists)",

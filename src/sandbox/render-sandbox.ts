@@ -638,7 +638,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       backend: "render",
       writablePersistence: "provider_managed",
       processSessions: true,
-      takesImage: true,
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
         os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; it resumes from its last checkpoint with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,

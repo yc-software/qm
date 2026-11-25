@@ -485,7 +485,6 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     writablePersistence: "provider_managed",
     sizesMemory: true,
     processSessions: true,
-    takesImage: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Debian 12 — Modal sandbox (24h max lifetime; home checkpoints have limited retention; publish durable work to git or Files)",

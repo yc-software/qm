@@ -454,7 +454,6 @@ export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox
     backend: "superserve",
     writablePersistence: "resident_disk",
     processSessions: true,
-    takesImage: true,
     egressEnforcement: "none",
     spec: {
       os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; publish durable work to git or Files)",

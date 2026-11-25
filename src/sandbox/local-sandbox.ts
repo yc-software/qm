@@ -372,7 +372,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
-    takesImage: true,
     parksOnTeardown: true,
     egressEnforcement: "none",
     spec: {

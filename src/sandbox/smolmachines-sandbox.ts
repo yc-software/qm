@@ -477,7 +477,6 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     sizesMemory: true,
     writablePersistence: "resident_disk",
     processSessions: true,
-    takesImage: true,
     egressEnforcement: egressProxyHost ? "domain" : "none",
     spec: {
       os: `smolmachines microVM booted from the ${image} image (the whole disk persists across stops${idleNote})`,

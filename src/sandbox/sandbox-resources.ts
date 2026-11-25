@@ -334,7 +334,7 @@ export function createSandboxResources(opts: {
       }));
   const images = opts.images ?? {};
   const offered = (backend: SandboxBackendName): string[] =>
-    opts.backends[backend]?.profile.takesImage ? Object.keys(images).filter((name) => images[name]![backend]) : [];
+    Object.keys(images).filter((name) => images[name]![backend]);
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
     if (memoryGb === undefined) return;
     if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
@@ -348,11 +348,7 @@ export function createSandboxResources(opts: {
       offered(name).includes(image),
     );
     const where = elsewhere.length ? `; it is available on ${elsewhere.join(", ")}` : "";
-    throw new Error(
-      opts.backends[backend]?.profile.takesImage
-        ? `image ${image} is not set up for ${backend}${where}`
-        : `${backend} computers boot only their provider's own image${where}`,
-    );
+    throw new Error(`image ${image} is not set up for ${backend}${where}`);
   };
   return {
     profiles,

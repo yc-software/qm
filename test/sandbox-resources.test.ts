@@ -304,10 +304,8 @@ test("a resize the backend refuses keeps the computer's old size", async () => {
 });
 
 test("a named image is stored on the computer, resolved for its provider, and refused where it is not set up", async () => {
-  const { options, backend } = fixture((local) => {
-    local.profile.takesImage = true;
-  });
-  const sprites = { ...backend, profile: { ...backend.profile, backend: "sprites", takesImage: false } };
+  const { options, backend } = fixture();
+  const sprites = { ...backend, profile: { ...backend.profile, backend: "sprites" } };
   const resources = createSandboxResources({
     ...options,
     images: { toolchain: { local: "registry/toolchain:1", e2b: "toolchain" }, gpu: { e2b: "gpu" } },
@@ -328,7 +326,7 @@ test("a named image is stored on the computer, resolved for its provider, and re
   );
   await assert.rejects(
     create("sprites", "toolchain"),
-    /^Error: sprites computers boot only their provider's own image; it is available on local$/,
+    /^Error: image toolchain is not set up for sprites; it is available on local$/,
   );
   await assert.rejects(create("local", "gpu"), /^Error: image gpu is not set up for local$/);
   await assert.rejects(create("local", "nope"), /^Error: unknown image nope; configured images: toolchain, gpu$/);
