@@ -26,7 +26,7 @@ import {
   type ArtifactHome,
   type ArtifactType,
   isMultiMemberSkillScope,
-  internalPerson,
+  carriesPersonAuthority,
   resolveShareTarget,
   type ShareAccessResult,
   type ShareArtifactRequest,
@@ -785,7 +785,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async createWebhook(req, capability, publicBase, signOff = unsigned): Promise<WebhookCreateResult> {
-      if (!internalPerson(capability))
+      if (!carriesPersonAuthority(capability))
         return { ok: false, code: "forbidden", message: "registering a webhook needs its owner's own authority" };
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
@@ -901,8 +901,8 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async shareArtifact(req, capability, signOff = unsigned): Promise<ShareArtifactResult> {
-      const personInInternalAudience = internalPerson(capability);
-      if (req.type === "deploy" && !personInInternalAudience)
+      const personAuthority = carriesPersonAuthority(capability);
+      if (req.type === "deploy" && !personAuthority)
         return { ok: false, code: "forbidden", message: "changing who can reach an app needs its owner's authority" };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const remove = req.permission === "none";
@@ -960,7 +960,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "bad_request",
           message: "a personal cron runs with your whole keychain, so it can't be shared for editing",
         };
-      const ceding = orgSkillCede && personInInternalAudience && (await app.isOrgAdmin(capability.actorId));
+      const ceding = orgSkillCede && personAuthority && (await app.isOrgAdmin(capability.actorId));
       if (orgSkillCede ? !ceding : !(await mayShare(app, home, cron, capability))) {
         const who = {
           cron: "only the cron's owner can share it",
@@ -1018,7 +1018,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           };
         }
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, personInInternalAudience);
+          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, personAuthority);
           return {
             ok: true,
             verb: "promote",
@@ -1030,7 +1030,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         }
 
         if (req.move) {
-          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && personInInternalAudience;
+          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && personAuthority;
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
@@ -1047,7 +1047,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           }
           if (
             req.type === "skill" &&
-            !personInInternalAudience &&
+            !personAuthority &&
             (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_REFUSAL };

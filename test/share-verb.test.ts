@@ -671,7 +671,7 @@ test("a team member who didn't create a team-owned skill can share it onward; a 
 
 test("skill mutations without the person's authority are refused for team homes, like channel and group homes", () => {
   assert.equal(sharedSkillRefused(scopeId("team", "alpha"), {}), true);
-  assert.equal(sharedSkillRefused(scopeId("team", "alpha"), { personAuthority: true, internalAudience: true }), false);
+  assert.equal(sharedSkillRefused(scopeId("team", "alpha"), { personAuthority: true }), false);
   assert.equal(sharedSkillRefused(scopeId("personal", "U1"), {}), false);
 });
 

@@ -2,7 +2,7 @@ import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { actionApproved } from "../action-approval.ts";
-import { internalPerson } from "../artifact-share.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -76,7 +76,7 @@ export async function requireSignOff(ctx: ApiCtx, summary: string, personMay = f
     refuseImpersonated(ctx.res);
     return false;
   }
-  if (ctx.capability) return (personMay && internalPerson(ctx.capability)) || actionApproved(ctx, { summary });
+  if (ctx.capability) return (personMay && carriesPersonAuthority(ctx.capability)) || actionApproved(ctx, { summary });
   if (ctx.actor?.p) return true;
   sendJson(ctx.res, 403, {
     error: "approval_unavailable",

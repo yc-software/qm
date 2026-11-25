@@ -855,12 +855,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const webhooksBefore = await built.app.listWebhooks();
     const auditBefore = (await built.auditLog.events(testTenant)).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
-      for (const extra of [
-        {},
-        { personAuthority: false },
-        { personAuthority: true, botActor: true },
-        { personAuthority: true, internalAudience: false },
-      ]) {
+      for (const extra of [{}, { personAuthority: false }, { personAuthority: true, botActor: true }]) {
         const res = await post(
           "/v1/webhooks",
           { action: "handle the event", verification: { scheme: "hmac-sha256", secret: "secret" } },

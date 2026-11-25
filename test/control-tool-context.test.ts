@@ -83,7 +83,6 @@ test("webhook registration through the tool needs the owner's authority and a si
     for (const extra of [
       {},
       { personAuthority: false },
-      { personAuthority: true },
       { internalAudience: true, personAuthority: true, botActor: true },
     ]) {
       const ctx = ctxFor({ control, controlClaims: { ...claims("U1"), scopeId: scope, ...extra } });

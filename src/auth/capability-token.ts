@@ -62,7 +62,7 @@ export async function personOrOwningBot(
   );
 }
 
-export type ActingClaims = Pick<CapabilityClaims, "actorId" | "botActor" | "internalAudience" | "personAuthority"> & {
+export type ActingClaims = Pick<CapabilityClaims, "actorId" | "botActor" | "personAuthority"> & {
   scopeId?: string;
 };
 
@@ -245,6 +245,6 @@ export async function asOrgAdmin(
   actor: ActingClaims,
 ): Promise<boolean> {
   if (actor.botActor === true) return false;
-  if (actor.scopeId !== undefined && !(actor.internalAudience === true && actor.personAuthority === true)) return false;
+  if (actor.scopeId !== undefined && actor.personAuthority !== true) return false;
   return (await admins.isOrgAdmin?.(actor.actorId)) === true;
 }

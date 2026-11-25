@@ -142,7 +142,7 @@ test("runtime get uses job execution defaults, and handoffs survive retries", as
       authorizesCapabilityScope: async () => true,
     },
   );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000 } as const;
+  const claims = { actorId: "alice", scopeId: SCOPE, personAuthority: true, exp: Date.now() + 60_000 } as const;
   const explicit = { fastMode: false };
   const get = await service(claims, fallback, { action: "get" }, undefined, false, undefined, true, "cron", explicit);
   assert.ok(get.ok);

@@ -12,7 +12,7 @@ const FIRE: TurnRequest = {
   actor: { externalId: "U_OWNER" },
   conversation: { kind: "dm", threadRef: "cron:c1:k1" },
   text: "set the org model",
-  origin: { kind: "automation", ownerFire: true, destination: { type: "principal", target: "U_OWNER" } },
+  origin: { kind: "automation", fire: true, destination: { type: "principal", target: "U_OWNER" } },
 } as TurnRequest;
 
 function setup() {
