@@ -1098,7 +1098,7 @@ test("a pending approval arrives as a card with buttons that only the person who
     await settle(async () => {
       const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
       const items = session ? await built.sessions.getItems(session.id) : [];
-      return items.some((i) => /denied this pending operation/.test((i as { text?: string }).text ?? ""));
+      return items.some((i) => /declined this pending operation/.test((i as { text?: string }).text ?? ""));
     });
     await new Promise((r) => setTimeout(r, 1_000));
     assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
