@@ -1474,6 +1474,12 @@ a.chat-row-open {
 .custom-chat-shell.empty-chat:has(> .chat-topbar) {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
+.custom-chat-shell.empty-chat.welcome-chat {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.custom-chat-shell.in-pane.empty-chat.welcome-chat {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
 .split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
 }
