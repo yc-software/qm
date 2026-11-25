@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopClientForTurn, introducesUser, mayDriveDesktop, sessionTurnOrigin } from "../src/core/turn-origin.ts";
+import {
+  desktopClientForTurn,
+  introducesUser,
+  mayDriveDesktop,
+  runStarter,
+  sessionTurnOrigin,
+} from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
@@ -46,4 +52,17 @@ test("a session message from a fire does not carry the fire marker", () => {
     kind: "automation",
     screenData: "hi",
   });
+});
+
+test("a run says whether a person, its parent session or another session started it", () => {
+  assert.equal(runStarter({ origin: { kind: "human" } }, false), "person");
+  assert.equal(
+    runStarter({ origin: { kind: "human" }, sessionSenderId: "parent", delegatingRunId: "r1" }, true),
+    "subagent",
+  );
+  assert.equal(
+    runStarter({ origin: { kind: "human" }, sessionSenderId: "child", delegatingRunId: "r0" }, false),
+    "wake",
+  );
+  assert.equal(runStarter({ origin: { kind: "automation" } }, false), undefined);
 });
