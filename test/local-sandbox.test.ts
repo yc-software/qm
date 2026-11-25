@@ -236,8 +236,13 @@ test("tenants with the same scope and scratch key keep separate containers, volu
     assert.equal(fake.networks.has(localNetworkName(first!.id)), false);
     assert.equal(fake.networks.has(localNetworkName(second!.id)), true);
     assert.equal(fake.volumes.size, options ? 0 : 1);
+    fake.containers.get(second!.id)!.args = fake.containers
+      .get(second!.id)!
+      .args.filter((arg) => arg !== "--cap-drop=NET_RAW");
+    await assert.rejects(sb.run(second!, "true"), /must be provisioned again/);
     const resumed = await withTenant(tenants[1]!, () => makeSandbox(fake).provision(scope, options));
     assert.equal(resumed.id, second!.id);
+    assert.equal(fake.containers.get(resumed.id)!.args.includes("--cap-drop=NET_RAW"), true);
     await withTenant(tenants[1]!, () =>
       options ? sb.teardown(second!, { destroy: true }) : makeSandbox(fake).destroyScope!(scope),
     );
@@ -281,6 +286,10 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
 
 test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
   const fake = installFakeDocker(daemonPort);
+  fake.coreForwarding = true;
+  await assert.rejects(makeSandbox(fake, { coreContainer: "qm-test-core" }).provision("blocked"), /ip_forward=0/);
+  assert.equal(fake.runCount, 0);
+  fake.coreForwarding = false;
   const seen: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
     const url = typeof input === "string" ? input : input.toString();

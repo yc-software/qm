@@ -21,6 +21,7 @@ export interface FakeDocker {
   imageId: string;
   imageFingerprint: string;
   labelInspectFails: boolean;
+  coreForwarding: boolean;
 }
 
 export function installFakeDocker(daemonPort: number): FakeDocker {
@@ -39,6 +40,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
     imageId: "sha256:image-v1",
     imageFingerprint: "",
     labelInspectFails: false,
+    coreForwarding: false,
     dockerExec: async (args) => exec(args),
   };
 
@@ -71,6 +73,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
     const [cmd, ...rest] = args;
     if (self.daemonDown) return fail("Cannot connect to the Docker daemon");
     switch (cmd) {
+      case "exec":
+        return ok(self.coreForwarding ? "1" : "0");
       case "version":
         return ok("Docker version fake");
       case "image": {
@@ -83,7 +87,9 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
-        return ok(`${c.running} ${c.imageId}`);
+        return ok(
+          `${c.running} ${c.imageId} ${JSON.stringify(c.args.includes("--cap-drop=NET_RAW") ? ["NET_RAW"] : [])}`,
+        );
       }
       case "ps": {
         const name = rest.find((a) => a.startsWith("name="))!.slice("name=".length);

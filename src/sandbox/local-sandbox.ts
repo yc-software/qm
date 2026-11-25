@@ -14,8 +14,7 @@ import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type Doc
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { hashId, shortHash } from "../util/crypto.ts";
-import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { sandboxTenant } from "./tenant-sandbox-shape.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -82,11 +81,8 @@ export const localNetworkName = (containerName: string): string =>
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
-  const tenant = boundTenant();
-  const boot = bootTenant();
-  if (tenant === undefined && boot === undefined && tenancyBooted())
-    throw new Error("sandbox work needs a bound tenant");
-  if (tenant !== undefined && tenant !== boot) return hashId([tenant, id], 32);
+  const tenant = sandboxTenant();
+  if (tenant !== undefined) return hashId([tenant, id], 32);
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -117,6 +113,15 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         preflightDone = undefined;
         throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");
       }
+      if (opts.coreContainer) {
+        const forwarding = await dexec(["exec", opts.coreContainer, "cat", "/proc/sys/net/ipv4/ip_forward"]);
+        if (forwarding.code !== 0 || forwarding.stdout.trim() !== "0") {
+          preflightDone = undefined;
+          throw new Error(
+            `local sandboxes require net.ipv4.ip_forward=0 in the core container: ${forwarding.stderr.trim() || forwarding.stdout.trim()}`,
+          );
+        }
+      }
       const img = await dexec(["image", "inspect", "-f", "{{.Id}}", image]);
       if (img.code !== 0) {
         preflightDone = undefined;
@@ -143,11 +148,14 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     return preflightDone;
   }
 
-  async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
+  async function containerState(
+    name: string,
+  ): Promise<{ running: boolean; imageId: string; rawSocketsDisabled: boolean } | null> {
+    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}} {{json .HostConfig.CapDrop}}", name]);
     if (r.code !== 0) return null;
-    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
-    return { running: running === "true", imageId };
+    const [running = "", imageId = "", droppedCapabilities = "null"] = r.stdout.trim().split(/\s+/);
+    const rawSocketsDisabled = ((JSON.parse(droppedCapabilities) ?? []) as string[]).includes("NET_RAW");
+    return { running: running === "true", imageId, rawSocketsDisabled };
   }
 
   async function resolvePort(name: string): Promise<number> {
@@ -172,6 +180,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
+    await preflight();
     const base = opts.coreContainer
       ? `http://${name}:${AGENT_PORT}${path}`
       : `http://127.0.0.1:${await resolvePort(name)}${path}`;
@@ -211,6 +220,8 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   async function ensureRunning(name: string): Promise<void> {
     const state = await containerState(name);
     if (!state) throw new Error(`local sandbox container ${name} is gone`);
+    if (!state.rawSocketsDisabled)
+      throw new Error(`local sandbox container ${name} must be provisioned again before use`);
     if (!state.running) await startContainer(name);
   }
 
@@ -241,6 +252,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
   async function connectCore(net: string): Promise<void> {
     if (!opts.coreContainer) return;
+    await preflight();
     const r = await dexec(["network", "connect", net, opts.coreContainer]);
     if (r.code !== 0 && !(await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(net)) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
@@ -275,6 +287,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       "agent_env=dev",
       "--network",
       net,
+      "--cap-drop=NET_RAW",
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
       ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
       "--add-host=host.docker.internal:host-gateway",
@@ -295,7 +308,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       const imageId = await preflight();
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
-      if (state && state.imageId === imageId) {
+      if (state && state.imageId === imageId && state.rawSocketsDisabled) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
@@ -319,12 +332,13 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     return provisionQueue(name, async () => {
       await preflight();
       const state = await containerState(name);
-      if (state) {
+      if (state?.rawSocketsDisabled) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
+      if (state) await dexec(["rm", "-f", name]);
       await runContainer(name, undefined, false);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
