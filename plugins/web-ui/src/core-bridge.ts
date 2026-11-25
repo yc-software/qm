@@ -580,7 +580,7 @@ export type AssistantWork = AssistantMessage & {
   viaTitle?: string;
   viaId?: string;
   personaId?: string;
-  supersedes?: number;
+  supersedes?: number[];
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -2465,8 +2465,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         }
       }
       tagPersona(e, out.slice(turn.start));
-      if (typeof e.body.supersedes === "number" && out.length > before)
-        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes;
+      if (Array.isArray(e.body.supersedes) && out.length > before)
+        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes.filter(Number.isSafeInteger);
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

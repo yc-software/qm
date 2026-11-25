@@ -5,7 +5,7 @@ import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
 import { firedByPoll } from "../../triggers/run-trigger.ts";
 import { personalScope, type ScopeId, type Session } from "../../types.ts";
-import { isAgentReply, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import { isAgentReply, isNarration, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
 import type { FeatureName } from "../../feature-flags.ts";
 import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
@@ -132,36 +132,51 @@ export async function appendTurnGuidance(turn: {
   return systemPrompt;
 }
 
-export async function replyToRewrite(
+const isSpoken = (item: Item): boolean => isShownReply(item) || (isNarration(item) && !!item.text?.trim());
+
+const supersededIn = (items: readonly Item[]): Set<number> =>
+  new Set(items.flatMap((item) => (Array.isArray(item.body.supersedes) ? item.body.supersedes : []))) as Set<number>;
+
+export async function rewriteTargets(
   deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
   tenant: TurnCapabilities["tenant"],
   personId: string,
   history: readonly Item[],
   flag: FeatureName = "wake_reply_rewrite",
-): Promise<Item | undefined> {
-  const replies = history
-    .slice(history.findLastIndex(typedBy) + 1)
-    .filter((item) => isShownReply(item) && !!item.turnId);
-  if (!replies.length || !(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
-  const sources = await deps.runs?.requestSources(
-    tenant,
-    replies.map((reply) => reply.turnId!),
-  );
-  return replies.findLast((reply) => {
-    const source = sources?.get(reply.turnId!);
-    return source && samePerson(source.actorId, personId) && !firedByPoll(source);
+): Promise<Item[] | undefined> {
+  if (!(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
+  const since = history.slice(history.findLastIndex(typedBy) + 1);
+  const replaced = supersededIn(since);
+  const spoken = since.filter((item) => isSpoken(item) && !!item.turnId && !replaced.has(item.seq));
+  if (!spoken.length) return [];
+  const sources = await deps.runs?.requestSources(tenant, [...new Set(spoken.map((item) => item.turnId!))]);
+  return spoken.filter((item) => {
+    const source = sources?.get(item.turnId!);
+    return !!source && samePerson(source.actorId, personId) && !firedByPoll(source);
   });
+}
+
+export async function replyToRewrite(...args: Parameters<typeof rewriteTargets>): Promise<Item | undefined> {
+  return (await rewriteTargets(...args))?.findLast(isShownReply);
+}
+
+export function supersedeMarker(prior: readonly Item[], emitted: readonly Item[]): Record<string, unknown> {
+  const own = emitted.filter(isSpoken);
+  const replaced = supersededIn(own);
+  const targets = [...prior, ...own].filter((item) => !replaced.has(item.seq)).map((item) => item.seq);
+  return targets.length ? { supersedes: targets } : {};
 }
 
 export const replacesReply = (entry: NewItem): boolean =>
   isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped;
 
-export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
+export function wakeTurnEvent(childWake: boolean, replies: readonly Item[]): string {
   const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;
+  const rewrites = replies.at(-1);
   if (!rewrites)
     return `${started} To end it without posting, call \`finish_silently\` and write no text; anything you write is shown to the person.`;
   return (
-    `${started} Your reply replaces your last message to the person, the one beginning "${snippet(rewrites.text ?? "", 60)}"; they will see only the new one. ` +
+    `${started} Your reply replaces ${replies.length > 1 ? `your ${replies.length} messages to the person since they last wrote, the latest` : "your last message to the person, the one"} beginning "${snippet(rewrites.text ?? "", 60)}"; they will see only the new one. ` +
     "Write it as your answer to what they asked, as you would give it had you had every result from the start: each result stated as a fact about what they asked about, not as news about the work (which worker found it, how many are back, when, how, or whether it finished, or what it took to get). " +
     "Anything not yet known is simply still to come, and anything waiting on them stays." +
     (childWake ? " To leave that message as it is, call `finish_silently` and write no text." : "")
