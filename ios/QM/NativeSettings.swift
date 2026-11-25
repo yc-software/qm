@@ -104,255 +104,144 @@ struct NativeActionLabel: View {
   }
 }
 
-/// Home-screen actions the settings page can offer when it is pushed from the conversation list.
-struct HomeSettingsActions {
-  let changeWorkspace: () -> Void
-  let signOut: () -> Void
-}
-
-extension EnvironmentValues {
-  @Entry var qmHomeSettingsActions: HomeSettingsActions? = nil
-}
-
-/// Settings laid out like the desktop General page: titled sections over rounded cards of rows,
-/// each row a title and a short note with its control on the trailing edge.
+/// Settings laid out like the desktop General page: titled sections whose rows pair a title and a
+/// short note with their control.
 struct NativeSettingsView: View {
   let client: APIClient
   let identity: Identity
-  @Environment(\.qmHomeSettingsActions) private var home
+  let changeWorkspace: () -> Void
+  let signOut: () -> Void
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 28) {
-        SettingsSection("Plan") {
-          SettingsLink(title: "AI access", note: "Use company access or your own subscription.") {
-            NativeModelAccountsView(client: client)
-          }
-          SettingsLink(title: "Model and effort", note: "Defaults for new conversations.") {
-            RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
-          }
+    QMForm {
+      Section {
+        NavigationLink {
+          NativeModelAccountsView(client: client)
+        } label: {
+          SettingsLabel("AI access", note: "Use company access or your own subscription.")
         }
-        SettingsSection("Appearance") {
-          VStack(alignment: .leading, spacing: 12) {
-            SettingsCopy(
-              title: "Theme", note: "System follows your device’s light or dark setting.")
-            Picker("Theme", selection: $appearance) {
-              Text("System").tag("system")
-              Text("Light").tag("light")
-              Text("Dark").tag("dark")
-              if let palette = NativeThemeStore.shared.palette { Text(palette.name).tag("custom") }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-          }
-          .settingsRowPadding()
-          NativeThemeImport()
+        NavigationLink {
+          RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
+        } label: {
+          SettingsLabel("Model and effort", note: "Defaults for new conversations.")
         }
-        SettingsSection("Conversations") {
-          Toggle(isOn: $webOnly) {
-            SettingsCopy(
-              title: "Web conversations only", note: "Hide Slack conversations from your list.")
-          }
-          .settingsRowPadding()
-          if home != nil {
-            SettingsValueLink(
-              title: "Waiting on you", note: "Conversations that need your reply.",
-              value: HomePage.waiting)
-            SettingsValueLink(title: "Archived conversations", note: nil, value: HomePage.archived)
-          }
-        }
-        SettingsSection("Connections") {
-          SettingsLink(title: "Set up QM", note: "Connect the apps and accounts QM works with.") {
-            NativeSetupView(client: client, identity: identity)
-          }
-          SettingsLink(title: "Slack account", note: nil, service: "slack") {
-            NativeSlackAccountView(client: client)
-          }
-          SettingsLink(
-            title: "Connections and credentials", note: "Keys and logins QM can use for you."
-          ) {
-            NativeKeychainView(client: client)
-          }
-        }
-        SettingsSection("Account") {
-          SettingsRow(title: "Account", note: accountNote) {
-            if let home {
-              Button("Sign out", action: home.signOut).buttonStyle(.bordered).controlSize(.small)
-            }
-          }
-          SettingsRow(title: "Workspace", note: client.baseURL.host) {
-            if let home {
-              Button("Change", action: home.changeWorkspace).buttonStyle(.bordered).controlSize(
-                .small)
-            }
-          }
-        }
-        SettingsSection("About") {
-          Link(destination: URL(string: "https://github.com/yc-software/qm")!) {
-            SettingsRow(title: "About QM", note: nil) {
-              Image(systemName: "arrow.up.right").font(.footnote.weight(.semibold)).foregroundStyle(
-                .tertiary)
-            }
-          }
-          .buttonStyle(.plain)
-          SettingsRow(title: "Version", note: nil) {
-            Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")
-              .foregroundStyle(.secondary)
-          }
-          SettingsLink(title: "Open source licenses", note: nil) {
-            ScrollView {
-              Text(
-                (try? String(
-                  contentsOf: Bundle.main.url(
-                    forResource: "ThirdPartyNotices", withExtension: "txt")
-                    ?? URL(fileURLWithPath: "/nonexistent"), encoding: .utf8))
-                  ?? "See the licenses included with QM."
-              ).font(.footnote).textSelection(.enabled).padding()
-            }.navigationTitle("Licenses")
-          }
-        }
+      } header: {
+        SettingsHeader("Plan")
       }
-      .padding(.horizontal, 16)
-      .padding(.top, 8)
-      .padding(.bottom, 32)
-      .frame(maxWidth: QMTheme.conversationWidth)
-      .frame(maxWidth: .infinity)
+      Section {
+        VStack(alignment: .leading, spacing: 12) {
+          SettingsLabel("Theme", note: "System follows your device’s light or dark setting.")
+          Picker("Theme", selection: $appearance) {
+            Text("System").tag("system")
+            Text("Light").tag("light")
+            Text("Dark").tag("dark")
+            if let palette = NativeThemeStore.shared.palette { Text(palette.name).tag("custom") }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+        }
+        .padding(.vertical, 4)
+        NativeThemeImport()
+      } header: {
+        SettingsHeader("Appearance")
+      }
+      Section {
+        Toggle(isOn: $webOnly) {
+          SettingsLabel("Web conversations only", note: "Hide Slack conversations from your list.")
+        }
+        NavigationLink(value: HomePage.waiting) {
+          SettingsLabel("Waiting on you", note: "Conversations that need your reply.")
+        }
+        NavigationLink("Archived conversations", value: HomePage.archived)
+      } header: {
+        SettingsHeader("Conversations")
+      }
+      Section {
+        NavigationLink {
+          NativeSetupView(client: client, identity: identity)
+        } label: {
+          SettingsLabel("Set up QM", note: "Connect the apps and accounts QM works with.")
+        }
+        NavigationLink {
+          NativeSlackAccountView(client: client)
+        } label: {
+          NativeServiceLabel(title: "Slack account", service: "slack")
+        }
+        NavigationLink {
+          NativeKeychainView(client: client)
+        } label: {
+          SettingsLabel("Connections and credentials", note: "Keys and logins QM can use for you.")
+        }
+      } header: {
+        SettingsHeader("Connections")
+      }
+      Section {
+        LabeledContent {
+          Button("Sign out", action: signOut).buttonStyle(.bordered).controlSize(.small)
+        } label: {
+          SettingsLabel("Account", note: accountNote)
+        }
+        LabeledContent {
+          Button("Change", action: changeWorkspace).buttonStyle(.bordered).controlSize(.small)
+        } label: {
+          SettingsLabel("Workspace", note: client.baseURL.host)
+        }
+      } header: {
+        SettingsHeader("Account")
+      }
+      Section {
+        Link("About QM", destination: URL(string: "https://github.com/yc-software/qm")!)
+        LabeledContent(
+          "Version",
+          value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")
+        NavigationLink("Open source licenses") {
+          ScrollView {
+            Text(
+              (try? String(
+                contentsOf: Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt")
+                  ?? URL(fileURLWithPath: "/nonexistent"), encoding: .utf8))
+                ?? "See the licenses included with QM."
+            ).font(.footnote).textSelection(.enabled).padding()
+          }.navigationTitle("Licenses")
+        }
+      } header: {
+        SettingsHeader("About")
+      }
     }
-    .foregroundStyle(QMTheme.ink)
-    .background(QMTheme.paper)
-    .toolbarBackground(QMTheme.paper, for: .navigationBar)
-    .toolbarBackground(.visible, for: .navigationBar)
     .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
   }
+
+  private var accountNote: String {
+    let name = identity.displayName ?? identity.user
+    guard let workspace = identity.companyName ?? client.baseURL.host else { return name }
+    return "\(name) · \(workspace)"
+  }
 }
 
-/// A titled settings section: a medium-weight heading over a rounded card whose rows are divided
-/// by hairlines, matching the desktop `.settings-section` and `.settings-card`.
-struct SettingsSection<Content: View>: View {
+/// A settings section title in sentence case, like the desktop General page's headings.
+struct SettingsHeader: View {
   let title: String
-  let content: Content
-
-  init(_ title: String, @ViewBuilder content: () -> Content) {
-    self.title = title
-    self.content = content()
-  }
-
+  init(_ title: String) { self.title = title }
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text(title)
-        .font(.subheadline.weight(.medium))
-        .padding(.horizontal, 4)
-        .accessibilityAddTraits(.isHeader)
-      VStack(spacing: 0) {
-        Group(subviews: content) { rows in
-          ForEach(rows) { row in
-            row
-            if row.id != rows.last?.id {
-              Rectangle().fill(QMTheme.ink.opacity(0.07)).frame(height: 1)
-                .padding(.leading, 16)
-            }
-          }
-        }
-      }
-      .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .strokeBorder(QMTheme.ink.opacity(0.09), lineWidth: 1)
-      )
-    }
+    Text(title).font(.subheadline.weight(.medium)).foregroundStyle(QMTheme.ink).textCase(nil)
   }
 }
 
-/// A row's title and its muted note.
-struct SettingsCopy: View {
+/// A settings row's title over its muted note.
+struct SettingsLabel: View {
   let title: String
   let note: String?
+  init(_ title: String, note: String? = nil) {
+    self.title = title
+    self.note = note
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(title).font(.body)
+      Text(title)
       if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-struct SettingsRow<Accessory: View>: View {
-  let title: String
-  let note: String?
-  var service: String?
-  let accessory: Accessory
-
-  init(
-    title: String, note: String?, service: String? = nil, @ViewBuilder accessory: () -> Accessory
-  ) {
-    self.title = title
-    self.note = note
-    self.service = service
-    self.accessory = accessory()
-  }
-
-  var body: some View {
-    HStack(spacing: 12) {
-      if let service, NativeServiceLogo.mark(service, size: 20) != nil {
-        NativeServiceLogo(service: service, size: 20)
-      }
-      SettingsCopy(title: title, note: note)
-      accessory
-    }
-    .settingsRowPadding()
-    .contentShape(Rectangle())
-  }
-}
-
-private struct SettingsChevron: View {
-  var body: some View {
-    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-  }
-}
-
-struct SettingsLink<Destination: View>: View {
-  let title: String
-  let note: String?
-  var service: String?
-  let destination: () -> Destination
-
-  init(
-    title: String, note: String?, service: String? = nil,
-    @ViewBuilder destination: @escaping () -> Destination
-  ) {
-    self.title = title
-    self.note = note
-    self.service = service
-    self.destination = destination
-  }
-
-  var body: some View {
-    NavigationLink {
-      destination()
-    } label: {
-      SettingsRow(title: title, note: note, service: service) { SettingsChevron() }
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-struct SettingsValueLink<Value: Hashable>: View {
-  let title: String
-  let note: String?
-  let value: Value
-  var body: some View {
-    NavigationLink(value: value) {
-      SettingsRow(title: title, note: note) { SettingsChevron() }
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-extension View {
-  func settingsRowPadding() -> some View {
-    padding(.horizontal, 16).padding(.vertical, 13).frame(minHeight: 52)
   }
 }
 

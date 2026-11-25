@@ -141,16 +141,14 @@ struct RootView: View {
               .task { await model.select(.archived) }
               .onDisappear { Task { await model.select(.active) } }
           case .setup: NativeSetupView(client: client, identity: identity)
-          case .settings: NativeSettingsView(client: client, identity: identity)
+          case .settings:
+            NativeSettingsView(
+              client: client, identity: identity, changeWorkspace: { choosingWorkspace = true },
+              signOut: { confirmingSignOut = true })
           }
         }
       }
     }
-    .environment(
-      \.qmHomeSettingsActions,
-      HomeSettingsActions(
-        changeWorkspace: { choosingWorkspace = true },
-        signOut: { confirmingSignOut = true }))
   }
 
   var body: some View {

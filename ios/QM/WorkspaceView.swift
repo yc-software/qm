@@ -42,7 +42,6 @@ struct WorkspaceDestination: Identifiable {
 struct BrowseView: View {
   let identity: Identity
   let client: APIClient
-  @Environment(\.qmHomeSettingsActions) private var home
 
   var body: some View {
     List {
@@ -51,8 +50,7 @@ struct BrowseView: View {
           ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
             destination in
             Group {
-              if destination.id == "settings", home != nil {
-                // Same page as the home screen's settings button, so its links can push home pages.
+              if destination.id == "settings" {
                 NavigationLink(value: HomePage.settings) { label(destination) }
               } else {
                 NavigationLink {
@@ -75,8 +73,6 @@ struct BrowseView: View {
                         "Your calendar will appear here when it is available in QM."))
                   } else if destination.id == "keychain" {
                     NativeKeychainView(client: client)
-                  } else if destination.id == "settings" {
-                    NativeSettingsView(client: client, identity: identity)
                   } else if destination.id == "loops" {
                     NativeLoopsView(client: client)
                   } else if destination.id == "inbox" {
