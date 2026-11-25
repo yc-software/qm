@@ -27,7 +27,7 @@ The manifest enables Slack's [Agents & AI Apps](https://docs.slack.dev/ai/develo
 feature (`agent_view`) so users can pin the app to the Slack top bar and open it anywhere.
 Conversations in the resulting split pane are ordinary DM thread messages and flow through
 the normal DM machinery unchanged. Thread titles, context passing and suggested prompts
-are not implemented. Activity cards are experimental and off by default.
+are not implemented.
 
 Two caveats:
 

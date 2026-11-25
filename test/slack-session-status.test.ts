@@ -162,10 +162,10 @@ function fixture() {
     add,
     background,
     watch,
-    start: async (id: string, account = "T1:B1") => {
-      await status.start(client, account, id, "C1", "1.0");
+    start: async (id: string) => {
+      await status.start(client, "T1:B1", id, "C1", "1.0");
       at += 30_000;
-      await status.reconcile(client, account);
+      await status.reconcile(client, "T1:B1");
     },
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
