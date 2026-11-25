@@ -615,7 +615,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .catch(swallowAs("orchestrator: run-activity append", undefined));
         if (ACTIVITY_KINDS.has(item.kind) || (item.kind === "AgentMessage" && item.variant === "narration")) {
           await append(item);
-          if (ACTIVITY_KINDS.has(item.kind)) deps.turnStream.noteActivity(input.runId);
         } else if (item.kind === "Reasoning") {
           const id = stepMessage(item)?.id;
           const step = typeof id === "string" && item.step !== null ? { id, index: item.step } : undefined;
