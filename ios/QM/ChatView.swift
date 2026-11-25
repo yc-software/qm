@@ -29,7 +29,7 @@ struct ChatView: View {
   @State private var approvalSubmission: (id: String, approved: Bool)?
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
 
   init(
     model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
@@ -903,17 +903,20 @@ struct ChatView: View {
   }
 
   private var composerTextField: some View {
-    TextField(
-      model.activeRunID == nil ? "Message QM" : "Queue a message", text: $model.draft,
-      axis: .vertical
+    let placeholder = model.activeRunID == nil ? "Message QM" : "Queue a message"
+    return ComposerField(
+      text: $model.draft, focused: $composerFocused, placeholder: placeholder,
+      maxLines: verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8,
+      onPasteImages: model.addAttachments
     )
-    .lineLimit(
-      1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
-    )
+    .overlay(alignment: .topLeading) {
+      if model.draft.isEmpty {
+        Text(placeholder).foregroundStyle(Color(uiColor: .placeholderText))
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+    }
     .padding(.horizontal, 8).padding(.top, 8)
-    .focused($composerFocused)
     .disabled(model.sending)
-    .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {
