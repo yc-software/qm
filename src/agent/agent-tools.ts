@@ -45,7 +45,6 @@ export interface ToolContextRef {
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
-  awaitingCallApprovals?: boolean;
   approvalUnavailable?: string;
   emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;

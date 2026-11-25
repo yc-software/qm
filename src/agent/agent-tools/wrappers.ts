@@ -78,8 +78,6 @@ const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_cal
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
-const CALL_APPROVALS_PER_TURN = 20;
-
 const CALL_LABEL_FIELD = "purpose";
 const CALL_LABEL_SCHEMA = Type.Optional(
   Type.String({
@@ -117,9 +115,6 @@ function keyedApprovalBlockedText(reason: string, callKey: string): string {
     `${blockedForApprovalText(reason)} ` +
     `An approval card for this exact call (card ${approvalCardId(callKey)}) is now waiting for the person. ` +
     "If they approve it, QM runs exactly this call and records its result in this conversation, so do not propose it again. " +
-    "If the same request needs more calls like this one (for example the same message to other recipients), go on and propose the rest now, in this turn, so the person can approve them together; each gets its own card. " +
-    "Do not make calls that depend on this call's result. " +
-    "When nothing else is left to propose, end your turn with one short line saying what is waiting for approval. " +
     "If they change their mind before approving, withdraw the card with withdraw_approval."
   );
 }
@@ -210,10 +205,7 @@ export function withToolApprovalGate(
                 ...(label ? { purpose: label } : {}),
               },
         );
-        const keyedPending = (ref.pendingApprovals ?? []).filter((p) => p.call).length;
-        const keepProposing = !!callKey && isObj(params) && keyedPending < CALL_APPROVALS_PER_TURN;
-        if (keepProposing) ref.awaitingCallApprovals = true;
-        else ref.pausedOnApproval = true;
+        ref.pausedOnApproval = true;
         await recordCall(callId, {
           tool: tool.name,
           ...(resourceAction ? { action: resourceAction } : {}),
@@ -238,7 +230,7 @@ export function withToolApprovalGate(
               },
             ],
             details: {},
-            ...(keepProposing ? {} : { terminate: true }),
+            terminate: true,
           },
           true,
         );
