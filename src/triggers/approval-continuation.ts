@@ -28,7 +28,6 @@ export function createApprovalContinuation(
       surface: APPROVAL_SURFACE,
       threadRef: request.conversation.threadRef,
       approval: decision,
-      ...(origin?.ownerFire ? { ownerFire: true } : {}),
       ...(origin?.destination ? { destination: origin.destination } : {}),
       ...(request.botActor ? { botActor: true } : {}),
     }).catch(reportFailureAs("approval continuation", undefined, decision.requestId));

@@ -42,9 +42,8 @@ test("only messages a person sent may drive their desktop, from any client", () 
 });
 
 test("a session message from a fire does not carry the fire marker", () => {
-  assert.deepEqual(sessionTurnOrigin({ kind: "automation", fire: true, ownerFire: true }, "hi"), {
+  assert.deepEqual(sessionTurnOrigin({ kind: "automation", fire: true }, "hi"), {
     kind: "automation",
-    ownerFire: true,
     screenData: "hi",
   });
 });
