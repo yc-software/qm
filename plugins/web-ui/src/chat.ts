@@ -1861,7 +1861,7 @@ export function createChatSurface(
         <div class="side-chat-layout" @keydown=${sideChats.onKeydown}>
           <div
             class="custom-chat-shell ${editingApp ? "app-edit-chat" : ""} ${ctx.pane ? "in-pane" : ""} ${ctx.composer.state.dragging ? "dragging" : ""} ${
-              emptyChat && !glanceTier && !editingApp ? "empty-chat" : ""
+              emptyChat && !glanceTier && !editingApp ? `empty-chat ${showWelcome ? "welcome-chat" : ""}` : ""
             }"
             @dragenter=${(e: DragEvent) => ctx.composer.onDragEnter(e)}
             @dragover=${(e: DragEvent) => ctx.composer.onDragOver(e)}
