@@ -327,37 +327,6 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
   );
 });
 
-test("AWS color pairs name the peer stack's target groups on a dedicated ALB", () => {
-  const aws = {
-    accountId: "123456789012",
-    region: "us-west-2",
-    cluster: "acme-blue",
-    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
-    secretsPrefix: "acme/",
-    imageLabel: "release",
-    alb: "acme-colors",
-    networking: { cloudMapNamespace: "acme.internal" },
-    services: {
-      core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024, architecture: "amd64" },
-    },
-  };
-  withConfig(
-    { target: "aws", aws: { ...aws, peerTargetGroups: { "core-public": "acme-green-core-public" } } },
-    ({ path }) =>
-      assert.deepEqual(loadConfigAt(path).config.aws!.peerTargetGroups, { "core-public": "acme-green-core-public" }),
-  );
-  for (const [peerTargetGroups, extra, expected] of [
-    [{}, {}, /must map ingress routes to target group names/],
-    [{ "core-public": "bad name" }, {}, /peerTargetGroups\.core-public" must be a target group name/],
-    [{ "core-public": "acme-green" }, { sharedAlb: true }, /cannot be combined with "aws\.sharedAlb"/],
-    [{ "core-public": "acme-green" }, { alb: undefined }, /requires "aws\.alb"/],
-  ] as const) {
-    withConfig({ target: "aws", aws: { ...aws, ...extra, peerTargetGroups } }, ({ path }) =>
-      assert.throws(() => loadConfigAt(path), expected),
-    );
-  }
-});
-
 test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
   const aws = {
     accountId: "123456789012",

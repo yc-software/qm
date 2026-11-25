@@ -7,14 +7,12 @@ import { createHash, createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { awsColorRoutes, awsRequireColorDrained, awsTakeColorTraffic } from "../src/backends/aws-color.ts";
 import {
   assertAwsDeploymentStorage,
   assertAwsServiceDiscovery,
   assertAwsPublicListener,
   assertAwsPublicRouting,
-  awsColorRoutes,
-  awsRequireColorDrained,
-  awsTakeColorTraffic,
   assertGithubDeployTrust,
   awsCheckLive,
   awsCoreRequest,
@@ -1167,7 +1165,10 @@ test("AWS deploy requires the live ALB to send everything but declared routes to
     }
   };
   try {
-    await run("AWS_FAKE_DEFAULT_404", /listener default does not route only to the core front door/);
+    await run(
+      "AWS_FAKE_DEFAULT_404",
+      /core-public must be routed by exactly one rule forwarding to this stack.s target group and one peer stack.s/,
+    );
     await run("AWS_FAKE_EXTRA_RULE", /ALB has non-default rules beyond the declared plugin and core API routes/);
     await run("AWS_FAKE_DEFAULT_FORWARD", /blue\/green listener default must return a fixed 404 response/, true);
     await run("AWS_FAKE_EXTRA_RULE", /blue\/green ALB has unexpected non-default rules/, true);
@@ -1257,11 +1258,7 @@ function colorPairFixture(peerActive = "") {
     ...config,
     apiUrl: "https://api.agent.acme.example",
     env: { ...config.env, core: { ...config.env.core, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
-    aws: {
-      ...config.aws!,
-      alb: "shared-colors",
-      peerTargetGroups: { "core-public": frontDoorAlternate, core: coreApiAlternate },
-    },
+    aws: { ...config.aws!, alb: "shared-colors" },
   };
   const flip = join(dir, "peer-active");
   if (peerActive) writeFileSync(flip, peerActive);
@@ -1307,43 +1304,6 @@ test("AWS accepts two color stacks on one ALB and reports this stack's own targe
         ["core", targetGroupArn("core-api")],
         ["core-public", targetGroupArn(awsTargetGroupName(config, "core-public"))],
       ]);
-      assert.throws(
-        () =>
-          assertAwsPublicRouting(
-            { ...f.paired, aws: { ...f.paired.aws!, peerTargetGroups: { "core-public": frontDoorAlternate } } },
-            f.services,
-          ),
-        /aws\.peerTargetGroups must name the peer target group of exactly core, core-public/,
-      );
-      assert.throws(
-        () =>
-          assertAwsPublicRouting(
-            {
-              ...f.paired,
-              aws: { ...f.paired.aws!, peerTargetGroups: { "core-public": frontDoorAlternate, core: "gone" } },
-            },
-            f.services,
-          ),
-        /peer target group for core is missing/,
-      );
-      assert.throws(
-        () =>
-          assertAwsPublicRouting(
-            f.paired,
-            new Map([
-              [
-                "core",
-                {
-                  loadBalancers: frontDoorAttachments({
-                    blueGreen: true,
-                    apiHosts: ["api.agent.acme.example", "*.apps.agent.acme.example"],
-                  }),
-                },
-              ],
-            ]),
-          ),
-        /color-paired ALB cannot also use ECS blue\/green alternate target groups/,
-      );
     } finally {
       f.cleanup();
     }
@@ -1391,15 +1351,13 @@ test("AWS waits for an idle color to serve no requests before calling it drained
       now: () => clock,
       sleep: async (ms: number) => void (clock += ms),
       log: (line: string) => lines.push(line),
-      deadlineMs: 120_000,
-      pollMs: 30_000,
     };
     writeFileSync(idle.requests, "118,0,3,0,0,0");
     await awsRequireColorDrained(idle.paired, opts);
     assert.match(lines.at(-1)!, /served no requests from 2026-11-25T10:2\d:00\.000Z to 2026-11-25T10:2\d:00\.000Z/);
     assert.equal(lines.filter((line) => line.includes("waiting for it to drain")).length, 2);
     assert.match(readFileSync(idle.log, "utf8"), /Name=TargetGroup,Value=targetgroup\/core-api\/1/);
-    writeFileSync(idle.requests, "5,5,5,5,5,5,5,5,5,5,5,5");
+    writeFileSync(idle.requests, Array(200).fill(5).join(","));
     await assert.rejects(
       () => awsRequireColorDrained(idle.paired, opts),
       /still served 10 requests .* it has not drained/,

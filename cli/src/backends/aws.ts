@@ -278,7 +278,7 @@ function awsArgs(aws: AwsConfig, args: string[]): string[] {
   return [...args, "--region", aws.region];
 }
 
-function awsJson<T>(aws: AwsConfig, args: string[]): T {
+export function awsJson<T>(aws: AwsConfig, args: string[]): T {
   const raw = capture(process.env.AWS_BIN ?? "aws", awsArgs(aws, [...args, "--output", "json"]));
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
@@ -3737,14 +3737,14 @@ export function assertAwsPublicRouting(
   return awsPublicRouting(config, ecsServices).targets;
 }
 
-interface AwsPublicRoutingState {
+export interface AwsPublicRoutingState {
   loadBalancerArn: string;
   listenerArn: string;
   targets: ReadonlyMap<string, string>;
-  colorRoutes: ReadonlyMap<string, { ruleArn: string; peer: string }>;
+  colorRoutes: ReadonlyMap<string, AwsColorRoute>;
 }
 
-function awsPublicRouting(
+export function awsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
 ): AwsPublicRoutingState {
@@ -3810,27 +3810,15 @@ function awsPublicRouting(
       expectedTargetArns.add(alternate);
     }
   }
-  const peerTargets = new Map<string, string>();
-  if (aws.peerTargetGroups) {
-    if (alternateTargets.size)
-      throw new Error("a color-paired ALB cannot also use ECS blue/green alternate target groups");
-    const declared = Object.keys(aws.peerTargetGroups);
-    if (declared.length !== ingress.length || ingress.some((name) => !aws.peerTargetGroups![name])) {
-      throw new Error(
-        `aws.peerTargetGroups must name the peer target group of exactly ${[...ingress].sort().join(", ")}`,
-      );
-    }
-    for (const name of ingress) {
-      const peer = targetGroups.find((group) => group.TargetGroupName === aws.peerTargetGroups![name])?.TargetGroupArn;
-      if (!peer) throw new Error(`peer target group for ${name} is missing`);
-      if (expectedTargetArns.has(peer) || peerTargets.has(peer)) {
-        throw new Error(`peer target group for ${name} is already one of this ALB's routed target groups`);
-      }
-      peerTargets.set(name, peer);
-    }
-    for (const peer of peerTargets.values()) expectedTargetArns.add(peer);
-  }
-  const blueGreen = alternateTargets.size > 0 || peerTargets.size > 0;
+  const defaults = listener.DefaultActions ?? [];
+  const colorPair =
+    !aws.sharedAlb &&
+    !alternateTargets.size &&
+    defaults.length === 1 &&
+    defaults[0]?.Type === "fixed-response" &&
+    defaults[0].FixedResponseConfig?.StatusCode === "404" &&
+    !defaults[0].TargetGroupArn;
+  const blueGreen = alternateTargets.size > 0 || colorPair;
   const ingressServices = new Set([...routes.values()].map((route) => route.service));
   for (const name of deployedAwsServices(aws)) {
     if (
@@ -3841,20 +3829,22 @@ function awsPublicRouting(
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
   }
-  if (
-    !aws.sharedAlb &&
-    (targetGroups.length !== expectedTargetArns.size ||
-      targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn)))
-  ) {
-    throw new Error("ALB has target groups for private or unknown services");
-  }
+  const requireKnownTargetGroups = (): void => {
+    if (
+      !aws.sharedAlb &&
+      (targetGroups.length !== expectedTargetArns.size ||
+        targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn)))
+    ) {
+      throw new Error("ALB has target groups for private or unknown services");
+    }
+  };
+  if (!colorPair) requireKnownTargetGroups();
   if (alternateTargets.size && alternateTargets.size !== ingress.length) {
     throw new Error("ALB cannot mix rolling and blue/green ingress services");
   }
   if (aws.sharedAlb && (ingress.length !== 1 || alternateTargets.size !== 1 || awsCoreHostnames(config).length)) {
     throw new Error("shared ALB requires one blue/green core front-door ingress without additional public routes");
   }
-  const defaults = listener.DefaultActions ?? [];
   if (blueGreen) {
     if (
       defaults.length !== 1 ||
@@ -3892,20 +3882,29 @@ function awsPublicRouting(
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
   const operatorRules = aws.sharedAlb ? new Set<string>() : operatorManagedRules(aws, rules);
   let nonDefault = rules.filter((rule) => !rule.IsDefault && !operatorRules.has(rule.RuleArn ?? ""));
-  for (const [name, peer] of peerTargets) {
-    const own = targets.get(name)!;
-    const routing = nonDefault.filter((rule) =>
-      rule.Actions?.some(
-        (action) =>
-          [own, peer].includes(action.TargetGroupArn ?? "") ||
-          action.ForwardConfig?.TargetGroups?.some((target) => [own, peer].includes(target.TargetGroupArn ?? "")),
-      ),
-    );
-    if (routing.length !== 1 || !routing[0]!.RuleArn) {
-      throw new Error(`color-paired ALB must route ${name} through exactly one rule, found ${routing.length}`);
+  if (colorPair) {
+    for (const name of ingress) {
+      const own = targets.get(name)!;
+      const routing = nonDefault.filter((rule) =>
+        rule.Actions?.some(
+          (action) =>
+            action.TargetGroupArn === own ||
+            action.ForwardConfig?.TargetGroups?.some((target) => target.TargetGroupArn === own),
+        ),
+      );
+      const peers = (routing[0]?.Actions?.[0]?.ForwardConfig?.TargetGroups ?? [])
+        .map((target) => target.TargetGroupArn)
+        .filter((arn) => arn && arn !== own);
+      if (routing.length !== 1 || !routing[0]!.RuleArn || peers.length !== 1) {
+        throw new Error(
+          `with a fixed-404 listener default and no ECS alternate target groups, ${name} must be routed by exactly one rule forwarding to this stack's target group and one peer stack's`,
+        );
+      }
+      productionRules.set(name, routing[0]!.RuleArn);
+      alternateTargets.set(name, peers[0]!);
+      expectedTargetArns.add(peers[0]!);
     }
-    productionRules.set(name, routing[0]!.RuleArn);
-    alternateTargets.set(name, peer);
+    requireKnownTargetGroups();
   }
   if (aws.sharedAlb) {
     const hostname = new URL(config.publicUrl).hostname.toLowerCase();
@@ -3998,7 +3997,7 @@ function awsPublicRouting(
     }
   }
 
-  const colorRoutes = new Map<string, { ruleArn: string; peer: string }>();
+  const colorRoutes = new Map<string, AwsColorRoute>();
   const state = (): AwsPublicRoutingState => ({
     loadBalancerArn,
     listenerArn: listener.ListenerArn!,
@@ -4041,7 +4040,16 @@ function awsPublicRouting(
       if (values.length !== expectedValues.length || expectedValues.some((value) => !values.includes(value))) {
         throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
       }
-      if (peerTargets.size) colorRoutes.set(name, { ruleArn: rule!.RuleArn!, peer: alternate });
+      const weight = (arn: string) => weightedTargets.find((target) => target.TargetGroupArn === arn)?.Weight ?? 0;
+      if (colorPair)
+        colorRoutes.set(name, {
+          route: name,
+          ruleArn: rule!.RuleArn!,
+          own: primary,
+          peer: alternate,
+          ownWeight: weight(primary),
+          peerWeight: weight(alternate),
+        });
       else targets.set(name, active[0].TargetGroupArn);
     }
     return state();
@@ -4112,133 +4120,6 @@ export interface AwsColorRoute {
   peer: string;
   ownWeight: number;
   peerWeight: number;
-}
-
-export function awsColorRoutes(config: QmConfig): { loadBalancerArn: string; routes: AwsColorRoute[] } {
-  const aws = requireAws(config);
-  if (!aws.peerTargetGroups) throw new CliError("aws.peerTargetGroups is not configured");
-  let state: AwsPublicRoutingState;
-  try {
-    state = awsPublicRouting(config);
-  } catch (error) {
-    throw new CliError(`color-paired ALB is not ready: ${errMessage(error)}`);
-  }
-  const rules =
-    awsJson<{
-      Rules?: Array<{
-        RuleArn?: string;
-        Actions?: Array<{ ForwardConfig?: { TargetGroups?: Array<{ TargetGroupArn?: string; Weight?: number }> } }>;
-      }>;
-    }>(aws, ["elbv2", "describe-rules", "--listener-arn", state.listenerArn]).Rules ?? [];
-  const routes = [...state.colorRoutes].map(([route, { ruleArn, peer }]) => {
-    const own = state.targets.get(route)!;
-    const weights = rules.find((rule) => rule.RuleArn === ruleArn)?.Actions?.[0]?.ForwardConfig?.TargetGroups ?? [];
-    const weight = (arn: string) => weights.find((target) => target.TargetGroupArn === arn)?.Weight ?? 0;
-    return { route, ruleArn, own, peer, ownWeight: weight(own), peerWeight: weight(peer) };
-  });
-  return { loadBalancerArn: state.loadBalancerArn, routes: routes.sort((a, b) => a.route.localeCompare(b.route)) };
-}
-
-export function awsTakeColorTraffic(config: QmConfig, log: (line: string) => void = console.log): void {
-  const aws = requireAws(config);
-  for (const route of awsColorRoutes(config).routes) {
-    if (route.ownWeight > 0 && route.peerWeight === 0) continue;
-    awsJson(aws, [
-      "elbv2",
-      "modify-rule",
-      "--rule-arn",
-      route.ruleArn,
-      "--actions",
-      JSON.stringify([
-        {
-          Type: "forward",
-          ForwardConfig: {
-            TargetGroups: [
-              { TargetGroupArn: route.own, Weight: 1 },
-              { TargetGroupArn: route.peer, Weight: 0 },
-            ],
-            TargetGroupStickinessConfig: { Enabled: false },
-          },
-        },
-      ]),
-    ]);
-    log(`${route.route}: routed to ${config.aws!.cluster}`);
-  }
-  const left = awsColorRoutes(config).routes.filter((route) => route.ownWeight <= 0 || route.peerWeight !== 0);
-  if (left.length) {
-    throw new CliError(`ALB still routes ${left.map((route) => route.route).join(", ")} to the peer color`);
-  }
-}
-
-const elbDimension = (arn: string, kind: "loadbalancer" | "targetgroup"): string => {
-  const marker = `:${kind}/`;
-  const index = arn.indexOf(marker);
-  if (index < 0) throw new CliError(`${arn} is not a ${kind} ARN`);
-  return arn.slice(index + marker.length - (kind === "targetgroup" ? kind.length + 1 : 0));
-};
-
-export interface AwsColorDrainOptions {
-  quietMs?: number;
-  metricLagMs?: number;
-  deadlineMs?: number;
-  pollMs?: number;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  log?: (line: string) => void;
-}
-
-export async function awsRequireColorDrained(config: QmConfig, opts: AwsColorDrainOptions = {}): Promise<void> {
-  const aws = requireAws(config);
-  const quietMs = opts.quietMs ?? 300_000;
-  const lagMs = opts.metricLagMs ?? 120_000;
-  const deadlineMs = opts.deadlineMs ?? 1_200_000;
-  const now = opts.now ?? Date.now;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const log = opts.log ?? console.log;
-  const started = now();
-  for (;;) {
-    const { loadBalancerArn, routes } = awsColorRoutes(config);
-    const routed = routes.filter((route) => route.ownWeight > 0);
-    if (routed.length) {
-      throw new CliError(`${aws.cluster} still receives ${routed.map((route) => route.route).join(", ")} traffic`);
-    }
-    const end = now() - lagMs;
-    const start = end - quietMs;
-    let requests = 0;
-    for (const own of new Set(routes.map((route) => route.own))) {
-      const points =
-        awsJson<{ Datapoints?: Array<{ Sum?: number }> }>(aws, [
-          "cloudwatch",
-          "get-metric-statistics",
-          "--namespace",
-          "AWS/ApplicationELB",
-          "--metric-name",
-          "RequestCount",
-          "--dimensions",
-          `Name=LoadBalancer,Value=${elbDimension(loadBalancerArn, "loadbalancer")}`,
-          `Name=TargetGroup,Value=${elbDimension(own, "targetgroup")}`,
-          "--start-time",
-          new Date(start).toISOString(),
-          "--end-time",
-          new Date(end).toISOString(),
-          "--period",
-          "60",
-          "--statistics",
-          "Sum",
-        ]).Datapoints ?? [];
-      requests += points.reduce((sum, point) => sum + (point.Sum ?? 0), 0);
-    }
-    const window = `${new Date(start).toISOString()} to ${new Date(end).toISOString()}`;
-    if (requests === 0) {
-      log(`${aws.cluster} served no requests from ${window}`);
-      return;
-    }
-    if (now() - started >= deadlineMs) {
-      throw new CliError(`${aws.cluster} still served ${requests} requests from ${window}; it has not drained`);
-    }
-    log(`${aws.cluster} served ${requests} requests from ${window}; waiting for it to drain`);
-    await sleep(opts.pollMs ?? 30_000);
-  }
 }
 
 async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = false): Promise<void> {
