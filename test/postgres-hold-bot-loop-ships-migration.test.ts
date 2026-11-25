@@ -35,12 +35,13 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
     grants: await Promise.all(["gb", "pa", "ge", "gr", "gd"].map((id) => loops.grants.get(id))),
   });
   const [before, pg] = [await state(), createPgPool(url)];
-  await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [MARK_EARLIER_LINKS_MIGRATION.id]);
+  await pg.q(
+    "DELETE FROM qm_schema_migrations WHERE id IN ('users/v2/0010-rerun-bot-marker-backfill', 'users/v2/0011-hold-bot-loop-ships')",
+  );
   await migrateRegisteredPgSchemas(url);
   const after = await state();
   const audit = await pg.q(`SELECT action, resource, scope_label, detail::jsonb FROM audit_log
     WHERE principal_id = 'system:migration' ORDER BY action, resource`);
-  await pg.close();
   const revocation = { revokedAt: after.grants[0]?.revokedAt, revokedBy: "system:migration" };
   const [[la, lb, lc, le, ld], held] = [before.loops, gates.shipActions.map((p) => ({ ...p, gate: "hold" }))];
   assert.deepEqual(after, {
@@ -53,4 +54,18 @@ test("a deploy revokes ship grants a bot made and holds the auto gates of loops 
     ["ship_grant_revoke", "gb", scope, { loopId: b.id }],
     ["ship_grant_revoke", "ge", scope, { loopId: e.id }],
   ]);
+  await users.link({ principalId: "kit", canonicalId: "U2", evidence: "qa", linkedBy: "", createdAt: 1 });
+  const [k, p] = [
+    await make("k", { owner: "kit", createdBy: "kit", ...gates }),
+    await make("p", { botActor: true, ...gates }),
+  ];
+  await grant("gk", k.id, "send_email", "kit");
+  await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [MARK_EARLIER_LINKS_MIGRATION.id]);
+  await migrateRegisteredPgSchemas(url);
+  const [lk, lp] = await Promise.all([k, p].map((loop) => loops.store.get(loop.id)));
+  assert.deepEqual(
+    [lk?.botActor, lk?.shipActions, lp?.shipActions, (await loops.grants.get("gk"))?.revokedBy],
+    [true, held, gates.shipActions, "system:migration"],
+  );
+  await pg.close();
 });
