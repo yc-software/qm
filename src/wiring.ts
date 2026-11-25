@@ -804,16 +804,18 @@ export function buildApp(
     catalog: { scopeId: orgScope, skills: () => deploymentLayerStore.skills() },
     ...(config.skillSigningSecret ? { signingSecret: config.skillSigningSecret } : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
+  let deploymentLayerLoad: Promise<unknown> | null = null;
+  const deploymentLayerReady = (): Promise<unknown> => (deploymentLayerLoad ??= deploymentLayerStore.hydrate());
   const refreshDeploymentLayer = (): void =>
     void deploymentLayerStore
       .hydrate()
       .catch((error: unknown) => console.error("[deployment-layer] refresh failed:", errMessage(error)));
   let stopLayerWatch: (() => void) | null = null;
-  const skillsReady = deploymentLayerReady.then(
-    () => undefined,
-    (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-  );
+  const skillsReady = (): Promise<void> =>
+    deploymentLayerReady().then(
+      () => undefined,
+      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+    );
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -2318,7 +2320,7 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: () => skillsReady,
+    skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -3276,7 +3278,9 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    deploymentLayerReady,
+    get deploymentLayerReady() {
+      return deploymentLayerReady();
+    },
     sessions,
     runs,
     signals: runSignals,
