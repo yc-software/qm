@@ -160,7 +160,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     if (r.code !== 0) return null;
     try {
       const [running, imageId, droppedCapabilities] = JSON.parse(r.stdout) as [boolean, string, string[] | null];
-      return { running, imageId, rawSocketsDisabled: droppedCapabilities?.includes("NET_RAW") ?? false };
+      return { running, imageId, rawSocketsDisabled: droppedCapabilities?.includes("CAP_NET_RAW") ?? false };
     } catch (cause) {
       throw new Error(`docker inspect ${name} returned invalid container state: ${r.stdout}`, { cause });
     }
@@ -300,7 +300,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       "agent_env=dev",
       "--network",
       net,
-      "--cap-drop=NET_RAW",
+      "--cap-drop=CAP_NET_RAW",
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
       ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
       "--add-host=host.docker.internal:host-gateway",

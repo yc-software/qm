@@ -238,11 +238,11 @@ test("tenants with the same scope and scratch key keep separate containers, volu
     assert.equal(fake.volumes.size, options ? 0 : 1);
     fake.containers.get(second!.id)!.args = fake.containers
       .get(second!.id)!
-      .args.filter((arg) => arg !== "--cap-drop=NET_RAW");
+      .args.filter((arg) => arg !== "--cap-drop=CAP_NET_RAW");
     await assert.rejects(sb.run(second!, "true"), /must be provisioned again/);
     const resumed = await withTenant(tenants[1]!, () => makeSandbox(fake).provision(scope, options));
     assert.equal(resumed.id, second!.id);
-    assert.equal(fake.containers.get(resumed.id)!.args.includes("--cap-drop=NET_RAW"), true);
+    assert.equal(fake.containers.get(resumed.id)!.args.includes("--cap-drop=CAP_NET_RAW"), true);
     await withTenant(tenants[1]!, () =>
       options ? sb.teardown(second!, { destroy: true }) : makeSandbox(fake).destroyScope!(scope),
     );
