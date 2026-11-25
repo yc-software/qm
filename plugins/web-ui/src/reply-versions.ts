@@ -35,8 +35,7 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
   const absorbed = new Set<AgentMessage>();
   const folded = new Map<AgentMessage, AssistantWork>();
   const inlined = new Set<number>();
-  const marked = (message: AgentMessage) =>
-    (message as AssistantWork).supersedes !== undefined || !!(message as AssistantWork).alsoSupersedes?.length;
+  const marked = (message: AgentMessage) => !!(message as AssistantWork).supersedes?.length;
   if (!messages.some(marked)) return { earlier, superseded, absorbed, folded, inlined };
   const narration = new Set(
     messages.flatMap((message) =>
@@ -49,8 +48,7 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
   for (const message of messages) {
     const reply = message as AssistantWork & { entrySeqs?: number[] };
     if (reply.role !== "assistant" || !messageText(reply).trim()) continue;
-    const targets = [...(reply.alsoSupersedes ?? []), ...(reply.supersedes === undefined ? [] : [reply.supersedes])];
-    for (const seq of targets) {
+    for (const seq of reply.supersedes ?? []) {
       if (narration.has(seq)) {
         inlined.add(seq);
         continue;

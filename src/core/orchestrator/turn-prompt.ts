@@ -135,12 +135,7 @@ export async function appendTurnGuidance(turn: {
 const isSpoken = (item: Item): boolean => isShownReply(item) || (isNarration(item) && !!item.text?.trim());
 
 const supersededIn = (items: readonly Item[]): Set<number> =>
-  new Set(
-    items.flatMap((item) => [
-      item.body.supersedes,
-      ...(Array.isArray(item.body.alsoSupersedes) ? item.body.alsoSupersedes : []),
-    ]),
-  ) as Set<number>;
+  new Set(items.flatMap((item) => (Array.isArray(item.body.supersedes) ? item.body.supersedes : []))) as Set<number>;
 
 export async function rewriteTargets(
   deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
@@ -168,13 +163,8 @@ export async function replyToRewrite(...args: Parameters<typeof rewriteTargets>)
 export function supersedeMarker(prior: readonly Item[], emitted: readonly Item[]): Record<string, unknown> {
   const own = emitted.filter(isSpoken);
   const replaced = supersededIn(own);
-  const targets = [...prior, ...own].filter((item) => !replaced.has(item.seq));
-  const latest = targets.findLast(isShownReply);
-  const others = targets.filter((item) => item !== latest).map((item) => item.seq);
-  return {
-    ...(latest ? { supersedes: latest.seq } : {}),
-    ...(others.length ? { alsoSupersedes: others } : {}),
-  };
+  const targets = [...prior, ...own].filter((item) => !replaced.has(item.seq)).map((item) => item.seq);
+  return targets.length ? { supersedes: targets } : {};
 }
 
 export const replacesReply = (entry: NewItem): boolean =>

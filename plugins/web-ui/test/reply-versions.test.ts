@@ -5,7 +5,12 @@ import { item } from "./item-fixture.ts";
 
 const at = Date.now() - 3_600_000;
 const reply = (seq: number, text: string, supersedes?: number) =>
-  item("AgentMessage", { seq, createdAt: at + seq * 1000, text, body: supersedes === undefined ? {} : { supersedes } });
+  item("AgentMessage", {
+    seq,
+    createdAt: at + seq * 1000,
+    text,
+    body: supersedes === undefined ? {} : { supersedes: [supersedes] },
+  });
 const wake = (seq: number) => [
   item("UserMessage", { seq, createdAt: at + seq * 1000, text: "A delegated task finished.", hidden: true }),
   item("ToolCall", { seq: seq + 1, createdAt: at + seq * 1000, tool: "execute", callId: `c${seq}`, body: {} }),
@@ -109,12 +114,12 @@ test("every message since the person last typed folds into the newest reply, nar
   }
   const { h, replies, texts } = await rendered([
     ...typedTurn,
-    answer(7, "Typed answer", { alsoSupersedes: [1, 4] }),
+    answer(7, "Typed answer", { supersedes: [1, 4] }),
     ...wake(8),
     reply(11, "Stacked report"),
     ...wake(12),
     ...said(15, "All lenses accept"),
-    answer(18, "Final answer", { supersedes: 11, alsoSupersedes: [7, 15] }),
+    answer(18, "Final answer", { supersedes: [7, 11, 15] }),
   ]);
   try {
     assert.deepEqual(replies(), ["Final answer"]);
