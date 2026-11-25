@@ -63,11 +63,7 @@ async function announced(stop?: boolean): Promise<string> {
 test("a call from any turn reaches the person's open desktop app, which claims and answers it once", async () => {
   const pending = call();
   const id = await announced();
-  assert.equal(
-    (await post(`${id}/claim`, { desktopClientId: windowA }, "bob")).status,
-    404,
-    "another person cannot claim",
-  );
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA }, "bob")).status, 404);
   const claim = await post(`${id}/claim`, { desktopClientId: windowA });
   assert.equal(claim.status, 200);
   assert.deepEqual(((await claim.json()) as { args: unknown }).args, { code: "await computer.listApps()" });
@@ -95,11 +91,8 @@ test("a call from a desktop app turn is claimable only by the window that sent i
 
 test("with no desktop app connected the call ends with a clear error", async () => {
   assert.deepEqual(await call({ timeoutMs: 500 }), { content: NO_DESKTOP_TEXT, isError: true });
-  assert.equal(
-    (await post(`${await announced()}/claim`, { desktopClientId: windowA })).status,
-    404,
-    "an expired call cannot be claimed",
-  );
+  const id = await announced();
+  assert.equal((await post(`${id}/claim`, { desktopClientId: windowA })).status, 404);
 });
 
 test("stopping the turn tells the desktop app to stop the running call", async () => {
