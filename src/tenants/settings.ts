@@ -28,7 +28,6 @@ export const tenantSettingsSchema = z
     orgSlug: z.string().refine(isDnsLabel, "expected a lowercase org slug"),
     handle: appHandleSchema,
     slackBridgeToken: z.string().regex(/^[\x21-\x7e]{16,}$/, "expected a Slack service bridge token"),
-    partnerChatAccount: text,
     spritesToken: text,
     spritesNamePrefix: namePrefix,
     modalAppName: text,
