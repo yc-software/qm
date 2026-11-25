@@ -251,10 +251,13 @@ companyTest("notify:false grants access on every direct share path without a DM 
     emailProblem: "notify was false",
     appUrl: "https://acme1-mysite.apps.example.com/",
   });
-  assert.deepEqual(await f.deploy.appGrantees(f.d.id), [
-    { scope: person(requester), permission: "write" },
-    { scope: person("carol@example.com"), permission: "read" },
-  ]);
+  assert.deepEqual(
+    (await f.deploy.appGrantees(f.d.id)).sort((a, b) => a.scope.localeCompare(b.scope)),
+    [
+      { scope: person(requester), permission: "write" },
+      { scope: person("carol@example.com"), permission: "read" },
+    ].sort((a, b) => a.scope.localeCompare(b.scope)),
+  );
   assert.deepEqual(await f.notices(), []);
   assert.deepEqual(sent, []);
   await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap, approved);

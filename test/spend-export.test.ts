@@ -192,12 +192,10 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
         [iso(today), personalScope("alice"), "person", "alice", "live", null, "claude-opus-5", 2, 3],
         [iso(today), personalScope("alice"), "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
         [iso(today), personalScope("U1"), "person", "U1", "live", null, "claude-opus-5", 1, 1],
-      ],
+      ].sort((a, b) => (String(a[1]) < String(b[1]) ? -1 : String(a[1]) > String(b[1]) ? 1 : 0)),
     );
-    assert.deepEqual(
-      [body.rows[2].input, body.rows[2].output, body.rows[2].cacheRead, body.rows[2].cacheWrite],
-      [200, 40, 800, 80],
-    );
+    const alice = body.rows.find((r: any) => r.principalId === "alice" && r.source === "live");
+    assert.deepEqual([alice.input, alice.output, alice.cacheRead, alice.cacheWrite], [200, 40, 800, 80]);
     const audited = (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");

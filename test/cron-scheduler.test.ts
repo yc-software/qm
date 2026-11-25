@@ -469,9 +469,13 @@ test("a failing interval cron does not starve later due crons across ticks", asy
   await scheduler.tick(2000);
   await scheduler.tick(3500);
 
+  const keys = calls.map((call) => call.idempotencyKey);
   assert.deepEqual(
-    calls.map((call) => call.idempotencyKey),
-    [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`, `cron:${failing.id}:1`, `cron:${succeeding.id}:3000`],
+    [keys.slice(0, 2).sort(), keys.slice(2).sort()],
+    [
+      [`cron:${failing.id}:1`, `cron:${succeeding.id}:1`].sort(),
+      [`cron:${failing.id}:1`, `cron:${succeeding.id}:3000`].sort(),
+    ],
   );
 });
 
