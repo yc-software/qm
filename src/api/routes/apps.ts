@@ -861,14 +861,13 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  const maxAge = deps.portalSession?.maxAgeSeconds;
-  let session = sessionSecret ? portalSession(req.headers.cookie, "portal_session", sessionSecret, maxAge) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, "portal_session", sessionSecret) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (publishedApp?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length)
-    session = portalSession(req.headers.cookie, "portal_session_x", sessionSecret, maxAge);
+    session = portalSession(req.headers.cookie, "portal_session_x", sessionSecret);
   if (session?.t !== undefined && session.t !== ctx.tenant?.id) {
     sendJson(res, 404, { error: "not_found" });
     return true;
