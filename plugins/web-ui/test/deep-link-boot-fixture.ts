@@ -56,7 +56,7 @@ interface HarnessOptions {
 
 export const welcomeSeeds: ActivitySeeds = {
   activities: [
-    { id: "research", title: "Research a customer", prompt: "Research our biggest customer.", icon: "search" },
+    { id: "research", title: "Research a customer", prompt: "Research our biggest customer.", icon: "book" },
   ],
   apps: {},
 };
