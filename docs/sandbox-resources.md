@@ -72,7 +72,7 @@ backfill is needed; existing jobs remain controllable by process ID. Interrupted
 
 ## Routing
 
-The retired `sandbox_routing` table and its import marker are dropped by migration. Routes that were never imported are dropped with it; their scopes have no default until one is selected.
+The retired `sandbox_routing` table and its import marker are dropped by migration. A tenant that never ran the import, because it used no sandbox since the import shipped, adopts nothing: its routing rows, session and environment scopes, and E2B, Modal, AWS and Superserve machine bodies get no sandbox record. Those scopes have no default until one is selected, and the provider machines behind those bodies stay unreferenced until an operator deletes them.
 
 Scoped commands require an explicit target or selected default. Disposable scratch computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
 

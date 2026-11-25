@@ -20,8 +20,9 @@ available until the new revision has passed operational checks.
   agent action are retired. Sandbox resources are always on; scoped execution uses the
   selected sandbox resource. Disposable computers use that resource's provider, or the
   installation provider when no resource is selected. A migration drops the routing
-  table and its import marker; routes that were never imported are dropped with it,
-  leaving those scopes without a default. To move a scope to another provider,
+  table and its import marker. A tenant that never ran the import adopts nothing:
+  its routes, session and environment scopes, and provider machine bodies get no sandbox
+  record, so those scopes start without a default and the old machines stay unreferenced. To move a scope to another provider,
   create a sandbox there, copy durable work via git or Files, and set it as the default.
 - Reach-denied Slack notifications are retired. Consult the audit log for denied
   requests.
