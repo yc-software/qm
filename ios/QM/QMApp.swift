@@ -13,12 +13,13 @@ struct QMApp: App {
   }
 }
 
-struct RootView: View {
-  private enum Page: Hashable {
-    case workspace, search, waiting, archived, setup
-  }
+/// Pages pushed onto the home conversation list's navigation stack.
+enum HomePage: Hashable {
+  case workspace, search, waiting, archived, setup, settings
+}
 
-  @State private var homePath: [Page] = []
+struct RootView: View {
+  @State private var homePath: [HomePage] = []
   @Bindable var model: AppModel
   @State private var selectedConversation: Conversation?
   @State private var showingConversations = true
@@ -93,7 +94,7 @@ struct RootView: View {
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if let identity = model.identity {
+        if model.identity != nil {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty {
               ConversationErrorBanner(model: model)
@@ -120,14 +121,14 @@ struct RootView: View {
               .padding(.horizontal, 16)
               .frame(height: 48)
               .background(.thinMaterial, in: Capsule())
-              accountMenu(identity)
+              settingsButton
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
           }
         }
       }
-      .navigationDestination(for: Page.self) { page in
+      .navigationDestination(for: HomePage.self) { page in
         if let client = model.client, let identity = model.identity {
           switch page {
           case .workspace: BrowseView(identity: identity, client: client)
@@ -138,6 +139,10 @@ struct RootView: View {
               .task { await model.select(.archived) }
               .onDisappear { Task { await model.select(.active) } }
           case .setup: NativeSetupView(client: client, identity: identity)
+          case .settings:
+            NativeSettingsView(
+              client: client, identity: identity, changeWorkspace: { choosingWorkspace = true },
+              signOut: { confirmingSignOut = true })
           }
         }
       }
@@ -292,35 +297,21 @@ struct RootView: View {
         ContentUnavailableView(
           empty.title, systemImage: empty.systemImage, description: Text(empty.description))
         if model.filter == .active, model.client != nil {
-          NavigationLink("Set up QM", value: Page.setup)
+          NavigationLink("Set up QM", value: HomePage.setup)
         }
       }
     }
   }
 
-  private func accountMenu(_ identity: Identity) -> some View {
-    Menu {
-      Text(identity.displayName ?? identity.user)
-      NavigationLink("Waiting on you", value: Page.waiting)
-      NavigationLink("Archived conversations", value: Page.archived)
-      Toggle("Web conversations only", isOn: $webOnly)
-      Button("Change workspace") { choosingWorkspace = true }
-      Picker("App appearance", selection: $appearance) {
-        Text("System").tag("system")
-        Text("Light").tag("light")
-        Text("Dark").tag("dark")
-        if let palette = NativeThemeStore.shared.palette {
-          Text(palette.name).tag("custom")
-        }
-      }
-      Button("Sign out", role: .destructive) { confirmingSignOut = true }
-    } label: {
+  private var settingsButton: some View {
+    NavigationLink(value: HomePage.settings) {
       Image(systemName: "person.crop.circle")
         .font(.system(size: 24))
         .frame(width: 48, height: 48)
         .background(.thinMaterial, in: Circle())
     }
-    .accessibilityLabel("Account")
+    .buttonStyle(.plain)
+    .accessibilityLabel("Settings")
   }
 
   @ToolbarContentBuilder
@@ -337,14 +328,14 @@ struct RootView: View {
     }
     ToolbarItem(placement: .topBarTrailing) {
       if model.client != nil {
-        NavigationLink(value: Page.search) {
+        NavigationLink(value: HomePage.search) {
           Image(systemName: "magnifyingglass")
         }.accessibilityLabel("Search workspace")
       }
     }
     ToolbarItem(placement: .topBarTrailing) {
       if model.client != nil {
-        NavigationLink(value: Page.workspace) {
+        NavigationLink(value: HomePage.workspace) {
           Image(systemName: "square.grid.2x2")
         }.accessibilityLabel("Browse workspace")
       }

@@ -104,55 +104,99 @@ struct NativeActionLabel: View {
   }
 }
 
+/// Settings laid out like the desktop General page: titled sections whose rows pair a title and a
+/// short note with their control.
 struct NativeSettingsView: View {
   let client: APIClient
   let identity: Identity
+  let changeWorkspace: () -> Void
+  let signOut: () -> Void
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
+
   var body: some View {
     QMForm {
-      Section("Workspace") {
-        LabeledContent("Signed in as", value: identity.displayName ?? identity.user)
-        LabeledContent("Workspace", value: identity.companyName ?? client.baseURL.host ?? "QM")
-      }
-      Section("Appearance") {
-        Picker("Theme", selection: $appearance) {
-          Text("System").tag("system")
-          Text("Light").tag("light")
-          Text("Dark").tag("dark")
-          if let palette = NativeThemeStore.shared.palette { Text(palette.name).tag("custom") }
-        }
-        NativeThemeImport()
-        Toggle("Web conversations only", isOn: $webOnly)
-      }
-      Section("Accounts") {
-        NavigationLink {
-          NativeSetupView(client: client, identity: identity)
-        } label: {
-          Label("Set up QM", systemImage: "checklist")
-        }
+      Section {
         NavigationLink {
           NativeModelAccountsView(client: client)
         } label: {
-          Label("AI accounts", systemImage: "person.crop.circle")
+          SettingsLabel("AI access", note: "Use company access or your own subscription.")
+        }
+        NavigationLink {
+          RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
+        } label: {
+          SettingsLabel("Model and effort", note: "Defaults for new conversations.")
+        }
+      } header: {
+        SettingsHeader("Plan")
+      }
+      Section {
+        VStack(alignment: .leading, spacing: 12) {
+          SettingsLabel("Theme", note: "System follows your device’s light or dark setting.")
+          Picker("Theme", selection: $appearance) {
+            Text("System").tag("system")
+            Text("Light").tag("light")
+            Text("Dark").tag("dark")
+            if let palette = NativeThemeStore.shared.palette { Text(palette.name).tag("custom") }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+        }
+        .padding(.vertical, 4)
+        NativeThemeImport()
+      } header: {
+        SettingsHeader("Appearance")
+      }
+      Section {
+        Toggle(isOn: $webOnly) {
+          SettingsLabel("Web conversations only", note: "Hide Slack conversations from your list.")
+        }
+        NavigationLink(value: HomePage.waiting) {
+          SettingsLabel("Waiting on you", note: "Conversations that need your reply.")
+        }
+        NavigationLink(value: HomePage.archived) {
+          SettingsLabel("Archived conversations", note: "Conversations you’ve put away.")
+        }
+      } header: {
+        SettingsHeader("Conversations")
+      }
+      Section {
+        NavigationLink {
+          NativeSetupView(client: client, identity: identity)
+        } label: {
+          SettingsLabel("Set up QM", note: "Connect the apps and accounts QM works with.")
         }
         NavigationLink {
           NativeSlackAccountView(client: client)
         } label: {
-          NativeServiceLabel(title: "Slack account", service: "slack")
+          NativeServiceLabel(service: "slack") {
+            SettingsLabel("Slack account", note: "Link your Slack identity to QM.")
+          }
         }
         NavigationLink {
           NativeKeychainView(client: client)
         } label: {
-          Label("Connections and credentials", systemImage: "key")
+          SettingsLabel("Connections and credentials", note: "Keys and logins QM can use for you.")
         }
+      } header: {
+        SettingsHeader("Connections")
       }
-      Section("Defaults") {
-        NavigationLink("Model and effort") {
-          RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
+      Section {
+        LabeledContent {
+          Button("Sign out", role: .destructive, action: signOut).buttonStyle(.bordered)
+            .controlSize(.small)
+        } label: {
+          SettingsLabel("Account", note: accountNote)
         }
+        LabeledContent {
+          Button("Change", action: changeWorkspace).buttonStyle(.bordered).controlSize(.small)
+        } label: {
+          SettingsLabel("Workspace", note: client.baseURL.host)
+        }
+      } header: {
+        SettingsHeader("Account")
       }
-      Section("About") {
+      Section {
         Link("About QM", destination: URL(string: "https://github.com/yc-software/qm")!)
         LabeledContent(
           "Version",
@@ -167,8 +211,42 @@ struct NativeSettingsView: View {
             ).font(.footnote).textSelection(.enabled).padding()
           }.navigationTitle("Licenses")
         }
+      } header: {
+        SettingsHeader("About")
       }
-    }.navigationTitle("Settings").scrollContentBackground(.hidden).background(QMTheme.paper)
+    }
+    .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+  }
+
+  private var accountNote: String {
+    let name = identity.displayName ?? identity.user
+    guard let workspace = identity.companyName ?? client.baseURL.host else { return name }
+    return "\(name) · \(workspace)"
+  }
+}
+
+/// A settings section title in sentence case, like the desktop General page's headings.
+struct SettingsHeader: View {
+  let title: String
+  init(_ title: String) { self.title = title }
+  var body: some View {
+    Text(title).font(.subheadline.weight(.medium)).foregroundStyle(QMTheme.ink).textCase(nil)
+  }
+}
+
+/// A settings row's title over its muted note.
+struct SettingsLabel: View {
+  let title: String
+  let note: String?
+  init(_ title: String, note: String? = nil) {
+    self.title = title
+    self.note = note
+  }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title)
+      if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
+    }
   }
 }
 
