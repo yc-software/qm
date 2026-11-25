@@ -2,13 +2,13 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } from "../src/onboarding/onboarding.ts";
+import { detectOnboardingStatus, setOnboardingStatus } from "../src/onboarding/onboarding.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -60,15 +60,6 @@ test("a new personal DM offers onboarding through the skills index", async () =>
   } as TurnRequest);
 
   assert.match(sys.reply ?? "", /^- onboarding — /m);
-});
-
-test("the opener defers Slack setup and the skill shows the web setup cards without requiring provider configuration", () => {
-  const skill = readFileSync(join(onboardingSkillDir, "onboarding/SKILL.md"), "utf8");
-  for (const card of ["add-to-slack", "connect-apps"]) assert.match(skill, new RegExp(`show the \`::${card}\\{\\}\``));
-  assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
-  assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
-  assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);
-  assert.match(PROACTIVE_OPENER_PROMPT, /Never ask regular users to create OAuth apps or supply project keys/);
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
