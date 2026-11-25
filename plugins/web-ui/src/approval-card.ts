@@ -47,7 +47,7 @@ function fieldLabel(f: ArgField): TemplateResult {
   </dt>`;
 }
 
-export function argsView(view: ArgView): TemplateResult | typeof nothing {
+function argsView(view: ArgView): TemplateResult | typeof nothing {
   if (!view.fields.length && !view.empty.length) return nothing;
   return html`${
     view.fields.length
@@ -87,7 +87,7 @@ function commandBody(a: PendingApproval): TemplateResult {
     ${showMatch ? html`<div class="ac-note">Matched <code>${a.matched}</code></div>` : nothing}`;
 }
 
-export function approvalBody(a: PendingApproval): TemplateResult {
+function approvalBody(a: PendingApproval): TemplateResult {
   const call = approvalCall(a);
   if (call) return html`${argsView(argView(call.args))}`;
   const reason = a.reason;

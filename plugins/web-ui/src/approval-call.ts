@@ -47,7 +47,7 @@ export function approvalCall(a: Pick<PendingApproval, "call">): ApprovalCall | n
   return a.call && isRecord(a.call.input) ? unwrapCatalog(a.call.tool, a.call.input) : null;
 }
 
-export function keyLabel(key: string): string {
+function keyLabel(key: string): string {
   return key.replaceAll("_", " ").replaceAll("-", " ").trim();
 }
 
@@ -67,7 +67,7 @@ function isEmpty(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length === 0;
 }
 
-export function argNode(value: unknown, depth = 0): ArgNode {
+function argNode(value: unknown, depth = 0): ArgNode {
   if (isScalar(value)) {
     const { text, literal } = scalarText(value);
     return !literal && (text.length > SHORT_TEXT || text.includes("\n"))
@@ -120,7 +120,7 @@ export function argView(args: Record<string, unknown>, depth = 0): ArgView {
   return { fields, empty };
 }
 
-export function toolWords(call: ApprovalCall): string {
+function toolWords(call: ApprovalCall): string {
   const words = keyLabel(call.tool);
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
