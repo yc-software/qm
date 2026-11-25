@@ -11,7 +11,7 @@ import { isConnectionReturn } from "./connection-return";
 import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
-import { welcomeLayout } from "./welcome-session";
+import { ideaThreadRef, welcomeLayout } from "./welcome-session";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -572,7 +572,7 @@ export function createChatSurface(
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
     const carried = storedDraft(newChatDraftKey(user));
-    if (carried) saveDraft(threadRef, carried);
+    if (carried && !storedDraft(threadRef)) saveDraft(threadRef, carried);
     ctx.composer.resetComposer();
     forkOriginController.reset();
     mountContinuable(threadRef, null, context?.scopeId ?? null, [], context?.name ?? null);
@@ -1506,6 +1506,13 @@ export function createChatSurface(
     }
   }
 
+  function startIdeaChat(prompt: string): void {
+    if (ideasUnavailable() || !appState.me) return;
+    const threadRef = ideaThreadRef(appState.me.user);
+    saveDraft(threadRef, prompt);
+    newChat(undefined, threadRef);
+  }
+
   function welcomeGreeting(animate = true): TemplateResult {
     return html`
       <article class="message-row assistant-row welcome-greeting">
@@ -1514,7 +1521,7 @@ export function createChatSurface(
             .me=${appState.me}
             .animateWelcome=${animate}
             .onMoreIdeas=${showWelcomeIdeas}
-            .onIdea=${(prompt: string) => chatState.agent && ctx.composer.fillSuggestedPrompt(prompt, chatState.agent)}
+            .onIdea=${startIdeaChat}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
           ></qm-onboarding-welcome>
