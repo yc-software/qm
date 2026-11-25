@@ -215,6 +215,7 @@ export interface Destination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
+  webHome?: true;
   type: string;
   target: string;
   audienceScopeId?: ScopeId;
@@ -357,6 +358,7 @@ export type TurnOrigin =
       kind: "automation";
       screenData?: string;
       destination?: Destination;
+      fire?: true;
     }
   | { kind: "direct" };
 
@@ -484,6 +486,7 @@ export interface PendingApprovalRecord {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
+  cardTo?: string;
 }
 
 type ApprovalScope = "once" | "session" | "always";

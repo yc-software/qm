@@ -25,7 +25,6 @@ import type {
   TurnResult,
   TurnRuntime,
 } from "../types.ts";
-import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { ByteRange } from "../files/durable-byte-store.ts";
@@ -72,8 +71,9 @@ import type {
   GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
-import type { Delivery, Destination } from "../types.ts";
+import type { Delivery, Destination, OutgoingAttachment } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, TriggerBase, Webhook } from "../triggers/types.ts";
+import type { ReachOpts, ReachResolution, ReachTarget } from "../reach/reach.ts";
 import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
@@ -106,7 +106,6 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
-import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
@@ -821,6 +820,7 @@ export interface AppDeps {
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
+  continueApproval?: import("../triggers/approval-continuation.ts").ApprovalContinuation;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
   contextRequests: DurableMap<SurfaceContextRequest>;

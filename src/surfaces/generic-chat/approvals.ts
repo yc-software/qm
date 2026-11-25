@@ -231,7 +231,10 @@ export function createGenericChatApprovals(deps: {
         );
       const line = commandDecisionBody(record, decision, click.actor.displayName);
       return settle({
-        body: queued.runId ? line : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
+        body:
+          queued.runId || queued.status === "queued"
+            ? line
+            : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
         actions: [],
       });
     }
