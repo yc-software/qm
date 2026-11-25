@@ -12,7 +12,7 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
-import { webNotificationsOn } from "../../notifications/web-push.ts";
+import { webNotificationsOn } from "../../notifications/reply-notifications.ts";
 import { personalScope } from "../../types.ts";
 
 export interface WebMeConfig {

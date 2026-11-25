@@ -43,7 +43,7 @@ export const FEATURES = {
   web_notifications: {
     label: "Reply notifications (experimental)",
     personalOnly: true,
-    hint: "Offers the selected people browser and desktop notifications for replies in web conversations they aren't viewing. Turning it off stops their notifications at the next reply; the prompt and setting disappear on their next page load.",
+    hint: "Offers the selected people desktop app notifications for replies in web conversations they aren't viewing. Turning it off stops their notifications at the next reply; the prompt and setting disappear on their next page load.",
   },
 } as const satisfies Record<string, { label: string; personalOnly?: boolean; hint?: string }>;
 export type FeatureName = keyof typeof FEATURES;
