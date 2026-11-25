@@ -1,7 +1,6 @@
 import { openSessionShare } from "./session-share";
 import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { meetingOf, meetingsReady, meetingsSidebar, mountMeetingNote } from "./meeting-note";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -371,8 +370,7 @@ export function renderList(): void {
   if (chatsPageShowing()) drawChatsPage();
   if (!appState.listEl) return;
   const visible = visibleSessions();
-  const meetings = visible.filter((s) => !s.archived && meetingOf(s));
-  const active = visible.filter((s) => !s.archived && !meetingOf(s));
+  const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
   const shownThreads = new Set(visible.map((session) => session.threadRef));
@@ -385,11 +383,6 @@ export function renderList(): void {
   render(
     html`
       ${detachDropZone()}
-      ${meetingsSidebar(
-        meetings.map((session) => sessionRow(session)),
-        openMeetingSession,
-        renderList,
-      )}
       ${
         pinned.length
           ? html`
@@ -2212,14 +2205,6 @@ async function showSession(
   await openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
-function openMeetingSession(id: string): void {
-  void refreshSessions({ silent: true });
-  void (async () => {
-    const session = sessionsState.list.find((s) => s.id === id) ?? (await fetchSessionRow({ id }));
-    if (session) await openSession(session);
-  })().catch((error: unknown) => reportHandledError("web:meeting_open", error));
-}
-
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
@@ -2238,13 +2223,6 @@ export async function openSessionInto(
   }
   if (s.id === conv.state.sessionId && !transcriptPrefetch) {
     conv.catchUp();
-    return true;
-  }
-  const meeting = s.threadRef.includes(":meeting:") && (await meetingsReady()) ? meetingOf(s) : null;
-  if (meeting) {
-    if (tracked) sessionsState.openingKey = null;
-    conv.mountMeeting(s, (host) => mountMeetingNote(host, sessionTitle(s), s.id, meeting));
-    renderList();
     return true;
   }
   const started = Date.now();

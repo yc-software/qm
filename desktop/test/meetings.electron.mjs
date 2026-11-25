@@ -10,9 +10,6 @@ const directory = mkdtempSync(path.join(tmpdir(), "qm-meetings-"));
 const wav = path.join(directory, "talk.wav");
 app.commandLine.appendSwitch("use-fake-device-for-media-stream");
 app.commandLine.appendSwitch("use-file-for-fake-audio-capture", wav);
-const waitFor = async (check) => {
-  while (!check()) await new Promise((resolve) => setTimeout(resolve, 100));
-};
 (async () => {
   const rate = 16_000;
   const samples = Int16Array.from({ length: rate * 5 }, (_, i) =>
@@ -60,8 +57,10 @@ setInterval(() => {}, 1000);
   process.env.QM_DESK_BIN = desk;
 
   const log = [];
-  const stopped = Promise.withResolvers();
+  const summarized = [];
+  let summary = Promise.withResolvers();
   let failedOnce = false;
+  let speechCount = 0;
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -75,35 +74,27 @@ setInterval(() => {}, 1000);
       res.setHeader("content-type", "text/html");
       return res.end(`<title>${url.pathname}</title>`);
     }
-    if (req.method === "GET") return reply(200, { enabled: true });
-    const [, , , id, action] = url.pathname.split("/");
-    const entry = { action: action ?? "create", id, client: req.headers["x-qm-client"], origin: req.headers.origin };
-    if (action === "speech") {
-      Object.assign(entry, {
-        speaker: url.searchParams.get("speaker"),
-        at: Number(url.searchParams.get("at")),
-        type: req.headers["content-type"],
-        ebml: body.subarray(0, 4).toString("hex"),
-        bytes: body.length,
-        text: req.headers["content-type"] === "application/json" ? JSON.parse(body).text : undefined,
-      });
-      log.push(entry);
-
+    const entry = { path: url.pathname, client: req.headers["x-qm-client"], origin: req.headers.origin };
+    log.push(entry);
+    if (req.method === "GET") return reply(200, { enabled: true, user: "alice" });
+    if (url.pathname === "/api/dictation") {
+      Object.assign(entry, { type: req.headers["content-type"], ebml: body.subarray(0, 4).toString("hex") });
       if (!failedOnce) {
         failedOnce = true;
         return reply(503, { error: "busy" });
       }
-      if (log.length === 5) return reply(422, { error: "unreadable", message: "The audio could not be read." });
-      return reply(200, { text: "hello", prompt: "the brief" });
+      if (++speechCount === 4) return reply(422, { error: "unreadable", message: "The audio could not be read." });
+      return reply(200, { text: "hello" });
     }
+    if (url.pathname === "/api/blobs") {
+      entry.markdown = body.toString();
+      return reply(200, { blobId: `blob-${summarized.length}`, sizeBytes: body.length });
+    }
+    if (url.pathname === "/api/sessions") return reply(201, { session: { id: "s1", threadRef: "web:alice:t1" } });
     Object.assign(entry, JSON.parse(body));
-    log.push(entry);
-
-    if (action === "stop") {
-      stopped.resolve(entry);
-      return reply(202, {});
-    }
-    reply(201, { path: `/meetings/${entry.id}`, prompt: "the brief" });
+    summarized.push(entry);
+    summary.resolve(entry);
+    return reply(202, { status: "queued" });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -112,76 +103,47 @@ setInterval(() => {}, 1000);
   await app.whenReady();
   try {
     await import("../main.mjs");
-    const stop = await stopped.promise;
+    const turn = await summary.promise;
     const ended = Date.now() - started;
     assert.ok(
       ended > 45_000 && ended < 70_000,
       `detected recording stopped ~20 s after the meeting ended (${ended} ms)`,
     );
-    const [create, ...rest] = log;
-    assert.equal(create.action, "create");
-    assert.equal(create.app, "Zoom");
-    assert.equal(create.id.length, 36);
-    assert.equal(typeof create.timezone, "string");
-    assert.equal(create.client, "desktop");
-    assert.equal(create.origin, origin);
-    assert.equal(rest.at(-1), stop);
-    const speech = rest.slice(0, -1);
-    assert.ok(speech.every((entry) => entry.action === "speech" && entry.id === create.id));
-    assert.ok(speech.every((entry) => entry.type === "audio/webm" && entry.ebml === "1a45dfa3" && entry.bytes > 1000));
-    const retried = speech.filter((entry) => entry.speaker === speech[0].speaker);
-    assert.deepEqual(retried[0], retried[1], "a failed upload is retried with the same segment");
-    assert.equal(speech.filter((entry) => entry.at === speech[3].at).length, 1, "an unusable segment is not retried");
-    for (const speaker of ["me", "others"]) {
-      const at = [...new Set(speech.filter((entry) => entry.speaker === speaker).map((entry) => entry.at))];
-      assert.ok(at.length >= 3, `${speaker} segments uploaded: ${at.length}`);
-      assert.deepEqual(
-        at,
-        at.toSorted((a, b) => a - b),
-        `${speaker} segments upload in order`,
-      );
-    }
-    assert.ok(stop.endedAt >= Math.max(...speech.map((entry) => entry.at)));
+    const speech = log.filter((entry) => entry.path === "/api/dictation");
+    assert.ok(speech.every((entry) => entry.type === "audio/webm" && entry.ebml === "1a45dfa3"));
+    assert.ok(speech.length >= 4, `segments uploaded: ${speech.length}`);
+    assert.ok(log.every((entry) => entry.client === "desktop" && entry.origin === origin));
+    const markdown = log.find((entry) => entry.path === "/api/blobs").markdown;
+    assert.ok(markdown.startsWith("# Zoom meeting"), markdown);
+    assert.ok(markdown.includes(" Me:** hello") && markdown.includes(" Them:** hello"), markdown);
+    assert.equal(turn.threadRef, "web:alice:t1");
+    assert.equal(turn.scopeId, "personal:alice");
+    assert.ok(turn.text.startsWith("Summarize this meeting transcript"));
+    assert.deepEqual(turn.attachments[0].blobId, "blob-0");
+    assert.ok(turn.attachments[0].name.endsWith(".md"));
+    const opened = () =>
+      BrowserWindow.getAllWindows().some((window) => window.webContents.getURL() === `${origin}/s/s1`);
+    for (let waited = 0; !opened() && waited < 5000; waited += 100)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(opened(), "the summary conversation opened");
     const menuItem = (label) =>
       Menu.getApplicationMenu()
         .items.flatMap((item) => item.submenu?.items ?? [])
         .find((item) => item.label === label);
-    menuItem("Open Meeting Notes").click();
-    const main = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().startsWith(origin));
-    await new Promise((resolve) => main.webContents.once("did-finish-load", resolve));
-    assert.equal(main.webContents.getURL(), `${origin}/meetings/${create.id}`);
     menuItem("Transcribe on This Mac").click();
-    const { path: notesPath } = await main.webContents.executeJavaScript("qmDesktop.meetings.start()");
-    const manual = log.findLast((entry) => entry.action === "create");
-    assert.equal(notesPath, `/meetings/${manual.id}`);
-    assert.equal(manual.app, undefined);
-    const { startedAt, ...state } = await main.webContents.executeJavaScript("qmDesktop.meetings.state()");
-    assert.ok(startedAt <= Date.now());
-    assert.deepEqual(state, { recording: true, stopping: false, path: notesPath });
-    const pillWindow = () =>
-      BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith("/pill.html"));
-    await waitFor(pillWindow);
-    const pill = pillWindow();
-    const line = () => pill.webContents.executeJavaScript("document.getElementById('line').textContent");
-    while ((await line()) !== "hello") await new Promise((resolve) => setTimeout(resolve, 100));
+    summary = Promise.withResolvers();
+    menuItem("Start Recording").click();
+    await new Promise((resolve) => setTimeout(resolve, 15_000));
     app.on("will-quit", () => {
       server.close();
       rmSync(directory, { recursive: true, force: true });
-      const last = log.at(-1);
-      const local = log.filter((entry) => entry.action === "speech" && entry.id === manual.id);
-      const heard = local.map((entry) => Number(entry.text?.split(" ")[1]));
-      if (
-        last.action !== "stop" ||
-        last.id !== manual.id ||
-        !local.every((entry) => entry.type === "application/json") ||
-        !heard.some((samples) => samples > 16_000 * 9) ||
-        !local.some((entry) => entry.text.endsWith("after the brief"))
-      ) {
-        console.error("Quitting did not flush and stop the recording", JSON.stringify(log, null, 1));
+      const local = log.findLast((entry) => entry.path === "/api/blobs")?.markdown ?? "";
+      if (summarized.length !== 2 || !local.includes("heard ") || !local.startsWith("# Meeting")) {
+        console.error("Quitting did not flush and summarize the recording", JSON.stringify(log, null, 1));
         return app.exit(1);
       }
       console.log(
-        `PASS: detected Zoom, created the meeting, uploaded ${speech.length} segments in order per track, retried a 503, stopped after the meeting ended, opened notes; a recording started from the page showed its latest line in the pill, transcribed on this Mac, sent only text with the server's prompt, and flushed and stopped on quit`,
+        `PASS: detected Zoom, uploaded ${speech.length} segments, retried a 503, skipped an unusable segment, stopped after the meeting ended, uploaded the Markdown transcript and opened a conversation asking QM to summarize it; a recording started from the menu transcribed on this Mac and was summarized on quit`,
       );
     });
     app.quit();

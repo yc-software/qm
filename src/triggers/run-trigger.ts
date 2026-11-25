@@ -96,7 +96,7 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
   );
 }
 
-const POLL_SURFACES = new Set(["cron", "webhook", "monitor", "meeting"]);
+const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
 export const firedByPoll = (turn: { origin?: Pick<TurnOrigin, "kind">; surface?: string }): boolean =>
   turn.origin?.kind === "automation" && !!turn.surface && POLL_SURFACES.has(turn.surface);
 

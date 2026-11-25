@@ -1,10 +1,9 @@
 import { app, Menu, Notification, systemPreferences } from "electron";
-import { randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startWhisper, watchMicrophone } from "./desk.mjs";
-import { pillLevel, registerPill, showPill } from "./pill.mjs";
 import { registerRecorder, startCapture } from "./recorder.mjs";
 import { discardCorruptModels, downloadModel } from "./transcription.mjs";
 
@@ -35,6 +34,7 @@ const meetingEndGrace = 20_000;
 const silenceLimit = 15 * 60_000;
 const othersQuietWarning = 2 * 60_000;
 const quitFlushWait = 10_000;
+const promptLines = 12;
 
 export function meetingApp(apps) {
   for (const { bundle_id: bundle } of apps) {
@@ -44,9 +44,9 @@ export function meetingApp(apps) {
 }
 
 let request;
-let openNotes;
-let publish;
+let openSession;
 let enabled = false;
+let user;
 let automatic = false;
 let local = true;
 let model;
@@ -56,11 +56,13 @@ let detectionProblem;
 let meetingNow;
 let meetingEnded;
 let recording;
-let notes;
 const notices = new Set();
 
 const settingsPath = () => path.join(app.getPath("userData"), "meetings.json");
 const plural = (count) => (count === 1 ? "1 audio segment" : `${count} audio segments`);
+const clock = (at) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+const day = (at) =>
+  new Date(at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 function notify(title, body, action) {
   const notification = new Notification({
@@ -77,31 +79,6 @@ function notify(title, body, action) {
   notification.show();
 }
 
-function problems(current) {
-  return [
-    ...Object.entries(current.tracks).map(([speaker, problem]) => `${trackNames[speaker]}: ${problem}`),
-    ...(current.othersQuiet ? ["Computer audio: nothing heard for 2 minutes"] : []),
-    ...(current.uploadProblem ? [`Upload retrying: ${current.uploadProblem}`] : []),
-    ...(current.local && model && !model.file
-      ? [
-          model.problem
-            ? `Transcription model: ${model.problem}`
-            : `Downloading transcription model: ${model.progress}%`,
-        ]
-      : []),
-  ];
-}
-
-export const meetingState = () =>
-  recording
-    ? {
-        recording: true,
-        startedAt: recording.startedAt,
-        stopping: Boolean(recording.stopping),
-        ...(recording.path ? { path: recording.path } : {}),
-      }
-    : { recording: false };
-
 function render() {
   for (const item of meetingMenu()) {
     const live = Menu.getApplicationMenu()?.getMenuItemById(item.id);
@@ -109,18 +86,10 @@ function render() {
       Object.assign(live, {
         visible: item.visible,
         enabled: item.enabled,
+        ...(item.label && { label: item.label }),
         ...(item.type && { checked: item.checked }),
       });
   }
-  publish?.(meetingState());
-  showPill(
-    recording && {
-      startedAt: recording.startedAt,
-      stopping: Boolean(recording.stopping),
-      line: recording.line,
-      problem: problems(recording)[0],
-    },
-  );
 }
 
 function prepareModel() {
@@ -129,17 +98,13 @@ function prepareModel() {
     for (let delay = 5000; local; delay = Math.min(delay * 2, 300_000)) {
       try {
         model.file = await downloadModel((share) => {
-          const progress = Math.floor(share * 100);
-          if (progress === model.progress) return;
-          model.progress = progress;
-          render();
+          model.progress = Math.floor(share * 100);
         });
         model.problem = undefined;
-        render();
         return model.file;
       } catch (error) {
+        if (model.problem !== error.message) notify("Transcription model not downloaded", error.message);
         model.problem = error.message;
-        render();
       }
       await sleep(delay);
     }
@@ -173,7 +138,7 @@ async function readSettings() {
 async function explain(response) {
   const text = await response.text().catch((error) => error.message);
   try {
-    return JSON.parse(text).message ?? text;
+    return JSON.parse(text).message ?? JSON.parse(text).error ?? text;
   } catch {
     return text;
   }
@@ -188,40 +153,21 @@ async function call(current, run) {
     } catch (error) {
       problem = error.message;
     }
-    if (response?.ok) {
-      if (current.uploadProblem) {
-        current.uploadProblem = undefined;
-        render();
-      }
-      return response;
-    }
+    if (response?.ok) return response;
     if (response) {
       problem = `HTTP ${response.status}: ${await explain(response)}`;
       if (response.status < 500 && response.status !== 408 && response.status !== 429)
-        throw Object.assign(new Error(problem), { segmentOnly: ![401, 403, 404].includes(response.status) });
+        throw Object.assign(new Error(problem), {
+          status: response.status,
+          segmentOnly: ![401, 403, 404].includes(response.status),
+        });
     }
+    if (current.uploadProblem !== problem) console.error("QM meeting upload retrying", problem);
     current.uploadProblem = problem;
-    render();
     await sleep(delay, undefined, { signal: current.quitting.signal }).catch(() => {
       throw new Error(problem);
     });
   }
-}
-
-function meeting(current) {
-  current.created ??= call(current, (signal) =>
-    request("/api/meetings", "POST", signal, "application/json", {
-      id: current.id,
-      startedAt: current.startedAt,
-      ...(current.app ? { app: current.app } : {}),
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    }),
-  ).then(async (response) => {
-    ({ path: current.path, prompt: current.prompt } = await response.json());
-    notes = current.path;
-    render();
-  });
-  return current.created;
 }
 
 function fail(current, error) {
@@ -230,7 +176,7 @@ function fail(current, error) {
   void stopRecording();
 }
 
-async function transcribeHere(current, pcm) {
+async function transcribeHere(current, pcm, prompt) {
   if (typeof pcm === "string")
     throw Object.assign(new Error(`The audio could not be decoded (${pcm})`), { segmentOnly: true });
   const { signal } = current.controller;
@@ -244,7 +190,7 @@ async function transcribeHere(current, pcm) {
   ]);
   const whisper = (current.whisper ??= startWhisper(file));
   try {
-    return await whisper.transcribe(pcm, current.prompt ?? "");
+    return await whisper.transcribe(pcm, prompt);
   } catch (error) {
     if (error.segmentOnly) throw error;
     whisper.discarded ??= discardCorruptModels().then((discarded) => {
@@ -252,44 +198,37 @@ async function transcribeHere(current, pcm) {
       return discarded;
     });
     if (!(await whisper.discarded)) throw error;
-    return transcribeHere(current, pcm);
+    return transcribeHere(current, pcm, prompt);
+  }
+}
+
+async function transcribeOnline(current, bytes) {
+  try {
+    const response = await call(current, (signal) => request("/api/dictation", "POST", signal, "audio/webm", bytes));
+    return (await response.json()).text ?? "";
+  } catch (error) {
+    if (error.status === 400 && error.message.includes("empty_audio")) return "";
+    throw error;
   }
 }
 
 function upload(current, speaker, at, bytes) {
   current.lastSpeech = Date.now();
-  if (speaker === "others") {
-    current.othersHeard = true;
-    if (current.othersQuiet) {
-      current.othersQuiet = false;
-      render();
-    }
-  }
+  if (speaker === "others") current.othersHeard = true;
   current.uploads[speaker] = current.uploads[speaker].then(async () => {
     if (current.failure) return;
     try {
-      await meeting(current);
-    } catch (error) {
-      return fail(current, error);
-    }
-    try {
-      const body = current.local ? { text: await transcribeHere(current, bytes) } : bytes;
-      if (body.text === "") return;
-      const response = await call(current, (signal) =>
-        request(
-          `/api/meetings/${current.id}/speech?${new URLSearchParams({ speaker, at: String(at) })}`,
-          "POST",
-          signal,
-          current.local ? "application/json" : "audio/webm",
-          body,
-        ),
-      );
-      const heard = await response.json();
-      current.prompt = heard.prompt;
-      if (heard.text) {
-        current.line = heard.text;
-        render();
-      }
+      const prompt = current.lines
+        .slice(-promptLines)
+        .map((line) => line.text)
+        .join("\n");
+      const text = (
+        current.local ? await transcribeHere(current, bytes, prompt) : await transcribeOnline(current, bytes)
+      ).trim();
+      if (!text) return;
+      const line = { at, speaker, text };
+      current.lines.push(line);
+      await appendFile(current.file, transcriptLine(line));
     } catch (error) {
       if (!error.segmentOnly) return fail(current, error);
       current.dropped = { count: (current.dropped?.count ?? 0) + 1, problem: error.message };
@@ -297,22 +236,34 @@ function upload(current, speaker, at, bytes) {
   });
 }
 
+const transcriptLine = (line) => `**${clock(line.at)} ${line.speaker === "me" ? "Me" : "Them"}:** ${line.text}\n\n`;
+
+function transcript(current) {
+  return [
+    `# ${current.app ? `${current.app} meeting` : "Meeting"} · ${day(current.startedAt)}\n\n`,
+    ...[...current.lines].sort((a, b) => a.at - b.at).map(transcriptLine),
+  ].join("");
+}
+
 function trackProblem(current, speaker, problem) {
   current.tracks[speaker] = problem;
-  render();
   if (Object.keys(current.tracks).length === 2) fail(current, new Error(Object.values(current.tracks).join(" ")));
   else notify(`${trackNames[speaker]} is not being recorded`, problem);
 }
 
 function startRecording(detected) {
   if (recording || !enabled) return undefined;
+  const startedAt = Date.now();
+  const stamp = new Date(startedAt).toISOString().slice(0, 16).replace("T", " ").replace(":", "-");
   const current = {
-    id: randomUUID(),
-    startedAt: Date.now(),
+    startedAt,
+    name: `Meeting ${stamp}.md`,
+    file: path.join(app.getPath("userData"), "meetings", `Meeting ${stamp}.md`),
     app: detected,
     detected: Boolean(detected),
     local,
-    lastSpeech: Date.now(),
+    lines: [],
+    lastSpeech: startedAt,
     tracks: {},
     uploads: { me: Promise.resolve(), others: Promise.resolve() },
     controller: new AbortController(),
@@ -332,21 +283,19 @@ function startRecording(detected) {
       Date.now() - current.capturing > othersQuietWarning
     ) {
       current.othersQuiet = true;
-      render();
-      if (current.detected)
-        notify(
-          `No sound from ${current.app}`,
-          "QM has heard nothing from your computer for 2 minutes. If others are talking, allow QM in System Settings › Privacy & Security › Screen & System Audio Recording.",
-        );
+      notify(
+        "No sound from your computer",
+        "QM has heard nothing from your computer for 2 minutes. If others are talking, allow QM in System Settings › Privacy & Security › Screen & System Audio Recording.",
+      );
     }
   }, 1000);
-  meeting(current).catch((error) => fail(current, error));
   render();
-  void capture(current);
+  void capture(current).catch((error) => fail(current, error));
   return current;
 }
 
 async function capture(current) {
+  await mkdir(path.dirname(current.file), { recursive: true });
   if (process.platform === "darwin" && systemPreferences.getMediaAccessStatus("microphone") !== "granted")
     await systemPreferences.askForMediaAccess("microphone");
   if (recording !== current || current.stopping) return;
@@ -354,13 +303,13 @@ async function capture(current) {
   current.stopCapture = startCapture({
     segment: (speaker, at, bytes) => upload(current, speaker, at, bytes),
     track: (speaker, problem) => trackProblem(current, speaker, problem),
-    level: (speaker, level) => pillLevel(speaker, level),
+    level: () => {},
     local: current.local,
   });
   if (current.detected && !meetingNow) endMeetingSoon();
 }
 
-export function stopRecording() {
+function stopRecording() {
   const current = recording;
   if (!current) return Promise.resolve();
   if (current.stopping) return current.stopping;
@@ -371,35 +320,52 @@ export function stopRecording() {
   return current.stopping;
 }
 
+async function summarize(current, endedAt) {
+  const bytes = Buffer.from(transcript(current));
+  const sha = createHash("sha256").update(bytes).digest("hex");
+  const json = async (pathname, body, type = "application/json") =>
+    (await call(current, (signal) => request(pathname, "POST", signal, type, body))).json();
+  const blob = await json(`/api/blobs?sha=${sha}`, bytes, "application/octet-stream");
+  const scopeId = `personal:${user}`;
+  const { session } = await json("/api/sessions", { principalId: user, scopeId });
+  await json("/api/turn", {
+    threadRef: session.threadRef,
+    scopeId,
+    text: `Summarize this meeting transcript (${day(current.startedAt)} to ${clock(endedAt)}): a short summary, decisions, and action items with owners.`,
+    attachments: [{ name: current.name, mimetype: "text/markdown", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+  return `/s/${encodeURIComponent(session.id)}`;
+}
+
 async function finishRecording(current, endedAt) {
   await current.stopCapture?.();
   await Promise.all(Object.values(current.uploads));
   current.whisper?.stop();
-  if (!current.failure) {
+  let opened;
+  if (current.lines.length) {
     try {
-      await current.created;
-      await call(current, (signal) =>
-        request(`/api/meetings/${current.id}/stop`, "POST", signal, "application/json", { endedAt }),
-      );
+      opened = await summarize(current, endedAt);
+      openSession(opened);
     } catch (error) {
-      current.failure = error.message;
+      current.failure ??= error.message;
     }
   }
   recording = undefined;
   render();
-  const open = current.path && { label: "Open Notes", run: () => openNotes(current.path) };
-  if (current.failure) notify("Meeting recording failed", current.failure, open);
+  const kept = `The transcript is kept at ${current.file}.`;
+  const dropped = current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`;
+  if (current.failure && current.lines.length)
+    notify("Meeting not summarized", [current.failure, kept, dropped].filter(Boolean).join(" "));
+  else if (current.failure) notify("Meeting recording failed", current.failure);
+  else if (!opened) notify("Nothing was transcribed", [dropped].filter(Boolean).join(" ") || "QM heard no speech.");
   else
     notify(
       "Meeting recorded",
-      [
-        current.silent && "Stopped after 15 minutes without speech.",
-        "QM is writing notes.",
-        current.dropped && `${plural(current.dropped.count)} could not be used: ${current.dropped.problem}`,
-      ]
+      [current.silent && "Stopped after 15 minutes without speech.", "QM is summarizing it.", dropped]
         .filter(Boolean)
         .join(" "),
-      open,
+      { label: "Open", run: () => openSession(opened) },
     );
 }
 
@@ -429,25 +395,12 @@ function microphoneChanged(apps) {
   meetingNow = name;
   if (began && !recording) {
     if (automatic) {
-      const current = startRecording(name);
-      notify(`Taking notes on your ${name} meeting`, "Stop it from the recording pill at the bottom of your screen.", {
-        label: "Open Notes",
-        run: () =>
-          void current?.created.then(
-            () => openNotes(current.path),
-            () => {},
-          ),
-      });
+      startRecording(name);
+      notify(`Recording your ${name} meeting`, "Stop it from the QM menu.");
     } else
       notify(`${name} meeting detected`, `${name} is using the microphone.`, {
-        label: "Take Notes",
-        run: () => {
-          const current = startRecording(name);
-          void current?.created.then(
-            () => openNotes(current.path),
-            () => {},
-          );
-        },
+        label: "Record",
+        run: () => startRecording(name),
       });
   }
 }
@@ -463,17 +416,10 @@ export function meetingMenu() {
     },
     {
       id: "meeting-stop",
-      label: "Stop Recording",
+      label: recording?.stopping ? "Saving Recording…" : "Stop Recording",
       visible: Boolean(recording),
       enabled: !recording?.stopping,
       click: () => void stopRecording(),
-    },
-    {
-      id: "meeting-notes",
-      label: "Open Meeting Notes",
-      visible: enabled,
-      enabled: Boolean(notes),
-      click: () => openNotes(notes),
     },
     {
       id: "meeting-local",
@@ -505,32 +451,27 @@ export function meetingMenu() {
   ];
 }
 
-export async function startMeeting() {
-  if (!enabled) await refreshMeetings();
-  if (!enabled) throw new Error("Meeting recording is not enabled for this account.");
-  if (recording) throw new Error("A meeting is already being recorded.");
-  const current = startRecording();
-  await current.created;
-  return { path: current.path };
-}
-
 export function configureMeetings(options) {
-  ({ request, openNotes, publish } = options);
+  ({ request, openSession } = options);
   registerRecorder();
-  registerPill({ open: () => recording?.path && openNotes(recording.path), stop: () => void stopRecording() });
 }
 
 export async function refreshMeetings() {
   if (recording) return;
   const check = ++checks;
   let next = false;
+  let who;
   try {
     const response = await request("/api/meetings", "GET", AbortSignal.timeout(15_000));
-    next = response.ok && (await response.json()).enabled === true;
+    const body = response.ok ? await response.json() : {};
+    next = body.enabled === true;
+    who = body.user ?? undefined;
   } catch (error) {
     console.error("QM could not check meeting recording", error);
   }
-  if (check !== checks || recording || next === enabled) return;
+  if (check !== checks || recording) return;
+  user = who;
+  if (next === enabled) return;
   enabled = next;
   if (enabled) {
     ({ automatic, local } = await readSettings());
@@ -541,7 +482,7 @@ export async function refreshMeetings() {
     });
   } else {
     stopWatching?.();
-    stopWatching = detectionProblem = meetingNow = notes = undefined;
+    stopWatching = detectionProblem = meetingNow = undefined;
   }
   render();
 }

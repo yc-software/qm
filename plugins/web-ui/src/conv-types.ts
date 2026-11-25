@@ -99,7 +99,6 @@ export interface ChatSurface {
   ): void;
   attachApprovalsWhenLoaded(sessionId: string, approvals: Promise<{ approvals: PendingApproval[] } | null>): void;
   mountLoadingPane(): () => boolean;
-  mountMeeting(s: CoreSession, draw: (host: HTMLElement) => void): void;
   mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
   revealEntry(seq: number): boolean;

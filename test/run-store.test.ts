@@ -35,21 +35,6 @@ for (const backend of backends) {
     ]);
   });
 
-  test(`[${backend.name}] listing by surface keeps only that conversation's runs on the surface`, async () => {
-    const { runs } = backend.make();
-    for (const [ref, surface] of [
-      ["dm:M1", "meeting"],
-      ["dm:M1", "web"],
-      ["dm:M2", "meeting"],
-    ] as const)
-      await runs.enqueue({ sessionId: ref, request: turn(ref, surface) });
-    const listed = await runs.list({ threadRef: "dm:M1", surface: "meeting", limit: 5 });
-    assert.deepEqual(
-      listed.map((run) => [run.sessionId, run.request.surface]),
-      [["dm:M1", "meeting"]],
-    );
-  });
-
   test(`[${backend.name}] terminalFinished pages finished runs by (finishedAt, id) within the bound`, async () => {
     const { runs } = backend.make();
     const finished: string[] = [];

@@ -162,7 +162,6 @@ export interface Session {
   surfaceBinding?: TurnSurfaceOrigin;
   runtime?: TurnRuntime;
   personaId?: string;
-  meetingId?: string;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;

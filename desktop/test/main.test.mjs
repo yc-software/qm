@@ -19,7 +19,6 @@ mock.module("../meetings.mjs", {
     configureMeetings() {},
     refreshMeetings: async () => {},
     meetingMenu: () => [],
-    meetingState() {},
     startMeeting() {},
     stopRecording() {},
     isRecording: () => recording,

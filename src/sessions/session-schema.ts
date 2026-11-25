@@ -679,11 +679,6 @@ const PARTICIPANT_NOTIFIED_AT: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE participants ADD COLUMN IF NOT EXISTS notified_at BIGINT`],
 };
 
-const SESSION_MEETING: PgMigrationDefinition = {
-  id: "sessions/store/0070-meeting-id",
-  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS meeting_id UUID`],
-};
-
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   ...PUBLISHED_SESSION_UPGRADE,
@@ -711,7 +706,6 @@ export const SESSION_MIGRATIONS = [
   SESSION_EPHEMERAL,
   SESSION_EPHEMERAL_CLAIM,
   PARTICIPANT_NOTIFIED_AT,
-  SESSION_MEETING,
 ];
 
 export const ancestry = (seed: string): string => `ancestry AS (

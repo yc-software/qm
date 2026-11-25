@@ -1,9 +1,6 @@
 import { errMessage } from "../../chassis/src/errors.ts";
 import { reportHandledError } from "./browser-errors.ts";
 
-export const QM_MAC_DOWNLOAD_URL =
-  "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
-
 type Result = {
   content: string;
   isError?: boolean;

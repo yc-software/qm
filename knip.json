@@ -48,8 +48,6 @@
         "runtime-preload.cjs",
         "recorder.js",
         "recorder-preload.cjs",
-        "pill.js",
-        "pill-preload.cjs",
         "permissions-preload.cjs",
         "test/**/*.electron.mjs"
       ]

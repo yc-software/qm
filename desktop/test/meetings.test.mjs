@@ -50,7 +50,6 @@ test("meeting detection counts only listed meeting apps, including browser helpe
       systemPreferences: {},
     },
   });
-  mock.module("../pill.mjs", { namedExports: { pillLevel() {}, registerPill() {}, showPill() {} } });
   mock.module("../desk.mjs", { namedExports: { startWhisper() {}, watchMicrophone() {} } });
   mock.module("../recorder.mjs", { namedExports: { registerRecorder() {}, startCapture() {} } });
   const { meetingApp } = await import("../meetings.mjs");

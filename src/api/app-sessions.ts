@@ -1220,18 +1220,11 @@ export function createSessionMethods(
       const scope = opts.scopeId;
       const parsed = parseScopeId(scope);
       const create = async (projectMembers?: readonly string[], channelName?: string) => {
-        const threadRef = opts.meeting?.threadRef ?? `web:${principalId}:${randomUUID()}`;
+        const threadRef = `web:${principalId}:${randomUUID()}`;
         let kind: "group" | "channel" | "dm" = "dm";
         if (parsed.kind === "group") kind = "group";
         else if (parsed.kind === "channel") kind = "channel";
-        const session = await deps.sessions.getOrCreateByThread(
-          threadRef,
-          kind,
-          scope,
-          channelName,
-          "web",
-          opts.meeting ? { meetingId: opts.meeting.id } : undefined,
-        );
+        const session = await deps.sessions.getOrCreateByThread(threadRef, kind, scope, channelName, "web");
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(session.id, memberId)),
         );

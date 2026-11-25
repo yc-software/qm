@@ -84,18 +84,7 @@ export function createRunReads(
       return rows.map((r) => r.session_id as string);
     },
 
-    async list({
-      limit = 200,
-      threadRef,
-      surface,
-    }: { limit?: number; threadRef?: string; surface?: string } = {}): Promise<Run[]> {
-      if (threadRef && surface) {
-        const { rows } = await q(
-          "SELECT * FROM runs WHERE session_id = $1 AND request::jsonb ->> 'surface' = $2 ORDER BY created_at DESC, seq DESC LIMIT $3",
-          [threadRef, surface, limit],
-        );
-        return rows.map(rowToRun);
-      }
+    async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
       const { rows } = threadRef
         ? await q(
             "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC, seq DESC LIMIT $2",
