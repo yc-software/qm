@@ -254,6 +254,25 @@ export interface SessionSummary {
   lastMessage: string;
 }
 
+const MESSAGE_PAGE = 50;
+
+export async function newestMessage(
+  sessions: Pick<SessionStore, "getItems">,
+  sessionId: string,
+  match: (item: Item) => boolean,
+): Promise<Item | undefined> {
+  for (let beforeSeq: number | undefined; ;) {
+    const page = await sessions.getItems(sessionId, {
+      messagesOnly: true,
+      limit: MESSAGE_PAGE,
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    });
+    const found = page.findLast(match);
+    if (found || page.length < MESSAGE_PAGE) return found;
+    beforeSeq = page[0]!.seq;
+  }
+}
+
 export function userMessagePreview(text: string, maxLen = 160): string {
   const kept =
     text

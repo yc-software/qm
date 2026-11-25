@@ -1,7 +1,7 @@
 import type { ApprovedToolCall, SteeredApproval } from "../../agent/agent.ts";
 import { samePerson } from "../../directory/person.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
-import { isUserItem, type Item } from "../../sessions/items.ts";
+import { isHidden, isOverheard, isUserItem, type Item } from "../../sessions/items.ts";
 import type {
   ApprovalGrantModes,
   CommandApprovalGrant,
@@ -13,7 +13,7 @@ import type {
   TurnResult,
 } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
-import type { SessionStore, SessionWriter } from "../../sessions/session-store.ts";
+import { newestMessage, type SessionStore, type SessionWriter } from "../../sessions/session-store.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
@@ -231,10 +231,12 @@ export async function heldInputAllowedInPausedTurn(
   input: OrchestratorInput,
   actorId: string,
 ): Promise<boolean> {
-  const [latest] = await sessions.getItems(sessionId, { messagesOnly: true, limit: 1 });
-  if (!latest?.turnId) return false;
+  const turnId = (
+    await newestMessage(sessions, sessionId, (item) => isUserItem(item) && !isHidden(item) && !isOverheard(item))
+  )?.turnId;
+  if (!turnId) return false;
   const holdId = inputApprovalId(sessionId, replayableRequest(input));
-  return (await sessions.getItems(sessionId, { turnId: latest.turnId })).some(
+  return (await sessions.getItems(sessionId, { turnId })).some(
     (item) =>
       item.kind === "ElicitationResponse" &&
       item.elicitId === holdId &&

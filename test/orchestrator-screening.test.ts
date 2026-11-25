@@ -850,23 +850,27 @@ for (const [card, securityPosture, text] of [
   });
 }
 
-test("allowing held input once survives a tool approval later in the same turn and still screens file names", async () => {
+test("allowing held input once survives every later approval in the same turn and still screens file names", async () => {
   const built = freshApp({ securityPosture: "strict" }, fixtureScreen());
   const file = async (name: string) => ({
     name,
     mimetype: "text/plain",
     ...(await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"))),
   });
-  const request = dm("!read notes", {
+  const request = dm("!paused-approval echo hi", {
     attachments: [await file("notes.txt"), await file("SCREENING_FIXTURE_BLOCK.txt")],
   });
   const allow = (requestId: string) => built.app.turn({ ...request, approval: { requestId, approved: true } });
-  const tool = (await allow((await built.app.turn(request)).pendingApprovals![0]!.requestId)).pendingApprovals![0]!;
-  assert.equal(tool.command, "read");
-  const resumed = await allow(tool.requestId);
-  assert.equal(resumed.status, "ok");
-  assert.equal(resumed.pendingApprovals?.length ?? 0, 0);
-  const last = (await built.sessions.listLlmRequests(resumed.sessionId!)).findLast((rec) => rec.model === "mock");
+  const first = await allow((await built.app.turn(request)).pendingApprovals![0]!.requestId);
+  const second = await allow(first.pendingApprovals![0]!.requestId);
+  const third = await allow(second.pendingApprovals![0]!.requestId);
+  for (const turn of [first, second, third]) assert.equal(turn.pendingApprovals?.[0]?.command, "echo hi");
+  const denied = await built.app.turn({
+    ...request,
+    approval: { requestId: third.pendingApprovals![0]!.requestId, approved: false },
+  });
+  assert.equal(denied.pendingApprovals?.length ?? 0, 0);
+  const last = (await built.sessions.listLlmRequests(third.sessionId!)).findLast((rec) => rec.model === "mock");
   assert.match(JSON.stringify(last), /shared notes\.txt \(Files ID/);
   assert.doesNotMatch(JSON.stringify(last), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
 });
