@@ -41,7 +41,7 @@ test("segments end at the first pause after ten seconds, at thirty seconds other
   assert.equal(segments((now) => now === 5_000)[0].speech, false, "a click is not speech");
 });
 
-test("meeting detection counts only listed meeting apps, including browser helpers", async () => {
+test("meeting detection counts only listed meeting apps, including browser helpers, and prefers call apps", async () => {
   mock.module("electron", {
     namedExports: {
       app: electronApp,
@@ -65,6 +65,13 @@ test("meeting detection counts only listed meeting apps, including browser helpe
   );
   assert.equal(meetingApp([{ bundle_id: "com.apple.WebKit.GPU", pid: 5 }]), undefined);
   assert.equal(meetingApp([{ bundle_id: "com.qm.desktop.helper", pid: 6 }]), undefined);
+  assert.equal(
+    meetingApp([
+      { bundle_id: "com.google.Chrome.helper", pid: 7 },
+      { bundle_id: "us.zoom.xos", pid: 8 },
+    ]),
+    "Zoom",
+  );
   assert.equal(meetingApp([]), undefined);
 });
 

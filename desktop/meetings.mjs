@@ -10,11 +10,11 @@ import { downloadModel } from "./transcription.mjs";
 const meetingApps = [
   ["us.zoom.", "Zoom"],
   ["com.microsoft.teams", "Microsoft Teams"],
-  ["com.tinyspeck.slackmacgap", "Slack"],
   ["com.apple.FaceTime", "FaceTime"],
   ["com.apple.avconferenced", "FaceTime"],
   ["com.cisco.webex", "Webex"],
   ["Cisco-Systems.Spark", "Webex"],
+  ["com.tinyspeck.slackmacgap", "Slack"],
   ["com.hnc.Discord", "Discord"],
   ["net.whatsapp.WhatsApp", "WhatsApp"],
   ["desktop.WhatsApp", "WhatsApp"],
@@ -26,8 +26,8 @@ const meetingApps = [
   ["com.operasoftware.Opera", "Opera"],
   ["com.vivaldi.Vivaldi", "Vivaldi"],
   ["org.mozilla.firefox", "Firefox"],
-  ["com.apple.Safari", "Safari"],
 ];
+const callApps = new Set(["Zoom", "Microsoft Teams", "FaceTime", "Webex"]);
 const trackNames = { me: "Microphone", others: "Computer audio" };
 const meetingEndGrace = 20_000;
 const promptLines = 12;
@@ -35,10 +35,8 @@ const transient = new Set([408, 429, 500, 503, 504]);
 const unusableSegment = new Set(["empty_audio", "invalid_audio", "unsupported_audio", "dictation_rejected"]);
 
 export function meetingApp(apps) {
-  for (const { bundle_id: bundle } of apps) {
-    const match = bundle && meetingApps.find(([prefix]) => bundle.startsWith(prefix));
-    if (match) return match[1];
-  }
+  const bundles = apps.flatMap(({ bundle_id: bundle }) => (bundle ? [bundle] : []));
+  return meetingApps.find(([prefix]) => bundles.some((bundle) => bundle.startsWith(prefix)))?.[1];
 }
 
 let request;
@@ -161,8 +159,8 @@ async function call(current, pathname, run) {
 }
 
 function fail(current, error) {
-  if (current.failure) return;
-  current.failure = error.message;
+  console.error("QM meeting recording failed", error);
+  current.failures.push(error.message);
   void stopRecording();
 }
 
@@ -197,7 +195,7 @@ async function transcribeOnline(current, bytes) {
 
 function upload(current, speaker, at, bytes) {
   current.uploads[speaker] = current.uploads[speaker].then(async () => {
-    if (current.failure) return;
+    if (current.failures.length) return;
     try {
       const prompt = current.lines
         .slice(-promptLines)
@@ -245,6 +243,7 @@ function startRecording(detected) {
     local,
     lines: [],
     dropped: [],
+    failures: [],
     tracks: {},
     uploads: { me: Promise.resolve(), others: Promise.resolve() },
     quitting: new AbortController(),
@@ -306,7 +305,8 @@ async function finishRecording(current, endedAt) {
       opened = await summarize(current, endedAt);
       openSession(opened);
     } catch (error) {
-      current.failure ??= error.message;
+      console.error("QM could not start the meeting summary", error);
+      current.failures.push(error.message);
     }
   }
   recording = undefined;
@@ -315,9 +315,10 @@ async function finishRecording(current, endedAt) {
   const dropped =
     current.dropped.length > 0 &&
     `${plural(current.dropped.length)} could not be used: ${[...new Set(current.dropped)].join(" ")}`;
-  if (current.failure && current.lines.length)
-    notify("Meeting not summarized", [current.failure, kept, dropped].filter(Boolean).join(" "));
-  else if (current.failure) notify("Meeting recording failed", current.failure);
+  const failure = current.failures.join(" ");
+  if (failure && current.lines.length)
+    notify("Meeting not summarized", [failure, kept, dropped].filter(Boolean).join(" "));
+  else if (failure) notify("Meeting recording failed", failure);
   else if (!opened) notify("Nothing was transcribed", [dropped].filter(Boolean).join(" ") || "QM heard no speech.");
   else
     notify("Meeting recorded", ["QM is summarizing it.", dropped].filter(Boolean).join(" "), {
@@ -344,12 +345,12 @@ function endMeetingSoon() {
 
 function microphoneChanged(apps) {
   const name = meetingApp(apps);
-  const began = name && !meetingNow;
+  const began = name && name !== meetingNow;
   if (name) clearTimeout(meetingEnded);
   else if (meetingNow && recording?.detected) endMeetingSoon();
   meetingNow = name;
   if (began && !recording) {
-    if (automatic) {
+    if (automatic && callApps.has(name)) {
       startRecording(name);
       notify(`Recording your ${name} meeting`, "Stop it from File › Stop Recording.");
     } else
@@ -434,6 +435,7 @@ export async function refreshMeetings() {
     ({ automatic, local } = await readSettings());
     if (local) void prepareModel();
     stopWatching = watchMicrophone(microphoneChanged, (problem) => {
+      console.error("QM meeting detection problem", problem);
       if (!detectionProblem) notify("Meeting detection unavailable", problem);
       detectionProblem = problem;
     });
