@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { messageText, SILENCE_TOOLS, type AssistantWork } from "./core-bridge.ts";
+import { deliveredSilence, messageText, SILENCE_TOOLS, type AssistantWork } from "./core-bridge.ts";
 import { activityItems } from "./items.ts";
 import { REACTION_PREFIX, splitOnce } from "./slack-text.ts";
 
@@ -29,14 +29,29 @@ export function continuedSpeakers(agents: boolean, rows: readonly AgentMessage[]
 
 type WorkRow = AssistantWork & { entrySeqs?: number[]; work: NonNullable<AssistantWork["work"]> };
 
-function workOnlyRow(message: AgentMessage): message is WorkRow {
+function plainReply(message: AgentMessage): message is AssistantWork {
   const row = message as AssistantWork;
   return (
     row.role === "assistant" &&
     row.persisted === true &&
-    Boolean(row.work) &&
-    !row.deliveredFiles?.length &&
-    !messageText(message).trim()
+    row.stopReason === "stop" &&
+    !row.continuing &&
+    !row.via &&
+    row.supersedes === undefined
+  );
+}
+
+function workOnlyRow(message: AgentMessage): message is WorkRow {
+  return (
+    plainReply(message) && Boolean(message.work) && !message.deliveredFiles?.length && !messageText(message).trim()
+  );
+}
+
+function silentRow(row: WorkRow): boolean {
+  const items = activityItems(row.work.activity);
+  return (
+    items.some(deliveredSilence) &&
+    items.every((item) => item.kind === "Reasoning" || SILENCE_TOOLS.has(item.tool ?? ""))
   );
 }
 
@@ -65,12 +80,11 @@ function foldInto(into: AssistantWork & { entrySeqs?: number[] }, row: WorkRow):
 export function slackRows(messages: readonly AgentMessage[]): AgentMessage[] {
   const rows: AgentMessage[] = [];
   for (const message of messages) {
-    const previous = rows.at(-1) as AssistantWork | undefined;
+    const previous = rows.at(-1);
     if (!workOnlyRow(message)) rows.push(message);
-    else if (previous?.role === "assistant" && previous.persisted && previous.runId && previous.runId === message.runId)
+    else if (previous && plainReply(previous) && previous.runId && previous.runId === message.runId)
       rows[rows.length - 1] = foldInto(previous, message) as AgentMessage;
-    else if (!activityItems(message.work.activity).some((item) => SILENCE_TOOLS.has(item.tool ?? "")))
-      rows.push(message);
+    else if (!silentRow(message)) rows.push(message);
   }
   return rows;
 }

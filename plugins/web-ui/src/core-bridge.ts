@@ -2245,7 +2245,7 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
 
 export const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
 
-function deliveredSilence(item: Item): boolean {
+export function deliveredSilence(item: Item): boolean {
   if (item.kind !== "ToolResult") return false;
   return (
     (item.tool === "finish_silently" && item.body.silent === true) ||
