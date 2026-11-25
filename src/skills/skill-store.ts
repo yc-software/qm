@@ -191,9 +191,10 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
   const secret = opts.signingSecret ?? randomUUID();
   let built: { source: readonly CatalogSkill[]; skills: Skill[] } | null = null;
   const catalogSkills = (): Skill[] => {
-    const source = opts.catalog?.skills() ?? [];
+    if (!opts.catalog) return [];
+    const source = opts.catalog.skills();
     if (built?.source !== source) {
-      const scopeId = opts.catalog!.scopeId;
+      const scopeId = opts.catalog.scopeId;
       built = {
         source,
         skills: source.map(({ manifest, createdBy, reviewer }) => ({

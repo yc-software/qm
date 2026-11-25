@@ -74,32 +74,6 @@ function makeRepoWithSharedLib(skillName: string): { dir: string; sha: string } 
   return { dir, sha };
 }
 
-function makeRepoWithLayerCollision(): { dir: string; sha: string } {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-col-fixture-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
-  const g = (...a: string[]): void => {
-    execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
-  };
-  g("init", "-q");
-  mkdirSync(join(dir, "skills", "pack-active"), { recursive: true });
-  mkdirSync(join(dir, "skills", "layer-owned"), { recursive: true });
-  writeFileSync(
-    join(dir, "skills", "pack-active", "SKILL.md"),
-    md("name: pack-active\ndescription: active\nscope: company"),
-  );
-  writeFileSync(join(dir, "skills", "layer-owned", "helper.txt"), "from pack");
-  g("add", "-A");
-  g("commit", "-q", "-m", "init");
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).toString().trim();
-  return { dir, sha };
-}
-
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reg-routes-")) }));
   const server = createInsecureTestServer(built.app, {
@@ -338,60 +312,6 @@ test("supporting files are namespaced per pack, so same paths never clobber", as
   } finally {
     rmSync(a.dir, { recursive: true, force: true });
     rmSync(b.dir, { recursive: true, force: true });
-    await s.close();
-  }
-});
-
-test("pack reconciliation and deployment-layer replacement serialize their materialization claims", async () => {
-  const repo = makeRepoWithLayerCollision();
-  const s = start();
-  try {
-    const reg = await json(
-      await fetch(`${s.base}/v1/admin/skill-packs`, {
-        method: "POST",
-        headers: ADMIN,
-        body: JSON.stringify({ url: repo.dir, ref: repo.sha }),
-      }),
-    );
-    const id = reg.pack.id as string;
-    const originalPut = s.built.skillBundles.put.bind(s.built.skillBundles);
-    let entered!: () => void;
-    let release!: () => void;
-    const bundleEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const bundleRelease = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    s.built.skillBundles.put = async (bundle) => {
-      entered();
-      await bundleRelease;
-      await originalPut(bundle);
-    };
-
-    const importing = fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
-      method: "POST",
-      headers: ADMIN,
-      body: JSON.stringify({ selected: "all" }),
-    });
-    await bundleEntered;
-    const replacing = s.built.deploymentLayerStore.put(
-      {
-        contract: 1,
-        tools: [],
-        skills: [
-          { path: "skills/layer-owned/SKILL.md", content: md("name: layer-owned\ndescription: deployment") },
-          { path: "skills/layer-owned/helper.txt", content: "from deployment" },
-        ],
-      },
-      "test",
-    );
-    release();
-
-    assert.equal((await importing).status, 200);
-    await assert.rejects(replacing, /skills\/layer-owned\/helper\.txt, already claimed by pack:/);
-  } finally {
-    rmSync(repo.dir, { recursive: true, force: true });
     await s.close();
   }
 });

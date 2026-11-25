@@ -240,7 +240,7 @@ export function createDeploymentLayerStore(opts: {
   now?: () => number;
   retryDelaysMs?: readonly number[];
   auditPersisted?: (record: StoredDeploymentLayer) => Promise<void>;
-  published?: () => Promise<void>;
+  published?: () => void;
 }): DeploymentLayerStore {
   const now = opts.now ?? Date.now;
   const retryDelaysMs = opts.retryDelaysMs ?? [250, 1000, 4000];
@@ -371,7 +371,7 @@ export function createDeploymentLayerStore(opts: {
         }
         apply(record);
         try {
-          await opts.published?.();
+          opts.published?.();
           await auditPersisted(record, true);
           if (appliedHash !== record.contentHash) throw new Error(`stored layer ${record.contentHash} did not apply`);
         } catch (error) {

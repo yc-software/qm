@@ -116,7 +116,6 @@ import {
   type SkillPackFetcher,
 } from "./skills/pack-fetcher.ts";
 import { readSeedSkills } from "./skills/seed.ts";
-import { subscribePostgresChannel } from "./persistence/postgres-listener.ts";
 import {
   createPostgresMap,
   createPostgresMapFactory,
@@ -760,6 +759,11 @@ export function buildApp(
   const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
+  const layerChanges = createPostgresNotifyBus<Record<string, never>>(
+    databaseUrl,
+    DEPLOYMENT_LAYER_CHANNEL,
+    "deployment layer",
+  );
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: processMap<StoredDeploymentLayer>("deployment_layer"),
     runtime: deploymentLayer,
@@ -775,9 +779,7 @@ export function buildApp(
             .flatMap((dir) => readSeedSkills(dir, "system:plugin-skills", "system:plugin-skills-reviewer")),
         ]
       : [],
-    published: async () => {
-      await pgArtifactMap.pool.q(`SELECT pg_notify('${DEPLOYMENT_LAYER_CHANNEL}', '')`);
-    },
+    published: () => layerChanges.emit({}),
     auditPersisted: (record) =>
       auditLog.recordOnce!(ambientTenant(), `deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
@@ -806,7 +808,7 @@ export function buildApp(
     void deploymentLayerStore
       .hydrate()
       .catch((error: unknown) => console.error("[deployment-layer] refresh failed:", errMessage(error)));
-  let stopLayerWatch: (() => Promise<void>) | null = null;
+  let stopLayerWatch: (() => void) | null = null;
   const skillsReady = deploymentLayerReady.then(
     () => undefined,
     (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
@@ -3217,12 +3219,7 @@ export function buildApp(
     start(services = { resume() {}, standDown: async () => {} }) {
       if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
       releasing = null;
-      stopLayerWatch ??= subscribePostgresChannel(
-        databaseUrl,
-        DEPLOYMENT_LAYER_CHANNEL,
-        refreshDeploymentLayer,
-        refreshDeploymentLayer,
-      );
+      stopLayerWatch ??= layerChanges.subscribe(refreshDeploymentLayer, { onResync: refreshDeploymentLayer });
       flyTunnel?.monitor();
       renderBasePreparing = new AbortController();
       void renderBase
@@ -3236,7 +3233,7 @@ export function buildApp(
     async stop(opts) {
       stopTenantLoad();
       stopSettingsLoad();
-      await stopLayerWatch?.();
+      stopLayerWatch?.();
       stopLayerWatch = null;
       renderBasePreparing?.abort();
       const draining = drain.stop();
@@ -3259,6 +3256,7 @@ export function buildApp(
           ledgerEventBus.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
+          layerChanges.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await agent.close?.();
