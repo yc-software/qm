@@ -106,6 +106,7 @@ import {
   createApprovalLedger,
   newApprovalRecord,
   resolveLiveApproval,
+  supersedeEarlierApprovals,
   withdrawCallApprovals,
   type ApprovalDecisionTurn,
 } from "./orchestrator/approvals.ts";
@@ -650,6 +651,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
       ): Promise<PendingApproval> => {
         const record = newApprovalRecord(fields, input, resolution.approvalGrantModes);
+        await supersedeEarlierApprovals(pending, requestId, record);
         await pending.put(requestId, record);
         return approvalView(requestId, record);
       };

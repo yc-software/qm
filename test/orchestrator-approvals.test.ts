@@ -693,6 +693,16 @@ test("'allow once' authorizes exactly one execution — a sibling approval for t
   assert.notEqual(stillPending!.requestId, pending.requestId, "the sibling's card gets its own id");
 });
 
+test("a later run's card for the same command retires the earlier card", async () => {
+  const { app } = await withCommandRules(freshApp());
+  const ask = "!run git push --force origin main";
+  const earlier = (await app.turn(dm(ask))).pendingApprovals![0]!;
+  const later = (await app.turn(dm(ask))).pendingApprovals![0]!;
+  const approve = (requestId: string) => app.turn(dm(ask, { approval: { requestId, approved: true } }));
+  assert.equal((await approve(later.requestId)).status, "ok");
+  assert.equal((await approve(earlier.requestId)).status, "refused");
+});
+
 test("'allow for session' approves every same-command invocation in the same turn", async () => {
   const { app } = await withCommandRules(freshApp());
   const command = "git push --force origin main";

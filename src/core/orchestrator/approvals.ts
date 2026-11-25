@@ -20,6 +20,7 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
+import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -185,6 +186,22 @@ export async function withdrawCallApprovals(
     });
   }
   return { withdrawn };
+}
+
+function approvalCall(record: PendingApprovalRecord): string | undefined {
+  if (record.kind === "input") return undefined;
+  return canonicalJson([record.command, record.approvalKey ?? null, record.screenedOutput ?? null]);
+}
+
+export async function supersedeEarlierApprovals(
+  pending: DurableMap<PendingApprovalRecord>,
+  requestId: string,
+  record: PendingApprovalRecord,
+): Promise<void> {
+  const call = approvalCall(record);
+  if (!call) return;
+  const rows = await pending.selectEntries({ where: { field: "sessionId", anyOfFold: [record.sessionId] } });
+  for (const [id, earlier] of rows) if (id !== requestId && approvalCall(earlier) === call) await pending.take(id);
 }
 
 export interface EarlierApprovals {
