@@ -8,8 +8,9 @@ import type { Session, TurnRequest } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
 const known: Record<string, Partial<Session>> = {
-  mine: { scopeId: "personal:U1", threadRef: "web:U1:mine" },
-  shared: { scopeId: "channel:C1", threadRef: "C1:1" },
+  mine: { scopeId: "personal:U1", threadRef: "web:U1:mine", surface: "web" },
+  shared: { scopeId: "channel:C1", threadRef: "C1:1", surface: "web" },
+  slackDm: { scopeId: "personal:U1", threadRef: "D1", surface: "slack" },
 };
 
 function harness(recent: string[]) {
@@ -43,7 +44,7 @@ function harness(recent: string[]) {
   return { next, turns };
 }
 
-test("a new connection wakes the person's own conversation once, never a shared one", async () => {
+test("a new connection wakes the person's own web conversation once, never a shared or non-web one", async () => {
   const h = harness(["web:U1:recent"]);
   const turn = await h.next({ principal: "U1", connector: "gmail", linkId: "composio:ca_1", sessionId: "mine" });
   assert.equal(turn.conversation.threadRef, "web:U1:mine");
@@ -52,9 +53,11 @@ test("a new connection wakes the person's own conversation once, never a shared 
   assert.match(turn.text, /^<wake reason="connection" surface="connection" connector="gmail"/);
   const shared = await h.next({ principal: "U1", connector: "notion", linkId: "composio:ca_2", sessionId: "shared" });
   assert.equal(shared.conversation.threadRef, "web:U1:recent");
+  const slackDm = await h.next({ principal: "U1", connector: "exa", linkId: "composio:ca_3", sessionId: "slackDm" });
+  assert.equal(slackDm.conversation.threadRef, "web:U1:recent");
   h.next({ principal: "U1", connector: "gmail", linkId: "composio:ca_1", sessionId: "mine" });
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(h.turns.length, 2);
+  assert.equal(h.turns.length, 3);
 });
 
 test("a person with no web conversation gets a new one for the wake", async () => {
