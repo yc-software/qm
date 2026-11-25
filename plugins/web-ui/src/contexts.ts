@@ -245,7 +245,9 @@ export function resolveProjectScope(contexts: readonly CoreContext[], slug: stri
   }
   const me = appState.me;
   const own = me && contexts.some((context) => context.scopeId === me.personalScope);
-  return own && /^([^@]+)@/.exec(me.user)?.[1]?.toLowerCase() === slug.toLowerCase() ? me.personalScope : null;
+  return own && me.user.includes("@") && me.user.split("@")[0]!.toLowerCase() === slug.toLowerCase()
+    ? me.personalScope
+    : null;
 }
 
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
