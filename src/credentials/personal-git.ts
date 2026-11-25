@@ -22,6 +22,7 @@ export function personalGitBasicCredential(remote: PersonalGitRemote, secret: st
   return Buffer.from(`${remote.username}:${secret}`).toString("base64");
 }
 
-export function isPersonalCredentialHandle(handle: string): boolean {
-  return /^[a-z][a-z0-9-]*:[0-9a-f]{16}$/.test(handle);
+export function personalCredentialId(handle: string): string | undefined {
+  const separator = handle.lastIndexOf(":");
+  return separator > 0 ? handle.slice(separator + 1) : undefined;
 }

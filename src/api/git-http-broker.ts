@@ -6,14 +6,12 @@ import {
   credentialHandle,
   type DecryptedServiceCredential,
   type Keychain,
+  KeychainError,
   isValidCredentialSlug,
   isComposioHost,
 } from "../credentials/keychain.ts";
-import {
-  isPersonalCredentialHandle,
-  personalGitBasicCredential,
-  personalGitRemote,
-} from "../credentials/personal-git.ts";
+import { personalCredentialId, personalGitBasicCredential, personalGitRemote } from "../credentials/personal-git.ts";
+import { samePerson } from "../directory/person.ts";
 import {
   brokerPathAllowed,
   brokerRequestHeaders,
@@ -77,7 +75,7 @@ function parseBrokerPath(pathname: string): { slug: string; upstreamPath: string
   } catch {
     return null;
   }
-  if (!isValidCredentialSlug(slug) && !isPersonalCredentialHandle(slug)) return null;
+  if (!isValidCredentialSlug(slug) && !personalCredentialId(slug)) return null;
   const upstreamPath = `/${rest.slice(slash + 1)}`;
   if (upstreamPath === "/" || upstreamPath.includes("\0")) return null;
   return { slug, upstreamPath };
@@ -149,10 +147,13 @@ async function grantedPersonalGitCredential(
       message: "personal credentials are not available to published apps",
       host: "",
     };
-  if (!keychain) return personalUnavailable();
-  const credential = (await keychain.listByOwner(claims.actorId)).find((c) => credentialHandle(c) === handle);
-  const remote = credential && personalGitRemote(credential);
-  if (!credential || !remote) return personalUnavailable();
+  const id = personalCredentialId(handle);
+  const credential = keychain && id ? await keychain.getCredential(id) : null;
+  const remote =
+    credential && samePerson(credential.ownerId, claims.actorId) && credentialHandle(credential) === handle
+      ? personalGitRemote(credential)
+      : undefined;
+  if (!keychain || !credential || !remote) return personalUnavailable();
   let secret: string | undefined;
   try {
     const materialized = await keychain.materializeOwnById(
@@ -161,8 +162,9 @@ async function grantedPersonalGitCredential(
       personalScope(claims.actorId),
     );
     if (materialized.kind === "env") secret = materialized.env.find((entry) => entry.key === credential.envKey)?.value;
-  } catch {
-    return personalUnavailable(remote.host);
+  } catch (error) {
+    if (!(error instanceof KeychainError)) throw error;
+    return { status: error.status, code: "credential_unavailable", message: error.message, host: remote.host };
   }
   if (!secret) return personalUnavailable(remote.host);
   return {
@@ -194,7 +196,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   if (method !== "GET" && method !== "POST") {
     return sendJson(ctx.res, 405, { error: "method_not_allowed", message: "git smart HTTP supports GET and POST" });
   }
-  const personal = isPersonalCredentialHandle(slug);
+  const personal = !isValidCredentialSlug(slug);
   const serviceCreds = ctx.deps.serviceCreds;
   if (!personal && !serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
 

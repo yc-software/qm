@@ -14,7 +14,7 @@ import {
   type MaterializedCred,
   type PublicServiceCredential,
 } from "../../credentials/keychain.ts";
-import { isPersonalCredentialHandle, personalGitRemote } from "../../credentials/personal-git.ts";
+import { personalGitRemote } from "../../credentials/personal-git.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { samePerson } from "../../directory/person.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
@@ -318,10 +318,10 @@ export async function registerServiceCredentials(
     .map((record) => record.slug)
     .sort();
   const personalGitHandles = async (): Promise<string[]> => {
-    const requested = requestedHandles.filter(isPersonalCredentialHandle);
-    if (external || !ownCredentialsAllowed || !deps.keychain || !requested.length) return [];
+    if (external || !ownCredentialsAllowed || !deps.keychain || !requestedHandles.some((h) => h.includes(":")))
+      return [];
     return (await deps.keychain.listByOwner(actor.id))
-      .filter((credential) => personalGitRemote(credential) && requested.includes(credentialHandle(credential)))
+      .filter((credential) => personalGitRemote(credential) && requestedHandles.includes(credentialHandle(credential)))
       .map(credentialHandle);
   };
   let brokerToken: Promise<string> | undefined;
