@@ -125,8 +125,8 @@ describe("ui canvas and ui observe", () => {
     await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test");
   });
 
-  it("refuses tokens that are not a web turn with an internal audience, and bot work", async () => {
-    for (const extra of [{ surface: "slack" }, { internalAudience: false }, { botActor: true }]) {
+  it("refuses tokens that are not a web turn, and bot work", async () => {
+    for (const extra of [{ surface: "slack" }, { personAuthority: false }, { botActor: true }]) {
       const r = await agent("POST", "/v1/ui/canvas", { html: "x" }, extra as Partial<CapabilityClaims>);
       assert.equal(r.status, 403, JSON.stringify(extra));
     }
