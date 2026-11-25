@@ -1,17 +1,12 @@
 export const SHARED_SLACK_HISTORY_LIMIT = 15;
 
-function isSlackRateLimited(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; data?: { error?: unknown } };
-  return value.code === "slack_webapi_rate_limited_error" || value.data?.error === "ratelimited";
-}
-
 export function slackHistoryRateLimitMessage(
   error: unknown,
   opts: { setupUrl?: string; managed?: boolean; format?: "slack" } = {},
 ): string | undefined {
-  if (!isSlackRateLimited(error)) return undefined;
-  const value = error as { retryAfter?: unknown };
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as { code?: unknown; retryAfter?: unknown; data?: { error?: unknown } };
+  if (value.code !== "slack_webapi_rate_limited_error" && value.data?.error !== "ratelimited") return undefined;
   const seconds = Number(value.retryAfter);
   const retry = Number.isFinite(seconds) && seconds > 0 ? `in ${Math.ceil(seconds)} seconds` : "shortly";
   const message = `Slack is temporarily limiting history reads, so I may be missing earlier context. Try again ${retry}`;
