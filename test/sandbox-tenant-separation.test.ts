@@ -7,6 +7,7 @@ import type { SandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { personalScope } from "../src/types.ts";
+import { createLocalSandbox } from "../src/sandbox/local-sandbox.ts";
 
 await bindBootTenant(async () => undefined);
 
@@ -31,10 +32,10 @@ const handle = (name: string): SandboxHandle => ({ scopeId: personalScope("pat")
 test("on a deployment shared by tenants, backends that cannot keep tenants apart are refused", async () => {
   const tenant = randomUUID();
   await withTenant(tenant, async () => {
-    for (const name of ["e2b", "local"])
-      await assert.rejects(async () => router.run(handle(name), "true"), /does not keep tenants apart/);
-    await router.run(handle("sprites"), "true");
+    await assert.rejects(async () => router.run(handle("e2b"), "true"), /does not keep tenants apart/);
+    for (const name of ["sprites", "local"]) await router.run(handle(name), "true");
   });
   await assert.rejects(async () => router.run(handle("e2b"), "true"), /does not keep tenants apart/);
-  assert.deepEqual(ran, ["sprites"]);
+  await assert.rejects(createLocalSandbox().provision("unbound"), /needs a bound tenant/);
+  assert.deepEqual(ran, ["sprites", "local"]);
 });
