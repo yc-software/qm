@@ -2590,7 +2590,6 @@ export function buildApp(
       work: createSessionWork({ runs, sessions, ...(processes ? { processes } : {}), monitors, deliveries }),
       publicWebUrl: config.publicWebUrl,
     },
-    featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
