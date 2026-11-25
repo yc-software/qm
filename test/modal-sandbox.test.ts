@@ -1239,7 +1239,7 @@ test("a computer's memory size reaches every Modal create, and a resize restart 
 test("a computer's chosen image reaches every Modal create for it, including a resize restart", async () => {
   const images: unknown[] = [];
   const s = make({
-    imageFor: async (id: string) => (id === scope ? "yc-dev" : undefined),
+    imageFor: async (id: string) => (id === scope ? "toolchain" : undefined),
     client: {
       ...fake.client,
       create: async (options: Parameters<ModalClient["create"]>[0]) => {
@@ -1251,5 +1251,5 @@ test("a computer's chosen image reaches every Modal create for it, including a r
   await s.provision(scope);
   await s.restartComputer!(scope, 8);
   await s.provision(scopeId("personal", "other"));
-  assert.deepEqual(images, ["yc-dev", "yc-dev", undefined]);
+  assert.deepEqual(images, ["toolchain", "toolchain", undefined]);
 });

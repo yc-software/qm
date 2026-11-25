@@ -310,28 +310,28 @@ test("a named image is stored on the computer, resolved for its provider, and re
   const sprites = { ...backend, profile: { ...backend.profile, backend: "sprites", takesImage: false } };
   const resources = createSandboxResources({
     ...options,
-    images: { "yc-dev": { local: "registry/yc-dev:1", e2b: "yc-dev" }, gpu: { e2b: "gpu" } },
+    images: { toolchain: { local: "registry/toolchain:1", e2b: "toolchain" }, gpu: { e2b: "gpu" } },
     backends: { local: backend, sprites },
   });
   const create = (backendName: string, image: string) =>
     resources.create("alice", "personal:alice", backendName, "dev", undefined, undefined, { image });
-  const computer = await create("local", "yc-dev");
-  assert.equal(computer.image, "yc-dev");
-  assert.equal(await resources.imageFor(computer.backingScopeId), "registry/yc-dev:1");
+  const computer = await create("local", "toolchain");
+  assert.equal(computer.image, "toolchain");
+  assert.equal(await resources.imageFor(computer.backingScopeId), "registry/toolchain:1");
   assert.equal(await resources.imageFor("sandbox-unknown"), undefined);
   assert.deepEqual(
     (await resources.list("alice", "personal:alice")).providers.map((p) => [p.name, p.images]),
     [
-      ["local", ["yc-dev"]],
+      ["local", ["toolchain"]],
       ["sprites", undefined],
     ],
   );
   await assert.rejects(
-    create("sprites", "yc-dev"),
+    create("sprites", "toolchain"),
     /^Error: sprites computers boot only their provider's own image; it is available on local$/,
   );
   await assert.rejects(create("local", "gpu"), /^Error: image gpu is not set up for local$/);
-  await assert.rejects(create("local", "nope"), /^Error: unknown image nope; configured images: yc-dev, gpu$/);
+  await assert.rejects(create("local", "nope"), /^Error: unknown image nope; configured images: toolchain, gpu$/);
 });
 
 test("a memory size is refused on a backend that takes none", async () => {

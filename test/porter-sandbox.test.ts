@@ -284,7 +284,7 @@ test("a computer's chosen image is used for its bodies, including after a restar
   const images: unknown[] = [];
   const s = make({
     image: "qm-base:1",
-    imageFor: async (id: string) => (id === scope ? "yc-dev:1" : undefined),
+    imageFor: async (id: string) => (id === scope ? "toolchain:1" : undefined),
     client: {
       ...fake.client,
       sandboxes: {
@@ -299,5 +299,5 @@ test("a computer's chosen image is used for its bodies, including after a restar
   await s.provision(scope);
   await s.restartComputer!(scope);
   await s.provision(scopeId("personal", "other"));
-  assert.deepEqual(images, ["yc-dev:1", "yc-dev:1", "qm-base:1"]);
+  assert.deepEqual(images, ["toolchain:1", "toolchain:1", "qm-base:1"]);
 });

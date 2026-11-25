@@ -352,11 +352,11 @@ test("a computer's chosen image is the microVM image, without the default image'
   const chosenScope = scopeId("personal", "chosen");
   const sb = makeSandbox(fake, {
     imageVersion: "3",
-    imageFor: async (id: string) => (id === chosenScope ? "arn:aws:yc-dev" : undefined),
+    imageFor: async (id: string) => (id === chosenScope ? "arn:aws:toolchain" : undefined),
     api: {
       ...fake.api,
       runMicrovm: (input: Parameters<typeof fake.api.runMicrovm>[0]) => {
-        runs.push([input.imageIdentifier === "arn:aws:yc-dev", input.imageVersion]);
+        runs.push([input.imageIdentifier === "arn:aws:toolchain", input.imageVersion]);
         return fake.api.runMicrovm(input);
       },
     },

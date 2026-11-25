@@ -1497,7 +1497,7 @@ test("Render does not report a command that exits 124 or 137 on its own as a tim
 
 test("a computer with a chosen image starts from that image's base", async (t) => {
   const { fake, store, scope, make } = setup(t);
-  const chosenRef = BASE_REF.replace("sandbox-base", "yc-dev");
+  const chosenRef = BASE_REF.replace("sandbox-base", "toolchain");
   const chosenBase: RenderBase = {
     ready: async () => ({ ref: chosenRef, snapshotId: fake.seedGolden(chosenRef) }),
     prepare: async () => {},

@@ -507,7 +507,7 @@ test("a computer's chosen image is its machine source; others boot the configure
   const sources: unknown[] = [];
   const s = make({
     image: "qm-base:1",
-    imageFor: async (id: string) => (id === scope ? "yc-dev:1" : undefined),
+    imageFor: async (id: string) => (id === scope ? "toolchain:1" : undefined),
     fetchImpl: async (url: string, init?: RequestInit) => {
       if (init?.method === "POST" && url.endsWith("/v1/machines"))
         sources.push((JSON.parse(String(init.body)) as { source: { reference: string } }).source.reference);
@@ -516,5 +516,5 @@ test("a computer's chosen image is its machine source; others boot the configure
   });
   await s.provision(scope);
   await s.provision(scopeId("personal", "other"));
-  assert.deepEqual(sources, ["yc-dev:1", "qm-base:1"]);
+  assert.deepEqual(sources, ["toolchain:1", "qm-base:1"]);
 });

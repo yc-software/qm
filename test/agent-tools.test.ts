@@ -2805,10 +2805,10 @@ test("sandbox offers image only when images are configured and passes it to crea
   const imageSchema = (sandbox: ReturnType<typeof tools>) =>
     (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties.image;
   assert.equal(imageSchema(tools()), undefined);
-  assert.deepEqual(imageSchema(tools(["yc-dev"]))?.enum, ["yc-dev"]);
-  await call(tools(["yc-dev"]), { action: "create", backend: "e2b", name: "dev", image: "yc-dev", purpose: "p" });
+  assert.deepEqual(imageSchema(tools(["toolchain"]))?.enum, ["toolchain"]);
+  await call(tools(["toolchain"]), { action: "create", backend: "e2b", name: "dev", image: "toolchain", purpose: "p" });
   assert.deepEqual(operations, [
-    { action: "create", input: { backend: "e2b", name: "dev", sandboxId: undefined, image: "yc-dev" } },
+    { action: "create", input: { backend: "e2b", name: "dev", sandboxId: undefined, image: "toolchain" } },
   ]);
 });
 

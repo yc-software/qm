@@ -343,11 +343,11 @@ test("a computer's memory size is the container's memory limit", async () => {
 test("a computer's chosen image is the image its container runs", async () => {
   const fake = installFakeDocker(daemonPort);
   const chosenScope = scopeId("personal", "U51");
-  const sb = makeSandbox(fake, { imageFor: async (id: string) => (id === chosenScope ? "yc-dev:1" : undefined) });
+  const sb = makeSandbox(fake, { imageFor: async (id: string) => (id === chosenScope ? "toolchain:1" : undefined) });
   const chosen = await sb.provision(chosenScope);
   const plain = await sb.provision(scopeId("personal", "U52"));
-  assert.equal(fake.containers.get(chosen.id)!.args.at(-1), "yc-dev:1");
-  assert.notEqual(fake.containers.get(plain.id)!.args.at(-1), "yc-dev:1");
+  assert.equal(fake.containers.get(chosen.id)!.args.at(-1), "toolchain:1");
+  assert.notEqual(fake.containers.get(plain.id)!.args.at(-1), "toolchain:1");
 });
 
 test("the boot tenant keeps its existing local sandbox names", async () => {
