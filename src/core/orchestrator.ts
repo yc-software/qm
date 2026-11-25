@@ -84,7 +84,7 @@ import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { firedByPoll } from "../triggers/run-trigger.ts";
-import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
+import { askResolutionEvents } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -181,8 +181,11 @@ import {
   currentTimeBlock,
   defaultSandboxLoadLine,
   environmentNote,
+  peopleToScreen,
+  previousRoster,
   renderGatewayContext,
   renderSandboxProviders,
+  screenedRoster,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
   type SystemContextBlocks,
@@ -206,6 +209,7 @@ import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import {
   addConversationBlocks,
   appendTurnGuidance,
+  conversationRoster,
   finishSystemPrompt,
   replacesReply,
   replyToRewrite,
@@ -686,12 +690,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
+      const hasRoster = !external && conversation.kind !== "dm";
+      const storedWindow = hasRoster && storedSession ? deps.sessions.getContextWindow(storedSession.id) : undefined;
+      const [rosterMembers, previousNames] = await Promise.all([
+        hasRoster
+          ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
+              swallowAs("orchestrator: conversation roster", undefined),
+            )
+          : undefined,
+        storedWindow
+          ?.then((window) => previousRoster(window.items))
+          .catch(swallowAs("orchestrator: previous roster", undefined)),
+      ]);
+      const people = peopleToScreen(actor.id, rosterMembers, conversation.audience, previousNames);
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
-          canonicalJson(screenedFields(input, homeChannel?.channelName));
+        canonicalJson(
+          screenedFields(approvalRecord.request, approvalRecord.homeChannel, approvalRecord.people ?? []),
+        ) === canonicalJson(screenedFields(input, homeChannel?.channelName, people));
       const replaysHeldInput =
         !!approvalSession &&
         approvalRecord?.sessionId === approvalSession.id &&
@@ -723,12 +741,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             origin: input.origin.kind,
             ...context,
           });
-      const { flaggedScreenedInput, inputUnscreened } = await screenInboundInput({
+      const { flaggedScreenedInput, inputUnscreened, screenedClean } = await screenInboundInput({
         deps,
         input,
         actor,
         conversation,
         homeChannelName: homeChannel?.channelName,
+        people,
         scopeId,
         resolution,
         screenInbound,
@@ -771,6 +790,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               command: "security-screen",
               reason: heldReason,
               homeChannel: homeChannel?.channelName,
+              ...(people.length ? { people } : {}),
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
@@ -967,8 +987,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (personaNote) turnEvents.push(personaNote);
-      let rosterMembers: DirectoryMember[] | undefined;
-      let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
         conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
         rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
@@ -1175,7 +1193,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           recordedTurn.answer,
         );
 
-      const contextWindow = deps.sessions.getContextWindow(session.id);
+      const contextWindow =
+        storedWindow && storedSession?.id === session.id ? storedWindow : deps.sessions.getContextWindow(session.id);
       const snapshot = context.memorySnapshot();
       void contextWindow.catch(() => undefined);
       const recallOutcomes: MemoryProviderOutcome[] = [];
@@ -1493,7 +1512,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgMemoryWritable,
           ephemeral,
         });
-        ({ rosterMembers, scopeAskList } = await addConversationBlocks({
+        const scopeAskList = await addConversationBlocks({
           deps,
           actor,
           conversation,
@@ -1504,10 +1523,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           credentialDescriptions,
           openOwnerKeychain,
           scopeKeychainGrants,
-          directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,
-          scopeAskList,
-        }));
+        });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
@@ -2264,6 +2281,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             context,
             recallOutcomes,
             rosterMembers,
+            screenedPeople: screenedRoster(actor.id, rosterMembers, previousNames, screenedClean),
             rawEntries,
             session,
             deps,

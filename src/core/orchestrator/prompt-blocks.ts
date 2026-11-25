@@ -3,12 +3,13 @@ import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
-import type { CandidateDestination, GatewayContext, GrantedHandle, ScopeId } from "../../types.ts";
+import type { CandidateDestination, GatewayContext, GrantedHandle, Principal, ScopeId } from "../../types.ts";
 import type { SandboxResource, SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.ts";
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
+import { samePerson } from "../../directory/person.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
@@ -35,19 +36,60 @@ export function renderSandboxProviders(
 interface RosterSnapshot {
   roster: Array<{ id: string; name: string }>;
   sessionId: string;
+  screened?: string[];
+}
+
+export function previousRoster(history: readonly Item[]): RosterSnapshot | undefined {
+  return retainedSnapshot(history, rosterOf).previous;
+}
+
+const screenedBefore = (previous: RosterSnapshot | undefined, id: string, name: string): boolean =>
+  !!previous?.screened?.includes(id) && previous.roster.some((o) => o.id === id && o.name === name);
+
+export function peopleToScreen(
+  actorId: string,
+  roster: readonly DirectoryMember[] | undefined,
+  audience: readonly Principal[],
+  previous: RosterSnapshot | undefined,
+): string[] {
+  const left = roster ? (previous?.roster ?? []).filter((o) => !roster.some((m) => m.principalId === o.id)) : [];
+  const names = [
+    ...(roster ?? []).map((m) => ({ id: m.principalId, name: m.displayName })),
+    ...audience.map((p) => ({ id: p.id, name: p.displayName })),
+    ...left,
+  ].flatMap(({ id, name }) =>
+    name?.trim() && !samePerson(id, actorId) && !screenedBefore(previous, id, name) ? [name] : [],
+  );
+  return [...new Set(names)].sort();
+}
+
+export function screenedRoster(
+  actorId: string,
+  roster: readonly DirectoryMember[] | undefined,
+  previous: RosterSnapshot | undefined,
+  passed: boolean,
+): string[] {
+  return (roster ?? [])
+    .filter(
+      (m) => screenedBefore(previous, m.principalId, m.displayName) || (passed && !samePerson(m.principalId, actorId)),
+    )
+    .map((m) => m.principalId)
+    .sort();
 }
 
 export function membershipEvent(
   current: ReadonlyArray<{ principalId: string; displayName: string; slackId?: string }> | undefined,
   history: readonly Item[],
   sessionId: string,
+  screened: readonly string[],
 ): { text: string; record?: RosterSnapshot } {
   if (!current) return { text: "" };
   const roster = current
     .map((m) => ({ id: m.principalId, name: m.displayName }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const { previous } = retainedSnapshot(history, rosterOf);
-  if (!previous) return { text: "", record: { roster, sessionId } };
+  const record = { roster, sessionId, ...(screened.length ? { screened: [...screened] } : {}) };
+  const previous = previousRoster(history);
+  if (!previous) return { text: "", record };
   const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
   const joined = current
     .filter((m) => absentFrom(previous.roster, m.principalId))
@@ -58,7 +100,7 @@ export function membershipEvent(
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",
   ].filter(Boolean);
-  return { text: parts.join(" "), record: { roster, sessionId } };
+  return { text: parts.join(" "), record };
 }
 
 function rosterOf(item: Item): RosterSnapshot | undefined {
