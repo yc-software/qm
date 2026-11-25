@@ -6,7 +6,7 @@ import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/s
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
-import type { Session } from "../src/types.ts";
+import type { Session, WornPersona } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
@@ -19,8 +19,17 @@ function deferred() {
   return { promise, resolve };
 }
 
+const ACK = {
+  text: "On it.",
+  blocks: [
+    { type: "section", text: { type: "mrkdwn", text: "On it." } },
+    { type: "context", elements: [{ type: "mrkdwn", text: "From Cron Doctor" }] },
+  ],
+};
+
 function fixture() {
   let at = 1_000;
+  let persona: WornPersona | null = null;
   const store = testMap<SlackSessionStatusState>();
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
@@ -95,7 +104,11 @@ function fixture() {
     () => at,
   );
   const manager = (rows = store, publicWebUrl = "https://qm.example.test/web-ui/") =>
-    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, () => at, { work, publicWebUrl });
+    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, () => at, {
+      work,
+      publicWebUrl,
+      persona: () => persona,
+    });
   const status = manager();
   const add = (id: string) => {
     const run = {
@@ -159,13 +172,17 @@ function fixture() {
     client,
     manager,
     status,
+    ride: status.card(client, "T1:B1", "C1", "1.0"),
+    wear: (worn: WornPersona) => {
+      persona = worn;
+    },
     add,
     background,
     watch,
-    start: async (id: string) => {
-      await status.start(client, "T1:B1", id, "C1", "1.0");
-      at += 30_000;
-      await status.reconcile(client, "T1:B1");
+    start: async (id: string, account = "T1:B1") => {
+      await status.start(client, account, id, "C1", "1.0");
+      at += 15_000;
+      await status.reconcile(client, account);
     },
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
@@ -297,6 +314,71 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   await f.reconcile();
   assert.deepEqual(f.deleted, ["card.1"]);
   assert.deepEqual(await f.store.all(), []);
+});
+
+test("a message QM posts carries the card after fifteen quiet seconds and gets its own content back", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  run.deliveryState = null;
+  await f.ride.posted(ACK, "ack.1", run.id);
+  f.advance(14_999);
+  await f.reconcile();
+  assert.equal(f.cards.length, 0);
+  f.advance(1);
+  await f.reconcile();
+  assert.deepEqual(
+    f.cards.map((call) => [call.method, call.args.ts, call.args.text]),
+    [["chat.update", "ack.1", "On it."]],
+  );
+  assert.deepEqual([f.card().slice(0, 2), f.card()[2]?.type], [ACK.blocks, "task_card"]);
+  await f.ride.posted({ text: "Done." }, "answer.1", run.id);
+  assert.deepEqual(f.cards.at(-1)?.args, { channel: "C1", ts: "ack.1", text: "On it.", blocks: ACK.blocks });
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual([f.cards.length, f.deleted, await f.store.all()], [2, [], []]);
+});
+
+test("a plain-text message shows as a section above the card and returns to plain text", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  await f.ride.posted({ text: "On it." }, "ack.1", run.id);
+  f.advance(15_000);
+  await f.reconcile();
+  assert.deepEqual([f.card()[0], f.card()[1]?.type], [ACK.blocks[0], "task_card"]);
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual(f.card(), []);
+});
+
+test("with no message the card stands alone under the persona, and a message that follows takes its place", async () => {
+  const f = fixture();
+  f.wear({ id: "p1", name: "Cron Doctor" });
+  const run = f.add("r1");
+  await f.start(run.id);
+  assert.deepEqual([f.cards[0]?.method, f.cards[0]?.args.username], ["chat.postMessage", "Cron Doctor"]);
+  await f.ride.posted(ACK, "ack.1", run.id);
+  assert.deepEqual([f.deleted, f.cards.length], [["card.1"], 1]);
+  f.advance(15_000);
+  await f.reconcile();
+  assert.deepEqual(
+    [f.cards.at(-1)?.method, f.cards.at(-1)?.args.ts, f.card().map((block) => block.type)],
+    ["chat.update", "ack.1", ["section", "context", "task_card"]],
+  );
+});
+
+test("a message released before another writer rewrites it is never written to again", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  await f.ride.posted(ACK, "ack.1", run.id);
+  f.advance(15_000);
+  await f.reconcile();
+  await f.ride.release("another.message");
+  assert.equal((await f.store.all())[0]?.cardTs, "ack.1");
+  await f.ride.release("ack.1");
+  assert.deepEqual([f.cards.at(-1)?.method, f.card().length], ["chat.postMessage", 1]);
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual([f.cards.filter((call) => call.args.ts === "ack.1").length, f.deleted], [1, ["card.2"]]);
 });
 
 test("without a web URL the details line is the plain-text state", async () => {

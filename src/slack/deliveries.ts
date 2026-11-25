@@ -33,13 +33,14 @@ import {
 } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { Delivery } from "../types.ts";
-import { liveRunHoldsDelivery, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
+import { liveRunHoldsDelivery, postingRunId, runDeliveryId, type TurnFlow } from "../surfaces/turn-flow.ts";
 import { cleanAgentReplyForSlack, stripSlackDirectives } from "./messaging.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 const PERMANENT_POST_ERRORS = new Set([
   "channel_not_found",
@@ -88,6 +89,7 @@ export function createSlackDeliverer(deps: {
   flow: TurnFlow;
   threads: ReturnType<typeof createThreadTracker>;
   clientForIdentity(identity: string): any;
+  card?: (channel: string, threadTs: string) => SlackStatusCard | undefined;
 }): { deliver(client: any, d: Delivery): Promise<void> } {
   const { core, flow, threads, clientForIdentity } = deps;
   const recoveredRow = (d: Delivery): boolean =>
@@ -239,6 +241,7 @@ export function createSlackDeliverer(deps: {
               ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
             ];
             const unfurlLinks = d.destination.unfurlLinks;
+            if (threadTs) await deps.card?.(channel, threadTs)?.release(d.destination.edit.messageTs);
             await client.chat
               .update({
                 channel,
@@ -319,6 +322,7 @@ export function createSlackDeliverer(deps: {
             const unfurlLinks = runId ? false : d.destination.unfurlLinks;
             try {
               const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
+              if (threadTs) await deps.card?.(channel, threadTs)?.release(editRef);
               await client.chat.update({
                 channel,
                 ts: editRef,
@@ -350,6 +354,17 @@ export function createSlackDeliverer(deps: {
           );
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
+          const by = postingRunId(d);
+          if (
+            by &&
+            threadTs &&
+            res.ts &&
+            !res.parts &&
+            d.provenance?.sourceThreadRef.endsWith(`${channel}:${threadTs}`)
+          )
+            void deps
+              .card?.(channel, threadTs)
+              ?.posted({ text, ...(footerBlocks ? { blocks: footerBlocks } : {}) }, res.ts, by);
           if (!res.reused) await replayAttachments(root);
           return res.ts === undefined ? undefined : { messageTs: String(res.ts) };
         } finally {

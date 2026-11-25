@@ -18,6 +18,7 @@ export interface SurfaceTransport {
     text: string,
     opts?: {
       idempotencyKey?: string;
+      runId?: string;
       note?: string;
       notice?: boolean;
       fileIds?: readonly string[];
@@ -87,7 +88,7 @@ export async function runSurfaceTurn(
       taskManaged: !!turn.taskAck,
       postAck: async (text, persona) => {
         const ref = await transport.post(transport.render?.(text) ?? text, {
-          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : {}),
+          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId), runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
         });
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
@@ -233,7 +234,7 @@ export async function runSurfaceTurn(
         await transport.post(reply, {
           ...(note ? { note } : {}),
           ...(uploaded.fileIds?.length ? { fileIds: uploaded.fileIds } : {}),
-          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}` } : {}),
+          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}`, runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
         });
       if (uploaded.failureNote) await transport.post(uploaded.failureNote, persona ? { persona } : undefined);

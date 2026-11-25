@@ -16,6 +16,7 @@ import {
 } from "./lib.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 const noticeBlocks = (text: string): Array<Record<string, unknown>> => [
   { type: "context", elements: [{ type: "mrkdwn", text }] },
@@ -33,6 +34,7 @@ export function createSlackTurnTransport(at: {
   webUiPublicUrl?: string;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
+  card?: (channel: string, threadTs: string) => Pick<SlackStatusCard, "posted"> | undefined;
 }): SurfaceTransport {
   const { client, channel, threadTs } = at;
   const notices = new Set<string>();
@@ -46,7 +48,13 @@ export function createSlackTurnTransport(at: {
           webUiPublicUrl: at.webUiPublicUrl,
           ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
         });
-    if (opts.idempotencyKey) return (await postWithVerify(client, args, opts.idempotencyKey)).ts;
+    if (opts.idempotencyKey) {
+      const posted = await postWithVerify(client, args, opts.idempotencyKey);
+      const blocks = args.blocks as Record<string, unknown>[] | undefined;
+      if (opts.runId && threadTs && posted.ts && !posted.parts)
+        void at.card?.(channel, threadTs)?.posted({ text: msg, ...(blocks ? { blocks } : {}) }, posted.ts, opts.runId);
+      return posted.ts;
+    }
     let firstTs: string | undefined;
     for (const [i, batch] of batchPostMessageArgs(args).entries()) {
       const ts = (await client.chat.postMessage(batch)).ts as string | undefined;
