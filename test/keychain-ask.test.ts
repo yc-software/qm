@@ -842,7 +842,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       /Bob \(U_BOB\) in \*\*#infra\*\* wants to use your \*\*github\*\* credential \(alice-acme\)\./,
       "core composes the notice from the directory + token",
     );
-    assert.match(notices[0]!.text, /Approve or decline on the card/);
+    assert.match(notices[0]!.text, /Approve or deny on the card/);
     assert.ok(!notices[0]!.text.includes(ask.id), "no ask id");
     assert.ok(!notices[0]!.text.includes("clone acme/payments"), "no requester purpose text");
     assert.ok(!/Mention me|reply/i.test(notices[0]!.text), "chat replies are not approval");

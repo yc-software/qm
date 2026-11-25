@@ -590,10 +590,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
     if (!selectedModel) {
+      const pausedApprovals = ctx.chat.activePendingApprovals();
       const selected =
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ?? defaultModelId();
       return html`<div class="composer-wrap">
-        ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
+        ${header} ${pausedApprovals.length ? composerApprovalPanel(pausedApprovals) : nothing}
         <p role="status">
           ${composerState.error || activeRuntimeConfig?.unavailableReason || "Selected model is unavailable. Choose a replacement to continue."}
           ${selected}
@@ -835,9 +836,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span
         ><kbd aria-hidden="true">${approveKey}</kbd>
       </button>`;
-    if (docked.length)
+    const declining = declinedByReply(docked);
+    if (declining.length)
       return html`<button class="send-btn ac-confirm ac-decline" type="submit" ?disabled=${!composerCanSend()}>
-        <span>${docked.length > 1 ? `Decline all ${docked.length}, send reply` : "Decline, send reply"}</span
+        <span>${declining.length > 1 ? `Decline all ${declining.length}, send reply` : "Decline, send reply"}</span
         ><kbd aria-hidden="true">↵</kbd>
       </button>`;
     if (!agent.state.isStreaming) return sendButton("Send");
@@ -1031,7 +1033,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     try {
       for (const a of approvals) {
         if (resolving.has(a.requestId)) continue;
-        await resolve({ requestId: a.requestId, approved, ...(approved ? { scope: "once" as const } : {}) });
+        const submitted = resolve({
+          requestId: a.requestId,
+          approved,
+          ...(approved ? { scope: "once" as const } : {}),
+        });
+        settling.delete(a.requestId);
+        await submitted;
       }
     } finally {
       for (const a of approvals) settling.delete(a.requestId);
@@ -1055,7 +1063,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return html`<div class="composer-approval-panel ${docked ? "docked" : ""}">
       ${approvalCard(approvals, {
         docked,
-        typing: docked && !!composerState.draft.trim(),
+        typing: docked && !!composerState.draft.trim() && declinedByReply(approvals).length > 0,
         busy,
         decide,
         approveAll: () => {
@@ -1068,6 +1076,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         },
       })}
     </div>`;
+  }
+
+  function declinedByReply(approvals: PendingApproval[]): PendingApproval[] {
+    return approvals.filter((a) => a.blocksInput !== false);
   }
 
   function approvalPlaceholder(count: number): string {
@@ -1695,7 +1707,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (docked.length && (!fromKey || flipSteer)) approveDocked(docked);
       return;
     }
-    if (docked.length) declineOnSend(agent, docked);
+    const declining = declinedByReply(docked);
+    if (declining.length) declineOnSend(agent, declining);
     const sideChat = ctx.chat.state.forkSession?.sideChat;
     const text =
       sideChat?.quote &&

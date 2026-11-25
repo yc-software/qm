@@ -196,7 +196,7 @@ test("a sealed-out deny never claims the command was denied", async () => {
   await f.click("U2", "hilo_deny");
   assert.equal(f.submitted.length, 1);
   assert.equal(
-    f.updates.some((u) => /Declined/.test(String(u.text ?? ""))),
+    f.updates.some((u) => /Denied/.test(String(u.text ?? ""))),
     false,
     "the card must not report a denial that never reached the record",
   );
@@ -205,7 +205,7 @@ test("a sealed-out deny never claims the command was denied", async () => {
   f.state.result = { status: "refused", reason: "approval declined for rm -rf /tmp/x" };
   await f.click("U2", "hilo_deny");
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
-  assert.match(String(f.updates.at(-1)?.text ?? ""), /Declined/);
+  assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);
 });
 
 test("cold delegated approval resumes the child without posting its reply a second time", async () => {
@@ -250,13 +250,13 @@ test("a deny click replaces the buttons before the resumed turn runs, then recor
   for (let i = 0; i < 20 && !f.submitted.length; i++) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.submitted.length, 1, "the resumed turn is in flight");
   assert.equal(f.updates.length, 1, "the card was rewritten before the turn finished");
-  assert.match(String(f.updates[0].text), /^:hourglass_flowing_sand: Declining · `rm -rf \/tmp\/x`…$/);
+  assert.match(String(f.updates[0].text), /^:hourglass_flowing_sand: Denying · `rm -rf \/tmp\/x`…$/);
   assert.equal(JSON.stringify(f.updates[0].blocks).includes("hilo_"), false, "no buttons remain to click again");
 
   release();
   await clicked;
   const final = f.updates.at(-1);
-  assert.match(String(final.text), /^Declined by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
+  assert.match(String(final.text), /^Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
   assert.equal(JSON.stringify(final.blocks).includes("hilo_"), false);
   assert.equal(f.ephemerals.length, 0);
 });

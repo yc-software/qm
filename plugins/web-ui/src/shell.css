@@ -3326,167 +3326,6 @@ qm-markdown .tok-in {
 .tool-row.tool-failed .tool-detail {
   color: color-mix(in srgb, var(--destructive) 75%, var(--background));
 }
-.approval-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--foreground) 4%, var(--background));
-}
-.inline-approval-marker {
-  gap: 8px;
-  padding: 10px 12px;
-}
-.approval-text {
-  overflow-wrap: anywhere;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-.approval-title {
-  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
-  font-weight: 600;
-  color: var(--foreground);
-}
-.approval-cmd {
-  font-family: var(--font-mono);
-  font-size: var(--font-13);
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--foreground) 8%, var(--background));
-  color: var(--foreground);
-  overflow-x: auto;
-  white-space: pre;
-}
-
-.approval-cmd-full {
-  display: block;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overflow-x: hidden;
-  max-height: 220px;
-  overflow-y: auto;
-}
-.approval-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.approval-reason-badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--destructive) 13%, var(--background));
-  color: var(--destructive);
-  border: 1px solid color-mix(in srgb, var(--destructive) 30%, transparent);
-}
-.approval-why {
-  font-size: var(--font-13);
-  color: var(--foreground);
-  line-height: 1.4;
-}
-.approval-why-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  margin-right: 8px;
-}
-.approval-summary-line {
-  font-size: var(--font-13);
-  color: var(--foreground);
-  line-height: 1.4;
-}
-.approval-summary {
-  font-family: var(--font-mono);
-  font-size: var(--font-13);
-  color: var(--foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-.approval-match {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.approval-match-label {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  flex: none;
-}
-.approval-match-snippet {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--destructive) 12%, var(--background));
-  color: var(--foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-.approval-full > summary {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-  width: fit-content;
-}
-.approval-full > summary::-webkit-details-marker {
-  display: none;
-}
-.approval-full > summary::before {
-  content: "▸ ";
-}
-.approval-full[open] > summary::before {
-  content: "▾ ";
-}
-.approval-full > .approval-cmd {
-  display: block;
-  margin-top: 6px;
-  max-height: 320px;
-  overflow: auto;
-}
-.approval-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.approval-btn {
-  font-size: var(--font-13);
-  font-weight: 500;
-  padding: 7px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: var(--foreground);
-  cursor: pointer;
-  transition: opacity 0.12s ease;
-}
-.approval-btn:hover:not(:disabled) {
-  opacity: 0.85;
-}
-.approval-btn.primary {
-  background: var(--cta);
-  color: var(--cta-foreground);
-  border-color: var(--cta);
-}
-.approval-btn.deny {
-  color: var(--destructive);
-  border-color: color-mix(in srgb, var(--destructive) 40%, var(--border));
-}
-.approval-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
 .tool-expandable {
   display: block;
 }
@@ -4444,33 +4283,6 @@ qm-draft .draft-card-body {
   max-height: min(calc(100dvh - 130px), calc(100cqh - 130px));
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-.composer-approval {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  min-height: 48px;
-  padding: 4px 4px 8px;
-}
-.composer-approval-copy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  overflow-wrap: anywhere;
-  width: 100%;
-  gap: 5px;
-  min-width: 0;
-}
-.composer-approval .approval-title {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.composer-approval .approval-cmd {
-  max-width: 100%;
-}
-.composer-approval .approval-actions {
-  width: 100%;
-  justify-content: flex-end;
 }
 .composer-toolbar {
   display: flex;
@@ -6123,9 +5935,6 @@ a.connector-widget:focus-visible {
     padding: calc(50px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
       calc(40px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
-  :where(html:not(.desktop-embed)) .composer-approval .approval-actions {
-    justify-content: flex-start;
-  }
   :where(html:not(.desktop-embed)) .composer-toolbar {
     align-items: flex-end;
   }
@@ -6161,15 +5970,6 @@ a.connector-widget:focus-visible {
 @media (max-width: 560px) {
   .pane {
     padding-bottom: calc(32px + env(safe-area-inset-bottom));
-  }
-  .composer-approval .approval-actions {
-    display: grid;
-    width: 100%;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .composer-approval .approval-btn {
-    width: 100%;
   }
   .runtime-upgrade {
     align-items: flex-start;
@@ -11945,12 +11745,6 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  :where(html:not(.desktop-embed)) .composer-approval .approval-btn {
-    min-height: 44px;
-  }
-}
-
-@media (max-width: 860px) {
   :where(html:not(.desktop-embed)) .pane .session-topbar {
     margin: calc(-50px - var(--surface-safe-top)) calc(-1 * max(14px, env(safe-area-inset-right))) 12px
       calc(-1 * max(14px, env(safe-area-inset-left)));
@@ -14664,7 +14458,6 @@ button:disabled .qm-switch {
   gap: 8px;
 }
 
-/* Approval card docked on the composer */
 .composer-approval-panel.docked {
   display: block;
   margin: calc(-1 * var(--composer-pad-block)) calc(-1 * var(--composer-pad-end)) 2px
@@ -14808,10 +14601,6 @@ button:disabled .qm-switch {
 .ac-value.literal {
   color: var(--ac-soft);
 }
-.ac-value.ident {
-  font-family: var(--ac-mono);
-  font-size: 12px;
-}
 .ac-text {
   padding: 9px 12px;
   border-radius: 10px;
@@ -14932,13 +14721,6 @@ button:disabled .qm-switch {
   margin: -4px -6px 0 auto;
   font-size: var(--font-12-5);
 }
-.ac-items > .ac-extra,
-.ac-all > .ac-more {
-  display: none;
-}
-.ac-all > .ac-extra {
-  display: grid;
-}
 .ac-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 26px;
@@ -14949,8 +14731,7 @@ button:disabled .qm-switch {
 .ac-items > :first-child {
   border-top: 0;
 }
-.ac-item summary,
-.ac-more button {
+.ac-item summary {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -14965,8 +14746,7 @@ button:disabled .qm-switch {
 .ac-card summary::-webkit-details-marker {
   display: none;
 }
-.ac-item summary:hover,
-.ac-more button:hover {
+.ac-item summary:hover {
   background: var(--ac-tint);
 }
 .ac-index {
@@ -15039,20 +14819,6 @@ button:disabled .qm-switch {
 }
 .ac-item .ac-drop {
   margin: 4px 0 0;
-}
-.ac-more {
-  border-top: 1px solid var(--ac-rule);
-}
-.ac-more button {
-  width: calc(100% + 8px);
-  padding-left: 28px;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-weight: 550;
-  color: var(--foreground);
-  align-items: center;
-  gap: 4px;
 }
 .composer-wrap.has-approval .composer-toolbar .send-btn.ac-confirm {
   width: auto;

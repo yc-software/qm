@@ -1692,7 +1692,7 @@ export function renderAskNotice(
   const self = ask.requesterScopeId.startsWith("personal:") && samePerson(ask.ownerId, ask.requesterId);
   return (
     `${task}${self ? "A task in your personal conversation" : `${who} in ${where}`} wants to use your **${credential.service}** credential${account}. ` +
-    `Approve or decline on the card (expires in ${hoursLeft(ask.expiresAt, now)}h).`
+    `Approve or deny on the card (expires in ${hoursLeft(ask.expiresAt, now)}h).`
   );
 }
 

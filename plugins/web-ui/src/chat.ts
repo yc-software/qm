@@ -137,8 +137,8 @@ import {
   pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
-import { approvalCall, approvalHeading, realApprovalReason } from "./approval-call";
-import { approvalBody, approvalRecord } from "./approval-card";
+import { realApprovalReason } from "./approval-call";
+import { approvalRecord } from "./approval-card";
 import {
   buildTimeline,
   rowArgs,
@@ -3282,7 +3282,6 @@ export function createChatSurface(
 
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
-    if (item.kind === "approval") return `approval:${item.approval.requestId}`;
     if (item.kind === "thinking") return `thinking:${item.step ?? item.seq}`;
     return `${item.kind}:${item.item.seq}`;
   }
@@ -3409,53 +3408,6 @@ export function createChatSurface(
     })}`;
   }
 
-  function approvalSummaryView(a: PendingApproval, expanded = false): TemplateResult {
-    const reason = realApprovalReason(a.reason);
-    const call = approvalCall(a);
-    if (call)
-      return html`<div class="approval-head">
-          <span class="approval-call-title" dir="auto">${approvalHeading(a, call)}</span>
-        </div>
-        ${approvalBody(a)}`;
-    const summary = firstLine(a.command, 80);
-    const truncated = a.command.includes("\n") || a.command.length > 80;
-    return html`
-      <div class="approval-head">
-        <span class="approval-title">Approval needed</span>
-        ${reason ? html`<span class="approval-reason-badge">${reason}</span>` : nothing}
-      </div>
-      ${a.summary ? html`<div class="approval-summary-line">${a.summary}</div>` : nothing}
-      ${a.purpose ? html`<div class="approval-why"><span class="approval-why-label">Why</span>${a.purpose}</div>` : nothing}
-      ${
-        expanded
-          ? html`<code class="approval-cmd approval-cmd-full">${a.command}</code>`
-          : html`<code class="approval-summary" ${tip(a.command)}>${summary}</code>`
-      }
-      ${
-        a.matched
-          ? html`<div class="approval-match">
-              <span class="approval-match-label">Triggered by</span
-              ><code class="approval-match-snippet">${a.matched}</code>
-            </div>`
-          : nothing
-      }
-      ${
-        !expanded && truncated
-          ? html`<details class="approval-full">
-              <summary>Show full command</summary>
-              <code class="approval-cmd">${a.command}</code>
-            </details>`
-          : nothing
-      }
-    `;
-  }
-
-  function approvalMarker(a: PendingApproval): TemplateResult {
-    return html`<div class="approval-card inline-approval-marker">
-      <div class="approval-text">${approvalSummaryView(a)}</div>
-    </div>`;
-  }
-
   function waitingSteerRows(agent: Agent): TemplateResult[] {
     return ctx.composer.waitingSteers(agent).map(
       (q) =>
@@ -3507,7 +3459,6 @@ export function createChatSurface(
       const reason = retractedReason(item.item);
       return reason ? retractedRow(reason, item.item.text ?? "") : interimReply(item.item);
     }
-    if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
@@ -4054,7 +4005,6 @@ export function createChatSurface(
     requestBackgroundPanel,
     activePendingApprovals,
     resolveCommandApproval,
-    approvalSummaryView,
     notePendingSessionOnSend,
     syncPaneState: postCurrentPaneState,
     onDelivery,

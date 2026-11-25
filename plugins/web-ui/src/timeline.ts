@@ -59,8 +59,7 @@ export type TimelineItem =
   | { kind: "steer"; item: Item }
   | { kind: "thinking"; seq: number; step: string | null; text: string }
   | { kind: "text"; item: Item }
-  | { kind: "tool"; row: ToolRowModel }
-  | { kind: "approval"; approval: PendingApproval };
+  | { kind: "tool"; row: ToolRowModel };
 
 export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
   const segments: TimelineItem[][] = [[]];

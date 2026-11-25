@@ -709,7 +709,7 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const { app, sessions, runs } = await withCommandRules(freshApp());
     const command = "git push --force origin main";
     const first = await app.turn(dm(`!run ${command}`));
-    const requestId = first.pendingApprovals![0]!.requestId;
+    const { requestId, summary } = first.pendingApprovals![0]!;
     await app.turn(dm(`!run ${command}`, { approval: { requestId, approved } }));
     const decisions = (await sessions.getItems(first.sessionId!)).filter((item) => item.kind === "ElicitationResponse");
     assert.equal(decisions.length, 1);
@@ -718,7 +718,12 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const { elicitId, approved: recorded, turnId, body } = decisions[0]!;
     assert.deepEqual(
       { elicitId, approved: recorded, turnId, body },
-      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+      {
+        elicitId: requestId,
+        approved,
+        turnId: replay.id,
+        body: { command, summary, ...(approved ? { scope: "once" } : {}) },
+      },
     );
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.flatMap((entry) =>
@@ -728,7 +733,12 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const shown = liveDecisions![0]!;
     assert.deepEqual(
       { elicitId: shown.elicitId, approved: shown.approved, turnId: shown.turnId, body: shown.body },
-      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+      {
+        elicitId: requestId,
+        approved,
+        turnId: replay.id,
+        body: { command, summary, ...(approved ? { scope: "once" } : {}) },
+      },
     );
   }
 });

@@ -422,7 +422,7 @@ struct ChatView: View {
           Task { await decide(approval, approved: false) }
         } label: {
           NativeActionLabel(
-            title: "Decline", busyTitle: "Declining…",
+            title: "Deny", busyTitle: "Denying…",
             busy: approvalSubmission?.id == approval.id && approvalSubmission?.approved == false)
         }
         Spacer()

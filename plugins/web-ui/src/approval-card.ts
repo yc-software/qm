@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { Check, ChevronDown, ChevronRight, Clock3, X } from "lucide";
+import { Check, ChevronRight, Clock3, X } from "lucide";
 import { animateDetailsToggle } from "./details-motion";
 import { icon } from "./icons";
 import type { ApprovalDecision, PendingApproval } from "./core-bridge";
@@ -10,7 +10,6 @@ import {
   approvalHeading,
   argView,
   realApprovalReason,
-  toolWords,
   type ApprovalCall,
   type ArgField,
   type ArgNode,
@@ -26,14 +25,10 @@ export interface ApprovalCardOptions {
   declineAll: () => void;
 }
 
-const ROW_LIMIT = 6;
-
 function nodeView(node: ArgNode): TemplateResult {
   switch (node.kind) {
     case "scalar":
-      return html`<span class="ac-value ${node.literal ? "literal" : ""} ${node.ident ? "ident" : ""}" dir="auto"
-        >${node.text}</span
-      >`;
+      return html`<span class="ac-value ${node.literal ? "literal" : ""}" dir="auto">${node.text}</span>`;
     case "text":
       return html`<div class="ac-text" dir="auto" tabindex="0">${node.text}</div>`;
     case "record":
@@ -161,22 +156,10 @@ function singleCard(a: PendingApproval, o: ApprovalCardOptions): TemplateResult 
   );
 }
 
-function textOf(node: ArgNode): string | null {
-  return node.kind === "text" || node.kind === "scalar" ? node.text : null;
-}
-
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
-const WHEN = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } as const;
-
 function previewOf(view: ArgView): string {
-  const shown = view.fields.filter((f) => f.node.kind === "text" || (f.node.kind === "scalar" && !f.node.literal));
-  const words = shown.filter((f) => !(f.node.kind === "scalar" && f.node.ident));
-  return (words.length ? words : shown)
-    .map((f) => {
-      const text = textOf(f.node)!.replace(/\s+/g, " ").trim().slice(0, 240);
-      return ISO_TIME.test(text) ? new Date(text).toLocaleString(undefined, WHEN) : text;
-    })
-    .join(" · ");
+  const texts = view.fields.flatMap((f) => (f.node.kind === "text" ? [f.node.text] : []));
+  const scalars = view.fields.flatMap((f) => (f.node.kind === "scalar" && !f.node.literal ? [f.node.text] : []));
+  return (texts.length ? texts : scalars).join(" · ");
 }
 
 interface Row {
@@ -200,8 +183,8 @@ function dropButton(row: Row, o: ApprovalCardOptions): TemplateResult {
   </button>`;
 }
 
-function rowView(row: Row, i: number, o: ApprovalCardOptions, extra: boolean, titled: boolean): TemplateResult {
-  return html`<li class="ac-item ${extra ? "ac-extra" : ""} ${titled ? "" : "ac-untitled"}">
+function rowView(row: Row, i: number, o: ApprovalCardOptions, titled: boolean): TemplateResult {
+  return html`<li class="ac-item ${titled ? "" : "ac-untitled"}">
     <details>
       <summary>
         <span class="ac-index">${i + 1}</span>${icon(ChevronRight, 14)}
@@ -223,26 +206,14 @@ function rowView(row: Row, i: number, o: ApprovalCardOptions, extra: boolean, ti
   </li>`;
 }
 
-function showAll(e: Event): void {
-  (e.currentTarget as HTMLElement).closest(".ac-items")?.classList.add("ac-all");
-}
-
 function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
-  const cut = rows.length > ROW_LIMIT ? ROW_LIMIT - 1 : rows.length;
   const titled = new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
   return html`<ol class="ac-items">
     ${repeat(
       rows,
       (r) => r.approval.requestId,
-      (r, i) => rowView(r, i, o, i >= cut, titled),
+      (r, i) => rowView(r, i, o, titled),
     )}
-    ${
-      cut < rows.length
-        ? html`<li class="ac-more">
-            <button type="button" @click=${showAll}>Show ${rows.length - cut} more ${icon(ChevronDown, 14)}</button>
-          </li>`
-        : nothing
-    }
   </ol>`;
 }
 
@@ -295,6 +266,7 @@ export interface ApprovalRecord {
   scope?: string;
   declined?: string;
   purpose?: string;
+  summary?: string;
   call?: { tool: string; input: Record<string, unknown> };
 }
 
@@ -309,15 +281,14 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
     requestId: d.requestId ?? "",
     command: d.command,
     ...(d.purpose ? { purpose: d.purpose } : {}),
+    ...(d.summary ? { summary: d.summary } : {}),
     ...(d.call ? { call: d.call } : {}),
   };
   const call = approvalCall(a);
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  let what = d.command.split("\n")[0]!.slice(0, 240);
-  if (a.purpose?.trim()) what = a.purpose.trim();
-  else if (call) what = toolWords(call);
+  const what = call || a.purpose ? approvalHeading(a, call) : d.command;
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;

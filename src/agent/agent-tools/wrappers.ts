@@ -82,7 +82,7 @@ const CALL_LABEL_FIELD = "purpose";
 const CALL_LABEL_SCHEMA = Type.Optional(
   Type.String({
     description:
-      'One plain line saying what this call does and to whom, e.g. "Send a DM to William Yu in W27 Slack". Shown to the person if the call needs their approval; it does not change what runs.',
+      'One plain line saying what this call does and to whom, e.g. "Send Ada a Slack DM about the Friday meeting". Shown to the person if the call needs their approval; it does not change what runs.',
   }),
 );
 

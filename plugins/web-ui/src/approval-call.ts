@@ -6,7 +6,7 @@ const SHORT_TEXT = 64;
 const MAX_DEPTH = 4;
 
 export type ArgNode =
-  | { kind: "scalar"; text: string; literal: boolean; ident: boolean }
+  | { kind: "scalar"; text: string; literal: boolean }
   | { kind: "text"; text: string }
   | { kind: "list"; items: ArgNode[] }
   | { kind: "record"; view: ArgView; inline: boolean };
@@ -45,25 +45,12 @@ function unwrapCatalog(tool: string, input: Record<string, unknown>): ApprovalCa
   return { tool, via: null, args: input };
 }
 
-export function approvalCall(a: Pick<PendingApproval, "call" | "command">): ApprovalCall | null {
-  if (a.call && isRecord(a.call.input)) return unwrapCatalog(a.call.tool, a.call.input);
-  const brace = a.command.indexOf("{");
-  const label = brace > 0 ? a.command.slice(0, brace).trim() : "";
-  if (!label || /\s/.test(label)) return null;
-  try {
-    const parsed: unknown = JSON.parse(a.command.slice(brace));
-    return isRecord(parsed) ? unwrapCatalog(label, parsed) : null;
-  } catch {
-    return null;
-  }
+export function approvalCall(a: Pick<PendingApproval, "call">): ApprovalCall | null {
+  return a.call && isRecord(a.call.input) ? unwrapCatalog(a.call.tool, a.call.input) : null;
 }
 
 export function keyLabel(key: string): string {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_\-.]+/g, " ")
-    .trim()
-    .toLowerCase();
+  return key.replaceAll("_", " ").replaceAll("-", " ").trim();
 }
 
 function scalarText(value: unknown): { text: string; literal: boolean } {
@@ -82,25 +69,19 @@ function isEmpty(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length === 0;
 }
 
-const looksLikeIdentifier = (text: string): boolean =>
-  /^\S{3,}$/.test(text) && /[A-Za-z]/.test(text) && /[\d._:/@-]/.test(text);
-
-function scalarNode(text: string, literal: boolean): ArgNode {
-  return { kind: "scalar", text, literal, ident: !literal && looksLikeIdentifier(text) };
-}
-
 export function argNode(value: unknown, depth = 0): ArgNode {
   if (isScalar(value)) {
     const { text, literal } = scalarText(value);
     return !literal && (text.length > SHORT_TEXT || text.includes("\n"))
       ? { kind: "text", text }
-      : scalarNode(text, literal);
+      : { kind: "scalar", text, literal };
   }
   if (depth >= MAX_DEPTH) return { kind: "text", text: JSON.stringify(value, null, 2) };
   if (Array.isArray(value)) {
     if (value.every(isScalar)) {
       const joined = value.map((v) => scalarText(v).text).join(", ");
-      if (joined.length <= SHORT_TEXT && !joined.includes("\n")) return scalarNode(joined, false);
+      if (joined.length <= SHORT_TEXT && !joined.includes("\n"))
+        return { kind: "scalar", text: joined, literal: false };
     }
     return { kind: "list", items: value.map((v) => argNode(v, depth + 1)) };
   }
@@ -147,9 +128,11 @@ export function toolWords(call: ApprovalCall): string {
 }
 
 export function approvalHeading(a: PendingApproval, call: ApprovalCall | null): string {
+  const summary = a.summary?.trim();
   if (a.purpose?.trim()) return a.purpose.trim();
+  if (summary && summary !== a.call?.tool) return summary;
   if (call) return toolWords(call);
-  return a.summary?.trim() || "Run a command";
+  return summary || "Run a command";
 }
 
 type Leaf = { path: string[]; value: unknown };

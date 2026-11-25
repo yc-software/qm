@@ -1088,7 +1088,7 @@ for (const origin of [undefined, "https://one.dev.example.test", "https://two.de
           ["Allow once", "primary", ["5"]],
           ["Allow session", "default", ["5"]],
           ["Allow always", "default", ["5"]],
-          ["Decline", "danger", ["5"]],
+          ["Deny", "danger", ["5"]],
         ],
       );
       const click = (eventId: string, user: Record<string, string>) =>
@@ -1110,7 +1110,7 @@ for (const origin of [undefined, "https://one.dev.example.test", "https://two.de
       const [denial] = await built.runs.list({ threadRef: `partner-chat:${account}:group:88:1002` });
       assert.ok(denial?.dedupKey?.startsWith(`partner-chat:action:${actionNamespace}ev-click-3:approval:`));
       const settled = genericChat.shown().find((m) => m.id === posted.id)!;
-      assert.deepEqual([settled.body, settled.actions], ["Declined by Ada Lovelace · `git push`", []]);
+      assert.deepEqual([settled.body, settled.actions], ["Denied by Ada Lovelace · `git push`", []]);
       await settle(async () => {
         const session = await built.sessions.getByThread(`partner-chat:${account}:group:88:1002`);
         const items = session ? await built.sessions.getItems(session.id) : [];
@@ -1166,7 +1166,7 @@ test("a credential request is a card its owner decides from the chat, and a deci
       [
         ["Allow once", ["5"]],
         ["Allow", ["5"]],
-        ["Decline", ["5"]],
+        ["Deny", ["5"]],
       ],
     );
     const actor = { externalId: "ada@example.com" };

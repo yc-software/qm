@@ -112,7 +112,6 @@ export interface ChatSurface {
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
   resolveCommandApproval(decision: ApprovalDecision): Promise<void>;
-  approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
   syncPaneState(): void;
   onDelivery(threadRef: string): void;

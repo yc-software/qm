@@ -20,8 +20,8 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
-import { redactCommand } from "../../sandbox/exec-process-session.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
+import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -67,10 +67,12 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
 }
 
 function redactedValue(value: unknown): unknown {
-  if (typeof value === "string") return redactCommand(redactSecrets(value));
+  if (typeof value === "string") return redactCommandSecrets(redactSecrets(value));
   if (Array.isArray(value)) return value.map(redactedValue);
   if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactedValue(v)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, isSensitiveKey(k) ? "[redacted]" : redactedValue(v)]),
+    );
   return value;
 }
 
@@ -369,6 +371,7 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         body: {
           command: record.command,
           ...(record.purpose ? { purpose: record.purpose } : {}),
+          ...(record.summary ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
