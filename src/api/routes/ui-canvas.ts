@@ -13,6 +13,7 @@ import {
 import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
+import { internalPerson } from "../artifact-share.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
@@ -45,7 +46,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
     });
     return null;
   }
-  if (cap.surface !== "web" || !cap.internalAudience || cap.botActor === true) {
+  if (cap.surface !== "web" || !internalPerson(cap)) {
     sendJson(res, 403, {
       error: "not_web_turn",
       message: "Only available on a web UI turn.",

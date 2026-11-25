@@ -23,7 +23,6 @@ import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts"
 import { AdminError } from "../admin/admin-service.ts";
 import { DeployAccessError } from "../deploy/deploy-service.ts";
 import {
-  carriesPersonAuthority,
   type ArtifactHome,
   type ArtifactType,
   isMultiMemberSkillScope,
@@ -101,7 +100,7 @@ export type WebhookCreateResult =
       message: string;
     };
 
-type SignOff = (step: { summary: string; key: string }) => Promise<boolean>;
+type SignOff = (step: { summary: string; key: string; shown?: unknown }) => Promise<boolean>;
 
 const SIGN_OFF_PENDING = "this step waits on the approval card sent to the person";
 const unsigned: SignOff = async () => false;
@@ -786,7 +785,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async createWebhook(req, capability, publicBase, signOff = unsigned): Promise<WebhookCreateResult> {
-      if (!carriesPersonAuthority(capability) || capability.internalAudience !== true)
+      if (!internalPerson(capability))
         return { ok: false, code: "forbidden", message: "registering a webhook needs its owner's own authority" };
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
@@ -796,7 +795,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           message: "destinationKey is not one of the destinations available for this conversation",
         };
       }
-      if (!(await signOff({ summary: `Register webhook "${req.title}"`, key: `webhook:${JSON.stringify(req)}` })))
+      const shown = { ...req, verification: { ...req.verification, secret: "***" } };
+      if (
+        !(await signOff({ summary: `Register webhook "${req.title}"`, key: `webhook:${JSON.stringify(req)}`, shown }))
+      )
         return { ok: false, code: "approval_required", message: SIGN_OFF_PENDING };
       const input: CreateWebhookInput = {
         ...(req.title !== undefined ? { title: req.title } : {}),

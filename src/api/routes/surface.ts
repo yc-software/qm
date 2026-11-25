@@ -815,8 +815,7 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     else if (personaScope) {
       if (
         capability.memory?.write &&
-        carriesPersonAuthority(capability) &&
-        capability.internalAudience === true &&
+        internalPerson(capability) &&
         (await ctx.app.managesScope(capability.actorId, personaScope))
       )
         write = personaScope;

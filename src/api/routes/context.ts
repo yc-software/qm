@@ -1,7 +1,7 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import { BLOB_TRANSFER_AUD, mintCapabilityToken, scopeAuthorizationClaims } from "../../auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { carriesPersonAuthority } from "../artifact-share.ts";
+import { internalPerson } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
@@ -65,13 +65,7 @@ async function resolveSurfaceTarget(
 
 async function rateLimitRecipient(ctx: ApiCtx): Promise<Pick<SurfaceContextQuery, "rateLimitRecipient">> {
   const cap = ctx.capability;
-  if (
-    !cap?.internalAudience ||
-    !carriesPersonAuthority(cap) ||
-    cap.destination?.type !== "slack" ||
-    !cap.destination.target
-  )
-    return {};
+  if (!cap || !internalPerson(cap) || cap.destination?.type !== "slack" || !cap.destination.target) return {};
   const member = await ctx.app.directoryMember(cap.actorId);
   return { rateLimitRecipient: { target: cap.destination.target, user: member?.slackId ?? cap.actorId } };
 }

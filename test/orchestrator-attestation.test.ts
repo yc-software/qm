@@ -691,7 +691,7 @@ test("admin reach rides turns with person authority and an all-internal audience
   );
   claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims!.internalAudience, undefined, "a guest in the room means no internal audience");
-  assert.equal(claims!.personAuthority, true, "authority is attested apart from the audience");
+  assert.equal(claims!.personAuthority, undefined, "a guest in the room means no person authority on the token");
   assert.equal(claims!.memory?.orgWrite, undefined);
 
   for (const publishMembers of [undefined, [] as { externalId: string; orgId: string }[]]) {

@@ -574,7 +574,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const speakerTurn =
         (!sessionTurn && (humanTurn || authoredDetection)) ||
         (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
-      const personAuthorityTurn = !external && input.botActor !== true && (speakerTurn || personFireTurn);
+      const personAuthorityTurn = internalAudience && input.botActor !== true && (speakerTurn || personFireTurn);
       const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
       const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
       if (spineDm !== undefined && spineDm !== (input.surfaceTools === true))
@@ -657,7 +657,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isCurrentSharedScopeMember = withSpeakerMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
-        verified: speakerTurn && personAuthorityTurn && internalAudience && conversation.kind !== "dm",
+        verified: speakerTurn && personAuthorityTurn && conversation.kind !== "dm",
       });
       const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
@@ -878,7 +878,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         audience: conversation.audience,
         acl: deps.acl,
-        personAuthority: personAuthorityTurn && internalAudience,
+        personAuthority: personAuthorityTurn,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -1219,7 +1219,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         internalAudience,
-        ownerAuthorityTurn: (personAuthorityTurn && internalAudience) || personFireTurn,
+        ownerAuthorityTurn: personAuthorityTurn || personFireTurn,
         scopeId,
         environmentId,
         resolution,
@@ -1397,7 +1397,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && ((personAuthorityTurn && internalAudience) || openOwnerKeychain),
+        openResourceAccess: !external && (personAuthorityTurn || openOwnerKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1806,7 +1806,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(carriesPersonAuthority(runtimeClaims) && internalAudience ? { personAuthority: true } : {}),
+          ...(carriesPersonAuthority(runtimeClaims) ? { personAuthority: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),

@@ -326,7 +326,8 @@ test("ingestion configuration rejects nonowners and accepts its owner", async ()
   const route = loopIngressRoutes.find((route) => "method" in route && route.method === "POST")!;
   for (const [actor, expected] of [
     ["mallory", 403],
-    [null, 201],
+    [null, 403],
+    ["alice", 201],
   ] as const) {
     let status = 0;
     await route.handle({

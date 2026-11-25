@@ -2,6 +2,7 @@ import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
 import { actionApproved } from "../action-approval.ts";
+import { internalPerson } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -70,13 +71,13 @@ export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
   return null;
 }
 
-export async function requireSignOff(ctx: ApiCtx, summary?: string): Promise<boolean> {
+export async function requireSignOff(ctx: ApiCtx, summary: string, personMay = false): Promise<boolean> {
   if (ctx.actor?.imp) {
     refuseImpersonated(ctx.res);
     return false;
   }
-  if (summary === undefined) return true;
-  if (ctx.capability || ctx.actor?.p) return actionApproved(ctx, { summary });
+  if (ctx.capability) return (personMay && internalPerson(ctx.capability)) || actionApproved(ctx, { summary });
+  if (ctx.actor?.p) return true;
   sendJson(ctx.res, 403, {
     error: "approval_unavailable",
     message: "This step needs a signed-in person or an agent run.",
@@ -263,7 +264,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
     if (!resolved.ok || !resolved.destination)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
-    if (!(await requireSignOff(ctx))) return;
+    if (!(await requireSignOff(ctx, "Create a loop that posts to a chosen destination", true))) return;
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
@@ -453,7 +454,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: "loop triage is not enabled for this loop's owner",
       });
-    if (!(await requireSignOff(ctx))) return;
+    if (!(await requireSignOff(ctx, `Change triage for loop "${loop.name}"`, true))) return;
     patch.triage = triage;
   }
   if (b.destinationKey !== undefined) {
@@ -461,7 +462,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string or null" });
     if (!ctx.capability)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
-    if (!(await requireSignOff(ctx))) return;
+    if (!(await requireSignOff(ctx, `Change where loop "${loop.name}" posts`, true))) return;
     if (b.destinationKey === null) {
       patch.destination = null;
     } else {
@@ -521,7 +522,7 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
-  if (!(await requireSignOff(ctx))) return;
+  if (!(await requireSignOff(ctx, `Preview triage for loop "${loop.name}"`, true))) return;
   try {
     const items = await deps.fire.previewTriage(loop, { ...loop.triage, ...triage });
     return sendJson(ctx.res, 200, { items });
@@ -682,7 +683,7 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
-  if (!(await requireSignOff(ctx))) return;
+  if (!(await requireSignOff(ctx, `Revoke a ship grant on loop "${loop.name}"`, true))) return;
   const grantId = ctx.params.grantId ?? "";
   const grant = await deps.grants.get(grantId);
   if (!grant || grant.loopId !== loop.id)

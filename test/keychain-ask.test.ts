@@ -1349,7 +1349,13 @@ test("turn e2e: a person's typed turn and their fire carry person authority, an 
     ({
       surface: fire ? "keychain-ask" : "slack",
       actor: { externalId: "U_ALICE" },
-      conversation: { kind: "channel", threadRef: "ch:C9-t", channelRef: "C9", audience: [{ externalId: "U_ALICE" }] },
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C9-t",
+        channelRef: "C9",
+        audience: [{ externalId: "U_ALICE" }],
+        publishMembers: [{ externalId: "U_ALICE" }],
+      },
       text: "!run true",
       origin: fire ? { kind: "automation" } : { kind: "human" },
     }) as TurnRequest;

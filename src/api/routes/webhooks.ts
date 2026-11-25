@@ -145,7 +145,7 @@ async function createWebhook(ctx: ApiCtx): Promise<void> {
       },
       capability,
       deps.publicUrl,
-      ({ summary }) => actionApproved(ctx, { summary, shownBody: { ...b, verification: { ...ver, secret: "***" } } }),
+      ({ summary, shown }) => actionApproved(ctx, { summary, shownBody: shown }),
     );
     if (res.writableEnded) return;
     if (!result.ok)

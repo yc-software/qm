@@ -96,7 +96,14 @@ test("webhook registration through the tool needs the owner's authority and a si
   }
   const authority = { internalAudience: true, personAuthority: true };
   const unsigned = ctxFor({ control, controlClaims: { ...claims("U1"), ...authority } });
-  await assert.rejects(unsigned.webhookCreate(request), NeedsApproval);
+  const card = await unsigned.webhookCreate(request).then(
+    () => assert.fail("registration ran without a sign-off"),
+    (e: unknown) => e,
+  );
+  assert.ok(card instanceof NeedsApproval);
+  assert.match(card.command, /handle the event/);
+  assert.match(card.command, /hmac-sha256/);
+  assert.doesNotMatch(card.command, /"secret":"secret"/);
   assert.deepEqual(await built.app.listWebhooks(), []);
   const signed = ctxFor({ control, controlClaims: { ...claims("U1"), ...authority }, authorizeCommand: () => true });
   const result = await signed.webhookCreate(request);

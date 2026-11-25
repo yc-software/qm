@@ -78,6 +78,7 @@ interface CallOptions {
   isAdmin?: boolean;
   managesScope?: boolean;
   botActor?: boolean;
+  guest?: boolean;
 }
 
 async function call(
@@ -87,7 +88,7 @@ async function call(
   body?: unknown,
   actor = "josh",
   mode: "capability" | "source" = "capability",
-  { signed = true, isAdmin = true, managesScope = false, botActor = false }: CallOptions = {},
+  { signed = true, isAdmin = true, managesScope = false, botActor = false, guest = false }: CallOptions = {},
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -117,6 +118,7 @@ async function call(
             scopeId: scopeId("personal", actor),
             ...run,
             ...(botActor ? { botActor: true, personAuthority: false } : {}),
+            ...(guest ? { internalAudience: false, personAuthority: false } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
         : null,
@@ -691,6 +693,71 @@ test("the portal's source-authed path acts as the signed principalId", async () 
   assert.equal((await call(deps, "GET", `/v1/loops/${id}`, undefined, "mallory", "source")).status, 403);
   const bare = await call(deps, "GET", "/v1/loops", undefined, "", "capability");
   assert.ok(bare.status === 200 || bare.status === 403);
+});
+
+test("a guest-audience turn raises approval cards before retargeting a loop or changing its triage", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  const loop = (created.body as { loop: Loop }).loop;
+  const guest = { signed: false, guest: true } as const;
+  cardRaised(
+    await call(deps, "PATCH", `/v1/loops/${loop.id}`, { destinationKey: "alerts" }, "josh", "capability", guest),
+  );
+  cardRaised(
+    await call(
+      deps,
+      "PATCH",
+      `/v1/loops/${loop.id}`,
+      { triage: { consolidate: { enabled: false } } },
+      "josh",
+      "capability",
+      guest,
+    ),
+  );
+  cardRaised(
+    await call(
+      deps,
+      "POST",
+      "/v1/loops",
+      { ...CREATE, name: "guest", destinationKey: "alerts" },
+      "josh",
+      "capability",
+      guest,
+    ),
+  );
+  assert.equal((await deps.store.get(loop.id))?.destination, undefined);
+  const approved = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { destinationKey: "alerts" },
+    "josh",
+    "capability",
+    {
+      guest: true,
+    },
+  );
+  assert.equal(approved.status, 200);
+  assert.equal((approved.body as { loop: Loop }).loop.destination?.target, "C-alerts");
+});
+
+test("a bare principalId caller cannot change a loop's triage or revoke its grants", async () => {
+  const deps = services();
+  const created = await call(deps, "POST", "/v1/loops", CREATE, "josh", "source");
+  const loop = (created.body as { loop: Loop }).loop;
+  const triage = await call(
+    deps,
+    "PATCH",
+    `/v1/loops/${loop.id}`,
+    { triage: { consolidate: { enabled: false } } },
+    "josh",
+    "source",
+  );
+  assert.equal(triage.status, 403);
+  assert.equal((triage.body as { error: string }).error, "approval_unavailable");
+  const revoke = await call(deps, "DELETE", `/v1/loops/${loop.id}/grants/g1`, undefined, "josh", "source");
+  assert.equal(revoke.status, 403);
+  assert.equal((revoke.body as { error: string }).error, "approval_unavailable");
 });
 
 test("a source call without a principal is refused", async () => {
