@@ -458,7 +458,7 @@ export class OnboardingWelcome extends LitElement {
     try {
       const asked = this.widget === "apps" ? this.toolkit : "";
       let services = asked ? await load(asked) : [];
-      if (asked && services.length === 1 && services[0]!.id.startsWith(`${asked}_`)) this.toolkit = services[0]!.id;
+      if (services.length === 1) this.toolkit = services[0]!.id;
       else if (!services.some((service) => service.id === asked)) services = await load("");
       this.services = services;
     } catch (error) {

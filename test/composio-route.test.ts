@@ -253,10 +253,8 @@ test("the catalog can be asked for one app, which costs one small request", asyn
     (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
     ["granola"],
   );
-  f.replies.push(
-    { items: [] },
-    { items: [app("notes_a", "A", "OAUTH2").items[0], app("notes_b", "B", "OAUTH2").items[0]] },
-  );
+  const notes = [...app("notes_a", "A", "OAUTH2").items, ...app("notes_b", "B", "OAUTH2").items];
+  f.replies.push({ items: [] }, { items: notes });
   assert.deepEqual((await f.invoke("/v1/composio/toolkits?toolkit=notes")).data.items, []);
   f.replies.push({ items: [] }, app("linear_mcp", "Linear MCP", "OAUTH2"));
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items[0]?.id, "linear_mcp");
