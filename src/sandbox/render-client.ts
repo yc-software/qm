@@ -139,17 +139,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   const exec = (sandboxId: string, command: string, signal: AbortSignal) =>
-    withAbort(async () => {
-      const stream = await api.exec(sandboxId, command, undefined, signal);
-      let stdout = "";
-      let stderr = "";
-      for await (const event of stream) {
-        if (event.type === "exit") return { stdout, stderr, exitCode: event.exit_code };
-        if (event.stream === "stdout") stdout += event.data;
-        else stderr += event.data;
-      }
-      throw new Error(`Render sandbox ${sandboxId}: command stream ended without an exit code`);
-    }, signal);
+    withAbort(() => api.exec(sandboxId, command, undefined, signal).result(), signal);
   const getSnapshot = async (snapshot: RenderSnapshot): Promise<RenderSnapshot> =>
     normalizeSnapshot(
       await retryOperation(
