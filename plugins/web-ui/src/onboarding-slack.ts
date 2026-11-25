@@ -15,8 +15,12 @@ export class OnboardingSlack extends LitElement {
     connected: { state: true },
     busy: { state: true },
     error: { state: true },
+    justInstalled: { state: true },
+    cohort: {},
   };
+  declare cohort: string;
   private connected = false;
+  private justInstalled = false;
   private installAvailable: boolean | undefined;
   private unavailable = false;
   private busy = false;
@@ -63,8 +67,15 @@ export class OnboardingSlack extends LitElement {
       });
       if (!response.ok) throw new Error();
       const status = await response.json();
+      const wasConnected = this.connected;
       this.installAvailable = status.installAvailable === true;
       this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
+      if (this.connected && !wasConnected && Date.now() < this.pollUntil) {
+        this.pollUntil = 0;
+        this.justInstalled = true;
+        this.dispatchEvent(new window.CustomEvent("slack-installed", { bubbles: true }));
+      }
+      if (!this.connected) this.justInstalled = false;
       this.unavailable = status.setupUnavailable === true && !this.installAvailable;
       this.error = "";
     } catch {
@@ -103,6 +114,8 @@ export class OnboardingSlack extends LitElement {
     popup.opener = null;
     if (this.installAvailable === false && !this.unavailable) {
       popup.location.href = `${SLACK_SETTINGS}?setup=slack`;
+      this.pollUntil = Date.now() + 10 * 60_000;
+      void this.refresh();
       return;
     }
     popup.document.title = "Connecting Slack";
@@ -144,17 +157,27 @@ export class OnboardingSlack extends LitElement {
   protected render() {
     let label = this.busy ? "Opening Slack…" : "Add to Slack";
     if (this.installAvailable === undefined) label = "Checking Slack…";
+    const cohort = this.cohort?.trim();
+    const hint = cohort
+      ? `Choose your company’s workspace, not the ${cohort} batch Slack.`
+      : "Choose your company’s workspace, where your team already talks.";
+    let status = html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`;
+    if (this.justInstalled)
+      status = html`<div class="welcome-slack slack-installed" role="status">
+        <span class="slack-installed-mark"
+          >${slackMark(24)}<span class="slack-installed-check">${icon(Check, 10)}</span></span
+        ><span><strong>QM added to Slack</strong><small>Your team can now work with QM in Slack.</small></span>
+      </div>`;
     return html`${
       this.connected
-        ? html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`
+        ? status
         : html`<button
             class="welcome-slack"
             type="button"
             ?disabled=${this.busy || this.installAvailable === undefined}
             @click=${() => void this.install()}
           >
-            ${slackMark(24)}<span
-              ><strong>${label}</strong><small>Work with QM where your team already talks.</small></span
+            ${slackMark(24)}<span><strong>${label}</strong><small>${hint}</small></span
             >${icon(ArrowUpRight, 16)}
           </button>`
     }

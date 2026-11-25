@@ -35,6 +35,30 @@ export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> =
   },
 };
 
+const BOOKFACE_ORIGIN = "https://bookface.ycombinator.com";
+
+export const BOOKFACE_CONNECTIONS: Record<string, { name: string; logo: string; anchor: string }> = {
+  "bookface-gmail": { name: "Gmail", logo: "gmail", anchor: "gmail-read" },
+  "bookface-calendar": { name: "Google Calendar", logo: "googlecalendar", anchor: "calendar" },
+  "bookface-google": { name: "Gmail & Calendar", logo: "google", anchor: "" },
+  "bookface-granola": { name: "Granola", logo: "granola", anchor: "granola" },
+};
+
+function bookfaceProvider(parsed: URL, label: string): string {
+  const path = parsed.pathname.replace(/\/+$/, "");
+  const google = path === "/google_connections";
+  if (!google && !/^(?:\/company\/\d+)?\/integrations$/.test(path)) return "";
+  const section = parsed.hash.slice(1) || parsed.searchParams.get("integration") || "";
+  if (["gmail", "gmail-read"].includes(section)) return "bookface-gmail";
+  if (section === "calendar") return "bookface-calendar";
+  if (section === "granola") return "bookface-granola";
+  if (section) return "";
+  const named = label.toLowerCase();
+  if (/\bgranola\b/.test(named)) return "bookface-granola";
+  if (google || /\b(?:gmail|calendar|google)\b/.test(named)) return "bookface-google";
+  return "";
+}
+
 export interface ConnectorLink {
   provider: string;
   url: string;
@@ -60,6 +84,11 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
     if (parsed.origin === "https://connect.composio.dev" && /^\/link\/lk_[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
       const label = labels.get(url);
       if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url, ...(label ? { label } : {}) });
+      continue;
+    }
+    if (parsed.origin === BOOKFACE_ORIGIN) {
+      const provider = bookfaceProvider(parsed, labels.get(url) ?? "");
+      if (provider && !out.some((l) => l.url === url)) out.push({ provider, url });
       continue;
     }
     if (

@@ -185,3 +185,26 @@ test("Composio service logos use recognizable names without changing the destina
   assert.equal(connectorService({ provider: "composio", url: COMPOSIO_URL }), "");
   assert.equal(connectorService({ provider: "github", url: URL, label: "Slack" }), "github");
 });
+
+test("Bookface connection links become Gmail, Calendar and Granola cards", () => {
+  const links = connectorLinksIn(
+    [
+      "Connect Gmail: https://bookface.ycombinator.com/integrations#gmail-read",
+      "Calendar: https://bookface.ycombinator.com/company/64/integrations#calendar",
+      "Both: https://bookface.ycombinator.com/google_connections",
+      "[Connect Granola](https://bookface.ycombinator.com/integrations)",
+      "Profile: https://bookface.ycombinator.com/user/1",
+      "Other: https://bookface.ycombinator.com/integrations#notion",
+    ].join("\n"),
+    "https://agent.example.com",
+  );
+  assert.deepEqual(
+    links.map((link) => link.provider),
+    ["bookface-gmail", "bookface-calendar", "bookface-google", "bookface-granola"],
+  );
+  assert.equal(connectorLinksIn("https://bookface.ycombinator.com/integrations").length, 0);
+  assert.equal(
+    stripConnectorLinks("Connect Granola: https://bookface.ycombinator.com/integrations#granola"),
+    "Connect Granola:",
+  );
+});

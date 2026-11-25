@@ -102,6 +102,12 @@ export class OnboardingWelcome extends LitElement {
     if (!this.preview && !["slack", "slack-account"].includes(this.widget) && !document.hidden)
       void this.loadConnections();
   };
+  private slackInstalled = () => {
+    const key = `slack:${this.returnKey}`;
+    if (!this.setupOnly || !this.returnKey || continuedAttempts.has(key)) return;
+    continuedAttempts.add(key);
+    this.onConnected?.("Slack");
+  };
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
@@ -654,6 +660,7 @@ export class OnboardingWelcome extends LitElement {
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
               }}
+              @slack-installed=${this.slackInstalled}
             ></qm-onboarding-slack>`
           : nothing
       }

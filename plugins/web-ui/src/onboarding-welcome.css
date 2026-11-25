@@ -14,6 +14,19 @@ qm-onboarding-welcome {
   max-width: 560px;
   padding: 12px 0;
 }
+qm-onboarding-welcome.inline-setup > .welcome-content {
+  padding-block: 0;
+}
+:is(.streaming-text, .inline-setup) + qm-onboarding-welcome.inline-setup,
+qm-onboarding-welcome.inline-setup + .streaming-text {
+  margin-top: 1rem;
+}
+.inline-setup :is(.welcome-slack, .slack-connected) {
+  margin-bottom: 0;
+}
+.inline-setup qm-slack-account {
+  margin-top: 12px;
+}
 .welcome-content h1 {
   font-size: 26px;
   letter-spacing: -0.7px;

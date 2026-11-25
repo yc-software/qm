@@ -2483,6 +2483,7 @@ export function createChatSurface(
         if (returnKey !== null)
           parts.push(
             html`<qm-onboarding-welcome
+              class="inline-setup"
               .me=${appState.me}
               .base=${withBase("")}
               .widget=${part.type === "setup" ? "apps" : part.type}
