@@ -59,7 +59,7 @@ function renderEvent(parsed: unknown, rawBody: string): string {
   return kept.length < pretty.length ? `${kept}\n…[truncated]` : kept;
 }
 
-function dropReason(wh: Webhook | null, fire: WebhookFire, now: number): string | undefined {
+function dropReason(wh: Webhook | null, fire: Pick<WebhookFire, "receivedAt">, now: number): string | undefined {
   if (!wh) return "its webhook was deleted";
   if (!wh.enabled) return "its webhook is disabled";
   if (fire.receivedAt < now - DEFAULT_FIRE_RUNNING_STALE_MS) return "it stayed unfinished for over 24 hours";
@@ -126,13 +126,18 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
 
     async redrive(now) {
       await claimThenBind(deps.webhooks.claimFireTenants, async () => {
+        const unsettled = await deps.webhooks.unsettledFires();
+        if (!unsettled.length) return;
+        const hooks = new Map(
+          (await deps.webhooks.getMany([...new Set(unsettled.map((f) => f.webhookId))])).map((wh) => [wh.id, wh]),
+        );
         await redriveHandedOffFires(
-          (await deps.webhooks.unsettledFires()).map((fire) => ({ ...fire, firedAt: fire.receivedAt })),
+          unsettled.map((fire) => ({ ...fire, firedAt: fire.receivedAt })),
           {
             now,
             idempotency: deps.idempotency,
             refire: async (fire) => {
-              const wh = await deps.webhooks.get(fire.webhookId);
+              const wh = hooks.get(fire.webhookId) ?? null;
               const dropped = dropReason(wh, fire, now);
               if (!wh || dropped) {
                 await deps.webhooks.settleFire(fire.fireKey);
@@ -144,7 +149,8 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
                   });
                 return;
               }
-              startFire(wh, fire);
+              const full = await deps.webhooks.unsettledFire(fire.fireKey);
+              if (full) startFire(wh, full);
             },
           },
         );

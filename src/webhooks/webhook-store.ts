@@ -56,7 +56,9 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
   beginFire(fire: WebhookFire): Promise<void>;
   settleFire(fireKey: string): Promise<void>;
-  unsettledFires(): Promise<WebhookFire[]>;
+  unsettledFires(): Promise<Omit<WebhookFire, "payload">[]>;
+  unsettledFire(fireKey: string): Promise<WebhookFire | null>;
+  getMany(ids: readonly string[]): Promise<Webhook[]>;
   claimFireTenants(): Promise<ClaimedRow[]>;
 }
 
@@ -141,7 +143,9 @@ export function createWebhookStore(
     },
     beginFire: (fire) => fires.put(fire.fireKey, fire),
     settleFire: (fireKey) => fires.delete(fireKey),
-    unsettledFires: async () => (await fires.all()).sort((a, b) => a.receivedAt - b.receivedAt),
+    unsettledFires: async () => (await fires.select({ omit: ["payload"] })).sort((a, b) => a.receivedAt - b.receivedAt),
+    unsettledFire: (fireKey) => fires.get(fireKey),
+    getMany: (ids) => backing.getMany(ids),
     claimFireTenants: () => fires.claimTenants(),
     async recordFire(id, info) {
       await backing.merge(id, {
