@@ -14,6 +14,7 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 function releaseFiles(files: Record<string, string | Buffer>): WebReleases {
   const read = (name: string) => (files[name] === undefined ? undefined : Buffer.from(files[name]));
@@ -138,7 +139,7 @@ test("assets stream from their precompressed sibling or the raw file, and paths 
 });
 
 async function seedShare(token: string, audience: "internal" | "external"): Promise<void> {
-  const session = await built.sessions.getOrCreateByThread(`web:alice:${token}`, "dm", "personal:alice");
+  const session = await built.sessions.getOrCreateByThread(`web:alice:${token}`, "dm", personalScope("alice"));
   await built.sessions.addParticipant(session.id, "alice", "Share me");
   await built.sessionShares.putIfAbsent(token, {
     token,

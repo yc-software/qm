@@ -2,10 +2,8 @@ import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
-import { conversationScope } from "../resolution/resolution-service.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -35,7 +33,6 @@ export function createSlackSessionStatus(
   store: DurableMap<SlackSessionStatusState>,
   lease: LeaderLease,
   runs: Pick<RunStore, "get">,
-  flags: Pick<FeatureFlagStore, "enabled">,
   now = Date.now,
   activity: SlackStatusActivity = {},
 ) {
@@ -53,10 +50,7 @@ export function createSlackSessionStatus(
           });
           const writer = randomUUID();
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
-          const scope = anchor && conversationScope(anchor.request.conversation, anchor.request.actor.id);
-          const optedIn = !!scope && (await flags.enabled("slack_loading_indicator", scope));
-          if (next && (!optedIn || !anchor?.deliveryState?.replying || anchor.request.privateSessionMessage))
-            return true;
+          if (next && (!anchor?.deliveryState?.replying || anchor.request.privateSessionMessage)) return true;
           if (leaseLost) return true;
           if (next) await store.putIfAbsent(id, { ...next, writer });
           if (leaseLost) {
@@ -65,7 +59,7 @@ export function createSlackSessionStatus(
           }
           const current = await store.get(id);
           if (!current || leaseLost) return true;
-          const work = optedIn && anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
+          const work = anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
           if (work?.delivering) return true;
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
@@ -74,8 +68,7 @@ export function createSlackSessionStatus(
           const { blocks, headline } = renderCard(work, { cardId, elapsed, followUrl });
           const ongoing = !!work?.busy;
           const content = JSON.stringify(blocks);
-          const post =
-            current.cardContent !== content && (!!current.cardTs || (optedIn && ongoing && elapsed >= SHOW_AFTER_MS));
+          const post = current.cardContent !== content && (!!current.cardTs || (ongoing && elapsed >= SHOW_AFTER_MS));
           if (!next && ongoing && !post && current.startedAt && current.cardId) return true;
           let state = await update(id, (row) =>
             leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },

@@ -177,7 +177,7 @@ export async function addConversationBlocks(turn: {
   strictReadOnly: boolean;
   turnContextBlocks: SystemContextBlocks;
   credentialDescriptions: CredentialCatalog["credentialDescriptions"];
-  openSpeakerKeychain: CredentialCatalog["openSpeakerKeychain"];
+  openOwnerKeychain: CredentialCatalog["openOwnerKeychain"];
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   rosterMembers: DirectoryMember[] | undefined;
@@ -192,7 +192,7 @@ export async function addConversationBlocks(turn: {
     strictReadOnly,
     turnContextBlocks,
     credentialDescriptions,
-    openSpeakerKeychain,
+    openOwnerKeychain,
     scopeKeychainGrants,
     directoryIndexFor,
   } = turn;
@@ -234,7 +234,7 @@ export async function addConversationBlocks(turn: {
     const keychainBlock = renderKeychainManifest({
       scopeId,
       conversationKind: conversation.kind,
-      openSpeakerKeychain,
+      openOwnerKeychain,
       actorId: actor.id,
       members,
       entriesByOwner,

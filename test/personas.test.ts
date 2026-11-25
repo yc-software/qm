@@ -209,7 +209,7 @@ test("skills written into a persona show for everyone with a role on it, and nob
   assert.equal(await sees(ALICE), true);
   assert.equal(await sees(BOB), true);
   assert.equal(await sees(CAROL), false);
-  await built.app.updateOwnedSkill(skill!.id, ALICE, { body: "Check tests last." }, { liveActor: true });
+  await built.app.updateOwnedSkill(skill!.id, ALICE, { body: "Check tests last." }, { personAuthority: true });
   assert.equal(await sees(BOB), true);
 });
 
@@ -253,7 +253,7 @@ test("a persona's page lists its skills and the crons from conversations with it
       const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${who}`);
       const { persona } = (await r.json()) as { persona: { crons: { title: string }[]; skills: { id: string }[] } };
       const opens = await Promise.all(persona.skills.map((s) => fetch(`${base}/v1/skills/${s.id}?principalId=${who}`)));
-      return [...persona.crons.map((c) => c.title), ...opens.map((o) => o.status)];
+      return [...persona.crons.map((c) => c.title).sort(), ...opens.map((o) => o.status)];
     };
     assert.deepEqual(await cronsFor(ALICE), ["Ada digest", "Pinned channel check", 200]);
     assert.deepEqual(await cronsFor(BOB), [200]);

@@ -22,7 +22,7 @@ import {
   setMemberBrains,
 } from "../src/memory/registry.ts";
 import type { DropResolution } from "../src/triggers/keychain-ask.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -237,10 +237,6 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   assert.equal(extra.status, 400);
   assert.match(extra.text, /only purpose, not service, envKey/);
   assert.equal((await mint("admin-alice", { memoryBrain: "nope", purpose: "p" })).status, 404);
-  assert.equal(
-    (await mint("admin-alice", brainDrop, scopeId("personal", "admin-alice"), { triggered: true })).status,
-    403,
-  );
 
   const beforeMove = await mint("admin-alice", brainDrop);
   await built.memoryRegistry.update((record) =>
@@ -317,15 +313,14 @@ test("a member connects their own brain from chat and sets its secret through th
   const own = { url: "https://brain.member.example/mcp", clientId: "member-qm" };
   const id = memberBrainId("U-member");
   assert.equal((await fetch(`${base}/v1/memory/brain`)).status, 401);
-  assert.equal((await self("U-member", "PUT", own, { triggered: true })).status, 403);
-  assert.equal((await self("U-member", "PUT", own, { liveActor: false })).status, 403);
+  assert.equal((await self("U-member", "PUT", own, { personAuthority: false })).status, 403);
 
   const put = await self("U-member", "PUT", own);
   assert.equal(put.status, 200);
   assert.equal(put.json.principalId, "U-member");
   assert.deepEqual(
     [put.json.brain?.id, put.json.brain?.auth, put.json.binding?.scope, put.json.disabled.map(({ code }) => code)],
-    [id, { clientId: "member-qm", hasClientSecret: false }, "personal:U-member", ["secret_missing"]],
+    [id, { clientId: "member-qm", hasClientSecret: false }, personalScope("U-member"), ["secret_missing"]],
   );
   assert.deepEqual((await self("U-member", "GET")).json.brain, put.json.brain);
 

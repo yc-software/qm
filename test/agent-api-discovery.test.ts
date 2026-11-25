@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -46,9 +46,8 @@ const capFor = (
     audienceScopeId?: ScopeId;
     destination?: { type: "slack"; target: string; audienceScopeId: ScopeId };
     memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
-    liveActor?: boolean;
-    liveAuthor?: boolean;
-    triggered?: boolean;
+    personAuthority?: boolean;
+    origin?: "cron";
     botActor?: boolean;
   } = {},
 ) =>
@@ -60,9 +59,8 @@ const capFor = (
       ...(opts.audienceScopeId ? { audienceScopeId: opts.audienceScopeId } : {}),
       ...(opts.destination ? { destination: opts.destination } : {}),
       ...(opts.memory ? { memory: opts.memory } : {}),
-      ...(opts.liveActor ? { liveActor: true } : {}),
-      ...(opts.liveAuthor ? { liveAuthor: true } : {}),
-      ...(opts.triggered ? { triggered: true } : {}),
+      ...(opts.personAuthority ? { internalAudience: true, personAuthority: true } : {}),
+      ...(opts.origin ? { origin: opts.origin } : {}),
       ...(opts.botActor ? { botActor: true } : {}),
     },
     SECRET,
@@ -125,10 +123,10 @@ test("discovery follows the token's memory claims, including the org selector", 
   }
 });
 
-test("discovery for an org admin's LIVE turn includes the admin plane (live grant check), with guidance", async () => {
+test("discovery for an org admin's turn with person authority includes the admin plane (current grant check), with guidance", async () => {
   const s = await start();
   try {
-    const { body } = await listApis(s.base, await capFor("admin-alice", { liveActor: true }));
+    const { body } = await listApis(s.base, await capFor("admin-alice", { personAuthority: true }));
     assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
     const p = paths(body);
     assert.ok(p.includes("/v1/admin/scopes"));
@@ -145,7 +143,7 @@ test("discovery for an org admin's LIVE turn includes the admin plane (live gran
 test("an admin's token carrying no person's authority is shown no admin plane â€” matching what the gate enforces", async () => {
   const s = await start();
   try {
-    for (const opts of [{}, { liveActor: true, botActor: true }]) {
+    for (const opts of [{}, { personAuthority: true, botActor: true }]) {
       const { body } = await listApis(s.base, await capFor("admin-alice", opts));
       assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
       const p = paths(body);
@@ -155,22 +153,6 @@ test("an admin's token carrying no person's authority is shown no admin plane â€
       );
       assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
     }
-  } finally {
-    await s.close();
-  }
-});
-
-test("a cron fire (liveActor + triggered) discovers the full admin plane", async () => {
-  const s = await start();
-  try {
-    const cap = await capFor("admin-alice", { liveActor: true, triggered: true });
-    const { body } = await listApis(s.base, cap);
-    assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
-    const p = paths(body);
-    assert.ok(p.includes("/v1/admin/scopes"));
-    assert.ok(p.includes("/v1/admin/users"));
-    assert.ok(!p.includes("/v1/admin/grants"), "grant management stays portal-only");
-    assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1);
   } finally {
     await s.close();
   }
@@ -206,14 +188,14 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
 test("discovery includes admin routes for a verified human thread reply", async () => {
   const s = await start();
   try {
-    const { body } = await listApis(s.base, await capFor("admin-alice", { liveAuthor: true }));
+    const { body } = await listApis(s.base, await capFor("admin-alice", { personAuthority: true }));
     const p = paths(body);
     assert.ok(p.includes("/v1/admin/scopes/:scopeId/:resource"));
     assert.equal(p.filter((path) => path === "/v1/admin/whoami").length, 1);
     assert.equal(p.filter((path) => path === "/v1/admin/scopes").length, 1);
     assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
     assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
-    const member = await listApis(s.base, await capFor("U1", { liveAuthor: true }));
+    const member = await listApis(s.base, await capFor("U1", { personAuthority: true }));
     assert.ok(!paths(member.body).includes("/v1/admin/scopes"));
   } finally {
     await s.close();
@@ -293,14 +275,18 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
       created.set(`${scope}:${name}`, sk.id);
     }
     const [cronTok, roomTok, crossTok, noAudienceTok, botTok] = await Promise.all([
-      capFor("U1", { audienceScopeId: scopeId("personal", "U1"), liveActor: true, triggered: true }),
-      capFor("U1", { scopeId: scopeId("channel", "C1"), audienceScopeId: scopeId("channel", "C1"), liveActor: true }),
+      capFor("U1", { audienceScopeId: scopeId("personal", "U1"), personAuthority: true, origin: "cron" as const }),
       capFor("U1", {
-        liveActor: true,
-        triggered: true,
+        scopeId: scopeId("channel", "C1"),
+        audienceScopeId: scopeId("channel", "C1"),
+        personAuthority: true,
+      }),
+      capFor("U1", {
+        personAuthority: true,
+        origin: "cron" as const,
         destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
       }),
-      capFor("U1", { liveActor: true, triggered: true }),
+      capFor("U1", { personAuthority: true, origin: "cron" as const }),
       capFor("U1", { scopeId: scopeId("channel", "C1"), botActor: true }),
     ]);
     const get = (p: string, tok: string) => fetch(`${base}${p}`, { headers: { "x-agent-capability": tok } });
@@ -329,7 +315,9 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
     assert.ok(
       (await j("/v1/skills?principalId=U2", cronTok)).skills.some((sk: any) => sk.name === "my-personal-skill"),
     );
-    assert.ok((await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === "personal:U1"));
+    assert.ok(
+      (await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === personalScope("U1")),
+    );
     assert.deepEqual(
       (await j("/v1/directory/channels?principalId=U2", cronTok)).channels.map((c: any) => c.channelId).sort(),
       ["C1", "P1"],
@@ -338,7 +326,7 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
     for (const tok of [roomTok, crossTok]) {
       const sk = (await j("/v1/skills", tok)).skills;
       assert.deepEqual(
-        sk.map((s: any) => [s.scopeId, s.name]),
+        sk.filter((s: any) => !s.scopeId.startsWith("org:")).map((s: any) => [s.scopeId, s.name]),
         [["channel:C1", "room-skill"]],
       );
       assert.equal((await get(`/v1/skills/${created.get("personal:U1:my-personal-skill")}`, tok)).status, 404);

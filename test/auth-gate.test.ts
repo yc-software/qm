@@ -13,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
@@ -218,7 +219,9 @@ test("egress-audit ingest requires source auth: unsigned is 401, signed lands â€
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
   try {
-    const body = JSON.stringify({ records: [{ host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1" }] });
+    const body = JSON.stringify({
+      records: [{ host: "api.github.com", verdict: "ok", scopeLabel: personalScope("U1") }],
+    });
     const unsigned = await fetch(`${srv.base}/v1/egress-audit`, {
       method: "POST",
       headers: { "content-type": "application/json" },

@@ -1,3 +1,4 @@
+import { rosterIds } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -77,7 +78,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     tenantLookup: tenantLookup(db),
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -114,12 +115,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         scopeId,
         threadRef,
         createdAt: now(),
-        ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools, ephemeral) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb,$11) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, ephemeral) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -130,7 +130,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           surface ?? null,
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
-          clientTools?.length ? JSON.stringify(clientTools) : null,
           facts?.ephemeral === true,
         ],
       );
@@ -161,7 +160,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         principalId === undefined
           ? `SELECT s.* FROM sessions s WHERE ${forks} AND ${asked} ORDER BY s.created_at`
           : participantSessionsSql(` AND ${forks} AND (${asked} OR ${queued}) ORDER BY s.created_at`),
-        principalId === undefined ? [sessionId] : [principalId, sessionId],
+        principalId === undefined ? [sessionId] : [rosterIds(principalId), sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
@@ -302,7 +301,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (!ids.length) return [];
       const rows = await q(
         participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
-        [principalId, ids],
+        [rosterIds(principalId), ids],
       );
       return rows.map(rowToParticipantSession);
     },

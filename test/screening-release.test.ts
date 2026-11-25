@@ -8,6 +8,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { isUserItem } from "../src/sessions/items.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 let executions = 0;
 let observedRelease = "";
@@ -31,7 +32,7 @@ mock.module("./support/mock-agent.ts", {
           current: {
             ...turn.tools,
             async read() {
-              return { content: "SCREENING_FIXTURE_BLOCK", sourceScopeId: "personal:U1", shared: true };
+              return { content: "SCREENING_FIXTURE_BLOCK", sourceScopeId: personalScope("U1"), shared: true };
             },
             async execute() {
               executions++;

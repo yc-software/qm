@@ -8,6 +8,7 @@ import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credent
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 import { installPrincipalLinks } from "../src/directory/person.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "super-secret-bearer";
 
@@ -26,8 +27,8 @@ function reader(rec: Partial<DecryptedServiceCredential> & { slug: string }): Se
 
 const claims = (credentials: string[]): CapabilityClaims => ({
   actorId: "U1",
-  scopeId: "personal:U1",
-  audienceScopeId: "personal:U1",
+  scopeId: personalScope("U1"),
+  audienceScopeId: personalScope("U1"),
   aud: "credential-broker",
   credentials,
   exp: Date.now() + 60_000,
@@ -330,6 +331,8 @@ test("actor attestation is opt-in and taken from capability claims", async (t) =
   installPrincipalLinks({
     canonical: () => undefined,
     aliases: (id) => (id === "actor-42" ? ["provider:stable-7"] : []),
+    userId: () => undefined,
+    claim: () => {},
   });
   t.after(() => installPrincipalLinks(null));
   for (const actor of [undefined, false, true]) {
@@ -339,8 +342,8 @@ test("actor attestation is opt-in and taken from capability claims", async (t) =
         claims: {
           ...claims(["x-firehose"]),
           actorId: "actor-42",
-          scopeId: "personal:actor-42",
-          audienceScopeId: "personal:actor-42",
+          scopeId: personalScope("actor-42"),
+          audienceScopeId: personalScope("actor-42"),
         },
         reader: reader({ slug: "x-firehose", injection: actor === undefined ? {} : { actor } }),
         fetchImpl: cap.fetch,
@@ -463,10 +466,10 @@ test("an actor-attested credential answers only to its person in their own priva
     return { result, calls: cap.calls };
   };
   const refused: Array<[string, Partial<CapabilityClaims>]> = [
-    ...["channel:C1", "group:G1", "team:T1", "org:default-org", "personal:U2"].map(
+    ...["channel:C1", "group:G1", "team:T1", "org:default-org", personalScope("U2")].map(
       (audienceScopeId): [string, Partial<CapabilityClaims>] => [audienceScopeId, {}],
     ),
-    ["personal:system:ambient:default-org", { actorId: "system:ambient:default-org" }],
+    [personalScope("system:ambient:default-org"), { actorId: "system:ambient:default-org" }],
   ];
   for (const [audienceScopeId, extra] of refused) {
     const { result, calls } = await call(audienceScopeId, extra);
@@ -474,13 +477,13 @@ test("an actor-attested credential answers only to its person in their own priva
     assert.equal((result.json as { error: string }).error, "private_only");
     assert.equal(calls.length, 0, "nothing reaches the upstream");
   }
-  const own = await call("personal:U1");
+  const own = await call(personalScope("U1"));
   assert.equal(own.result.status, 200);
   assert.equal(own.calls[0]!.headers["x-qm-actor"], "U1");
   const published = {
     ...claims(["x-firehose"]),
     actorId: "publisher",
-    scopeId: "personal:publisher",
+    scopeId: personalScope("publisher"),
     deployment: "dpl-1",
   };
   delete published.audienceScopeId;

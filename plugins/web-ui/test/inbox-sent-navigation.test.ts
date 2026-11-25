@@ -122,7 +122,7 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
       }
       return Response.json({});
     };
-    appState.me = { user: "sam", org: "test", permissions: ["inbox"] };
+    appState.me = { user: "sam", personalScope: "personal:sam", org: "test", permissions: ["inbox"] };
     appState.mainEl = document.querySelector("main");
     appState.currentView = "chats";
     splitState.active = true;

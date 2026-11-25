@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { memoryRecallLabels } from "../src/memory/recall-labels.ts";
+import { personalScope } from "../src/types.ts";
 
 const project = "group:web-project-example";
 
@@ -8,8 +9,8 @@ test("recall headings use stored names without requesting any rosters", async ()
   const lookups: string[] = [];
   const labels = await memoryRecallLabels(
     [
-      "personal:alice",
-      "personal:bob@example.com",
+      personalScope("alice"),
+      personalScope("bob@example.com"),
       "org:acme",
       "channel:C1",
       project,
@@ -38,8 +39,8 @@ test("recall headings use stored names without requesting any rosters", async ()
       },
     },
   );
-  assert.equal(labels.get("personal:alice"), "Alice");
-  assert.equal(labels.get("personal:bob@example.com"), "bob@example.com");
+  assert.equal(labels.get(personalScope("alice")), "Alice");
+  assert.equal(labels.get(personalScope("bob@example.com")), "bob@example.com");
   assert.equal(labels.get("org:acme"), "Organization");
   assert.equal(labels.get("channel:C1"), "#engineering");
   assert.equal(labels.get(project), "Launch plan (web project)");

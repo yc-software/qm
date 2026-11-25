@@ -8,6 +8,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { isAgentReply, stepMessage, storedItem, type Item } from "../src/sessions/items.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -25,7 +26,7 @@ function cancelTurn(
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });

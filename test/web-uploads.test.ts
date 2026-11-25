@@ -15,6 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { BlobTooLargeError, type BlobInfo } from "../src/persistence/blob-transfer.ts";
+import { personalScope } from "../src/types.ts";
 
 const SIGNING = "web-uploads-signing-secret-0123456789";
 
@@ -83,7 +84,7 @@ test("a file upload lands in the signed-in person's files with its name and cont
   assert.ok(!(await bobs.text()).includes(file.id));
   const named = await upload(base, `/api/files/upload?${query}&principalId=bob`, browserSessionCookie("alice"), bytes);
   assert.equal(named.status, 403);
-  const elsewhere = new URLSearchParams({ sha: sha(bytes), scope: "personal:bob" });
+  const elsewhere = new URLSearchParams({ sha: sha(bytes), scope: personalScope("bob") });
   const foreign = await upload(base, `/api/files/upload?${elsewhere}`, browserSessionCookie("alice"), bytes);
   assert.deepEqual(
     [foreign.status, await foreign.json()],

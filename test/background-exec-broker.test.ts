@@ -8,8 +8,9 @@ import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts"
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { startedBy } from "./support/live-run.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
-const SCOPE = "personal:U1";
+const SCOPE = personalScope("U1");
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
 
 function fakeSandbox(opts?: { seedOutput?: string }) {
@@ -280,8 +281,8 @@ test("stop actually waits the TERM grace: a process exiting shortly after TERM i
 test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (invariant 1)", async () => {
   const fake = fakeSandbox();
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:A", pollMs: 20 });
-  const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:B", pollMs: 20 });
+  const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: personalScope("A"), pollMs: 20 });
+  const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: personalScope("B"), pollMs: 20 });
 
   const { processId } = await brokerA.start(handle, "secret-job", "Run background tests");
   await assert.rejects(brokerB.poll(handle, processId), /no such background job/);

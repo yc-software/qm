@@ -37,8 +37,25 @@ const RUN = { runAttempt: 1, runLeaseToken: "live", threadRef: "dm:live" };
 const running = { status: "running", leaseToken: "live", attempts: 1, sessionId: "dm:live", leaseExpiresAt: Infinity };
 
 export const liveRunBinding = (actorId: string) => ({ ...RUN, runId: `live:${actorId}` });
-export const liveRunClaims = (actorId: string) => ({ ...liveRunBinding(actorId), liveActor: true });
-export const liveRun = (id: string, sessionId = "dm:live") => ({ ...running, sessionId, request: { actor: { id } } });
+export const liveRunClaims = (actorId: string) => ({
+  ...liveRunBinding(actorId),
+  internalAudience: true,
+  personAuthority: true,
+});
+export const liveRun = (id: string, sessionId = "dm:live") => {
+  const actor = { id, type: "internal" as const };
+  return {
+    ...running,
+    sessionId,
+    request: {
+      surface: "test",
+      actor,
+      conversation: { kind: "dm" as const, threadRef: sessionId, audience: [actor] },
+      origin: { kind: "human" as const },
+      text: "run it",
+    },
+  };
+};
 
 export const liveRunStore = (runs?: RunStore) =>
   ({

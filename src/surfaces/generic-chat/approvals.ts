@@ -28,7 +28,7 @@ import {
 import type { SurfaceAction } from "../contract.ts";
 import type { GenericChatClient } from "./client.ts";
 import { editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { GENERIC_CHAT, genericChatUserIds, parseGenericChatRef } from "./protocol.ts";
+import { GENERIC_CHAT, genericChatUserIds, parseGenericChatAccount, parseGenericChatRef } from "./protocol.ts";
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -191,6 +191,9 @@ export function createGenericChatApprovals(deps: {
   async function invoke(click: GenericChatActionClick): Promise<void> {
     const parsed = parseAction(click.actionId);
     if (!parsed) return;
+    const eventId = parseGenericChatAccount(click.account)?.origin
+      ? `${click.account}:${click.eventId}`
+      : click.eventId;
     const where = { account: click.account, kind: click.kind, chat: click.chat };
     const settle = (card: Card): Promise<void> =>
       editGenericChatMessage(deps, where, click.messageId, card.body, card.actions);
@@ -198,7 +201,7 @@ export function createGenericChatApprovals(deps: {
       await postGenericChatMessage(
         deps,
         { ...where, ...(click.thread ? { thread: click.thread } : {}) },
-        { text, idempotencyKey: `action:${click.eventId}`, recipientUserId: click.userId },
+        { text, idempotencyKey: `action:${eventId}`, recipientUserId: click.userId },
       );
     };
 
@@ -223,7 +226,7 @@ export function createGenericChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `${GENERIC_CHAT}:action:${click.eventId}`,
+        idempotencyKey: `${GENERIC_CHAT}:action:${eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(
@@ -231,7 +234,10 @@ export function createGenericChatApprovals(deps: {
         );
       const line = commandDecisionBody(record, decision, click.actor.displayName);
       return settle({
-        body: queued.runId ? line : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
+        body:
+          queued.runId || queued.status === "queued"
+            ? line
+            : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
         actions: [],
       });
     }

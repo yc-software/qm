@@ -4,14 +4,13 @@ import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 
 const FAILURE_HEADER_LINES = 5;
 import { isSubagentThreadRef } from "../../sessions/session-syscalls.ts";
-import { samePerson } from "../../directory/person.ts";
 import type { TurnRequest } from "../../types.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { inboxView } from "./inbox.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
-import { postRunSignal, postTurn } from "./turns.ts";
+import { CLIENT_RESULT_MAX_BODY_BYTES, postRunSignal, postTurn } from "./turns.ts";
 import { isObj } from "./shared.ts";
-import { ownsWebThread } from "../../directory/person.ts";
+import { ownsWebThread, samePerson } from "../../directory/person.ts";
 import { type ApiCtx, type Route, tenantOf } from "./route.ts";
 
 type WebConversation = TurnRequest["conversation"];
@@ -225,6 +224,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
+    ...(p.declinePendingApprovals === true && !approval && !ctx.actor?.imp ? { declinePendingApprovals: true } : {}),
     ...(ephemeral ? { ephemeral: true } : {}),
     ...(proactiveOpener ? { proactiveOpener: true } : {}),
     ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),
@@ -268,7 +268,7 @@ async function webApproval(ctx: ApiCtx): Promise<void> {
     if ("error" in resolved) return sendJson(res, 403, resolved);
     if (request.conversation.kind !== "dm") return sendJson(res, 403, { error: "forbidden_scope" });
   }
-  if (!(await visibleApprovalThread(ctx, user, threadRef, record.sessionId)))
+  if (!samePerson(record.cardTo, user) && !(await visibleApprovalThread(ctx, user, threadRef, record.sessionId)))
     return sendJson(res, 404, { error: "not_found" });
   const { idempotencyKey: _stored, ...replay } = request;
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
@@ -299,7 +299,7 @@ async function webRunSignal(ctx: ApiCtx): Promise<void> {
     ...ctx,
     body: {
       kind,
-      ...(kind === "client_result" ? { callId: p.callId, result: p.result, desktopClientId: p.desktopClientId } : {}),
+      ...(kind === "client_result" ? { callId: p.callId, result: p.result } : {}),
       ...(text !== undefined ? { text } : {}),
       ...(request ? { request } : {}),
       ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
@@ -343,7 +343,7 @@ export const webTurnRoutes: ReadonlyArray<Route<ApiCtx>> = [
     browser: "embed",
     actor: "person",
     auth: "source",
-    maxBodyBytes: 6_000_000,
+    maxBodyBytes: CLIENT_RESULT_MAX_BODY_BYTES,
     handle: webRunSignal,
   },
 ];

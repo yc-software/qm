@@ -32,7 +32,10 @@ test("a decision handed to the live run hides its card instead of leaving it cli
     { requestId: "live-card", command: "send", blocksInput: false, executesOnApprove: true },
     { requestId: "other-card", command: "send", blocksInput: false, executesOnApprove: true },
   ];
-  assert.equal(await resolveApproval({ requestId: "live-card", approved: true, scope: "once" }), "live-run");
+  assert.deepEqual(await resolveApproval({ requestId: "live-card", approved: true, scope: "once" }), {
+    status: "resumed",
+    runId: "live-run",
+  });
   assert.deepEqual(
     unresolvedApprovals(cards).map((card) => card.requestId),
     ["other-card"],

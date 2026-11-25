@@ -10,6 +10,8 @@ import { createStepRecorder, recordingTools } from "../src/agent/step-recorder.t
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import "./support/auto-fake-sprites.ts";
+import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
 test("the bot marker backfill marks what a Slack app user made and nothing a person made", async () => {
   const url = testDatabaseUrl();
@@ -54,7 +56,7 @@ test("a deploy marks crons still running what a bot-marked turn wrote and lists 
     const items: never[] = [];
     const steps = createStepRecorder({ emit: async (item: never) => void items.push(item) } as never, (w) => void w());
     const claims = { actorId: owner, scopeId: scope, exp: Date.now() + 60_000, botActor: bot === "refused" };
-    const current = { cronPatch: (c: string, req: never) => control.patchCron(c, req, claims, async () => undefined) };
+    const current = { cronPatch: (c: string, req: never) => control.patchCron(c, req, claims) };
     const tools = createAgentTools({ current, emit: steps.emit, scopeLabel: scope } as never, { controlTools: true });
     const cron = recordingTools(tools, () => steps).find((t) => t.name === "cron")!;
     const call = { type: "toolCall", id: threadRef, name: "cron", arguments: { action: "patch", id, ...args } };
@@ -68,12 +70,15 @@ test("a deploy marks crons still running what a bot-marked turn wrote and lists 
   const make = (action: string, botActor = false, owner = ambient) =>
     built.app.createCron({ ownerScopeId: scope, owner, createdBy: owner, botActor, schedule, action });
   const crons = await Promise.all([make("a", false, "U1"), make("b"), make("c"), make("d", true), make("e")]);
+  await selectDefaultSandbox(built, ambient, scope);
+  const home = await built.sessions.getOrCreateByThread("slack:C1:home", "channel", scope, "c", "slack");
+  await built.sessions.addParticipant(home.id, ambient);
   const [marked, scripted, rewritten, already, refused] = crons;
   const from = await edit(marked.id, "bot-a", "admitted");
   await edit(marked.id, "bot-a-schedule", "admitted", { schedule: { ...schedule, cron: "0 10 * * *" } });
   const review = await edit(rewritten.id, "bot-b", "admitted", { task: "bot-b\0" });
   await edit(rewritten.id, "person-b");
-  const fromScript = await edit(scripted.id, "sh", "admitted", { script: { command: "true", credentials: ["gh"] } });
+  const fromScript = await edit(scripted.id, "sh", "admitted", { script: { command: "true" } });
   await edit(already.id, "bot-d", "admitted");
   await edit(refused.id, "bot-e", "refused");
   const before = await Promise.all(crons.map((c) => built.app.getCron(c.id)));
@@ -107,7 +112,8 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
   );
   for (const [alias, person] of Object.entries({ [bot]: pat, U0PAT: pat, [bot2]: sam, [app2]: app }))
     await users.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "U0ADM", createdAt: 1 });
-  await users.markApps([pat, sam, app]);
+  const pg = createPgPool(url);
+  await pg.q("UPDATE users SET kind = 'app' WHERE primary_alias = ANY($1::text[])", [[pat, sam, app]]);
   for (const who of [kim, lee, dir]) await users.record({ id: who, source: "turn", at: 1 });
   await built.directory.replace([
     { principalId: pat, displayName: "Pat", type: "internal", slackId: "U0PAT" },
@@ -128,7 +134,6 @@ test("a deploy gives a Slack bot linked to a person its own app user, so the bot
     said(app2, app, true),
     said(lee, lee),
   ]);
-  const pg = createPgPool(url);
   const rerun = async (id: string) => {
     await pg.q("DELETE FROM qm_schema_migrations WHERE id = $1", [id]);
     await migrateRegisteredPgSchemas(url);

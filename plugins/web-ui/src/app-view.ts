@@ -13,6 +13,7 @@ export interface AppView {
   createdBy?: string;
   ownerName?: string;
   createdByName?: string;
+  ownedByCreator?: boolean;
   createdInScope?: string;
   currentVersion?: number;
   appliedVersion?: number;
@@ -82,11 +83,16 @@ export function appLatestAt(d: AppView): number {
   return applied?.createdAt ?? d.versions?.at(-1)?.createdAt ?? 0;
 }
 
-export function appTab(d: AppView, viewer: string | undefined): AppTab {
+export interface AppViewer {
+  user: string;
+  personalScope: string;
+}
+
+export function appTab(d: AppView, viewer: AppViewer | null | undefined): AppTab {
   if (d.status === "archived") return "archived";
   if (!viewer) return "shared";
-  if (d.ownerScopeId === `personal:${viewer}`) return "yours";
-  return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer ? "yours" : "shared";
+  if (d.ownerScopeId === viewer.personalScope) return "yours";
+  return !d.ownerScopeId?.startsWith("personal:") && d.createdBy === viewer.user ? "yours" : "shared";
 }
 
 export function appTabEmptyMessage(tab: AppTab): string {
@@ -97,7 +103,7 @@ export function appTabEmptyMessage(tab: AppTab): string {
 
 export function filterApps(
   publishedApps: AppView[],
-  options: { tab: AppTab; scope: string | null; query: string; viewer?: string; sort?: AppSort },
+  options: { tab: AppTab; scope: string | null; query: string; viewer?: AppViewer | null; sort?: AppSort },
 ): AppView[] {
   const query = options.query.trim().toLocaleLowerCase();
   return publishedApps

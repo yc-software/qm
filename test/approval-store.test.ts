@@ -8,6 +8,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 type StoreArgs = Parameters<typeof createRoutedApprovalStore>;
 const createApprovalStore = (backing: StoreArgs[0], deliveries: StoreArgs[1]) =>
@@ -142,7 +143,7 @@ test("a Slack-originated approval goes to the Slack author even when the actor i
   const [delivery] = await deliveries.pending("principal");
   assert.equal(delivery?.destination.target, "U9");
   assert.equal(delivery?.destination.onBehalfOf, "oidc:linked-principal");
-  assert.equal(delivery?.destination.audienceScopeId, "personal:oidc:linked-principal");
+  assert.equal(delivery?.destination.audienceScopeId, personalScope("oidc:linked-principal"));
 });
 
 test("automation approvals route through the fallback route and generic-chat destinations", async () => {
@@ -177,4 +178,19 @@ test("automation approvals route through the fallback route and generic-chat des
     (await deliveries.pending(GENERIC_CHAT)).map((d) => [d.destination.commandApprovalId, d.destination.target]),
     [["a-chat", "acc:room"]],
   );
+});
+
+test("a fire's approval reaches its owner's DM whatever surface the run came from", async () => {
+  for (const surface of ["cron", "webhook", "loop", "approval"]) {
+    const deliveries = createDeliveryStore();
+    const approvals = createApprovalStore(testMap<PendingApprovalRecord>(), deliveries);
+    const approval = record(`cron:c1:${surface}`);
+    approval.request!.surface = surface;
+    approval.request!.actor.externalId = "owner@example.com";
+    await approvals.put("A1", approval);
+    const [delivery] = await deliveries.pending("principal");
+    assert.equal(delivery?.destination.target, "owner@example.com", surface);
+    assert.equal(delivery?.destination.commandApprovalId, "A1");
+    assert.equal((await approvals.get("A1"))?.cardTo, "owner@example.com");
+  }
 });

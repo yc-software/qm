@@ -8,7 +8,7 @@ const items = [item("UserMessage", { seq: 1, createdAt: Date.now(), text: "pleas
 const approval = { requestId: "a1", command: "deploy --prod", reason: "requires approval" };
 const OTHER = { ...SESSION, id: "sess-other", threadRef: "web:tester:other", title: "Other chat" } as CoreSession;
 
-const cards = (): number => document.querySelectorAll(".approval-btn").length;
+const cards = (): number => document.querySelectorAll(".ac-card").length;
 const chatText = (): string => document.querySelector(".main")?.textContent ?? "";
 
 function promptly<T>(opening: Promise<T>): Promise<T> {

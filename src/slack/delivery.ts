@@ -6,6 +6,7 @@ import type { WornPersona } from "../types.ts";
 import { emojiNameOf } from "./emoji-map.ts";
 import { blocksWithContext, escapeSlackText } from "./mrkdwn.ts";
 import { projectScopeId } from "../projects/project-store.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -107,8 +108,9 @@ export function slackReplyArgs(
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
   const base = trimTrailingSlashes((webUiPublicUrl ?? "").trim());
   if (!base || !scopeId) return undefined;
-  const personal = /^personal:([^@]+)@/.exec(scopeId);
-  if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
+  const person = parseScopeId(scopeId as ScopeId);
+  const local = person.kind === "personal" && person.ref.includes("@") ? person.ref.split("@")[0]! : "";
+  if (local && /^[a-z0-9._-]+$/i.test(local)) return `${base}/projects/${local.toLowerCase()}`;
   const shared = /^(channel|group):(.+)$/.exec(scopeId);
   if (shared?.[1] && shared[2]) return `${base}/projects/${shared[1]}/${encodeURIComponent(shared[2])}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;

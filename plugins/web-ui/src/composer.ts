@@ -1,6 +1,7 @@
 import { sideChatExcerpt } from "./side-chat-excerpt";
 import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
+import { slackComposerForm, type SlackSkin } from "./composer-slack";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "../../chassis/src/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
@@ -28,12 +29,15 @@ import {
   userSendMessage,
   withdrawRun,
   type ApprovalDecision,
+  type AssistantWork,
   type CoreAttachment,
   type PendingApproval,
   type QueuedRun,
   alwaysSteer,
   switchedDefault,
 } from "./core-bridge";
+import { approvalCall, approvalHeading } from "./approval-call";
+import { approvalCard, approvalReceipt, type ApprovalReceipt } from "./approval-card";
 import { errMessage } from "../../chassis/src/errors";
 import { fieldSelect } from "./ui";
 import { icon } from "./icons";
@@ -97,8 +101,7 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
 let threadModelPicks = loadThreadPicks();
 function runtimeScopeKey(scopeId: string | null): string | null {
   if (scopeId) return scopeId;
-  const user = appState.me?.user;
-  return user ? `personal:${user}` : null;
+  return appState.me?.personalScope ?? null;
 }
 
 if (typeof window !== "undefined") {
@@ -197,6 +200,7 @@ export interface ComposerOptions {
   placeholder?: string;
   preferenceKey?: string;
   runtimeAccount?: "company";
+  slack?: SlackSkin;
 }
 
 export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {}): ComposerSurface {
@@ -519,14 +523,77 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
   }
 
+  function attachmentStrip(agent: Agent): TemplateResult | typeof nothing {
+    return composerState.attachments.length
+      ? html`
+          <div class="attachment-strip">
+            ${repeat(
+              composerState.attachments,
+              (a) => a.id,
+              (a) => html`
+                <span class=${stagedMedia(a) ? "file-chip composer-image" : "file-chip"}>
+                  ${stagedThumb(a)}
+                  ${
+                    pastedTextIds.has(a.id)
+                      ? html`
+                          <button
+                            type="button"
+                            class="chip-open"
+                            aria-label="View pasted text"
+                            ${tip("View pasted text")}
+                            @click=${() => openPasteView(a.id, agent)}
+                          >
+                            ${icon(FileText, 14)}
+                            <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
+                          </button>
+                        `
+                      : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
+                            >${a.fileName}</span
+                          >`
+                  }
+                  <button
+                    type="button"
+                    class="chip-x"
+                    aria-label="Remove attachment"
+                    ${tip("Remove")}
+                    @click=${() => removeAttachment(a.id, agent)}
+                  >
+                    ${icon(X, 13)}
+                  </button>
+                </span>
+              `,
+            )}
+          </div>
+        `
+      : nothing;
+  }
+
+  function slackForm(agent: Agent, slack: NonNullable<ComposerOptions["slack"]>): TemplateResult {
+    return slackComposerForm({
+      ...slack,
+      draft: composerState.draft,
+      status: composerState.processingFiles ? "Preparing files..." : "",
+      error: composerState.error,
+      attachments: attachmentStrip(agent),
+      send: sendButton("Send to Slack"),
+      pasteView: pasteViewDialog(agent),
+      onSubmit: (e) => submitComposer(e, agent),
+      onInput: (e) => onDraftInput(e, agent),
+      onKeydown: (e) => onComposerKeydown(e, agent),
+      onPaste: (e) => void onComposerPaste(e, agent),
+    });
+  }
+
   function composerForm(agent: Agent, header: TemplateResult | typeof nothing = nothing): TemplateResult {
+    if (options.slack) return slackForm(agent, options.slack);
     const activeRuntimeConfig = getRuntimeConfig(scopeKey());
     const selectedModel = currentModelOption();
     if (!selectedModel) {
+      const pausedApprovals = ctx.chat.activePendingApprovals();
       const selected =
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ?? defaultModelId();
       return html`<div class="composer-wrap">
-        ${header} ${composerApprovalPanel(ctx.chat.activePendingApprovals())}
+        ${header} ${pausedApprovals.length ? composerApprovalPanel(pausedApprovals) : nothing}
         <p role="status">
           ${composerState.error || activeRuntimeConfig?.unavailableReason || "Selected model is unavailable. Choose a replacement to continue."}
           ${selected}
@@ -551,16 +618,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         </button>
       </div>`;
     }
-    const approvalPauses = ctx.chat.activePendingApprovals();
+    const approvalPauses = ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
+    const docked = dockedApprovals(agent);
     const runtimePending = activeRuntimeConfig === null;
     const inputBlocked = runtimePending || ctx.chat.state.resolvingApprovals.size > 0;
     const attachingDisabled = inputBlocked;
     let placeholder =
       options.placeholder ??
       (appEditSlug(ctx.chat.state.threadRef, appState.me?.user) ? "Describe a change…" : "Ask anything");
-    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Approve or deny to continue";
+    if (inputBlocked) placeholder = runtimePending ? "Loading runtime…" : "Sending your decision…";
+    else if (docked.length) placeholder = approvalPlaceholder(docked.length);
     else if (agent.state.isStreaming) placeholder = "Queue a message for after this turn…";
-    suggestedNext = inputBlocked ? null : nextPromptFor(agent);
+    suggestedNext = inputBlocked || docked.length ? null : nextPromptFor(agent);
     if (suggestedNext) placeholder = suggestedNext;
     let composerNotice: TemplateResult | typeof nothing = nothing;
     if (composerState.processingFiles) {
@@ -589,7 +658,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked, routed);
     return html`
       <form
-        class="composer-wrap ${compact ? "compact" : ""}"
+        class="composer-wrap ${compact ? "compact" : ""} ${docked.length ? "has-approval" : ""}"
         @submit=${(e: Event) => submitComposer(e, agent)}
         @keydown=${(e: KeyboardEvent) => composerShortcut(e, agent, inputBlocked)}
       >
@@ -614,51 +683,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
               </div>`
             : nothing
         }
-        ${
-          composerState.attachments.length
-            ? html`
-                <div class="attachment-strip">
-                  ${repeat(
-                    composerState.attachments,
-                    (a) => a.id,
-                    (a) => html`
-                      <span class=${stagedMedia(a) ? "file-chip composer-image" : "file-chip"}>
-                        ${stagedThumb(a)}
-                        ${
-                          pastedTextIds.has(a.id)
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="chip-open"
-                                  aria-label="View pasted text"
-                                  ${tip("View pasted text")}
-                                  @click=${() => openPasteView(a.id, agent)}
-                                >
-                                  ${icon(FileText, 14)}
-                                  <span>${pasteChipLabel(a.extractedText?.length ?? 0)}</span>
-                                </button>
-                              `
-                            : html`${stagedMedia(a) ? nothing : icon(Paperclip, 14)}<span dir="auto" title=${a.fileName}
-                                  >${a.fileName}</span
-                                >`
-                        }
-                        <button
-                          type="button"
-                          class="chip-x"
-                          aria-label="Remove attachment"
-                          ${tip("Remove")}
-                          @click=${() => removeAttachment(a.id, agent)}
-                        >
-                          ${icon(X, 13)}
-                        </button>
-                      </span>
-                    `,
-                  )}
-                </div>
-              `
-            : nothing
-        }
-        ${approvalPauses.length ? composerApprovalPanel(approvalPauses) : nothing}
+        ${attachmentStrip(agent)}
+        ${approvalPauses.length ? composerApprovalPanel(approvalPauses, ctx.chat.resolveCommandApproval, docked.length > 0) : nothing}
+        ${!approvalPauses.length && receipt ? approvalReceipt(receipt) : nothing}
         ${composerInput({
           value: composerState.draft,
           placeholder,
@@ -792,6 +819,23 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function sendControls(agent: Agent): TemplateResult {
+    const docked = dockedApprovals(agent);
+    if (docked.length && !composerState.draft.trim() && !composerState.attachments.length)
+      return html`<button
+        class="send-btn ac-confirm"
+        type="submit"
+        ?disabled=${!readyToSend()}
+        aria-label=${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}
+      >
+        <span>${docked.length > 1 ? `Approve all ${docked.length}` : "Approve"}</span
+        ><kbd aria-hidden="true">${approveKey}</kbd>
+      </button>`;
+    const declining = declinedByReply(docked);
+    if (declining.length)
+      return html`<button class="send-btn ac-confirm ac-decline" type="submit" ?disabled=${!composerCanSend()}>
+        <span>${declining.length > 1 ? `Decline all ${declining.length}, send reply` : "Decline, send reply"}</span
+        ><kbd aria-hidden="true">↵</kbd>
+      </button>`;
     if (!agent.state.isStreaming) return sendButton("Send");
     if (ctx.chat.isStopping())
       return html`
@@ -811,11 +855,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return alwaysSteer() !== flip && canSteer(agent);
   }
 
+  const modKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
+  const approveKey = `${modKey}↵`;
+
   function sendWhileWorkingLabel(agent: Agent, steer: boolean): string {
     const action = steer ? "Steer the running task" : "Queue for after this turn";
     if (!canSteer(agent) || flipHeld) return action;
-    const flipKey = ["Mac", "iPhone", "iPad", "iPod"].some((p) => navigator.platform.startsWith(p)) ? "⌘" : "Ctrl+";
-    return `${action} (${flipKey}↵ to ${steer ? "queue" : "steer"})`;
+    return `${action} (${modKey}↵ to ${steer ? "queue" : "steer"})`;
   }
 
   let flipHeld = false;
@@ -950,63 +996,105 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     `;
   }
 
+  let receipt: ApprovalReceipt | null = null;
+  let receiptTimer: ReturnType<typeof setTimeout> | undefined;
+  const settling = new Set<string>();
+
+  function showReceipt(verdict: ApprovalReceipt["verdict"], approvals: PendingApproval[]): void {
+    const first = approvals[0];
+    const text =
+      approvals.length === 1 && first ? approvalHeading(first, approvalCall(first)) : `${approvals.length} calls`;
+    receipt = { key: Date.now(), verdict, text };
+    clearTimeout(receiptTimer);
+    receiptTimer = setTimeout(() => {
+      receipt = null;
+      ctx.chat.drawActiveChat();
+    }, 2600);
+  }
+
+  function dockedApprovals(agent: Agent | null = ctx.chat.state.agent): PendingApproval[] {
+    if (!agent || agent.state.isStreaming || options.prepareSubmit) return [];
+    return ctx.chat.activePendingApprovals().filter((a) => !settling.has(a.requestId));
+  }
+
+  async function decideEach(
+    approvals: PendingApproval[],
+    approved: boolean,
+    resolve: (decision: ApprovalDecision) => void | Promise<void>,
+  ): Promise<void> {
+    const resolving = ctx.chat.state.resolvingApprovals;
+    for (const a of approvals) settling.add(a.requestId);
+    try {
+      for (const a of approvals) {
+        if (resolving.has(a.requestId)) continue;
+        const submitted = resolve({
+          requestId: a.requestId,
+          approved,
+          ...(approved ? { scope: "once" as const } : {}),
+        });
+        settling.delete(a.requestId);
+        await submitted;
+      }
+    } finally {
+      for (const a of approvals) settling.delete(a.requestId);
+      ctx.chat.drawActiveChat();
+    }
+  }
+
   function composerApprovalPanel(
     approvals: PendingApproval[],
-    resolve: (decision: ApprovalDecision) => void = ctx.chat.resolveCommandApproval,
+    resolve: (decision: ApprovalDecision) => void | Promise<void> = ctx.chat.resolveCommandApproval,
+    docked = false,
   ): TemplateResult {
+    const resolving = ctx.chat.state.resolvingApprovals;
+    const busy = resolving.size > 0;
     const decide = (decision: ApprovalDecision): void => {
-      if (!ctx.chat.state.resolvingApprovals.has(decision.requestId)) resolve(decision);
+      if (resolving.has(decision.requestId)) return;
+      const target = approvals.filter((a) => a.requestId === decision.requestId);
+      if (docked && approvals.length === 1) showReceipt(decision.approved ? "approved" : "declined", target);
+      void resolve(decision);
     };
-    return html`<div class="composer-approval-panel" role="group" aria-label="Command approval">
-      ${approvals.map(
-        (a) =>
-          html`<div class="composer-approval">
-            <div class="composer-approval-copy">${ctx.chat.approvalSummaryView(a, true)}</div>
-            <div class="approval-actions">
-              <button
-                class="approval-btn deny"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: false })}
-              >
-                Deny
-              </button>
-              <button
-                class="approval-btn"
-                type="button"
-                ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                @click=${() => decide({ requestId: a.requestId, approved: true, scope: "once" })}
-              >
-                Allow once
-              </button>
-              ${
-                a.grantModes?.session === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn primary"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "session" })}
-                    >
-                      Allow for session
-                    </button>`
-              }
-              ${
-                a.grantModes?.always === false
-                  ? nothing
-                  : html`<button
-                      class="approval-btn"
-                      type="button"
-                      ?disabled=${ctx.chat.state.resolvingApprovals.has(a.requestId)}
-                      @click=${() => decide({ requestId: a.requestId, approved: true, scope: "always" })}
-                    >
-                      Allow always
-                    </button>`
-              }
-            </div>
-          </div>`,
-      )}
+    return html`<div class="composer-approval-panel ${docked ? "docked" : ""}">
+      ${approvalCard(approvals, {
+        docked,
+        typing: docked && !!composerState.draft.trim() && declinedByReply(approvals).length > 0,
+        busy,
+        decide,
+        approveAll: () => {
+          if (docked) showReceipt("approved", approvals);
+          void decideEach(approvals, true, resolve);
+        },
+        declineAll: () => {
+          if (docked) showReceipt("declined", approvals);
+          void decideEach(approvals, false, resolve);
+        },
+      })}
     </div>`;
+  }
+
+  function declinedByReply(approvals: PendingApproval[]): PendingApproval[] {
+    return approvals.filter((a) => a.blocksInput !== false);
+  }
+
+  function approvalPlaceholder(count: number): string {
+    return count > 1
+      ? `${approveKey} to approve all ${count}, or say what to change`
+      : `${approveKey} to approve, or say what to change`;
+  }
+
+  function approveDocked(approvals: PendingApproval[]): void {
+    showReceipt("approved", approvals);
+    void decideEach(approvals, true, ctx.chat.resolveCommandApproval);
+  }
+
+  function declineOnSend(agent: Agent, approvals: PendingApproval[]): void {
+    const ids = new Set(approvals.map((a) => a.requestId));
+    for (const message of agent.state.messages) {
+      const work = (message as AssistantWork).work;
+      if (work?.pendingApprovals) work.pendingApprovals = work.pendingApprovals.filter((a) => !ids.has(a.requestId));
+    }
+    ctx.chat.state.declineApprovalsOnSend = true;
+    showReceipt("declined", approvals);
   }
 
   let loadout = loadLoadout(loadoutKey);
@@ -1119,7 +1207,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function currentSlashMenu(): { open: boolean; loading: boolean; matches: SkillMatch[] } {
-    const query = slashQuery(composerState.draft);
+    const query = options.slack ? null : slashQuery(composerState.draft);
     if (query === null || composerState.slashDismissed) return { open: false, loading: false, matches: [] };
     const loading = skillsLoading;
     const matches = skillsCache ? matchSkills(query, skillsCache) : [];
@@ -1256,7 +1344,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function submitComposer(e: Event, agent: Agent): void {
     e.preventDefault();
-    void sendPrompt(agent, flipHeld);
+    void sendPrompt(agent, flipHeld, false);
   }
 
   function onDraftInput(e: InputEvent, agent: Agent): void {
@@ -1268,14 +1356,15 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.note = "";
     composerState.slashDismissed = false;
     slashActiveIndex = 0;
-    const armed = slashQuery(composerState.draft) !== null;
+    const armed = !options.slack && slashQuery(composerState.draft) !== null;
     if (armed && skillsCache === null && !skillsLoading) void loadSkills(agent);
     const popoverShown = Boolean(ctx.chat.state.host?.querySelector(".slash-popover"));
     if (
       armed ||
       popoverShown ||
       hadError ||
-      (Boolean(appState.me?.suggestedActivities?.length) && wasEmpty !== !composerState.draft)
+      ((Boolean(appState.me?.suggestedActivities?.length) || dockedApprovals(agent).length > 0) &&
+        wasEmpty !== !composerState.draft)
     ) {
       ctx.chat.drawActiveChat(agent);
       return;
@@ -1285,10 +1374,14 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function composerCanSend(): boolean {
-    return Boolean(composerState.draft.trim() || composerState.attachments.length) && readyToSend();
+    return (
+      Boolean(composerState.draft.trim() || composerState.attachments.length || dockedApprovals().length) &&
+      readyToSend()
+    );
   }
 
   function readyToSend(): boolean {
+    if (options.slack) return !composerState.processingFiles && !submitting;
     if (!currentModelOption()) return false;
     return (
       !composerState.processingFiles &&
@@ -1352,7 +1445,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
-    void sendPrompt(agent, e.metaKey || e.ctrlKey);
+    void sendPrompt(agent, e.metaKey || e.ctrlKey, true);
   }
 
   function stopStreaming(agent: Agent): void {
@@ -1588,22 +1681,28 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent, flipSteer = false): Promise<void> {
+  async function sendPrompt(agent: Agent, flipSteer = false, fromKey = false): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent, flipSteer);
+      await sendPromptNow(agent, flipSteer, fromKey);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent, flipSteer = false): Promise<void> {
+  async function sendPromptNow(agent: Agent, flipSteer = false, fromKey = false): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
     if (agent.state.isStreaming) return queueDraft(agent, flipSteer);
     const draft = composerState.draft.trim();
-    if (!draft && composerState.attachments.length === 0) return;
+    const docked = dockedApprovals(agent);
+    if (!draft && composerState.attachments.length === 0) {
+      if (docked.length && (!fromKey || flipSteer)) approveDocked(docked);
+      return;
+    }
+    const declining = declinedByReply(docked);
+    if (declining.length) declineOnSend(agent, declining);
     const sideChat = ctx.chat.state.forkSession?.sideChat;
     const text =
       sideChat?.quote &&
@@ -1614,13 +1713,15 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         : draft;
     const submit = options.prepareSubmit?.();
     if (submit) {
-      const selected = currentModelOption()!;
+      const selected = currentModelOption();
       const attachments = [...composerState.attachments];
-      const selection: ComposerSubmission = {
-        model: selected.model.id,
-        thinkingLevel: composerState.effortLevel,
-        fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
-      };
+      const selection: ComposerSubmission = selected
+        ? {
+            model: selected.model.id,
+            thinkingLevel: composerState.effortLevel,
+            fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
+          }
+        : { model: "" };
       submitting = true;
       clearActiveDraft();
       resetComposer();
@@ -1644,7 +1745,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     resetComposer();
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
-    await deliver(agent, sentFromThread, text, draft, attachments);
+    try {
+      await deliver(agent, sentFromThread, text, draft, attachments);
+    } finally {
+      ctx.chat.state.declineApprovalsOnSend = false;
+    }
   }
 
   function beginSend(): string | null {
@@ -2048,7 +2153,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
       if (ta.value === autosizedValue) return;
       autosizedValue = ta.value;
-      resizeComposerInput(ta, ctx.pane ? 0 : 48);
+      const minHeight = ctx.pane ? 0 : 48;
+      resizeComposerInput(ta, options.slack ? 32 : minHeight);
     });
   }
 

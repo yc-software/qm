@@ -2,7 +2,7 @@ import { perTenant } from "../tenants/cache.ts";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { createEncryptedSecretStore, deleteReplacedSecrets, type SecretStore } from "../credentials/secret-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId, scopeLabel } from "../types.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import {
@@ -341,7 +341,7 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
       binding.brain === brain.id &&
       (binding.scope === scope || binding.scope === "personal" || scope === "personal"),
   );
-  if (twin) throw conflict(`${twin.scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
+  if (twin) throw conflict(`${scopeLabel(twin.scope)} is already bound to brain ${brain.id} by binding ${twin.id}`);
   const binding: RegistryBinding = {
     id,
     brain: brain.id,

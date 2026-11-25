@@ -5,8 +5,9 @@ import type { ScopeId, Session } from "../src/types.ts";
 import type { NewItem } from "../src/sessions/items.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
-const scope = "personal:viewer@example.com" as ScopeId;
+const scope = personalScope("viewer@example.com") as ScopeId;
 const VIEWER = "viewer";
 const TOOL_SECRET = "brokered-credential-XJQ99";
 const THINKING_SECRET = "private-deliberation-KLM42";

@@ -4,7 +4,7 @@ import { sniffImageDimensions } from "../../core/image-downscale.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
-import { activeRun, audit } from "./shared.ts";
+import { audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -81,7 +81,6 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
   try {
     const owned = await activeOwnedAccount(ctx, access, accountId);
     if (!owned || owned.toolkit !== "twitter") return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(owned.account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx, {
@@ -98,13 +97,11 @@ async function uploadMedia(ctx: ApiCtx): Promise<void> {
     const mediaId = started.id;
     if (typeof mediaId !== "string" || !/^\d{1,32}$/.test(mediaId)) throw new Error("Invalid media id");
     for (let offset = 0, segment = 0; offset < bytes.length; offset += CHUNK_BYTES, segment++) {
-      if (!(await activeRun(ctx))) return;
       await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/${mediaId}/append`, {
         media: bytes.subarray(offset, offset + CHUNK_BYTES).toString("base64"),
         segment_index: segment,
       });
     }
-    if (!(await activeRun(ctx))) return;
     const finished = await xMedia(ctx, access.key, accountId, `${X_MEDIA_UPLOAD}/${mediaId}/finalize`);
     if (finished.id !== mediaId) throw new Error("Media id changed during upload");
     audit(ctx, {

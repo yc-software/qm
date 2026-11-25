@@ -5,17 +5,12 @@ import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
 import {
   foreignSkillCollision,
   safeSkillFilePath,
+  type CatalogSkill,
   type Skill,
   type SkillFile,
   type SkillManifest,
   type SkillStore,
 } from "./skill-store.ts";
-
-export interface SeedInstallResult {
-  installed: string[];
-  updated: string[];
-  skipped: string[];
-}
 
 export function isProbablyBinary(bytes: Buffer): boolean {
   if (bytes.includes(0)) return true;
@@ -29,7 +24,7 @@ function canonicalFilesKey(files: SkillFile[] | undefined): string {
     .join("");
 }
 
-export function sameManifest(a: SkillManifest, b: SkillManifest): boolean {
+function sameManifest(a: SkillManifest, b: SkillManifest): boolean {
   return (
     a.description === b.description &&
     a.body === b.body &&
@@ -86,7 +81,6 @@ export function upsertSeedSkill(
     createdBy: string;
     reviewer: string;
     pack?: Skill["pack"];
-    respectArchived?: boolean;
   },
 ): Promise<UpsertOutcome> {
   return skills.withNameLock(input.scopeId, input.manifest.name, () => upsertSeedSkillUnsafe(skills, input));
@@ -100,7 +94,6 @@ async function upsertSeedSkillUnsafe(
     createdBy: string;
     reviewer: string;
     pack?: Skill["pack"];
-    respectArchived?: boolean;
   },
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
@@ -108,7 +101,6 @@ async function upsertSeedSkillUnsafe(
   const isOwn = (s: Skill) => (pack ? s.pack?.packId === pack.packId : s.createdBy === createdBy);
   const existing = all.find((s) => s.scopeId === scopeId && s.manifest.name === manifest.name && isOwn(s));
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";
-  if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
     const changed = !sameManifest(existing.manifest, manifest);
     if (!changed && existing.status === "published") return "skipped";
@@ -123,30 +115,15 @@ async function upsertSeedSkillUnsafe(
   return "installed";
 }
 
-export async function installSeedSkills(
-  skills: SkillStore,
-  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string; respectArchived?: boolean },
-): Promise<SeedInstallResult> {
-  if (!existsSync(opts.dir)) return { installed: [], updated: [], skipped: [] };
-  const createdBy = opts.createdBy ?? "system:skills-seed";
-  const reviewer = opts.reviewer ?? "system:skills-reviewer";
-  const result: SeedInstallResult = { installed: [], updated: [], skipped: [] };
-
-  for (const entry of readdirSync(opts.dir).sort()) {
-    const skillDir = join(opts.dir, entry);
-    const skillPath = join(skillDir, "SKILL.md");
-    if (!existsSync(skillPath) || !statSync(skillPath).isFile()) continue;
-    const manifest = parseSeedSkill(readFileSync(skillPath, "utf8"));
-    manifest.files = readSkillFiles(skillDir);
-    const outcome = await upsertSeedSkill(skills, {
-      scopeId: opts.scopeId,
-      manifest,
-      createdBy,
-      reviewer,
-      ...(opts.respectArchived ? { respectArchived: true } : {}),
+export function readSeedSkills(dir: string, createdBy: string, reviewer: string): CatalogSkill[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .sort()
+    .flatMap((entry) => {
+      const skillPath = join(dir, entry, "SKILL.md");
+      if (!existsSync(skillPath) || !statSync(skillPath).isFile()) return [];
+      const manifest = parseSeedSkill(readFileSync(skillPath, "utf8"));
+      manifest.files = readSkillFiles(join(dir, entry));
+      return [{ manifest, createdBy, reviewer }];
     });
-    result[outcome === "foreign" ? "skipped" : outcome].push(manifest.name);
-  }
-
-  return result;
 }

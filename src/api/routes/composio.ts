@@ -1,9 +1,10 @@
 import { LRUCache } from "lru-cache";
 import { hasSlackAccount } from "./slack-composio.ts";
+import { actionApproved } from "../action-approval.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { COMPOSIO_ENV_KEY, isBackendCredential, isUsableComposioKey } from "../../credentials/keychain.ts";
-import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -13,11 +14,11 @@ import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
-import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, activeRun, audit } from "./shared.ts";
+import { activePrincipal, audit, requirePersonAuthority } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
 
@@ -50,7 +51,6 @@ export async function credential(
   ctx: ApiCtx,
   optional = false,
 ): Promise<{ key: string | null; principal: string } | null> {
-  if (!(await activeRun(ctx))) return null;
   const principal = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principal) {
     sendJson(ctx.res, 401, { error: "unauthorized" });
@@ -69,13 +69,12 @@ export async function credential(
       cap.deployment ||
       cap.botActor ||
       (shared &&
-        livePersonCapability(cap) &&
+        carriesPersonAuthority(cap) &&
         (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
     ) {
       sendJson(ctx.res, 403, {
         error: "private_connections",
-        message:
-          "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+        message: "Use your connected apps in your own conversation, or explicitly open sharing to this conversation.",
       });
       return null;
     }
@@ -217,8 +216,14 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   if (cursor) query.set("cursor", cursor);
   try {
     let data = NO_COMPOSIO;
-    if (access.key && only) data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
-    else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
+    if (access.key && only) {
+      data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
+      const missing = !apps.some((app) => app.toolkit === only) && Array.isArray(data.items) && !data.items.length;
+      const found = missing
+        ? await request(ctx, access.key, `/toolkits?${new URLSearchParams({ search: only })}`)
+        : NO_COMPOSIO;
+      if (Array.isArray(found.items) && found.items.length === 1) data = found;
+    } else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (
@@ -389,7 +394,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (!requirePersonAuthority(ctx)) return;
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
@@ -399,7 +404,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
     const owned = await ownedAccount(ctx, access, accountId);
     if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     const { toolkit } = owned;
-    if (!(await activeRun(ctx))) return;
+    if (!(await actionApproved(ctx, { summary: `Disconnect ${toolkit} account ${accountId}` }))) return;
     await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
     audit(ctx, {
       principalId: access.principal,
@@ -491,7 +496,6 @@ async function execute(ctx: ApiCtx): Promise<void> {
       tool.version !== body.version
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
-    if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx, {

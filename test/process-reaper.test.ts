@@ -7,6 +7,7 @@ import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions }
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -198,7 +199,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: bgId(1),
-    scopeId: "personal:A",
+    scopeId: personalScope("A"),
     sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm run build",
@@ -206,7 +207,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   });
   await reg.register({
     processId: bgId(2),
-    scopeId: "personal:B",
+    scopeId: personalScope("B"),
     sandboxId: "sandbox-1",
     kind: "build",
     command: "aws sso login",
@@ -214,7 +215,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   });
   await reg.register({
     processId: bgId(3),
-    scopeId: "personal:C",
+    scopeId: personalScope("C"),
     sandboxId: "sandbox-1",
     kind: "dev-server",
     command: "npm run dev",
@@ -238,7 +239,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   );
 
   assert.equal(provisions.length, 3);
-  assert.equal(provisions[0]!.owner, "personal:A");
+  assert.equal(provisions[0]!.owner, personalScope("A"));
   assert.deepEqual(provisions[0]!.opts, { sandboxId: "sandbox-1" });
   assert.equal(teardowns.length, 3);
   assert.equal(teardowns[0]!.opts?.keepWarm, true);
@@ -363,7 +364,7 @@ test("an expired job with no recorded computer is retired without touching the s
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: bgId(9),
-    scopeId: "personal:A",
+    scopeId: personalScope("A"),
     kind: "background",
     command: "bg: npm run dev",
     ttlMs: -1,

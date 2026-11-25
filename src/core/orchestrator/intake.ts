@@ -12,6 +12,7 @@ import { samePerson } from "../../directory/person.ts";
 import { unscreenedNotice } from "../../security/security-posture.ts";
 import type { ConversationKind, IncomingAttachment } from "../../types.ts";
 import {
+  attachmentMetadata,
   inboundIssueList,
   inboundIssuesNote,
   inboundManifest,
@@ -187,7 +188,13 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
       request?.sessionSenderId && request.text.trim()
         ? midTurnSessionMessage(request.text, request.sessionSenderId === session.parentSessionId)
         : [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
-    const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
+    const screened = [
+      wordsToScreen(said, speaker, actor.id),
+      ...(request?.inboundNotes ?? []),
+      ...(request?.attachments?.length
+        ? request.attachments.map((attachment) => attachmentMetadata(attachment, request.actor.displayName))
+        : []),
+    ]
       .filter(Boolean)
       .join("\n\n");
     if (screened) {

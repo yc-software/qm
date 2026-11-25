@@ -70,7 +70,7 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
     const canvas = await vite.ssrLoadModule("/src/split.ts");
     split = canvas as typeof split;
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
     document.body.append(appState.mainEl);

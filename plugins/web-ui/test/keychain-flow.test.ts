@@ -126,7 +126,9 @@ test("an inline credential card decides through the keychain approval route, not
   }) as typeof fetch;
   try {
     const { resolveApproval } = await import("../src/core-bridge.ts");
-    assert.equal(await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "always" }), "");
+    assert.deepEqual(await resolveApproval({ requestId: "keychain:a1", approved: true, scope: "always" }), {
+      status: "settled",
+    });
     await resolveApproval({ requestId: "keychain:a2", approved: true, scope: "once" });
     await resolveApproval({ requestId: "keychain:a3", approved: false });
   } finally {

@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: Connect a new user's accounts, learn their real work, choose a voice, and set up concrete help.
+description: Connect a new user's accounts, learn their real work, and set up concrete help.
 ---
 
 # Onboarding
@@ -11,13 +11,21 @@ Connections are optional, not a prerequisite. Keep turns short and conversationa
 user explicitly asks to skip one:
 
 1. For an org admin, make sure a connector source works, then check whether the Slack bot is missing. Otherwise go straight to personal connections through an authorized access skill.
-2. Choose how you should sound.
-3. Read connected tools for a real work snapshot.
-4. Confirm your read, then propose and—with approval—create concrete help.
+2. Read connected tools for a real work snapshot.
+3. Confirm your read, then propose and—with approval—create concrete help.
 
-Do not ask about their voice, their work, or their week until connections are set up or
+Do not ask about their work or their week until connections are set up or
 explicitly deferred. If they ask to stop, mark onboarding completed and do not raise it again. A returning user
 keeps what memory already knows; focus on what changed.
+
+## When they ask what you are
+
+Answer in a few short lines, then continue onboarding. Name what this deployment offers:
+work in their connected tools, acting for them, scheduled follow-through, apps (internal
+tools and dashboards you publish as live links), browser use on real websites, and
+computer use on their Mac through the desktop app. Close by suggesting they add their
+teammates, such as cofounders and employees, so the whole team works with you, and offer
+to help invite them.
 
 ## State and persistence
 
@@ -71,8 +79,11 @@ before mentioning Slack bot setup. If their role is unclear, use
 
 - `configured: true`: skip silently and go straight to personal connections. Include
   no Slack setup heading, checklist, status announcement, or verification task.
-- Confirmed missing bot: offer the setup early, with the available steps and links
-  together as described in the admin skill. Do not make the admin ask for each step.
+- Confirmed missing bot: offer the setup early. With `installAvailable: true` in web
+  chat, show the `::add-to-slack{}` card and say to pick their own organization's
+  workspace, not another shared workspace they belong to. Otherwise give the available
+  steps and links together as described in the admin skill. Do not make the admin ask
+  for each step.
 - Disabled or deferred setup: skip silently. A failed or unavailable status read is
   unknown, not missing; continue onboarding without advertising setup or claiming it
   is connected. Investigate only if the user asks.
@@ -94,9 +105,11 @@ form, never into chat.
 
 ### Personal connections
 
-Check Composio availability through `GET /v1/composio/toolkits` on the authenticated QM API. When available,
-load the composio skill with the skills tool, discover available apps, and use its consent flow for the
-user's choices. Reuse their connected accounts after checking identity and permissions;
+Check Composio availability through `GET /v1/composio/toolkits` on the authenticated QM API. When available
+in web chat, show the `::connect-apps{}` app picker instead of listing apps or links. Write each card
+directive as its own paragraph, outside code fences and quotations; both may share a reply. Keep plain
+links on other surfaces and for apps that connect elsewhere. Load the composio skill with the skills tool
+for discovery and its consent flow for the user's choices. Reuse their connected accounts after checking identity and permissions;
 a project key is not proof that a personal account is connected. Do not ask them to
 create OAuth apps for connections this source already provides. Do not infer that Composio is unavailable from an empty direct OAuth list
 or a native provider-not-configured error. Explicit app restrictions and account permissions
@@ -120,29 +133,6 @@ curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \
 Never construct the URL yourself. Omit providers that return `oauth_not_configured`. The
 user must tap the links; continue after asking them to approve the services they use.
 Mention a machine-local login only when the live Your logins block lists it.
-
-## Voice
-
-Once connections are checked or deferred, offer three demonstrably different voices using the same
-short status update, for example:
-
-- lowkey: calm, lowercase, opinionated, no performance.
-- The Editor: sharp, decision-first, no padding.
-- The Right Hand: warm, anticipatory, and concrete without fawning.
-
-They may instead name a writer or paste their own writing. Save the choice in memory. Also
-update SOUL when it should shape nearly every turn: read the current value, preserve it,
-and write first-person operating rules plus two or three short examples in the chosen
-voice, including disagreement or bad news. Avoid generic assistant tics such as reflexive
-hedging, praise, and decorative bullets.
-
-```bash
-curl -sS "$AGENT_API_URL/v1/soul" -H "X-Agent-Capability: $AGENT_API_TOKEN"
-curl -sS -X POST "$AGENT_API_URL/v1/soul" \
-  -H "X-Agent-Capability: $AGENT_API_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"content":"<full revised first-person SOUL>"}'
-```
 
 ## 2. Read their work
 

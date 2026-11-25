@@ -52,14 +52,14 @@ export interface ToolRowModel {
   approval?: Item;
   attempts?: number;
   pending?: PendingApproval;
+  waiting?: number;
 }
 
 export type TimelineItem =
   | { kind: "steer"; item: Item }
   | { kind: "thinking"; seq: number; step: string | null; text: string }
   | { kind: "text"; item: Item }
-  | { kind: "tool"; row: ToolRowModel }
-  | { kind: "approval"; approval: PendingApproval };
+  | { kind: "tool"; row: ToolRowModel };
 
 export function workTimelineSegments(items: TimelineItem[]): TimelineItem[][] {
   const segments: TimelineItem[][] = [[]];
@@ -263,8 +263,22 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
     const queue = pendingByCmd.get(cmd);
     if (queue?.length) item.row.pending = queue.shift();
   }
-  for (const queue of pendingByCmd.values()) for (const a of queue) collapsed.push({ kind: "approval", approval: a });
-  return collapsed;
+  const out: TimelineItem[] = [];
+  for (const item of collapsed) {
+    const prev = out[out.length - 1];
+    if (
+      item.kind === "tool" &&
+      toolBody(item.row.result).blocked === "needs_approval" &&
+      prev?.kind === "tool" &&
+      toolBody(prev.row.result).blocked === "needs_approval"
+    ) {
+      prev.row.waiting = (prev.row.waiting ?? 1) + 1;
+      prev.row.pending ??= item.row.pending;
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
 }
 
 function liveReasoning(work: WorkBlock): NonNullable<WorkBlock["reasoning"]> {

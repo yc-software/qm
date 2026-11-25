@@ -5,6 +5,7 @@ import { friendlyPrincipal } from "./app-view";
 import { avatarTpl } from "./ui";
 import { icon } from "./icons";
 import { scopeChip } from "./contexts";
+import { scopePerson } from "./scope-labels";
 import { sessionsState, sessionTitle } from "./sessions";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
@@ -50,7 +51,7 @@ function copyDestinationLabel(type: string | undefined): string {
 }
 
 function granteeName(scope: string): TemplateResult | string {
-  return scope.startsWith("personal:") ? friendlyPrincipal(scope.slice("personal:".length)) : scopeChip(scope);
+  return scope.startsWith("personal:") ? friendlyPrincipal(scopePerson(scope)) : scopeChip(scope);
 }
 
 export function cronDeliveryList(

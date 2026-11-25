@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start() {
@@ -118,14 +118,14 @@ test("the admin memory directory lists every known scope, notebooks-first (power
 
     assert.ok(byId.has("org:default-org"), "the org scope is always listed");
     assert.ok(byId.has("channel:C9"), "session scopes are listed");
-    assert.ok(byId.has("personal:U1"), "every participant gets a personal-scope row, even with no memory yet");
-    assert.ok(byId.has("personal:admin-alice"), "grant holders are listed even if they never spoke");
+    assert.ok(byId.has(personalScope("U1")), "every participant gets a personal-scope row, even with no memory yet");
+    assert.ok(byId.has(personalScope("admin-alice")), "grant holders are listed even if they never spoke");
 
     const c9: any = byId.get("channel:C9");
     assert.equal(c9.hasMemory, true);
     assert.equal(c9.label, "#eng", "channel rows carry the human channel name");
     assert.ok(c9.bytes > 0);
-    const u1: any = byId.get("personal:U1");
+    const u1: any = byId.get(personalScope("U1"));
     assert.equal(u1.hasMemory, false);
     assert.equal(d.scopes[0].hasMemory, true, "scopes with notebooks sort first");
 

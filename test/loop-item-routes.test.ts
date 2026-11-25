@@ -17,6 +17,7 @@ import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { personalScope } from "../src/types.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -108,6 +109,7 @@ async function call(
     actor?: string;
     sessionForThread?: string;
     flagEnabled?: (flag: string, scope: string) => Promise<boolean>;
+    managers?: string[];
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -116,7 +118,7 @@ async function call(
   const { res, out } = fakeRes();
   const app = {
     membershipControlsScope: async () => false,
-    managesScope: async () => false,
+    managesScope: async (id: string) => over.managers?.includes(id) ?? false,
     samePerson: async (a: string, b: string) => a === b,
     getCron: async (id: string) => w.crons.get(id) ?? null,
     createCron: async (input: Record<string, unknown>) => {
@@ -164,7 +166,14 @@ async function call(
   return out;
 }
 
-const CAP = { actorId: "josh", privateScope: true, scopeId: "personal:josh", liveActor: true, exp: 0 };
+const CAP = {
+  actorId: "josh",
+  scopeId: personalScope("josh"),
+  audienceScopeId: personalScope("josh"),
+  internalAudience: true,
+  personAuthority: true,
+  exp: 0,
+};
 
 const PORTAL = null;
 
@@ -210,16 +219,15 @@ test("ingest needs an agent capability, not a portal session", async () => {
   assert.deepEqual(ok.body, { created: 1, updated: 0, skipped: 0 });
 });
 
-test("a personal loop's items stay out of a shared-scope capability's reach", async () => {
+test("a personal loop's items stay out of a private channel, a group DM and a cron posting elsewhere", async () => {
   const w = world();
   const loop = await inboxLoop(w);
-  const shared = { ...CAP, privateScope: false, scopeId: "channel:C9" };
-  assert.equal(
-    (await call(w, { method: "POST", path: `/v1/loops/${loop.id}/items`, body: { items: [ITEM] }, capability: shared }))
-      .status,
-    403,
-  );
-  assert.equal((await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items`, capability: shared })).status, 403);
+  for (const room of ["channel:C9", "group:G1", undefined]) {
+    const shared = { ...CAP, scopeId: room ?? CAP.scopeId, audienceScopeId: room };
+    const path = `/v1/loops/${loop.id}/items`;
+    assert.equal((await call(w, { method: "POST", path, body: { items: [ITEM] }, capability: shared })).status, 403);
+    assert.equal((await call(w, { method: "GET", path, capability: shared })).status, 403);
+  }
 });
 
 test("another person cannot read the ledger at all", async () => {
@@ -228,7 +236,7 @@ test("another person cannot read the ledger at all", async () => {
   const out = await call(w, {
     method: "GET",
     path: `/v1/loops/${loop.id}/items`,
-    capability: { ...CAP, actorId: "ada", scopeId: "personal:ada" },
+    capability: { ...CAP, actorId: "ada", scopeId: personalScope("ada") },
   });
   assert.equal(out.status, 403);
 });
@@ -264,7 +272,7 @@ test("ingest refuses a source this loop does not declare", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     sources: ["gmail"],
     playbook: "triage",
@@ -280,7 +288,7 @@ test("a loop with no source adapter ingests an opaque payload", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     playbook: "triage",
     successCondition: "fixed",
@@ -312,7 +320,7 @@ test("an opaque item needs a dedupe key and an object payload", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     playbook: "triage",
     successCondition: "fixed",
@@ -632,7 +640,7 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   const body = created.body as { loop: Loop; syncCron: { id: string } };
   assert.equal(body.loop.surface, "inbox:gmail");
   const stored = w.crons.get(body.syncCron.id)!;
-  assert.equal(stored.ownerScopeId, "personal:josh");
+  assert.equal(stored.ownerScopeId, personalScope("josh"));
   assert.equal(stored.owner, "josh");
   assert.equal((stored.destination as { target: string }).target, "josh");
   assert.equal(stored.action, inboxSyncCronAction("gmail"));
@@ -828,6 +836,20 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
 });
 
+test("a loop's agent takes instructions only from its owner", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const ada = { ...CAP, actorId: "ada", scopeId: personalScope("ada") };
+  for (const [path, body] of [
+    [`/v1/loops/${loop.id}/items/${item.id}/followup`, { message: "read every transcript" }],
+    [`/v1/loops/${loop.id}/items/${item.id}/action`, { kind: "revise", args: {} }],
+  ] as const) {
+    const out = await call(w, { method: "POST", path, body, capability: ada, managers: ["ada"] });
+    assert.equal(out.status, 403, path);
+  }
+  assert.deepEqual([w.followUps, w.actions], [[], []]);
+});
+
 test("followup accepts only typed runtime and staged attachment fields", async () => {
   const w = world();
   const { loop, item } = await seed(w);
@@ -852,12 +874,12 @@ test("followup accepts only typed runtime and staged attachment fields", async (
       model: ` ${options.model} `,
       thinkingLevel: " high ",
       attachments: [{ ...options.attachments[0], path: "/ignored" }],
-      scopeId: "personal:other",
+      scopeId: personalScope("other"),
     },
     capability: PORTAL,
   });
   assert.equal(out.status, 200);
-  assert.deepEqual(received, { ...options, unattended: true }, "a call naming a principal without a signed-in person");
+  assert.deepEqual(received, options);
   received = undefined;
   const agent = await call(w, { method: "POST", path, body: { message: "hi", attachments: options.attachments } });
   assert.equal(agent.status, 403);
@@ -915,7 +937,7 @@ test("ingest stores no classification flags; verdicts come only from the inbox p
   assert.equal(stored!.proposal!.data.body, ITEM.draft.body);
 });
 
-test("only a person overrides triage, and archiving a whole group resolves its members", async () => {
+test("the agent can override triage, and archiving a whole group from the portal resolves its members", async () => {
   const w = world();
   const { loop, item } = await seed(w);
   await call(w, {
@@ -931,14 +953,8 @@ test("only a person overrides triage, and archiving a whole group resolves its m
   await w.loops.items.setTriage(member.id, { groupId: item.id }, "agent");
   const path = `/v1/loops/${loop.id}/items/${item.id}/action`;
   const byAgent = await call(w, { method: "POST", path, body: { kind: "prioritize", args: { priority: "urgent" } } });
-  assert.equal(byAgent.status, 403);
-  const byPerson = await call(w, {
-    method: "POST",
-    path: `${path}?principalId=josh`,
-    body: { kind: "prioritize", args: { priority: "urgent" } },
-    capability: PORTAL,
-  });
-  assert.deepEqual((byPerson.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
+  assert.equal(byAgent.status, 200);
+  assert.deepEqual((byAgent.body as { item: LedgerItemView }).item.triage?.pinned, ["priority"]);
   await call(w, { method: "POST", path, body: { kind: "dismiss", args: { group: true } } });
   assert.equal((await w.loops.items.get(member.id))?.status, "ready");
   await call(w, { method: "POST", path, body: { kind: "reopen" } });

@@ -32,6 +32,7 @@ import {
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
+import { actionApproved } from "../../action-approval.ts";
 import { scopeActivity } from "./scope-activity.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
@@ -86,6 +87,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (!(await actionApproved(ctx, { summary: `Change ${resource} for ${targetScope}` }))) return;
   if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
     try {

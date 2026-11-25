@@ -26,7 +26,7 @@ import { APP_TABLES } from "../src/deploy/page-views.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
 import { onTenantLoad } from "../src/tenants/cache.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
@@ -157,7 +157,7 @@ describeTwoTenants("background sweeps claim across tenants and work each row und
       await withTenant(tenant, () =>
         registry.register({
           processId: `p-${tenant}`,
-          scopeId: "personal:U1",
+          scopeId: personalScope("U1"),
           sandboxId: "",
           kind: "background",
           command: "x",

@@ -81,7 +81,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     approval: { requestId: deniedPending.pendingApprovals![0]!.requestId, approved: false },
   });
   assert.equal(denied.status, "refused");
-  assert.match(denied.reason ?? "", /approval denied/);
+  assert.match(denied.reason ?? "", /approval declined/);
   assert.equal(denied.refusalKind, "approval_denied");
   assert.deepEqual(
     (await deniedApp.sessions.getItems(deniedPending.sessionId!)).filter((item) => USER_ITEM_KINDS.includes(item.kind)),

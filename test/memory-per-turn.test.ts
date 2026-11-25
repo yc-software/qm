@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
@@ -37,13 +37,13 @@ test("redirected capture writes only to the resolved target, not the speaker's n
   const { memory } = freshMemory();
   const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory });
   await strategy.onTurnEnd!({
-    scopeId: "personal:U2",
+    scopeId: personalScope("U2"),
     conversationScopeId: CHANNEL,
     input: INPUT,
     reply: REPLY,
     actorId: ACTOR,
   });
-  assert.match(await memory.read("personal:U2"), /task list is ship the launch/);
+  assert.match(await memory.read(personalScope("U2")), /task list is ship the launch/);
   assert.equal(await memory.read(PERSONAL), "");
   assert.equal(await memory.read(CHANNEL), "");
 });

@@ -55,7 +55,7 @@ Limits the API enforces (don't offer what it will refuse):
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron, webhook or loop fire **carries its owner's authority** (see
   [Scheduling admin-reading work](#scheduling-admin-reading-work)): an org admin's fire
-  can read on the admin plane what the admin's own typed turn could, audited as the owner
+  can read on the admin plane what the admin can, audited as the owner
   and re-checked on every call (revoking their admin grant closes it). The audience
   rule still applies to private-content reads, so such a fire must live in the owner's
   DM or an Open conversation. Mutations work anywhere, including from the admin's own
@@ -117,8 +117,8 @@ ask regular users to configure a source.
 ## Guide Slack installation
 
 Check this silently before offering Slack bot setup during admin onboarding. It is
-separate from personal account connections. Verify admin status first. On a
-human-started admin turn, read `GET /v1/admin/slack-installation`; it returns setup
+separate from personal account connections. Verify admin status first. Then
+read `GET /v1/admin/slack-installation`; it returns setup
 metadata, not tokens. A failed read means unknown, not absent. Never inspect
 deployment secrets to infer status.
 
@@ -294,9 +294,9 @@ through their usual controls.
 ## Scheduling admin-reading work
 
 A cron's fires run as its owner with the owner's own authority, so an org admin's
-scheduled work can read what the admin could on a typed turn — no grants to set up.
-Changes through the admin API stay with typed turns. Two things still need settling
-at creation, not after the first fire fails:
+scheduled work can read on the admin plane — no grants to set up. A change through the
+admin API raises an approval card to the admin, and approving it runs that exact change.
+Two things still need settling at creation, not after the first fire fails:
 
 1. **Audience.** Private-content reads (transcripts, memory, files, the scope directory)
    still require the cron's home to be the owner's own DM or an Open conversation. A
@@ -320,13 +320,11 @@ run with that person's standing, not the original admin's.
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
 - `403 … carry a person's own authority — this turn runs with none` — a bot actor, an
-  external audience, a cron or loop whose task an automated turn wrote (its owner
-  restores their authority by rewriting it on a turn they send) or that a conversation
-  owns, or a session message whose authorization chain could not be verified. Report it
+  external audience, a cron or loop that a conversation owns, or a session message whose
+  authorization chain could not be verified. Report it
   where the run delivers — never finish silently.
-- `403 admin changes need the admin at the keyboard …` — a fire tried to change
-  something. Report the change you would make where the run delivers; the admin
-  confirms it on a turn they send.
+- `202 approval_required` — the change waits on the approval card sent to the admin;
+  approving it runs that exact request, so don't retry it.
 - `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this admin;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to create the cron from their DM so it is homed there).
