@@ -794,7 +794,8 @@ export function buildApp(
     statements: [
       "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       `DELETE FROM skills WHERE json ->> 'createdBy' IN ('system:skills-seed', 'system:plugin-skills', 'system:deployment-layer')
-         AND (json ->> 'status' = 'published' OR json ->> 'createdBy' = 'system:deployment-layer')`,
+         AND (json ->> 'status' = 'published' OR json ->> 'createdBy' = 'system:deployment-layer')
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(json -> 'approvals', '[]')) AS a(v) WHERE a.v NOT LIKE 'system:%')`,
     ],
   });
   const skills: SkillStore = createSkillStore({
