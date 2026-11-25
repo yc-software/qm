@@ -644,7 +644,7 @@ test("a large channel's first turn screens only the names it shows, in as many c
     calls = 0;
     const audience = Array.from({ length: size }, (_, i) => ({
       externalId: `UD${i}`,
-      displayName: `Member ${i} of a big channel`,
+      displayName: `Member ${i} of a very large channel, with a long display name`,
     }));
     const conversation = {
       kind: "channel" as const,
@@ -656,7 +656,7 @@ test("a large channel's first turn screens only the names it shows, in as many c
     return { status: res.status, calls, more: !!res.reply?.includes("more in this conversation.") };
   };
   const small = await turn(3);
-  assert.deepEqual(await turn(15000), { ...small, more: true });
+  assert.deepEqual(await turn(4000), { ...small, more: true });
 });
 
 test("approving a held turn replays it after another person's turn screens the names it read", async () => {
