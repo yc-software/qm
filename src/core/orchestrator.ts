@@ -1722,6 +1722,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           exp: Date.now() + CAPABILITY_TTL_MS,
           ...(personAuthorityTurn ? { personAuthority: true } : {}),
         };
+        const personAuthority = carriesPersonAuthority(runtimeClaims);
+        const turnMcpTools = appEdit ? undefined : context.mcpTools(personAuthority, mcpToolsReady);
         const baseTools = createToolContext({
           tenant,
           desktopCall: mayDriveDesktop(input)
@@ -1808,7 +1810,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(carriesPersonAuthority(runtimeClaims) ? { personAuthority: true } : {}),
+          ...(personAuthority ? { personAuthority: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -2053,7 +2055,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.swarms && input.runId && !partial && !input.approval
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
             : undefined;
-        const mcpTools = await mcpToolsReady;
+        const mcpTools = await turnMcpTools;
         const freshBody = appEdit
           ? appEdit.body(basePrompt)
           : [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
@@ -2369,7 +2371,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swarmGoalTurn,
             screenSwarmMessage,
           });
-          const mcpTools = await mcpToolsReady;
+          const mcpTools = await turnMcpTools;
 
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({

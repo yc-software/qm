@@ -360,6 +360,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async callMcpTool() {
       return "";
     },
+    async lookupBrain() {
+      return "";
+    },
     async mcpToolNeedsApproval() {
       return false;
     },
