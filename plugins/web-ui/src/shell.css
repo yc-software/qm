@@ -670,39 +670,6 @@ a.chat-row-open {
   margin: 2px 0 0;
   padding-left: 6px;
 }
-#sidebar-body.detach-drop-target {
-  position: relative;
-}
-.detach-drop-zone {
-  display: none;
-}
-#sidebar-body.detach-drop-target .detach-drop-zone {
-  position: absolute;
-  inset: 6px 4px;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 0 4px 4px;
-  padding: 8px 10px;
-  border: 1.5px dashed var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: center;
-}
-#sidebar-body.detach-drop-target .detach-drop-zone.over {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--foreground) 45%, var(--border));
-  color: var(--foreground);
-  background: var(--muted);
-}
-#sidebar-body.detach-drop-target .detach-drop-zone * {
-  pointer-events: none;
-}
 .session-drop-over {
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
@@ -2281,7 +2248,7 @@ a.chat-row-open {
   color: var(--muted-foreground);
 }
 button.subagent-chip {
-  cursor: grab;
+  cursor: pointer;
 }
 button.subagent-chip:hover {
   border-color: color-mix(in srgb, var(--foreground) 30%, var(--border));

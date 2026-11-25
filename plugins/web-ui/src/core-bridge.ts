@@ -522,10 +522,6 @@ export async function suggestNextPrompt(id: string): Promise<{ enabled: boolean;
   });
 }
 
-export async function detachSession(id: string): Promise<{ detached: true }> {
-  return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
-}
-
 export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
   return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
 }
