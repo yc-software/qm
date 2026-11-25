@@ -35,30 +35,6 @@ export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> =
   },
 };
 
-const BOOKFACE_ORIGIN = "https://bookface.ycombinator.com";
-
-export const BOOKFACE_CONNECTIONS: Record<string, { name: string; logo: string; anchor: string }> = {
-  "bookface-gmail": { name: "Gmail", logo: "gmail", anchor: "gmail-read" },
-  "bookface-calendar": { name: "Google Calendar", logo: "googlecalendar", anchor: "calendar" },
-  "bookface-google": { name: "Gmail & Calendar", logo: "google", anchor: "" },
-  "bookface-granola": { name: "Granola", logo: "granola", anchor: "granola" },
-};
-
-function bookfaceProvider(parsed: URL, label: string): string {
-  const path = parsed.pathname.replace(/\/+$/, "");
-  const google = path === "/google_connections";
-  if (!google && !/^(?:\/company\/\d+)?\/integrations$/.test(path)) return "";
-  const section = parsed.hash.slice(1) || parsed.searchParams.get("integration") || "";
-  if (["gmail", "gmail-read"].includes(section)) return "bookface-gmail";
-  if (section === "calendar") return "bookface-calendar";
-  if (section === "granola") return "bookface-granola";
-  if (section) return "";
-  const named = label.toLowerCase();
-  if (/\bgranola\b/.test(named)) return "bookface-granola";
-  if (google || /\b(?:gmail|calendar|google)\b/.test(named)) return "bookface-google";
-  return "";
-}
-
 export interface ConnectorLink {
   provider: string;
   url: string;
@@ -86,11 +62,6 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
       if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url, ...(label ? { label } : {}) });
       continue;
     }
-    if (parsed.origin === BOOKFACE_ORIGIN) {
-      const provider = bookfaceProvider(parsed, labels.get(url) ?? "");
-      if (provider && !out.some((l) => l.url === url)) out.push({ provider, url });
-      continue;
-    }
     if (
       trustedOrigin &&
       parsed.origin === trustedOrigin &&
@@ -100,7 +71,13 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
       if (!out.some((l) => l.provider === "slack-bot")) out.push({ provider: "slack-bot", url });
       continue;
     }
-    if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
+    if (trustedOrigin && parsed.origin !== trustedOrigin) {
+      const label = labels.get(url) ?? "";
+      const external: ConnectorLink = { provider: "external", url, label };
+      if (parsed.protocol === "https:" && label.startsWith("Connect ") && connectorService(external))
+        if (!out.some((l) => l.url === url)) out.push(external);
+      continue;
+    }
     if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
     const provider = parsed.searchParams.get("p") ?? "";
     if (!CONNECTOR_LABELS[provider]) continue;
@@ -122,7 +99,7 @@ export function stripConnectorLinks(text: string, links = connectorLinksIn(text)
 }
 
 export function connectorService(link: ConnectorLink): string {
-  if (link.provider !== "composio") return link.provider;
+  if (link.provider !== "composio" && link.provider !== "external") return link.provider;
   const label = (link.label ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
@@ -139,6 +116,7 @@ export function connectorService(link: ConnectorLink): string {
     ["github", /\bgithub\b/],
     ["dropbox", /\bdropbox\b/],
     ["x", /\b(?:twitter|x)\b/],
+    ["granola_mcp", /\bgranola\b/],
   ];
   const matches = services.filter(([, pattern]) => pattern.test(label));
   const hasGoogleProduct = matches.some(([id]) => id.startsWith("google") && id !== "google");

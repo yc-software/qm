@@ -369,6 +369,6 @@ account queue separately instead of steering an existing run; an explicit steer
 across accounts is refused. Organizations that already require individual accounts
 continue to require them.
 
-Links to Bookface's Gmail, Google Calendar and Granola connection pages (`/integrations#gmail-read`, `#calendar`, `#granola`, `/google_connections`, or a company's `/company/<id>/integrations`) render as connector cards that open Bookface in a new tab. QM cannot see when those connections finish, so these cards do not continue the chat.
+A Markdown link to another site whose label starts with `Connect ` and names a known app, such as `[Connect Granola](https://example.com/integrations#granola)`, renders as a connector card showing the app's logo and the destination host. It opens in a new tab; QM cannot see when such a connection finishes, so the card does not continue the chat.
 
 The standalone `::link-slack-account{}` directive offers personal Slack account linking in a web reply. It shows the account card or linked status, requires the company bot to be installed first, and does not include the app picker. `::add-to-slack{}` remains the company installation trigger.
