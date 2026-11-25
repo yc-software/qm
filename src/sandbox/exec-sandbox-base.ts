@@ -33,7 +33,7 @@ export const sandboxScopeName = (prefix: string, id: string): string => {
   return head ? `${head}-${hash}` : hash;
 };
 
-export interface ExecSandboxBaseDeps {
+interface ExecSandboxBaseCommon {
   label: string;
   prefix: string;
   instanceName?(scope: string, scratch: boolean): Promise<string>;
@@ -41,7 +41,9 @@ export interface ExecSandboxBaseDeps {
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
   egressProxyUrl?: string;
-  deleteFailureCode: string;
+  provisionQueue?: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
+  prepSuffix?: string;
+  runExec?(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
   exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
@@ -56,10 +58,19 @@ export interface ExecSandboxBaseDeps {
   combineLayerToolPrep?: boolean;
 }
 
+export type ExecSandboxBaseDeps = ExecSandboxBaseCommon &
+  (
+    | { deleteFailureCode: string; teardownResident?: undefined }
+    | { teardownResident(handle: SandboxHandle, scope: string, opts?: TeardownOptions): Promise<void> }
+  );
+
 export interface ExecSandboxBase {
   workspaceDir: string;
   provisionQueue: <T>(key: string, fn: () => Promise<T>) => Promise<T>;
   scopeFor(name: string): string | undefined;
+  bindScope(name: string, scope: string): void;
+  releaseScope(name: string): void;
+  isScratch(name: string): boolean;
   provision(scope: string, opts?: ProvisionOptions): Promise<SandboxHandle>;
   run(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
   writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void>;
@@ -78,7 +89,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   const instanceName =
     deps.instanceName ??
     (async (scope: string, scratch: boolean) => sandboxScopeName(scratch ? `${prefix}-scratch` : prefix, scope));
-  const provisionQueue = createKeyedQueue<string>();
+  const provisionQueue = deps.provisionQueue ?? createKeyedQueue<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -140,10 +151,16 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
         scratchKeyByName.delete(handle.id);
       });
     }
+    const scope = scopeByName.get(handle.id);
+    if (deps.teardownResident) {
+      const park = deps.teardownResident;
+      return tdOpts?.destroy && !scope
+        ? undefined
+        : provisionQueue(scope ?? "default", () => park(handle, scope ?? "default", tdOpts));
+    }
     if (!tdOpts?.destroy) return;
     deps.forgetInstance?.(handle.id);
     await deps.deleteInstance(handle.id).catch((e) => {
-      const scope = scopeByName.get(handle.id);
       deps.onError?.({
         category: "sandbox_teardown",
         code: deps.deleteFailureCode,
@@ -182,7 +199,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
       const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
-      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
+      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}${deps.prepSuffix ?? ""}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),
         writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),
@@ -211,7 +228,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       .join("; ");
     const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
     const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec);
+    const exec = deps.runExec ?? deps.exec;
+    if (!signal) return exec(handle.id, script, timeoutSec);
     const killUid = randomUUID();
     const fireKill = () => {
       deps
@@ -222,7 +240,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     const onAbort = () => fireKill();
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
+      return await exec(handle.id, killableScript(script, killUid), timeoutSec);
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
@@ -232,6 +250,9 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     workspaceDir,
     provisionQueue,
     scopeFor: (name) => scopeByName.get(name),
+    bindScope: (name, scope) => void scopeByName.set(name, scope),
+    releaseScope: (name) => void scopeByName.delete(name),
+    isScratch: (name) => scratchKeyByName.has(name),
     provision,
     run,
     writeFileBytes,
@@ -239,5 +260,54 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     readFileBytes,
     readFile,
     teardown,
+  };
+}
+
+interface SessionCacheIo<S> {
+  base(): Pick<ExecSandboxBase, "isScratch" | "scopeFor">;
+  createScratch(name: string): Promise<S>;
+  ensureSession(scope: string, name: string): Promise<{ session: S }>;
+  isGone(err: unknown): boolean;
+  isLost(err: unknown): boolean;
+}
+
+export function createSessionCache<S extends { kill(): Promise<void> }>(io: SessionCacheIo<S>) {
+  const sessions = new Map<string, S>();
+  const recreateScratch = async (name: string): Promise<S> => {
+    const session = await io.createScratch(name);
+    sessions.set(name, session);
+    return session;
+  };
+
+  async function withSession<T>(name: string, action: (session: S) => Promise<T>): Promise<T> {
+    const base = io.base();
+    const scratch = base.isScratch(name);
+    if (!scratch && base.scopeFor(name) === undefined) throw new Error("sandbox handle has been released");
+    const resolve = async (): Promise<S> =>
+      scratch
+        ? (sessions.get(name) ?? (await recreateScratch(name)))
+        : (await io.ensureSession(base.scopeFor(name) ?? "default", name)).session;
+    const first = await resolve();
+    try {
+      return await action(first);
+    } catch (err) {
+      if (io.isLost(err)) sessions.delete(name);
+      if (!io.isGone(err)) throw err;
+      sessions.delete(name);
+      return action(await resolve());
+    }
+  }
+
+  async function deleteInstance(name: string): Promise<void> {
+    await sessions.get(name)?.kill();
+    sessions.delete(name);
+  }
+
+  return {
+    sessions,
+    withSession,
+    isProvisioned: (name: string) => sessions.has(name),
+    recreateScratch: async (name: string) => void (await recreateScratch(name)),
+    deleteInstance,
   };
 }

@@ -1,11 +1,8 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -13,17 +10,11 @@ import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
-  posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { hasParentPathSegment, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, createSessionCache, sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -43,9 +34,7 @@ import {
 import type {
   AgentComputerProfile,
   ComputerStatus,
-  ExecOptions,
   ExecResult,
-  ProvisionOptions,
   Sandbox,
   SandboxHandle,
   TeardownOptions,
@@ -54,7 +43,6 @@ import type {
 const WORKSPACE_ROOT = "/workspace";
 const HOME_DIR = `${WORKSPACE_ROOT}/home`;
 const TRANSFER_RELAY_BASENAME = ".qm-transfer.";
-const WORKSPACE_BASENAME = "workspace";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const EGRESS_FORWARD_DIR = `${WORKSPACE_ROOT}/.qm-egress`;
 const EGRESS_FORWARD_PORT = 3129;
@@ -124,15 +112,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? DEFAULT_SNAPSHOT_INTERVAL_MS;
-  const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store;
-  const provisionQueue = createKeyedQueue<string>();
-
-  const sessionByName = new Map<string, ManagedAgentsSession>();
   const pauseFailed = new Set<string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -219,109 +200,79 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       preservationState: "running",
     });
 
-  async function ensureSession(
+  const ensureSession = (scope: string, name: string) => base.provisionQueue(scope, () => resumeOrCreate(scope, name));
+
+  async function resumeOrCreate(
     scope: string,
     name: string,
     onStatus?: (text: string) => void,
   ): Promise<{ session: ManagedAgentsSession; coldStart: boolean }> {
-    return provisionQueue(scope, async () => {
-      const adopt = async (session: ManagedAgentsSession) => {
-        await store.merge(scope, {
-          sandboxId: session.sandboxId,
-          preservationState: "running",
-          preservationError: undefined,
-        });
-        sessionByName.set(name, session);
-        return { session, coldStart: false };
-      };
-
-      const cached = sessionByName.get(name);
-      if (cached) return pauseFailed.delete(name) ? adopt(cached) : { session: cached, coldStart: false };
-
-      const stored = await store.get(scope);
-      if (stored) {
-        try {
-          onStatus?.("Resuming the sandbox…");
-          const session = await client.connect(stored.sessionId);
-          return await adopt(session);
-        } catch (err) {
-          if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
-        }
-      }
-
-      for (const summary of await client.list(name)) {
-        try {
-          const session = await client.connect(summary.sessionId);
-          await recordSession(scope, session, Date.now());
-          return await adopt(session);
-        } catch (err) {
-          if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
-        }
-      }
-
-      onStatus?.("Creating the sandbox…");
-      const session = await client.create({ name, ...egressAllow });
+    const adopt = async (session: ManagedAgentsSession) => {
+      await store.merge(scope, {
+        sandboxId: session.sandboxId,
+        preservationState: "running",
+        preservationError: undefined,
+      });
       sessionByName.set(name, session);
-      await recordSession(scope, session, Date.now());
-      let hydrated: boolean;
-      try {
-        hydrated = await hydrateHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-        sessionByName.delete(name);
-        await client.kill(session.sessionId).catch((err: unknown) => {
-          reportError("sandbox_hydrate", "orphan_kill_failed", errMessage(err), scope);
-        });
-        throw new Error(
-          `do-managed-agents provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`,
-          {
-            cause: e,
-          },
-        );
-      }
-      return { session, coldStart: !hydrated };
-    });
-  }
-
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !sessionByName.has(name)) {
-        sessionByName.set(name, await client.create({ name, ...egressAllow }));
-      }
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
-    });
-  }
-
-  async function withSession<T>(name: string, action: (session: ManagedAgentsSession) => Promise<T>): Promise<T> {
-    const scratchKey = scratchKeyByName.get(name);
-    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
-
-    const reviveScratch = async (): Promise<ManagedAgentsSession> => {
-      const session = await client.create({ name, ...egressAllow });
-      sessionByName.set(name, session);
-      return session;
+      return { session, coldStart: false };
     };
-    const first =
-      scratchKey !== undefined
-        ? { session: sessionByName.get(name) ?? (await reviveScratch()) }
-        : await ensureSession(scopeByName.get(name) ?? "default", name);
-    try {
-      return await action(first.session);
-    } catch (err) {
-      if (err instanceof ManagedAgentsCommandLostError) sessionByName.delete(name);
-      if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
-      sessionByName.delete(name);
-      const second =
-        scratchKey !== undefined
-          ? { session: await reviveScratch() }
-          : await ensureSession(scopeByName.get(name) ?? "default", name);
-      return action(second.session);
+
+    const cached = sessionByName.get(name);
+    if (cached) return pauseFailed.delete(name) ? adopt(cached) : { session: cached, coldStart: false };
+
+    const stored = await store.get(scope);
+    if (stored) {
+      try {
+        onStatus?.("Resuming the sandbox…");
+        const session = await client.connect(stored.sessionId);
+        return await adopt(session);
+      } catch (err) {
+        if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
+      }
     }
+
+    for (const summary of await client.list(name)) {
+      try {
+        const session = await client.connect(summary.sessionId);
+        await recordSession(scope, session, Date.now());
+        return await adopt(session);
+      } catch (err) {
+        if (!(err instanceof ManagedAgentsSandboxGoneError)) throw err;
+      }
+    }
+
+    onStatus?.("Creating the sandbox…");
+    const session = await client.create({ name, ...egressAllow });
+    sessionByName.set(name, session);
+    await recordSession(scope, session, Date.now());
+    let hydrated: boolean;
+    try {
+      hydrated = await hydrateHome(scope, session);
+    } catch (e) {
+      reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
+      sessionByName.delete(name);
+      await client.kill(session.sessionId).catch((err: unknown) => {
+        reportError("sandbox_hydrate", "orphan_kill_failed", errMessage(err), scope);
+      });
+      throw new Error(
+        `do-managed-agents provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`,
+        {
+          cause: e,
+        },
+      );
+    }
+    return { session, coldStart: !hydrated };
   }
+
+  const cache = createSessionCache<ManagedAgentsSession>({
+    base: () => base,
+    createScratch: (name) => client.create({ name, ...egressAllow }),
+    ensureSession,
+    isGone: (err) => err instanceof ManagedAgentsSandboxGoneError,
+    isLost: (err) => err instanceof ManagedAgentsCommandLostError,
+  });
+  const sessionByName = cache.sessions;
+  const withSession = cache.withSession;
 
   async function execRaw(name: string, script: string, timeoutSec: number, guard = ""): Promise<ExecResult> {
     return withSession(name, async (session) => {
@@ -344,29 +295,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
   const egressGuard = opts.egressProxyUrl ? EGRESS_FORWARD_ENSURE : "";
   const execNetworked = (name: string, script: string, timeoutSec: number): Promise<ExecResult> =>
     execRaw(name, script, timeoutSec, egressGuard);
-
-  const profile: AgentComputerProfile = {
-    backend: "do-managed-agents",
-    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
-    processSessions: true,
-    parksOnTeardown: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
-    spec: {
-      os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
-      runtimes: ["Node", "Python 3"],
-      get tools() {
-        return visibleTools(["git", "curl", "tar", "python3", ...(opts.extraTools ?? [])]);
-      },
-      get notInstalled() {
-        return visibleNotInstalled(
-          ["jq", "rg", "unzip", "wget", "gh", "aws", "gcloud", "kubectl", "flyctl", "glab"],
-          opts.extraTools ?? [],
-        );
-      },
-      homeDir: HOME_DIR,
-      workdir: workspaceDir,
-    },
-  };
 
   const procIo: ExecProcessIo = {
     async run(handle, command, execOpts): Promise<ExecResult> {
@@ -403,7 +331,50 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       );
     }
   };
-  const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : null;
+
+  const base = createExecSandboxBase({
+    label: "do-managed-agents",
+    prefix,
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    egressProxyUrl: opts.egressProxyUrl ? `http://127.0.0.1:${EGRESS_FORWARD_PORT}` : undefined,
+    onError: opts.onError,
+    prepSuffix: opts.egressProxyUrl ? ` && ${egressForwardInstallScript(opts.egressProxyUrl)}` : "",
+    exec: (name, script, timeoutSec) => execRaw(name, script, timeoutSec),
+    runExec: execNetworked,
+    writeAbsBytes,
+    readAbsBytes,
+    ensureResident: (name, onStatus) => resumeOrCreate(base.scopeFor(name) ?? "default", name, onStatus),
+    isProvisioned: cache.isProvisioned,
+    recreateScratch: cache.recreateScratch,
+    deleteInstance: cache.deleteInstance,
+    installLayerTools: opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : undefined,
+    teardownResident: teardownScope,
+  });
+
+  const profile: AgentComputerProfile = {
+    backend: "do-managed-agents",
+    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
+    processSessions: true,
+    parksOnTeardown: true,
+    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+    spec: {
+      os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
+      runtimes: ["Node", "Python 3"],
+      get tools() {
+        return visibleTools(["git", "curl", "tar", "python3", ...(opts.extraTools ?? [])]);
+      },
+      get notInstalled() {
+        return visibleNotInstalled(
+          ["jq", "rg", "unzip", "wget", "gh", "aws", "gcloud", "kubectl", "flyctl", "glab"],
+          opts.extraTools ?? [],
+        );
+      },
+      homeDir: HOME_DIR,
+      workdir: base.workspaceDir,
+    },
+  };
 
   const execFileOps = createExecFileOps({
     label: "do-managed-agents",
@@ -436,12 +407,12 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     }
     await store.delete(scope);
     sessionByName.delete(name);
-    scopeByName.delete(name);
+    base.releaseScope(name);
   }
 
   const sandbox: Sandbox = {
     destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
+      return base.provisionQueue(scopeId, () => destroyStoredScope(scopeId));
     },
 
     profile,
@@ -453,98 +424,20 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     ...execFileOps,
     ...blobStaging,
 
-    async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const scratch = provOpts?.scratch;
-      let name: string;
-      let coldStart: boolean;
-      if (scratch) {
-        ({ name, coldStart } = await ensureScratch(scratch.key));
-      } else {
-        name = sandboxScopeName(prefix, scope);
-        scopeByName.set(name, scope);
-        ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
-      }
-
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress
-        ? forceThroughProxyEnv(`http://127.0.0.1:${EGRESS_FORWARD_PORT}`, provOpts!.egressToken!, turnEnv)
-        : turnEnv;
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const forward = opts.egressProxyUrl ? ` && ${egressForwardInstallScript(opts.egressProxyUrl)}` : "";
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}${forward}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`do-managed-agents provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await installLayerTools?.({
-          exec: (script, t) => execRaw(name, script, t),
-          writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
-        });
-
-        return handle;
-      } catch (err) {
-        await cleanupFailedProvision(sandbox, handle, err);
-        throw err;
-      }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execNetworked(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = (): void => {
-        execRaw(handle.id, killScript(killUid), 15).catch(
-          swallowAs("managed-agents-sandbox: kill in-flight exec", undefined),
-        );
-      };
-      signal.throwIfAborted();
-      const onAbort = (): void => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execNetworked(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
-
+    provision: base.provision,
+    run: base.run,
+    writeFileBytes: base.writeFileBytes,
+    writeFile: base.writeFile,
+    readFileBytes: base.readFileBytes,
+    readFile: base.readFile,
+    teardown: base.teardown,
     exportFiles: execExport.exportFiles,
 
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
             const name = sandboxScopeName(prefix, scopeId);
-            scopeByName.set(name, scopeId);
+            base.bindScope(name, scopeId);
             const { session } = await ensureSession(scopeId, name);
             await snapshotHome(scopeId, session);
           },
@@ -553,8 +446,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
     async restartComputer(scopeId: string): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);
-      scopeByName.set(name, scopeId);
-      return provisionQueue(scopeId, async () => {
+      base.bindScope(name, scopeId);
+      return base.provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored?.sessionId) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
         if (homeSnapshots) {
@@ -631,7 +524,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
             guestResponsive: false,
             recovery: { ...recovery, state: "paused" },
           };
-        scopeByName.set(name, scopeId);
+        base.bindScope(name, scopeId);
         const session = sessionByName.get(name) ?? (await client.connect(stored.sessionId));
         const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
         return {
@@ -648,30 +541,6 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
           guestResponsive: false,
         };
       }
-    },
-
-    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      if (handle.scratch) {
-        const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
-          }
-          activeScratch.delete(handle.id);
-          const session = sessionByName.get(handle.id);
-          if (session) {
-            if (tdOpts?.destroy) await session.kill();
-            else await session.kill().catch(swallowAs("managed-agents-sandbox: scratch kill", undefined));
-          }
-          sessionByName.delete(handle.id);
-          scratchKeyByName.delete(handle.id);
-        });
-      }
-      if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
-      const scope = scopeByName.get(handle.id) ?? "default";
-      return provisionQueue(scope, () => teardownScope(handle, scope, tdOpts));
     },
   };
 
