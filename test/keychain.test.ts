@@ -1713,7 +1713,7 @@ test("manifest merges credential representations without conflating login identi
   const input: Parameters<typeof renderKeychainManifest>[0] = {
     scopeId: "channel:C1",
     conversationKind: "channel",
-    openSpeakerKeychain: true,
+    openOwnerKeychain: true,
     actorId: "alice@example.com",
     members: [{ id: "alice@example.com", displayName: "Alice" }],
     entriesByOwner: new Map([["alice@example.com", [first, second]]]),

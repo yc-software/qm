@@ -69,7 +69,7 @@ async function capabilityAdminDenied(
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (!internalLivePerson(claims)) {
-    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task an automated turn wrote or a conversation owns, a background-job or swarm wake, a loop follow-up someone other than its owner sent, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
+    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task a conversation owns, a swarm wake, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {

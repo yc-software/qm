@@ -357,8 +357,6 @@ export type TurnOrigin =
       kind: "automation";
       screenData?: string;
       destination?: Destination;
-      useOwnerKeychain?: boolean;
-      ownerFire?: true;
     }
   | { kind: "direct" };
 

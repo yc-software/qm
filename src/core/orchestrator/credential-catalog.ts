@@ -33,10 +33,9 @@ export interface CredentialCatalogTurn {
   external: boolean;
   strictReadOnly: boolean;
   internalAudience: boolean;
-  liveAuthorTurn: boolean;
+  ownerAuthorityTurn: boolean;
   scopeId: ScopeId;
   environmentId: string;
-  sharingSources: readonly ScopeId[];
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   isCurrentSharedScopeMember: IsCurrentSharedScopeMember;
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void;
@@ -60,10 +59,9 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
     conversation,
     external,
     internalAudience,
-    liveAuthorTurn,
+    ownerAuthorityTurn,
     scopeId,
     environmentId,
-    sharingSources,
     resolution,
     isCurrentSharedScopeMember,
     audit,
@@ -73,26 +71,14 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   } = turn;
   const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
   const actorKeychain = input.botActor !== true;
-  const openSpeakerKeychain =
-    liveAuthorTurn &&
-    internalAudience &&
-    conversation.kind !== "dm" &&
-    sharingSources.includes(personalScope(actor.id));
-  const openAutomationKeychain =
+  const openOwnerKeychain =
     actorKeychain &&
+    ownerAuthorityTurn &&
+    internalAudience &&
     !external &&
-    input.origin.kind === "automation" &&
-    input.origin.useOwnerKeychain === true &&
     conversation.kind !== "dm" &&
-    !!deps.isCurrentSharedScopeMember &&
-    (await isOpenScopeMember({
-      actorId: actor.id,
-      scope: scopeId,
-      config: deps.config,
-      isCurrentSharedScopeMember: deps.isCurrentSharedScopeMember,
-    }));
-  const ownCredentialsAllowed =
-    (actorKeychain && scopeId === personalScope(actor.id)) || openSpeakerKeychain || openAutomationKeychain;
+    (await isOpenScopeMember({ actorId: actor.id, scope: scopeId, config: deps.config, isCurrentSharedScopeMember }));
+  const ownCredentialsAllowed = (actorKeychain && scopeId === personalScope(actor.id)) || openOwnerKeychain;
   const sharedScope =
     !external &&
     (scopeId !== personalScope(actor.id) ||
@@ -106,7 +92,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   const credentialIdentities = new Map<string, string>();
 
   const authorizeOwnerCredentials = async (): Promise<void> => {
-    if (!openSpeakerKeychain && !openAutomationKeychain) return;
+    if (!openOwnerKeychain) return;
     if (
       !(await isCurrentSharedScopeMember(actor.id, scopeId)) ||
       (await deps.config.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open"
@@ -170,8 +156,7 @@ export async function createCredentialCatalog(turn: CredentialCatalogTurn) {
   return {
     ...turn,
     brokeredTools,
-    openSpeakerKeychain,
-    openAutomationKeychain,
+    openOwnerKeychain,
     ownCredentialsAllowed,
     connectorEnv,
     commandCredentials,

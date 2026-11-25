@@ -22,7 +22,7 @@ import {
   requiresDelegation,
   delegatedAuthorization,
   doesBotWork,
-  isOwnerFire,
+  isPersonFire,
   forkOfBotWork,
   ownsSessionContext,
   isSubagentThreadRef,
@@ -546,12 +546,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const delegatedOrigin = delegated?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation" || delegated?.attended === false;
-      const ownerFireTurn = isOwnerFire({ origin: authorizationOrigin, botActor: input.botActor }) && !input.swarm;
+      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
+      const personFireTurn =
+        (!sessionTurn || delegatedOrigin !== undefined) &&
+        isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
       const internalAudience = allInternal && !external;
-      const liveTurn = (authorizationOrigin.kind === "human" || ownerFireTurn) && internalAudience;
+      const liveTurn = (authorizationOrigin.kind === "human" || personFireTurn) && internalAudience;
       const liveAuthorTurn =
-        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !ownerFireTurn)) &&
+        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !personFireTurn)) &&
         internalAudience;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
@@ -910,7 +912,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         directory: deps.directory,
         projects: deps.projects,
       });
-      const { sharingSources, memoryScopeId, notebookScopeId, baseRecallScopes, memoryAccess } = context;
+      const { memoryScopeId, notebookScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
       const surfaceTool = input.surface ?? "slack";
       const surfaceHints = surface?.promptHints;
@@ -1228,10 +1230,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         internalAudience,
-        liveAuthorTurn: livePersonTurn,
+        ownerAuthorityTurn: livePersonTurn || personFireTurn,
         scopeId,
         environmentId,
-        sharingSources,
         resolution,
         isCurrentSharedScopeMember,
         audit,
@@ -1246,8 +1247,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         commandCredentials,
         credentialDescriptions,
         ownCredentialsAllowed,
-        openSpeakerKeychain,
-        openAutomationKeychain,
+        openOwnerKeychain,
         placeCredential,
         addCredentialToCatalog,
       } = credentialCatalog;
@@ -1410,7 +1410,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && ((livePersonTurn && internalAudience) || openAutomationKeychain),
+        openResourceAccess: !external && ((livePersonTurn && internalAudience) || openOwnerKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1510,7 +1510,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           strictReadOnly,
           turnContextBlocks,
           credentialDescriptions,
-          openSpeakerKeychain,
+          openOwnerKeychain,
           scopeKeychainGrants,
           directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,

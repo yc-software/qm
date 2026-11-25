@@ -133,7 +133,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    origin: { kind: "automation", useOwnerKeychain: true },
+    origin: { kind: "automation" },
     spawned: true,
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });

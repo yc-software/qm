@@ -32,7 +32,7 @@ test("create stores a monitor with cursor 0 and enabled", async () => {
 
 test("create rejects assigning a different owner without consent (anti-escalation)", async () => {
   const store = createMonitorStore(testMap());
-  await assert.rejects(() => store.create(input({ owner: "U2" })), /consent/);
+  await assert.rejects(() => store.create(input({ owner: "U2" })), /owner must be/);
 });
 
 test("advance moves the cursor, holds/clears the tail, and records the fire time", async () => {

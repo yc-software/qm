@@ -490,7 +490,7 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     actor: alice,
     conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire" },
     text: "!run echo fire",
-    origin: { kind: "automation", ownerFire: true },
+    origin: { kind: "automation" },
     ...extra,
   });
 
@@ -509,14 +509,6 @@ test("an owner's cron fire carries the owner's authority: liveActor, no org-note
     fire({ text: "!sysprompt", conversation: { kind: "dm", threadRef: "dm:admin-alice:owner-fire-2" } }),
   );
   assert.match(prompt.reply ?? "", /## Acting for an org admin/, "an admin owner's fire gets the admin plane");
-
-  captured.opts = undefined;
-  const unmarked = await app.turn(
-    fire({ origin: { kind: "automation" }, conversation: { kind: "dm", threadRef: "dm:admin-alice:not-a-fire" } }),
-  );
-  assert.equal(unmarked.status, "ok");
-  claims = await verifyCapabilityToken(captured.opts!.env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims!.liveActor, undefined, "an automation turn no trigger produced carries no authority");
 });
 
 test("an org admin's turn carries org-notebook write (token claim + prompt hint); a regular user's does not", async () => {

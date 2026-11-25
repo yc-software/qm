@@ -13,6 +13,7 @@ import {
   requiresDelegation,
   sessionTreeRuns,
   delegatedAuthorization,
+  isPersonFire,
   stopSessionTree,
   sessionContextOf,
   stopSessionRuns,
@@ -2609,58 +2610,6 @@ test("completion wakes preserve a spine trigger's delivery destination", async (
   assert.deepEqual(wake.request.origin.destination, destination);
 });
 
-test("delegated automation retains owner-keychain authority", async () => {
-  const r = await rig();
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const api = factory.forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: {
-      actor,
-      conversation,
-      surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
-    },
-  });
-  const opened = await api.open({ task: "prepare the scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(queued.request.origin.kind === "automation");
-  assert.equal(queued.request.origin.useOwnerKeychain, true);
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok((await api.write({ target: child.id, text: "finish the report", wake: true })).ok);
-  const followup = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(followup.request.origin.kind === "automation");
-  assert.equal(followup.request.origin.useOwnerKeychain, true);
-});
-
-test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
-  const r = await rig();
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const privileged = factory.forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: {
-      actor,
-      conversation,
-      surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true },
-    },
-  });
-  const opened = await privileged.open({ task: "scheduled report" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  const claimed = await r.runs.claimById(queued.id, "w1", 60000);
-  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  assert.ok((await r.syscallsFor(r.room).write({ target: child.id, text: "unprivileged follow-up", wake: true })).ok);
-  const next = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.ok(next.request.origin.kind === "automation");
-  assert.equal(next.request.origin.useOwnerKeychain, undefined);
-});
-
 test("coordinator delegation follows the surface and excludes external actors", () => {
   const request = { surface: "slack", conversation };
   assert.equal(requiresDelegation(request), true);
@@ -2800,14 +2749,13 @@ test("completion wakes run Slack parents as coordinators unless the author is ex
   }
 });
 
-test("delegated human origin retains live authority boundaries", async () => {
+test("delegated human origin keeps its identity boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   const parentClaim = await r.runs.claimById(r.parent.id, "parent", 60_000);
   await r.runs.complete(r.parent.id, parentClaim!.leaseToken!, { status: "ok", reply: "done" });
-  assert.equal((await delegatedAuthorization({ ...r.run.request, runStartedAt: 0 }, r))?.attended, true);
-  assert.equal((await delegatedAuthorization(r.run.request, r))?.attended, false);
+  assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   for (const patch of [
     { actor: { ...actor, id: "other" } },
     { delegatingRunId: "missing" },
@@ -2824,7 +2772,7 @@ test("delegated human origin retains live authority boundaries", async () => {
   assert.equal(await delegatedAuthorization(r.run.request, r), undefined);
 });
 
-test("unrelated automated follow-ups cannot borrow earlier human authority", async () => {
+test("a follow-up carries its own sender's authority, not an earlier delegation's", async () => {
   const r = await delegatedHumanRig();
   const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
   await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
@@ -2840,17 +2788,13 @@ test("unrelated automated follow-ups cannot borrow earlier human authority", asy
   assert.ok((await api.write({ target: r.child.id, text: "new scheduled task", wake: true })).ok);
   const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
   assert.equal(next.request.delegatingRunId, parent.run.id);
-  assert.equal(await delegatedAuthorization(next.request, r), undefined);
+  assert.equal((await delegatedAuthorization(next.request, r))?.origin.kind, "automation");
 });
 
 test("a subagent spawned by an owner's fire inherits the fire's automation authority", async () => {
-  const r = await delegatedHumanRig({ origin: { kind: "automation", useOwnerKeychain: true, ownerFire: true } });
+  const r = await delegatedHumanRig({ origin: { kind: "automation" } });
   assert.equal(r.run.request.origin.kind, "automation");
-  assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.origin, {
-    kind: "automation",
-    useOwnerKeychain: true,
-    ownerFire: true,
-  });
+  assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.origin, { kind: "automation" });
   await r.sessions.removeParticipant(r.run.request.sessionSenderId!, actor.id);
   assert.equal(
     (await delegatedAuthorization(r.run.request, r))?.origin.kind,
@@ -2861,12 +2805,19 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
   assert.equal(await delegatedAuthorization(r.run.request, r), undefined);
 });
 
-test("a bot actor's automation turn, or one no trigger produced, delegates no authority to its subagents", async () => {
-  const bot = await delegatedHumanRig({ origin: { kind: "automation", ownerFire: true }, botActor: true });
+test("a bot actor's automation turn delegates no authority to its subagents", async () => {
+  const bot = await delegatedHumanRig({ origin: { kind: "automation" }, botActor: true });
   assert.equal(bot.run.request.origin.kind, "automation");
   assert.equal(await delegatedAuthorization(bot.run.request, bot), undefined);
-  const unmarked = await delegatedHumanRig({ origin: { kind: "automation" } });
-  assert.equal(await delegatedAuthorization(unmarked.run.request, unmarked), undefined);
+});
+
+test("a fire carries a person's authority unless a bot, a swarm or a conversation's own scope runs it", () => {
+  const fire = { origin: { kind: "automation" as const }, actor };
+  assert.equal(isPersonFire(fire), true);
+  assert.equal(isPersonFire({ ...fire, botActor: true }), false);
+  assert.equal(isPersonFire({ ...fire, swarm: { swarmId: "s", recipientId: "r" } as never }), false);
+  assert.equal(isPersonFire({ ...fire, actor: { id: "system:channel:C1", type: "internal" } }), false);
+  assert.equal(isPersonFire({ ...fire, origin: { kind: "human" } }), false);
 });
 
 test("a later participant cannot change a completion's actor or destination", async () => {
@@ -2910,7 +2861,7 @@ test("a later participant cannot change a completion's actor or destination", as
       conversation: sharedConversation,
       surface: "slack",
       surfaceTools: true,
-      origin: { kind: "automation", useOwnerKeychain: true, destination: { type: "slack", target: "unrelated" } },
+      origin: { kind: "automation", destination: { type: "slack", target: "unrelated" } },
       text: "unrelated",
     },
   });

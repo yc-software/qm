@@ -31,7 +31,6 @@ interface CronLike {
   script?: { command: string };
   botActor?: boolean;
   loopId?: string;
-  taskAuthor?: "automation";
   sharedFrom?: string;
   sharedBy?: string;
   forkedAt?: number;
@@ -66,12 +65,10 @@ function fmtCronLine(c: CronLike, preview = false): string {
     ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
   const script = c.script && !preview ? `\n    script: ${c.script.command}` : "";
-  let authority = "";
-  if (!preview && c.botActor)
-    authority = `\n    authority: none — bot work made or edited this ${c.loopId ? "loop" : "cron"}; its owner restores theirs only by recreating it`;
-  else if (!preview && c.taskAuthor === "automation")
-    authority =
-      "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send";
+  const authority =
+    !preview && c.botActor
+      ? `\n    bot-made: bot work made or edited this ${c.loopId ? "loop" : "cron"}, so it carries no person's authority; its owner can recreate it to run it as themselves`
+      : "";
   return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${preview ? "" : fmtSharing(c)}${note}`;
 }
 
@@ -127,7 +124,7 @@ export function cronTools(kit: ToolKit) {
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
       'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
-      "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin authority the owner's typed turn would have; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner, except an org admin, whose rewrite keeps the owner. A task a fire, other automated turn or bot work wrote runs without that authority; get says how its owner restores it.\n" +
+      "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin authority the owner has; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner, except an org admin, whose rewrite keeps the owner. A cron bot work made or edited carries no person's authority.\n" +
       "ACCESS: a cron belongs to its creator (or active persona) and runs as its owner; everyone here can see it, only the owner, a persona write/owner holder, or an org admin can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
       "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +

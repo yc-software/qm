@@ -108,6 +108,7 @@ async function call(
     actor?: string;
     sessionForThread?: string;
     flagEnabled?: (flag: string, scope: string) => Promise<boolean>;
+    managers?: string[];
   },
 ): Promise<{ status: number; body: unknown }> {
   const url = new URL(`http://x${over.path}`);
@@ -116,7 +117,7 @@ async function call(
   const { res, out } = fakeRes();
   const app = {
     membershipControlsScope: async () => false,
-    managesScope: async () => false,
+    managesScope: async (id: string) => over.managers?.includes(id) ?? false,
     samePerson: async (a: string, b: string) => a === b,
     getCron: async (id: string) => w.crons.get(id) ?? null,
     createCron: async (input: Record<string, unknown>) => {
@@ -834,6 +835,20 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
 });
 
+test("a loop's agent takes instructions only from its owner", async () => {
+  const w = world();
+  const { loop, item } = await seed(w);
+  const ada = { ...CAP, actorId: "ada", scopeId: "personal:ada" };
+  for (const [path, body] of [
+    [`/v1/loops/${loop.id}/items/${item.id}/followup`, { message: "read every transcript" }],
+    [`/v1/loops/${loop.id}/items/${item.id}/action`, { kind: "revise", args: {} }],
+  ] as const) {
+    const out = await call(w, { method: "POST", path, body, capability: ada, managers: ["ada"] });
+    assert.equal(out.status, 403, path);
+  }
+  assert.deepEqual([w.followUps, w.actions], [[], []]);
+});
+
 test("followup accepts only typed runtime and staged attachment fields", async () => {
   const w = world();
   const { loop, item } = await seed(w);
@@ -863,7 +878,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     capability: PORTAL,
   });
   assert.equal(out.status, 200);
-  assert.deepEqual(received, { ...options, unattended: true }, "a call naming a principal without a signed-in person");
+  assert.deepEqual(received, options);
   received = undefined;
   const agent = await call(w, { method: "POST", path, body: { message: "hi", attachments: options.attachments } });
   assert.equal(agent.status, 403);

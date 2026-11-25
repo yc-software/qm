@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { authoredNow, reauthored } from "../cron/authority.ts";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, scriptTrialRefusal } from "../cron/script.ts";
@@ -242,12 +241,10 @@ export async function cronTaskRewrite(
   >,
   cron: Cron,
   editorId: string,
-  atKeyboard: boolean,
-): Promise<Pick<CronPatch, "owner" | "script" | "taskAuthor">> {
-  const authored = reauthored(atKeyboard, cron);
-  if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return authored;
-  if (await asOrgAdmin(app, { actorId: editorId })) return authored;
-  return { ...authored, owner: editorId, ...(cron.script ? { script: null } : {}) };
+): Promise<Pick<CronPatch, "owner" | "script">> {
+  if (actsAsScope(cron.owner, cron.ownerScopeId) || (await ownsCron(app, cron, editorId))) return {};
+  if (await asOrgAdmin(app, { actorId: editorId })) return {};
+  return { owner: editorId, ...(cron.script ? { script: null } : {}) };
 }
 
 const WEBHOOK_OWNER_ONLY =
@@ -564,7 +561,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         createdBy: capability.actorId,
         ownerScopeId,
         ...(capability.botActor ? { botActor: true } : {}),
-        ...authoredNow(internalPerson(capability)),
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
@@ -632,9 +628,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
       const rewritesTask = req.action !== undefined || req.text !== undefined;
-      const atKeyboard = internalPerson(capability);
-      if (rewritesTask || patch.script)
-        Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId, atKeyboard));
+      if (rewritesTask || patch.script) Object.assign(patch, await cronTaskRewrite(app, before, capability.actorId));
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       try {
         const cron = await app.updateCron(id, patch, capability, trialIn({ ...before, ...patch }, capability));

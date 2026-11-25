@@ -527,7 +527,6 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     const run = (await runs.get(notification.runId!))!;
     assert.equal(run.request.origin.kind, "automation");
     assert.equal(run.request.deliveryTarget, undefined);
-    assert.equal(run.request.origin.kind === "automation" && run.request.origin.useOwnerKeychain, undefined);
     assert.equal(
       runResultDelivery({
         ...run,
