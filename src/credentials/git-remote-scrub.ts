@@ -2,6 +2,8 @@ import type { Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
 import { errMessage } from "../util/errors.ts";
 
+export const SCRUB_FAILED = "Credentials may remain in a git remote URL under the workspace: removing them failed";
+
 export function scrubGitRemotesScript(root: string): string {
   return [
     `find ${shq(root)} \\( -name node_modules -o -path '*/.git/objects' \\) -prune -o -path '*/.git/config' -type f -print | while IFS= read -r f; do`,
@@ -13,11 +15,10 @@ export function scrubGitRemotesScript(root: string): string {
 }
 
 export async function scrubGitRemotes(sandbox: Sandbox, handle: SandboxHandle): Promise<string | undefined> {
-  const failed = "Credentials may remain in a git remote URL under the workspace: removing them failed";
   try {
     const { code, stderr } = await sandbox.run(handle, scrubGitRemotesScript(handle.rootDir));
-    return code === 0 ? undefined : `${failed} (exit ${code}): ${stderr.trim().slice(-500)}`;
+    return code === 0 ? undefined : `${SCRUB_FAILED} (exit ${code}): ${stderr.trim()}`;
   } catch (error) {
-    return `${failed}: ${errMessage(error)}`;
+    return `${SCRUB_FAILED}: ${errMessage(error)}`;
   }
 }

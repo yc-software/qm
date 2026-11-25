@@ -9,7 +9,7 @@ import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
 import { SandboxAccessError } from "../sandbox/sandbox-resources.ts";
 import { shq } from "../util/shell.ts";
-import { scrubGitRemotesScript } from "../credentials/git-remote-scrub.ts";
+import { SCRUB_FAILED, scrubGitRemotesScript } from "../credentials/git-remote-scrub.ts";
 
 export interface BackgroundExecBrokerDeps {
   sandbox: ProcessSandbox;
@@ -194,7 +194,9 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           });
         };
         const startOptions = { env: { PYTHONUNBUFFERED: "1", ...credentials?.env } };
-        const launch = credentials ? `trap ${shq(scrubGitRemotesScript(handle.rootDir))} EXIT\n${command}` : command;
+        const launch = credentials
+          ? `trap ${shq(`s=$?; (${scrubGitRemotesScript(handle.rootDir)}) || echo ${shq(SCRUB_FAILED)} >&2; exit $s`)} EXIT\n${command}`
+          : command;
         if (deps.sandbox.startRegisteredProcess) {
           ({ processId } = await deps.sandbox.startRegisteredProcess(handle, launch, register, startOptions));
         } else {
