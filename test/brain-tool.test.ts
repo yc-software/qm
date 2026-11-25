@@ -57,7 +57,6 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
   const calls: Call[] = [];
   const failures = new Map<string, CallToolResult | number>();
   const pages: Row[] = [];
-  const people = [{ ...PRIYA }];
   const server = await startMcpTestServer(t, {
     tools: contractTools.map(({ name, description, mutating, input_schema }) => ({
       name,
@@ -69,19 +68,17 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
     call: async (tool, args, _authorization, actor) => {
       calls.push({ tool, args, ...(actor ? { actor } : {}) });
       if (tool === "memory_recall") return { content: [] };
-      const failure = failures.get(String(args.query));
+      const failure = failures.get(String(args.query ?? tool));
       if (typeof failure === "number") await sleep(failure);
       else if (failure) return failure;
       const prior = String(args.prior_context);
       const volunteered = pages.filter(({ slug }) => !prior.includes(String(slug)));
       if (tool === "volunteer_context")
         return gbrainAnswer({ pages: volunteered, count: volunteered.length, window_turns: 1 });
-      if (tool === "whois")
-        return gbrainAnswer({ query: args.query, matches: people.filter(({ title }) => title === args.query) });
       return gbrainAnswer({ tool, args, results: [PRIYA] });
     },
   });
-  return Object.assign(server, { calls, failures, pages, people });
+  return Object.assign(server, { calls, failures, pages });
 }
 
 async function brainApp(t: { after(fn: () => Promise<void>): void }, config = testConfig()) {
@@ -178,7 +175,6 @@ const cards = (run?: { environment?: string }) =>
   run?.environment?.match(/### Brain cards\n```untrusted-data\n([\s\S]*?)\n```/)?.[1]!.split("\n") ?? [];
 const MENTION = { text: "Lunch with <@U2>?" };
 const U2 = [{ principalId: "U2", displayName: "Priya Raman", type: "internal" as const }];
-const CARD = "acme:default:people/priya-raman — Priya Raman (person)";
 const WIDGET = "acme:default:companies/widget-co — Widget Co";
 const asks = (brain: { calls: Call[] }, tool: string) => brain.calls.filter((call) => call.tool === tool);
 
@@ -361,43 +357,45 @@ test("a brain card needs its switch and the binding's recall, and a revoked bind
   }
 });
 
-test("a mention's card comes from one whois match and keeps recall's deadline, unlike the agent's own lookups, and a late whois leaves the brain's other cards", async (t) => {
-  const { acme, built, turn } = await brainApp(t);
+test("a Slack mention reaches volunteer_context as the member's name in recall's 2,000 characters, and a brain that is late or answers malformed leaves the other brain's cards", async (t) => {
+  const { acme, beta, bind, built, turn } = await brainApp(t);
+  await bind("beta", "Beta brain");
   await built.directory.replace(U2);
-  assert.deepEqual(cards(await turn([], MENTION)), [CARD]);
-  acme.failures.set("Priya Raman", 1_100);
   acme.pages.push(PAGE);
-  assert.deepEqual(cards(await turn([], MENTION)), [WIDGET]);
-  assert.deepEqual(
-    lookups(acme)
-      .map(({ tool, args }) => `${tool} ${args.query ?? ""}`.trim())
-      .toSorted(),
-    ["volunteer_context", "volunteer_context", "whois Priya Raman", "whois Priya Raman"],
-  );
+  beta.pages.push(PAGE);
+  beta.failures.set("volunteer_context", 1_100);
+  const text = `${MENTION.text} ${"x".repeat(2_100)}`;
+  assert.deepEqual(cards(await turn([], { text })), [WIDGET]);
+  const { window } = asks(acme, "volunteer_context")[0]!.args;
+  assert.deepEqual([String(window).length, String(window).startsWith("Lunch with @Priya Raman? x")], [2_000, true]);
+  beta.failures.delete("volunteer_context");
+  acme.failures.set("volunteer_context", gbrainAnswer({ pages: [{ slug: PAGE.slug }] }));
+  assert.deepEqual(cards(await turn([], MENTION)), [WIDGET.replace("acme", "beta")]);
 });
 
-test("a card shows once per retained context, whichever tool finds its page again, and again after an interrupted turn or compaction", async (t) => {
-  const { acme, built, turn } = await brainApp(t);
-  await built.directory.replace(U2);
+test("a card shows once per retained context, again after an interrupted turn, compaction or a re-pointed brain, and is taken back with its binding", async (t) => {
+  const { acme, admin, built, turn } = await brainApp(t);
   acme.pages.push(PAGE);
-  const ask = { ...MENTION, conversation: { kind: "dm" as const, threadRef: "dm:U1:cards" } };
-  const both = [CARD, WIDGET];
-  assert.deepEqual(cards(await turn(["crash"], ask)), both);
-  assert.deepEqual(cards(await turn([], ask)), both);
-  assert.deepEqual(cards(await turn([], ask)), []);
+  const ask = { conversation: { kind: "dm" as const, threadRef: "dm:U1:cards" } };
+  assert.deepEqual(cards(await turn(["crash"], ask)), [WIDGET]);
+  assert.deepEqual(cards(await turn([], ask)), [WIDGET]);
+  acme.pages.push({ ...PAGE, slug: "companies/acme" });
+  assert.deepEqual(cards(await turn([], ask)), ["acme:default:companies/acme — Widget Co"]);
   const { id } = (await built.sessions.getByThread(ask.conversation.threadRef))!;
   const throughSeq = (await built.sessions.getItems(id)).at(-1)!.seq;
   await built.sessions.append({ sessionId: id }, { kind: "ContextCompaction", throughSeq, text: "recap" });
-  assert.deepEqual(cards(await turn([], ask)), both);
-  const refs = both.map((card) => card.split(" ")[0]).join("\n");
-  acme.pages.unshift({ ...PRIYA, display: "Priya Raman" });
-  const later = { conversation: { kind: "dm" as const, threadRef: "dm:U1:later" } };
-  assert.deepEqual(cards(await turn([], later)), ["acme:default:people/priya-raman — Priya Raman", WIDGET]);
-  assert.deepEqual(cards(await turn([], { ...later, ...MENTION })), []);
+  assert.equal(cards(await turn([], ask)).length, 2);
+  await admin("PUT", "/v1/admin/memory-registry/brains/acme", {
+    url: "https://brain.moved.example/mcp",
+    clientSecret: "brain-secret",
+  });
+  assert.equal(cards(await turn([], ask)).length, 2);
   assert.deepEqual(
     asks(acme, "volunteer_context").map(({ args }) => args.prior_context),
-    [undefined, undefined, refs, undefined, undefined, refs],
+    [undefined, undefined, WIDGET.split(" ")[0], undefined, undefined],
   );
+  await admin("DELETE", "/v1/admin/memory-registry/bindings/acme");
+  assert.match((await turn([], ask))!.environment!, /no longer included/);
 });
 
 test("the same page in two brains gives two cards in one 1,200-character block, and each brain hears only its own refs", async (t) => {

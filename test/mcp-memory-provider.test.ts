@@ -101,6 +101,7 @@ test("a write that carries no member is not sent to an attested provider", async
         read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
         write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
         attestActor: true,
+        url: "https://knowledge.example/mcp",
       }),
     },
     routes: [{ provider: "knowledge", scopes: ["channel"], capture: "explicit", manage: false }],
@@ -182,6 +183,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       read: { client, tool: "memory_recall", timeoutMs: 100 },
       forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
+      url: "https://brain.example/mcp",
     });
   const gone = `http://127.0.0.1:${await closedPort()}`;
   const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });

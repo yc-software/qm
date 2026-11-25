@@ -36,7 +36,7 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
       };
       const identity = await call("auth.test");
       if (!identity.ok || identity.bot_id || !identity.user_id || !identity.team_id) continue;
-      const member = await ctx.deps.directory?.getBySlackId(identity.user_id);
+      const member = (await ctx.deps.directory?.getBySlackIds([identity.user_id]))?.get(identity.user_id);
       if (!member || member.type !== "internal" || !samePerson(member.principalId, principal)) continue;
       const installation = await ctx.deps.slackInstallation?.get();
       let teamId = installation?.teamId;

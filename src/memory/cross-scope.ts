@@ -14,6 +14,7 @@ export interface RecalledFact {
 export interface BrainCard {
   scope: ScopeId;
   provider: string;
+  endpoint: string;
   ref: string;
   text: string;
 }

@@ -59,7 +59,7 @@ const BRAIN_ABOUT =
 
 export function withBrainTools(
   connectors: McpToolDescriptor[] | undefined,
-  brains: readonly BoundBrain[],
+  brains: readonly Pick<BoundBrain, "id" | "label" | "tools">[],
 ): McpToolDescriptor[] | undefined {
   const taken = new Set(connectors?.map((tool) => tool.serverId));
   const listed = brains.filter((brain) => {
@@ -178,6 +178,7 @@ export async function resolveTurnContext(input: ContextInput) {
       report?: MemoryRecallContext["report"],
       text?: string,
       sessionId?: string,
+      startedAt?: number,
     ) =>
       tracePhase(
         "turn.memory_recall",
@@ -193,17 +194,21 @@ export async function resolveTurnContext(input: ContextInput) {
               ...(disclosedFacts ? { disclosedFacts } : {}),
               ...(report ? { report } : {}),
               ...(sessionId ? { sessionId } : {}),
+              ...(startedAt ? { startedAt } : {}),
             },
             memoryLabels,
           ),
         { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
       ),
-    recallCards: async (text: string | undefined, personAuthority: boolean, history: readonly Item[]) => {
-      const startedAt = Date.now();
+    recallCards: async (
+      text: string | undefined,
+      personAuthority: boolean,
+      history: readonly Item[],
+      startedAt: number,
+    ) => {
       const by = brainAuthority(personAuthority);
       if (!by || !text || memoryPolicy.card === "off") return [];
       return brainCards({
-        memory,
         brains: await boundBrains(),
         scopeId: memoryScopeId,
         message: text,
@@ -211,7 +216,7 @@ export async function resolveTurnContext(input: ContextInput) {
         directory: input.directory,
         by,
         context: { ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}), startedAt },
-      });
+      }).catch(swallowAs("turn context: brain cards", []));
     },
     searchMemory: async (
       query: string,

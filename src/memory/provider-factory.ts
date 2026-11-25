@@ -55,15 +55,17 @@ export function createMemoryProviders(
       });
       continue;
     }
-    providers[provider.id] = createMcpMemoryProvider({
+    const operations = {
       read: operation(provider.url, provider.read, provider.timeoutMs, fetchFn),
       ...(provider.write ? { write: operation(provider.url, provider.write, MAX_PROVIDER_TIMEOUT_MS, fetchFn) } : {}),
       ...(provider.forget
         ? { forget: operation(provider.url, provider.forget, MAX_PROVIDER_TIMEOUT_MS, fetchFn) }
         : {}),
       label: provider.id,
-      attestActor: provider.attestActor,
-    });
+    };
+    providers[provider.id] = createMcpMemoryProvider(
+      provider.attestActor ? { ...operations, attestActor: true, url: provider.url } : operations,
+    );
   }
   return providers;
 }

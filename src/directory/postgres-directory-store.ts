@@ -549,13 +549,14 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return (await getMany([principalId])).get(principalId) ?? null;
     },
 
-    async getBySlackId(slackId) {
+    async getBySlackIds(slackIds) {
+      if (!slackIds.length) return new Map();
       const rows = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (slack_id = $2 OR (slack_id IS NULL AND principal_id = $2)) LIMIT 1`,
-        [orgId, slackId],
+         WHERE org_id = $1 AND (slack_id = ANY($2::text[]) OR (slack_id IS NULL AND principal_id = ANY($2::text[])))`,
+        [orgId, slackIds],
       );
-      return rows.length ? memberRow(rows[0]!) : null;
+      return new Map(rows.map(memberRow).map((member) => [member.slackId ?? member.principalId, member]));
     },
 
     async resolve(query) {
