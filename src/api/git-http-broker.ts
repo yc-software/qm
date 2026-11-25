@@ -6,18 +6,14 @@ import {
   credentialHandle,
   type DecryptedServiceCredential,
   type Keychain,
+  type ServiceCredentialReader,
   KeychainError,
   isValidCredentialSlug,
   isComposioHost,
 } from "../credentials/keychain.ts";
 import { personalCredentialId, personalGitBasicCredential, personalGitRemote } from "../credentials/personal-git.ts";
 import { samePerson } from "../directory/person.ts";
-import {
-  brokerPathAllowed,
-  brokerRequestHeaders,
-  grantedCredential,
-  type CredentialGrant,
-} from "./credential-broker.ts";
+import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
 import { sendJson } from "./http.ts";
 import { relayStream } from "../../plugins/chassis/src/http.ts";
 import { tenantOf, type BaseCtx } from "./routes/route.ts";
@@ -126,58 +122,33 @@ function sendDenied(
   sendJson(ctx.res, status, { error: code, message });
 }
 
-const personalUnavailable = (host = ""): CredentialGrant => ({
-  status: 404,
-  code: "credential_unavailable",
-  message: "credential not found or disabled",
-  host,
-});
-
-async function grantedPersonalGitCredential(
-  claims: CapabilityClaims,
-  handle: string,
-  keychain: Keychain | undefined,
-): Promise<CredentialGrant> {
-  if (!Array.isArray(claims.credentials) || !claims.credentials.includes(handle))
-    return { status: 403, code: "not_entitled", message: "this session is not entitled to that credential", host: "" };
-  if (claims.deployment)
-    return {
-      status: 403,
-      code: "not_available_to_deployments",
-      message: "personal credentials are not available to published apps",
-      host: "",
-    };
-  const id = personalCredentialId(handle);
-  const credential = keychain && id ? await keychain.getCredential(id) : null;
-  const remote =
-    credential && samePerson(credential.ownerId, claims.actorId) && credentialHandle(credential) === handle
-      ? personalGitRemote(credential)
-      : undefined;
-  if (!keychain || !credential || !remote) return personalUnavailable();
-  let secret: string | undefined;
-  try {
-    const materialized = await keychain.materializeOwnById(
-      claims.actorId,
-      credential.id,
-      personalScope(claims.actorId),
-    );
-    if (materialized.kind === "env") secret = materialized.env.find((entry) => entry.key === credential.envKey)?.value;
-  } catch (error) {
-    if (!(error instanceof KeychainError)) throw error;
-    return { status: error.status, code: "credential_unavailable", message: error.message, host: remote.host };
-  }
-  if (!secret) return personalUnavailable(remote.host);
+function personalGitCredentials(keychain: Keychain, actorId: string): ServiceCredentialReader {
   return {
-    rec: {
-      slug: handle,
-      name: credential.service,
-      secret: personalGitBasicCredential(remote, secret),
-      delivery: "broker",
-      host: remote.host,
-      injection: { scheme: "Basic " },
-      allowedMethods: ["GET", "POST"],
-      deployments: false,
-      enabled: true,
+    async getServiceCredentialSecret(_orgScopeId, handle) {
+      const id = personalCredentialId(handle);
+      const credential = id ? await keychain.getCredential(id) : null;
+      const remote =
+        credential && samePerson(credential.ownerId, actorId) && credentialHandle(credential) === handle
+          ? personalGitRemote(credential)
+          : undefined;
+      if (!credential || !remote) return null;
+      const materialized = await keychain.materializeOwnById(actorId, credential.id, personalScope(actorId));
+      const secret =
+        materialized.kind === "env"
+          ? materialized.env.find((entry) => entry.key === credential.envKey)?.value
+          : undefined;
+      if (!secret) return null;
+      return {
+        slug: handle,
+        name: credential.service,
+        secret: personalGitBasicCredential(remote, secret),
+        delivery: "broker",
+        host: remote.host,
+        injection: { scheme: "Basic " },
+        allowedMethods: ["GET", "POST"],
+        deployments: false,
+        enabled: true,
+      };
     },
   };
 }
@@ -196,16 +167,19 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   if (method !== "GET" && method !== "POST") {
     return sendJson(ctx.res, 405, { error: "method_not_allowed", message: "git smart HTTP supports GET and POST" });
   }
-  const personal = !isValidCredentialSlug(slug);
-  const serviceCreds = ctx.deps.serviceCreds;
-  if (!personal && !serviceCreds) return sendJson(ctx.res, 404, { error: "not_found" });
-
   const claims = ctx.capability;
   if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const grant =
-    personal || !serviceCreds
-      ? await grantedPersonalGitCredential(claims, slug, ctx.deps.keychain)
-      : await grantedCredential(claims, slug, serviceCreds, makeScopeId("org", configOrgId()));
+  const reader = isValidCredentialSlug(slug)
+    ? ctx.deps.serviceCreds
+    : ctx.deps.keychain && personalGitCredentials(ctx.deps.keychain, claims.actorId);
+  if (!reader) return sendJson(ctx.res, 404, { error: "not_found" });
+  let grant: Awaited<ReturnType<typeof grantedCredential>>;
+  try {
+    grant = await grantedCredential(claims, slug, reader, makeScopeId("org", configOrgId()));
+  } catch (error) {
+    if (!(error instanceof KeychainError)) throw error;
+    return sendDenied(ctx, claims, error.status, "credential_unavailable", error.message, slug, "");
+  }
   if (!grant.rec) return sendDenied(ctx, claims, grant.status, grant.code, grant.message, slug, grant.host);
   const { rec } = grant;
   const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>

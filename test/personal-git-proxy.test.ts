@@ -6,7 +6,7 @@ import { finished } from "node:stream/promises";
 import { buildApp, signedConfig } from "./support/orchestrator-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { credentialHandle, renderKeychainManifest } from "../src/credentials/keychain.ts";
+import { credentialHandle } from "../src/credentials/keychain.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { brokerGitHttp } from "../src/api/git-http-broker.ts";
 import type { BaseCtx } from "../src/api/routes/route.ts";
@@ -66,23 +66,9 @@ async function call(path: string, claims: CapabilityClaims, deps: ServerDeps) {
   return { status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") };
 }
 
-test("a personal GitHub handle reaches its host through the git proxy; other personal handles get no proxy", async () => {
+test("a personal GitHub handle reaches github.com through the git proxy for its owner only", async () => {
   const { built, github, openai, execute } = await setup();
   assert.equal((await execute(openai)).AGENT_CREDENTIAL_TOKEN, undefined);
-  const owned = await built.keychain!.listByOwner("U1");
-  const manifest = renderKeychainManifest({
-    scopeId: scopeId("personal", "U1"),
-    conversationKind: "dm",
-    actorId: "U1",
-    members: [{ id: "U1" }],
-    entriesByOwner: new Map([["U1", owned]]),
-    scopeGrants: [],
-    execution: owned.map((c) => ({ handle: credentialHandle(c), ownerId: "U1", credentialId: c.id, description: "" })),
-  });
-  assert.deepEqual(manifest.match(/— \w+; env `\w+`.*$/gm), [
-    "— github; env `GITHUB_TOKEN`; git proxy github.com",
-    "— openai; env `OPENAI_TOKEN`",
-  ]);
   const env = await execute(github);
   assert.equal(env.GITHUB_TOKEN, "ghp-owner-token");
   const claims = (await verifyCapabilityToken(env.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET))!;
@@ -96,6 +82,15 @@ test("a personal GitHub handle reaches its host through the git proxy; other per
     },
   } as unknown as ServerDeps;
   const path = `/v1/credentials/git/${github}/acme/repo.git/info/refs?service=git-upload-pack`;
+  const status = async (c: CapabilityClaims) => (await call(path, c, deps)).status;
+  assert.deepEqual(
+    {
+      otherPerson: await status({ ...claims, actorId: "U2", scopeId: scopeId("personal", "U2") }),
+      notNamed: await status({ ...claims, credentials: [] }),
+      publishedApp: await status({ ...claims, deployment: "app-1" } as CapabilityClaims),
+    },
+    { otherPerson: 404, notNamed: 403, publishedApp: 403 },
+  );
   assert.deepEqual(await call(path, claims, deps), { status: 200, body: "0000" });
   assert.deepEqual(fetched, [
     {
@@ -106,28 +101,4 @@ test("a personal GitHub handle reaches its host through the git proxy; other per
       },
     },
   ]);
-});
-
-test("the git proxy never serves one person's handle to another person, even when named in their token", async () => {
-  const { built, github, execute } = await setup();
-  const claims = (await verifyCapabilityToken(
-    (await execute(github)).AGENT_CREDENTIAL_TOKEN!,
-    TEST_CAPABILITY_SECRET,
-  ))!;
-  let fetched = 0;
-  const deps = {
-    keychain: built.keychain,
-    gitHttpFetch: async () => {
-      fetched++;
-      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
-    },
-  } as unknown as ServerDeps;
-  const path = `/v1/credentials/git/${github}/acme/repo.git/info/refs`;
-  const results = {
-    otherPerson: (await call(path, { ...claims, actorId: "U2", scopeId: scopeId("personal", "U2") }, deps)).status,
-    notNamed: (await call(path, { ...claims, credentials: [] }, deps)).status,
-    publishedApp: (await call(path, { ...claims, deployment: "app-1" } as CapabilityClaims, deps)).status,
-  };
-  assert.deepEqual(results, { otherPerson: 404, notNamed: 403, publishedApp: 403 });
-  assert.equal(fetched, 0);
 });

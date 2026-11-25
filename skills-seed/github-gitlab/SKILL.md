@@ -24,19 +24,9 @@ a write, ask. Do not infer permission from a login merely being present on the c
   provider account (for example, `gh api user --jq .login`) and the Git transport's auth
   configuration; a CLI API identity alone does not prove which account Git will use.
 - **Personal saved token** (a handle whose credentials line says `git proxy <host>`):
-  select that handle in `execute.credentials` and use its core-hosted remote. Core adds
-  the token on the wire. Never put a token in a remote URL, `git config`, or a
-  credential helper.
-
-  ```bash
-  git -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
-    clone "$AGENT_API_URL/v1/credentials/git/<handle>/OWNER/REPO.git" repo
-  git -C repo -c http.extraHeader="x-agent-capability: $AGENT_CREDENTIAL_TOKEN" \
-    push origin HEAD:refs/heads/codex/small-change
-  ```
-
-  For an existing checkout, add the same URL as a second remote.
-
+  select that handle in `execute.credentials` and use it as `<slug>` in the core-hosted
+  remote from the `use-shared-credential` skill. Core adds the token on the wire. Never
+  put a token in a remote URL, `git config`, or a credential helper.
 - **Shared org credential:** if listed in the prompt, select its slug and use the
   core-hosted smart HTTP remote in the `use-shared-credential` skill. This uses
   the configured shared account, even when a personal OAuth connector is live.

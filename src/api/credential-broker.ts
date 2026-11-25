@@ -136,7 +136,7 @@ export function brokerRequestHeaders(
   return { ...headers, ...injected };
 }
 
-export type CredentialGrant =
+type CredentialGrant =
   | { rec: DecryptedServiceCredential }
   | { rec?: undefined; status: number; code: string; message: string; host: string };
 
