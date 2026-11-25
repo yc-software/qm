@@ -2500,7 +2500,9 @@ export function createChatSurface(
       .base=${withBase("")}
       .widget=${{ apps: "apps", add_to_slack: "slack", link_slack: "slack-account" }[card.kind]}
       .toolkit=${card.toolkit}
-      @slack-installed=${() => void continueAfterConnection("QM to our Slack workspace")}
+      @slack-installed=${(event: CustomEvent<{ byService: boolean }>) => {
+        if (event.detail.byService) void continueAfterConnection("QM to our Slack workspace");
+      }}
       .returnKey=${`card:${card.callId}`}
       .setupOnly=${true}
       .animateWelcome=${false}

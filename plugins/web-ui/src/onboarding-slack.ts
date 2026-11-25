@@ -71,7 +71,12 @@ export class OnboardingSlack extends LitElement {
       if (this.connected && !wasConnected && this.installStarted) {
         this.installStarted = false;
         this.justInstalled = true;
-        this.dispatchEvent(new window.CustomEvent("slack-installed", { bubbles: true }));
+        this.dispatchEvent(
+          new window.CustomEvent("slack-installed", {
+            bubbles: true,
+            detail: { byService: status.updatedBy === "slack-service" },
+          }),
+        );
       }
       if (!this.connected) this.justInstalled = false;
       this.error = "";
