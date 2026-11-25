@@ -11,6 +11,7 @@ import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { personalScope } from "../src/types.ts";
 
 const asU1 = { actorId: "U1" };
 
@@ -104,7 +105,7 @@ test("sidebar batches visible goals from the session rows and drops inactive one
   const refs: string[] = [];
   for (const [index, owner] of ["U1", "U1", "hidden"].entries()) {
     const ref = `web:${owner}:batch:${index}`;
-    const session = await sessions.getOrCreateByThread(ref, "dm", `personal:${owner}`);
+    const session = await sessions.getOrCreateByThread(ref, "dm", personalScope(owner));
     await sessions.addParticipant(session.id, owner);
     const writer = { sessionId: session.id };
     await sessions.setGoal(writer, {

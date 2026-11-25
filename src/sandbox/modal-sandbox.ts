@@ -53,6 +53,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
@@ -82,6 +83,7 @@ export interface StoredModalSandbox extends SnapshotBookkeeping {
 }
 
 export interface ModalSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: ModalClient;
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
@@ -222,7 +224,12 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
     let session: ModalSession;
     try {
-      session = await client.create({ name, tags: tags("scope"), memoryGb: sizeByScope.get(scope) });
+      session = await client.create({
+        name,
+        tags: tags("scope"),
+        memoryGb: sizeByScope.get(scope),
+        image: await opts.imageFor?.(scope),
+      });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -347,7 +354,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             }
           }
           try {
-            await session.terminate();
+            await session.terminate({ wait: true });
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
@@ -592,15 +599,15 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
 
   function refreshCheckpoint(scope: string, rec: StoredModalSandbox, session: ModalSession): Promise<void> {
     return provisionQueue(scope, async () => {
-      try {
-        const current = await store.get(scope);
-        if (!current || current.sandboxId !== rec.sandboxId || !snapshotDue(current, undefined, snapshotIntervalMs))
-          return;
-        await snapshotHome(scope, session);
-      } catch (error) {
-        if (!(error instanceof ModalSandboxGoneError))
-          reportError("sandbox_snapshot", "periodic_snapshot_failed", errMessage(error), scope);
-      }
+      const current = await store.get(scope).catch(swallowAs("modal-sandbox: read checkpoint record", null));
+      if (!current || current.sandboxId !== rec.sandboxId || !snapshotDue(current, undefined, snapshotIntervalMs))
+        return;
+      await attemptSnapshot(
+        current,
+        (patch) => store.merge(scope, patch),
+        () => snapshotHome(scope, session).catch(swallowGone),
+        (message) => reportError("sandbox_snapshot", "periodic_snapshot_failed", message, scope),
+      );
     });
   }
 
@@ -850,7 +857,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await snapshotHome(scopeId, session).catch((error: unknown) => {
               if (!(error instanceof ModalSandboxGoneError)) throw error;
             });
-          await session.terminate().catch((error: unknown) => {
+          await session.terminate({ wait: true }).catch((error: unknown) => {
             if (!(error instanceof ModalSandboxGoneError)) throw error;
           });
         }

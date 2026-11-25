@@ -13,6 +13,7 @@ import type { CapabilityClaims } from "../../src/auth/capability-token.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import { personalScope } from "../../src/types.ts";
 
 export async function swarmFixture(
   options: {
@@ -74,7 +75,7 @@ export async function swarmFixture(
     defaultBackend: "modal",
     lock,
     canUseScope: async (actorId, scopeId) =>
-      scopeId === `personal:${actorId}` || (options.channel !== undefined && scopeId === `channel:${options.channel}`),
+      scopeId === personalScope(actorId) || (options.channel !== undefined && scopeId === `channel:${options.channel}`),
   });
   const sandbox = createSandboxRouter({
     backends: { modal: backend },
@@ -85,7 +86,7 @@ export async function swarmFixture(
   const root = await sessions.getOrCreateByThread(
     `web:alice:${randomUUID()}`,
     options.channel ? "channel" : "dm",
-    options.channel ? `channel:${options.channel}` : "personal:alice",
+    options.channel ? `channel:${options.channel}` : personalScope("alice"),
     undefined,
     "web",
   );
@@ -117,7 +118,8 @@ export async function swarmFixture(
       runAttempt: claim.attempts,
       runLeaseToken: claim.leaseToken!,
       threadRef: root.threadRef,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       exp: Date.now() + 60_000,
       ...(options.runtime?.botActor ? { botActor: true } : {}),
       ...options.claims,

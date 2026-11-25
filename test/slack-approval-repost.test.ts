@@ -202,7 +202,7 @@ test("a sealed-out deny never claims the command was denied", async () => {
   );
   assert.match(String(f.updates.at(-1)?.text ?? ""), /waiting for someone else/);
 
-  f.state.result = { status: "refused", reason: "approval denied for rm -rf /tmp/x" };
+  f.state.result = { status: "refused", reason: "approval declined for rm -rf /tmp/x" };
   await f.click("U2", "hilo_deny");
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
   assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);

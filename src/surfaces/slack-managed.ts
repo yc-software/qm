@@ -15,6 +15,8 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { tenantSettings } from "../tenants/settings.ts";
 
+export class SlackInstallStartError extends Error {}
+
 export function createManagedSlack(opts: {
   serviceUrl: string;
   token?: string;
@@ -38,7 +40,7 @@ export function createManagedSlack(opts: {
   const bridgeToken = (): string | undefined => tenantSettings().slackBridgeToken ?? opts.token;
   const credential = (): string => {
     const token = bridgeToken();
-    if (!token) throw new Error("Slack service credential is not configured");
+    if (!token) throw new SlackInstallStartError("Slack installation isn't enabled for this workspace yet.");
     return token;
   };
   const bearerMatches = (req: IncomingMessage, token: string | undefined): boolean => {
@@ -59,7 +61,7 @@ export function createManagedSlack(opts: {
         redirect: "error",
       });
       if (response.status === 404) return undefined;
-      if (!response.ok) throw new Error("Slack setup status is unavailable");
+      if (!response.ok) throw new Error(`Slack setup status is unavailable (HTTP ${response.status})`);
       const data = (await response.json()) as Record<string, unknown>;
       if ([data.companyOwned, data.appReady, data.connected].some((v) => typeof v !== "boolean"))
         throw new Error("Invalid Slack setup status");
@@ -70,16 +72,19 @@ export function createManagedSlack(opts: {
       };
     },
     async start(step: "setup" | "install" = "install", origin?: string): Promise<{ url: string }> {
+      const token = credential();
       if (!(await opts.store.enableManaged()))
-        throw new Error("Disconnect your own Slack app before installing the managed app");
+        throw new SlackInstallStartError("Disconnect your own Slack app before installing the managed app.");
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/start", serviceUrl), {
         method: "POST",
-        headers: { authorization: `Bearer ${credential()}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ step, tenant: boundTenant(), ...(origin ? { origin } : {}) }),
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
       });
-      if (!response.ok) throw new Error("Slack installation service is unavailable");
+      if (response.status === 401 || response.status === 403)
+        throw new SlackInstallStartError("Slack installation isn't enabled for this workspace yet.");
+      if (!response.ok) throw new Error(`Slack installation service is unavailable (HTTP ${response.status})`);
       const data = (await response.json()) as { url?: unknown };
       if (typeof data.url !== "string" || new URL(data.url).origin !== serviceUrl.origin) {
         throw new Error("Slack installation service returned an invalid URL");
@@ -151,16 +156,35 @@ export function createManagedSlack(opts: {
         const ready = active.get(tenantKey())?.installId === input.installId;
         return sendJson(res, ready ? 200 : 202, { ok: true, ready });
       }
+      const body = input.body as Record<string, unknown> | undefined;
+      const bodyTeam =
+        body && typeof body === "object" && !Array.isArray(body)
+          ? (body.team_id ?? (body.team as { id?: unknown } | undefined)?.id)
+          : undefined;
       if (!stored || stored.installId !== input.installId || (!!opts.appId && stored.appId !== opts.appId)) {
+        let teamId: string | null = null;
+        if (typeof bodyTeam === "string") teamId = bodyTeam;
+        else if (typeof input.teamId === "string") teamId = input.teamId;
+        console.warn(
+          "[slack-managed] installation_mismatch",
+          JSON.stringify({
+            tenant: tenantKey() || null,
+            teamId,
+            storedTeamId: stored?.teamId ?? null,
+            storedInstallId: stored?.installId ?? null,
+            inputInstallId: input.installId,
+            storedAppId: stored?.appId ?? null,
+            optsAppId: opts.appId ?? null,
+          }),
+        );
         return sendJson(res, 409, { error: "installation_mismatch" });
       }
-      const body = input.body as Record<string, unknown> | undefined;
       if (
         !body ||
         typeof body !== "object" ||
         Array.isArray(body) ||
         body.api_app_id !== stored.appId ||
-        (body.team_id ?? (body.team as { id?: unknown } | undefined)?.id) !== stored.teamId
+        bodyTeam !== stored.teamId
       ) {
         return sendJson(res, 400, { error: "workspace_mismatch" });
       }

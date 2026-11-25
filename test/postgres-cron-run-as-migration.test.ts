@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DROP_RUN_AS_MIGRATION } from "../src/cron/cron-store.ts";
+import { personalScope } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron run-mode migration test";
@@ -15,7 +16,7 @@ test("dropping run modes hands floor crons to their conversation and strips mode
     const crons = {
       floor: { owner: "alice", ownerScopeId: "channel:C1", runAs: "scopeFloor", members },
       floorLoop: { owner: "alice", ownerScopeId: "channel:C1", runAs: "scopeFloor", loopId: "L1" },
-      floorPersonal: { owner: "alice", ownerScopeId: "personal:alice", runAs: "scopeFloor" },
+      floorPersonal: { owner: "alice", ownerScopeId: personalScope("alice"), runAs: "scopeFloor" },
       shared: {
         owner: "alice",
         ownerScopeId: "group:G1",

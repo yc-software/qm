@@ -5,6 +5,7 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
@@ -105,7 +106,11 @@ test("late child signals remain pending behind approval and requestless steers r
   const built = buildApp(testConfig());
   t.after(() => built.runtime.stop());
   const actor: Principal = { id: "sender", type: "internal" };
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:late-review", "dm", "personal:sender");
+  const child = await built.sessions.getOrCreateByThread(
+    "agent:main:subagent:late-review",
+    "dm",
+    personalScope("sender"),
+  );
   const conversation: Conversation = { kind: "dm", threadRef: child.threadRef, audience: [actor] };
   const { run } = await built.runs.enqueue({
     sessionId: child.threadRef,

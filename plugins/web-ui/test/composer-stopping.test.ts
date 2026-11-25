@@ -48,7 +48,7 @@ test("stopping holds a disabled Stopping… button beside Send and queues every 
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     const model = {
       id: "alpha",
       name: "Alpha",
@@ -184,6 +184,11 @@ test("stopping holds a disabled Stopping… button beside Send and queues every 
     composer!.state.draft = "Resume sending";
     draw();
     assert.equal(button(".send-btn").disabled, false, "sending recovers after stop completes");
+    const arrow = button(".send-btn").innerHTML;
+    (ctx.chat.state as { ephemeral?: boolean }).ephemeral = true;
+    draw();
+    assert.notEqual(button(".send-btn").innerHTML, arrow);
+    (ctx.chat.state as { ephemeral?: boolean }).ephemeral = false;
     host.querySelector("form")!.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(prompts, 1, "normal submission still works");

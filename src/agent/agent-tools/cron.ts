@@ -31,7 +31,6 @@ interface CronLike {
   script?: { command: string };
   botActor?: boolean;
   loopId?: string;
-  taskAuthor?: "automation";
   sharedFrom?: string;
   sharedBy?: string;
   forkedAt?: number;
@@ -66,12 +65,10 @@ function fmtCronLine(c: CronLike, preview = false): string {
     ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
   const script = c.script && !preview ? `\n    script: ${c.script.command}` : "";
-  let authority = "";
-  if (!preview && c.botActor)
-    authority = `\n    authority: none — bot work made or edited this ${c.loopId ? "loop" : "cron"}; its owner restores theirs only by recreating it`;
-  else if (!preview && c.taskAuthor === "automation")
-    authority =
-      "\n    authority: none — an automated turn wrote this task; its owner restores theirs by rewriting it on a turn they send";
+  const authority =
+    !preview && c.botActor
+      ? `\n    bot-made: bot work made or edited this ${c.loopId ? "loop" : "cron"}, so it carries no person's authority; its owner can recreate it to run it as themselves`
+      : "";
   return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${script}${authority}${preview ? "" : fmtSharing(c)}${note}`;
 }
 
@@ -100,6 +97,7 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
     `status=${entry.status ?? "unknown"}`,
     lifecycle,
     `fireKey=${entry.fireKey}`,
+    entry.sessionId ? `session=${entry.sessionId}` : null,
     entry.note ? `note=${entry.note}` : null,
     entry.reply ? `reply=${entry.reply}` : null,
   ].filter((bit): bit is string => bit !== null);
@@ -115,7 +113,7 @@ export function cronTools(kit: ToolKit) {
       "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. One job = one cron: list first and patch an existing one rather than creating a second.\n" +
       'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
       "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
-      "Right after creating one, make a reasonable effort to test it with the user (a sample run, or a preview of what a fire would post, with anything consequential stubbed; run a script's exact command end to end without marking its work done by other means), so the first real fire is not where they learn it isn't what they wanted. " +
+      "When a cron posts something the user reads for its content, like a digest or report, show them a sample right after creating it (a test run, or a preview of what a fire would post, with anything consequential stubbed) so they approve the format before the first real fire; watches, reminders and follow-ups need no demo. When a task runs a script, first run that exact command once end to end without marking its work done by other means. " +
       "`script` hands a task cron's routine work to a command run first at each fire, leaving the agent turn for judgment: exit 0 means it handled the fire and no agent turn runs; exit 1 wakes the agent with its output. " +
       "Setting a script runs it once for real right away, and it is refused unless that run exits 0 or 1. " +
       "Neither `script` nor `task` may run code from a sandbox disk (no `python3 /home/…/x.py`, no `cd ~/workspace/…`): sandboxes get recreated and are per-conversation. " +
@@ -126,7 +124,7 @@ export function cronTools(kit: ToolKit) {
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
       'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
-      "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin authority the owner's typed turn would have; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner, except an org admin, whose rewrite keeps the owner. A task a fire, other automated turn or bot work wrote runs without that authority; get says how its owner restores it.\n" +
+      "AUTHORITY: a fire runs as its owner with the owner's own standing — the same credentials, connections and (for org admins) admin authority the owner has; private-content admin reads still need the cron to live in the owner's DM or an Open conversation. Before a cron that will read admin data posts anywhere but its owner's DM, tell the owner who will see that output and act only on their explicit yes. Whoever rewrites a shared cron's task becomes its owner, except an org admin, whose rewrite keeps the owner. A cron bot work made or edited carries no person's authority.\n" +
       "ACCESS: a cron belongs to its creator (or active persona) and runs as its owner; everyone here can see it, only the owner, a persona write/owner holder, or an org admin can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
       "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +

@@ -6,7 +6,6 @@ const EPHEMERAL_SUBTITLE = "Not saved to history, memory, or files";
 
 export function ephemeralEmptyTpl(): TemplateResult {
   return html`<div class="ephemeral-empty">
-    <span class="ephemeral-empty-icon">${icon(Ghost, 24)}</span>
     <h1 class="chat-cta">Hidden chat</h1>
     <p class="ephemeral-subtitle">${EPHEMERAL_SUBTITLE}. Cleared when you leave.</p>
   </div>`;

@@ -49,6 +49,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const WORKSPACE_ROOT = "/workspace";
@@ -106,6 +107,7 @@ export interface StoredManagedAgentsSandbox extends SnapshotBookkeeping {
 }
 
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: ManagedAgentsClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -260,7 +262,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       }
 
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ name, ...egressAllow });
+      const template = await opts.imageFor?.(scope);
+      const session = await client.create({ name, ...egressAllow, ...(template ? { template } : {}) });
       sessionByName.set(name, session);
       await recordSession(scope, session, Date.now());
       let hydrated: boolean;

@@ -94,6 +94,7 @@ export interface AgentToolsOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
+  sandboxImages?: string[];
   readOnly?: boolean;
   ephemeral?: boolean;
   botActor?: boolean;
@@ -219,7 +220,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ]
       : []),
     ...(controlTools || surfaceTools ? [guidance] : []),
-    ...(surfaceTools ? [surface] : [attach]),
+    ...(surfaceTools
+      ? [opts?.surfacePrompt?.transcript ? { ...surface, executionMode: "sequential" as const } : surface]
+      : [attach]),
     finishSilently,
     withdrawApproval,
     { ...resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }), handlesAbort: true },

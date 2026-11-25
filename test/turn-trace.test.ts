@@ -11,6 +11,7 @@ import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { collectSpans } from "./support/sentry-spans.ts";
+import { personalScope } from "../src/types.ts";
 
 const sentry = await collectSpans();
 initializeErrorReporting(Sentry, "worker", { SENTRY_DSN: sentry.dsn, SENTRY_TRACES_SAMPLE_RATE: "1" });
@@ -80,7 +81,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
           return "saved facts";
         },
       } as AgentTurnInput["tools"],
-      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},

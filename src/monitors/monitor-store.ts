@@ -41,6 +41,22 @@ export interface MonitorStore {
   rehome(move: ScopeMove): Promise<string[]>;
 }
 
+export async function armedWatches(
+  monitors: Pick<MonitorStore, "ownedBy">,
+  scopeId: string,
+  threadRefs: ReadonlySet<string>,
+  now: number,
+): Promise<Monitor[]> {
+  return (await monitors.ownedBy(scopeId)).filter(
+    (monitor) => monitor.enabled && threadRefs.has(monitor.threadRef) && monitor.expiresAt > now,
+  );
+}
+
+export function finalWakeMonitorId(fireKey: string | undefined): string | undefined {
+  const [kind, id, event] = fireKey?.split(":") ?? [];
+  return kind === "monitor" && (event === "exit" || event === "expired" || event === "lost") ? id : undefined;
+}
+
 const DEFUNCT_MONITOR_GRACE_MS = 7 * 24 * 60 * 60_000;
 
 function lastActivityAt(m: Monitor): number {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { applyTurnEffort } from "../src/agent/turn-effort.ts";
 import { createModelRoutes, type ModelRouteOptions } from "../src/model/model-route.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
@@ -16,6 +17,7 @@ import {
   FAST_COST_MULTIPLIER,
   wantsFastMode,
 } from "../src/model/model-runtime.ts";
+import { personalScope } from "../src/types.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
@@ -374,7 +376,7 @@ async function runTurn(
       systemPrompt: "BASE",
       history: [],
       tools: {} as AgentTurnInput["tools"],
-      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       runtime: { modelId, fastMode },
       ...(!gateway && modelId === ASTRA.id ? { providerKeys: { openai: "sk-openai-direct" } } : {}),
@@ -546,6 +548,20 @@ test("a stop_reason refusal retries on the admin-configured fallback runtime", a
   assert.equal(payloads.length, 2);
   assert.equal(payloads[1]?.model, "gpt-6-sol");
   assert.equal((payloads[1]?.reasoning as { effort?: string } | undefined)?.effort, "low");
+});
+
+test("an in-stream overload falls back to the configured runtime and stays retryable when that fails too", async () => {
+  const models: unknown[] = [];
+  const respond = (payload: Record<string, unknown>) => {
+    models.push(payload.model);
+    if (payload.model === "gpt-6-sol") return new Response("{}", { status: 400 });
+    return sse([{ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }]);
+  };
+  const fallback = { resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }) };
+  const turn = runTurn("overload-fallback", "claude-sonnet-5", false, respond, false, fallback);
+  const error = await turn.catch((e: unknown) => e);
+  assert.deepEqual(models, [...Array(4).fill("claude-sonnet-5"), "gpt-6-sol"]);
+  assert.ok(error instanceof ProviderTurnError && error.retryable);
 });
 
 test("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { ScopeId, SpawnMeta } from "../../src/types.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
+import { personalScope } from "../../src/types.ts";
 
 async function appendUser(store: SessionStore, sessionId: string, text: string): Promise<void> {
   await store.append({ sessionId }, { kind: "UserMessage", text });
@@ -27,16 +28,14 @@ export async function assertLateJoinerScopes(store: SessionStore, prefix: string
 
 export async function assertLeanListing(store: SessionStore, prefix: string): Promise<void> {
   const me = `${prefix}-U1`;
-  const personal = `personal:${me}` as ScopeId;
+  const personal = personalScope(me) as ScopeId;
   const channel = `channel:${prefix}-C1` as ScopeId;
   const spawnMeta = {
     surface: "web",
     conversation: { kind: "dm", threadRef: `web:${me}:root`, audience: [] },
     actor: { id: me, type: "internal" },
   } as unknown as SpawnMeta;
-  const child = await store.getOrCreateByThread(`subagent:${prefix}-root:1`, "dm", personal, undefined, "web", [
-    { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
-  ]);
+  const child = await store.getOrCreateByThread(`subagent:${prefix}-root:1`, "dm", personal, undefined, "web");
   await store.setSpawnMeta(child.id, spawnMeta);
   await store.addParticipant(child.id, me, "Child task");
   const empty = await store.getOrCreateByThread(`web:${me}:empty`, "dm", personal);
@@ -49,7 +48,6 @@ export async function assertLeanListing(store: SessionStore, prefix: string): Pr
   const listed = (await store.listByParticipant(me)).find((session) => session.id === child.id);
   assert.equal(listed?.title, "Child task");
   assert.equal(listed?.spawnMeta, undefined);
-  assert.equal(listed?.clientTools, undefined);
   assert.ok((await store.getForParticipant(child.id, me))?.spawnMeta, "a single session read keeps spawn metadata");
 
   const scopes = new Map((await store.participantScopes(me)).map((scope) => [scope.scopeId, scope]));

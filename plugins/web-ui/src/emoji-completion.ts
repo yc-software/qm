@@ -1,9 +1,18 @@
 import { html, nothing, render } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import { mentionToken } from "./mention-wire";
 import { emojiMatches, rowForName, type EmojiRow } from "./emoji-picker";
 
-export function emojiToken(
+export interface MentionRow {
+  key: string;
+  label: string;
+  lead: unknown;
+}
+export type MentionSource = (query: string) => MentionRow[] | Promise<MentionRow[]>;
+type Row = { lead: unknown; label: string; insert: string };
+
+function emojiToken(
   value: string,
   caret: number,
 ): { start: number; end: number; query: string; complete: boolean } | null {
@@ -23,17 +32,19 @@ export function emojiToken(
 class EmojiCompletion extends AsyncDirective {
   private input!: HTMLTextAreaElement;
   private popup: HTMLDivElement | null = null;
-  private token: ReturnType<typeof emojiToken> = null;
-  private matches: EmojiRow[] = [];
+  private token: { start: number; end: number; query: string; complete?: boolean; mention?: boolean } | null = null;
+  private matches: Row[] = [];
+  private mentions?: MentionSource;
   private active = 0;
   private browsed = false;
   private id = `emoji-${crypto.randomUUID()}`;
 
-  render(_value: string) {
+  render(_value: string, _mentions?: MentionSource) {
     return nothing;
   }
 
-  override update(part: ElementPart, [value]: [string]) {
+  override update(part: ElementPart, [value, mentions]: [string, MentionSource?]) {
+    this.mentions = mentions;
     if (!this.input) {
       this.input = part.element as HTMLTextAreaElement;
       this.listen();
@@ -65,6 +76,8 @@ class EmojiCompletion extends AsyncDirective {
   private onInput = (event: Event) => {
     this.close();
     if ((event as InputEvent).isComposing || this.input.selectionStart !== this.input.selectionEnd) return;
+    const mention = this.mentions && mentionToken(this.input.value, this.input.selectionStart);
+    if (mention) return this.lookup({ ...mention, mention: true });
     this.token = emojiToken(this.input.value, this.input.selectionStart);
     if (!this.token) return;
     if (this.token.complete) {
@@ -73,26 +86,39 @@ class EmojiCompletion extends AsyncDirective {
         const value = this.input.value;
         const caret = this.input.selectionStart;
         setTimeout(() => {
-          if (this.isConnected && this.input.value === value && this.input.selectionStart === caret) this.insert(row);
+          if (this.isConnected && this.input.value === value && this.input.selectionStart === caret)
+            this.insert(emojiRow(row));
         });
       }
       return;
     }
-    this.matches = emojiMatches(this.token.query, 8);
+    this.matches = emojiMatches(this.token.query, 8).map(emojiRow);
     this.active = 0;
     this.browsed = false;
     if (this.matches.length) this.draw();
   };
 
-  private insert(row: EmojiRow) {
+  private async lookup(token: NonNullable<EmojiCompletion["token"]>) {
+    this.token = token;
+    const rows = await this.mentions!(token.query);
+    if (this.token !== token || !this.current()) return;
+    this.matches = rows
+      .slice(0, 8)
+      .map((row) => ({ lead: row.lead, label: `@${row.label}`, insert: `@${row.label} ` }));
+    this.active = 0;
+    this.browsed = Boolean(token.query);
+    if (this.matches.length) this.draw();
+  }
+
+  private insert(row: Row) {
     if (!this.current()) return;
     const token = this.token!;
     this.close();
     this.input.setSelectionRange(token.start, token.end);
-    if (this.input.ownerDocument.execCommand?.("insertText", false, row.c)) return;
-    this.input.setRangeText(row.c, token.start, token.end, "end");
+    if (this.input.ownerDocument.execCommand?.("insertText", false, row.insert)) return;
+    this.input.setRangeText(row.insert, token.start, token.end, "end");
     this.input.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: row.c }),
+      new InputEvent("input", { bubbles: true, inputType: "insertReplacementText", data: row.insert }),
     );
   }
 
@@ -102,7 +128,8 @@ class EmojiCompletion extends AsyncDirective {
     if (
       this.input.selectionStart !== token.end ||
       this.input.selectionEnd !== token.end ||
-      this.input.value.slice(token.start, token.end) !== `:${token.query}${token.complete ? ":" : ""}`
+      this.input.value.slice(token.start, token.end) !==
+        (token.mention ? `@${token.query}` : `:${token.query}${token.complete ? ":" : ""}`)
     ) {
       this.close();
       return false;
@@ -113,10 +140,10 @@ class EmojiCompletion extends AsyncDirective {
   private draw() {
     if (!this.popup) {
       this.popup = document.createElement("div");
-      this.popup.className = "slash-popover emoji-completion";
+      this.popup.className = `slash-popover ${this.token?.mention ? "mention-completion" : "emoji-completion"}`;
       this.popup.id = this.id;
       this.popup.setAttribute("role", "listbox");
-      this.popup.setAttribute("aria-label", "Emoji");
+      this.popup.setAttribute("aria-label", this.token?.mention ? "People" : "Emoji");
       this.input.insertAdjacentElement("afterend", this.popup);
       this.input.setAttribute("aria-controls", this.id);
       this.input.setAttribute("aria-autocomplete", "list");
@@ -135,7 +162,7 @@ class EmojiCompletion extends AsyncDirective {
             @mousedown=${(event: MouseEvent) => event.preventDefault()}
             @click=${() => this.insert(row)}
           >
-            <span class="slash-icon">${row.c}</span><span>:${row.n}:</span>
+            <span class="slash-icon">${row.lead}</span><span>${row.label}</span>
           </button>`,
       )}`,
       this.popup,
@@ -180,6 +207,10 @@ class EmojiCompletion extends AsyncDirective {
   protected override reconnected() {
     this.listen();
   }
+}
+
+function emojiRow(row: EmojiRow): Row {
+  return { lead: row.c, label: `:${row.n}:`, insert: row.c };
 }
 
 export const emojiCompletion = directive(EmojiCompletion);

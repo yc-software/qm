@@ -22,16 +22,16 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { CONTROL_PLANE_AUD, scopeAuthorizationClaims, type CapabilityClaims } from "../auth/capability-token.ts";
 import { bootTenant } from "../tenants/boot.ts";
 import { capabilityToken, identityTenant, requestCapability, withRequestTenant } from "./request-tenant.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { canonicalScopeId, parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { KEEP_ALIVE_TIMEOUT_MS, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
 import {
   armBodyDeadline,
   PayloadTooLargeError,
@@ -51,9 +51,8 @@ import {
 } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyAppSubdomain } from "./routes/apps.ts";
-import { runIsActive } from "./routes/shared.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
-import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { carriesPersonAuthority } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
 import { apiAlias, appHostRequest, browserIdentity, browserSessionTenant, withRouteActor } from "./browser-session.ts";
 
@@ -68,8 +67,8 @@ async function capabilityAdminDenied(
 ): Promise<string | null> {
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
-  if (!livePersonCapability(claims)) {
-    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task an automated turn wrote or a conversation owns, a background-job or swarm wake, a loop follow-up someone other than its owner sent, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
+  if (!carriesPersonAuthority(claims)) {
+    return "admin actions through the agent carry a person's own authority — this turn runs with none (e.g. a bot actor, an external audience, a task a conversation owns, a swarm wake, or a session message whose authorization chain could not be verified). Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
@@ -77,7 +76,7 @@ async function capabilityAdminDenied(
       access.privateRead === "unless-org-scope" ? (params.scope ?? url.searchParams.get("scope") ?? "") : "";
     if (
       parseScopeId(target).kind !== "org" &&
-      (!livePersonCapability(claims) ||
+      (!carriesPersonAuthority(claims) ||
         (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
     ) {
       return "this admin read returns private content — ask the agent in a DM";
@@ -174,14 +173,7 @@ async function verifyCapability(
   if (
     !(capability.externalSlack
       ? tenant !== undefined && (await externalSlackCapabilityAllowed(tenant, capability, deps))
-      : await app.authorizesCapabilityScope({
-          actorId: capability.actorId,
-          scopeId: capability.scopeId,
-          ...(capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-          ...(capability.botActor ? { botActor: true } : {}),
-          ...(capability.liveActor ? { liveActor: true } : {}),
-          ...(capability.members ? { members: capability.members } : {}),
-        }))
+      : await app.authorizesCapabilityScope(scopeAuthorizationClaims(capability)))
   ) {
     sendJson(res, 403, {
       error: "forbidden",
@@ -196,13 +188,7 @@ async function verifyCapability(
     });
     return null;
   }
-  return personAtKeyboard(capability) && !(await runIsActive({ deps, capability }))
-    ? {
-        ...capability,
-        triggered: true,
-        ...(capability.memory ? { memory: { ...capability.memory, orgWrite: undefined } } : {}),
-      }
-    : capability;
+  return capability;
 }
 
 const EPHEMERAL_READ_POST_PATHS = new Set(["/v1/search", "/v1/memory/search"]);
@@ -255,7 +241,7 @@ async function gate(
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, raw),
+      canonicalPayload(method, pathname + new URL(req.url ?? "/", "http://localhost").search, raw),
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -266,7 +252,7 @@ async function gate(
   let body: unknown = {};
   if (raw) {
     try {
-      body = JSON.parse(raw);
+      body = canonicalScopes(JSON.parse(raw));
     } catch {
       sendJson(res, 400, {
         error: "bad_request",
@@ -373,8 +359,33 @@ function assertedActorValues(field: string, url: URL, body: unknown): unknown[] 
 
 const requestTenants = new WeakMap<IncomingMessage, Tenant>();
 
-function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
-  const url = new URL(req.url ?? "/", "http://localhost");
+const SCOPE_KEYS = new Set(["scope", "scopeId", "scopeIds", "toScope", "grantees", "granteeScopeId", "ownerScopeId"]);
+
+function canonicalScopes(value: unknown, scoped = false): unknown {
+  if (typeof value === "string") return scoped ? canonicalScopeId(value as ScopeId) : value;
+  if (Array.isArray(value)) return value.map((item) => canonicalScopes(item, scoped));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, canonicalScopes(item, SCOPE_KEYS.has(key))]),
+  );
+}
+
+function rawUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? "/", "http://localhost");
+}
+
+function requestUrl(req: IncomingMessage): URL {
+  const url = rawUrl(req);
+  for (const key of ["scope", "scopeId"]) {
+    if (!url.searchParams.has(key)) continue;
+    const values = url.searchParams.getAll(key);
+    url.searchParams.delete(key);
+    for (const value of values) url.searchParams.append(key, canonicalScopeId(value as ScopeId));
+  }
+  return url;
+}
+
+function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring, url = requestUrl(req)): BaseCtx {
   const tenant = requestTenants.get(req);
   return {
     req,
@@ -389,6 +400,7 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  if (destroyIfRequestFailed(req, res, err)) return;
   if (
     err instanceof MemoryDisclosureDenied ||
     err instanceof MemoryFactsMissing ||
@@ -495,7 +507,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   });
 
   const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const url = new URL(request.raw.url ?? "/", "http://localhost");
+    const url = requestUrl(request.raw);
     const raw = rawBodies.get(request.raw) ?? "";
     const result = await gate(
       request.raw,
@@ -593,7 +605,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   async function upgradeFront(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const res = isWebSocketUpgrade(req) ? responseOnSocket(req, socket) : null;
     if (!res) return void socket.destroy();
-    const base: BaseCtx = { ...baseCtx(req, res, wiring), upgrade: { socket, head } };
+    const base: BaseCtx = { ...baseCtx(req, res, wiring, rawUrl(req)), upgrade: { socket, head } };
     await withRequestContext("core", req, res, () =>
       inRequestTenant(req, res, base, null, async () => {
         if (await proxyAppSubdomain(base)) return nameRequest(base.method, "/deployment-proxy/websocket");
@@ -603,11 +615,11 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   }
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    let base = baseCtx(req, res, wiring);
+    let base = baseCtx(req, res, wiring, rawUrl(req));
     const alias = appHostRequest(req, deps) ? null : apiAlias(base.method, base.pathname);
     if (alias && canonicalPath(req, base.pathname)) {
       req.url = `${alias}${base.url.search}`;
-      base = baseCtx(req, res, wiring);
+      base = baseCtx(req, res, wiring, rawUrl(req));
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     const matched = raw ? null : findRoute(apiRoutes, base.method, base.pathname);
@@ -627,6 +639,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         requestTenants.set(req, tenant);
         base.tenant = tenant;
       }
+      base.url = requestUrl(req);
       return then();
     };
     const inbound = inboundKey(req, deps, found, base.url);

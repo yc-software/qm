@@ -13,13 +13,13 @@ import type { CoreSearch } from "../search/core-search.ts";
 import type {
   ChildIsolation,
   ChildIsolationMode,
-  Principal,
   ScopeId,
   Session,
   SpawnMeta,
   StopScope,
   TurnOrigin,
 } from "../types.ts";
+import { isSystemActor } from "../types.ts";
 import { childIsolation } from "./child-isolation.ts";
 import { sessionVisibleTo } from "./session-rows.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
@@ -62,21 +62,21 @@ export function requiresDelegation(
   );
 }
 
-export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActor">): boolean {
-  return request.origin.kind === "automation" && request.origin.ownerFire === true && !request.botActor;
+export function isPersonFire(request: Pick<OrchestratorInput, "origin" | "botActor" | "actor" | "swarm">): boolean {
+  return (
+    request.origin.kind === "automation" && !request.botActor && !request.swarm && !isSystemActor(request.actor.id)
+  );
 }
 
 export async function delegatedAuthorization(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
+): Promise<{ origin: OrchestratorInput["origin"] } | undefined> {
   const seen = new Set<string>();
-  const startedAt = request.runStartedAt ?? Date.now();
-  let attended = true;
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
     if (
-      (current.origin.kind === "automation" && !isOwnerFire(current)) ||
+      (current.origin.kind === "automation" && !isPersonFire(current)) ||
       current.readOnly ||
       current.privateSessionMessage ||
       current.swarm ||
@@ -104,7 +104,6 @@ export async function delegatedAuthorization(
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
-    attended &&= source.finishedAt === null || source.finishedAt > startedAt;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
@@ -128,10 +127,10 @@ export async function delegatedAuthorization(
       !isSessionTurn(parent) &&
       internal &&
       (parent.origin.kind === "human" ||
-        isOwnerFire(parent) ||
+        isPersonFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return { origin: parent.origin, attended };
+      return { origin: parent.origin };
     current = parent;
   }
 }
@@ -308,7 +307,6 @@ export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
-  liveTurn?: boolean;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -367,7 +365,6 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "latestItemSeq"
     | "visibleItems"
     | "participantsOf"
     | "getForParticipant"
@@ -476,15 +473,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
   };
-}
-
-export function assertAudienceCompatible(
-  source: { actor: Pick<Principal, "id">; conversation: Pick<OrchestratorInput["conversation"], "audience"> },
-  target: Pick<OrchestratorInput, "actor" | "conversation">,
-): void {
-  const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
-  if ([target.actor.id, ...target.conversation.audience.map((person) => person.id)].some((id) => !allowed.has(id)))
-    throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
 export const AMBIENT_REACH_REFUSAL =
@@ -615,7 +603,6 @@ export async function stopSessionRuns(
         senderId: foreign.sender,
         actor: run.request.actor,
         ...(run.request.botActor ? { botActor: true } : {}),
-        audience: run.request.conversation.audience,
         text: run.request.text,
         createdAt: run.createdAt,
       });
@@ -802,30 +789,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
               if (deps.authorize && !(await deps.authorize(sender, caller))) continue;
-              try {
-                assertAudienceCompatible(
-                  { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
-                  caller,
-                );
-                if (message.sourceEntrySeq !== undefined) {
-                  const viewers = new Set([
-                    caller.actor.id,
-                    ...caller.conversation.audience.map((person) => person.id),
-                  ]);
-                  const readable = await Promise.all(
-                    [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleItems(sender.id, id)).some(
-                        (item) => item.seq === message.sourceEntrySeq,
-                      ),
-                    ),
-                  );
-                  if (!readable.every(Boolean)) continue;
-                }
-                visible.push(message);
-                if (visible.length >= 4) break;
-              } catch {
-                continue;
-              }
+              visible.push(message);
+              if (visible.length >= 4) break;
             }
             if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
@@ -843,7 +808,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
-              assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
                 throw new Error("private session messages cannot delegate new work");
               const task = input.task?.trim();
@@ -944,7 +908,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
-              assertAudienceCompatible(binding.request, caller);
               const target = await resolveTarget(input.target, !input.interrupt);
               if (typeof target === "string") return { ok: false, message: target };
               const refusal = input.peer ? peerRefusal(target) : null;
@@ -999,7 +962,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 "",
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
-              assertAudienceCompatible(caller, request);
               const title = visibleTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
@@ -1040,8 +1002,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const messageId = input.requestId
                 ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
                 : randomUUID();
-              const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
-              const mail = { id: messageId, text: stamped, ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}) };
+              const mail = { id: messageId, text: stamped };
               const inFlight = await deps.runs.inFlightForThread(target.threadRef);
               const busy = inFlight.length > 0;
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
@@ -1051,7 +1012,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   senderId: binding.session.id,
                   actor: caller.actor,
                   ...(caller.botActor ? { botActor: true } : {}),
-                  audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
                 const reason = notWoken ? { notWoken } : {};
@@ -1275,12 +1235,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (!conversations) return { ok: false, message: "sessions aren't available on this deployment." };
           const refusal = sidebarRefusal();
           if (refusal) return { ok: false, message: refusal };
-          const verb = input.fork ? "fork" : "new";
-          if (binding.liveTurn !== true)
-            return {
-              ok: false,
-              message: `${verb} needs a person attending this turn — not a cron, trigger, subagent, or other automation.`,
-            };
           if (binding.request.readOnly) return { ok: false, message: "a read-only turn cannot create sessions." };
           if (binding.request.botActor)
             return { ok: false, message: "a turn doing a Slack bot's work cannot create sessions." };

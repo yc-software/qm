@@ -1,4 +1,4 @@
-import { ownerAuthored, cronTriggerAuthority } from "../cron/authority.ts";
+import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { Keychain, KeychainAsk, KeychainGrant } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { Destination, ScopeId } from "../types.ts";
@@ -68,14 +68,13 @@ export async function fireAskResolution(
     input: resolutionInput(ask, grant),
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
-    ...(cron ? { ownerFire: ownerAuthored(cron) } : {}),
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });
   if (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
     throw new Error("credential approval resume is already running for this request");
-  if (outcome.ran && outcome.status === "ok") return outcome;
+  if (outcome.ran && (outcome.status === "ok" || outcome.status === "pending_approval")) return outcome;
   if (cronId && (!outcome.ran || outcome.status === "refused")) return outcome;
   if (!outcome.ran && !outcome.authzFailed) {
     const cur = await deps.getAsk?.(ask.id);
@@ -144,7 +143,7 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
     swallow("secret-drop: resolution resume cut off", error);
     return { authzFailed: false, ran: false, note: errMessage(error) };
   });
-  if (outcome.ran && outcome.status === "ok") return outcome;
+  if (outcome.ran && (outcome.status === "ok" || outcome.status === "pending_approval")) return outcome;
   if (drop.destination && (await destinationVisible(deps, drop.ownerId, drop.destination))) {
     await deps.deliveries.enqueue({
       destination: withWebTranscriptText(drop.destination),

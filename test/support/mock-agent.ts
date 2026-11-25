@@ -562,7 +562,17 @@ export function createMockAgent(): Agent {
         usedTool = true;
         reply = await turn.tools.memoryDelete(ids, "forget").then(
           (forgot) => (forgot === null ? "(memory unavailable)" : `forgot ${forgot.forgotten}`),
-          (error: Error) => error.message,
+          (error: Error) => {
+            if (!(error instanceof NeedsApproval)) return error.message;
+            collected.push({
+              command: error.command,
+              reason: error.approvalReason,
+              kind: error.kind,
+              ...(error.approvalKey ? { approvalKey: error.approvalKey } : {}),
+              ...(error.grantModes ? { grantModes: error.grantModes } : {}),
+            });
+            return `[blocked] ${error.approvalReason}`;
+          },
         );
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();
@@ -823,6 +833,7 @@ export function createMockAgent(): Agent {
 
       if (turn.onDelta) for (const chunk of streamChunks(reply)) turn.onDelta(chunk);
 
+      if (!silent) reply = turn.closingReply?.(reply) ?? reply;
       await record({ kind: "AgentMessage", text: reply });
       const modelCalls = usedTool ? 2 : 1;
       const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));

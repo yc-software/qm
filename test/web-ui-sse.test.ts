@@ -14,6 +14,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -95,8 +96,8 @@ test("SSE streams partial frames then a terminal done frame carrying the reply",
 });
 
 test("SSE relays tool activity frames and folds them into the done frame", async () => {
-  const computer = await built.sandboxResources.create("alice", "personal:alice", "sprites", "default");
-  await built.sandboxResources.setDefault("alice", "personal:alice", computer.id);
+  const computer = await built.sandboxResources.create("alice", personalScope("alice"), "sprites", "default");
+  await built.sandboxResources.setDefault("alice", personalScope("alice"), computer.id);
   const submit = (await (
     await fetch(
       `${coreBase}/api/turn`,

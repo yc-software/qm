@@ -413,7 +413,7 @@ async function patchCronAsPerson(ctx: ApiCtx, cron: Cron, body: unknown): Promis
     return sendJson(res, 400, { error: "bad_request", message: PERSON_CRON_PATCH_BAD_REQUEST });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const editor = url.searchParams.get("principalId")!;
-  const rewrite = body.task !== undefined ? await cronTaskRewrite(app, cron, editor, true) : {};
+  const rewrite = body.task !== undefined ? await cronTaskRewrite(app, cron, editor) : {};
   const patch: CronPatch = {
     ...rewrite,
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),

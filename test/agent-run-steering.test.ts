@@ -11,6 +11,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { PARKED } from "../src/runs/run-store.ts";
+import { personalScope } from "../src/types.ts";
 
 type Sink = {
   entries: Item[];
@@ -24,7 +25,7 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
@@ -186,7 +187,7 @@ test("a session deleted mid-turn fails the turn instead of degrading silently", 
   const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
+  const session = await store.getOrCreateByThread("dm:session-deleted", "dm", personalScope("tester") as ScopeId);
   const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
@@ -206,7 +207,7 @@ test("a session deleted mid-turn fails the turn instead of degrading silently", 
 test("completed Pi attach results retain openable files in viewer history", async () => {
   const { createTranscriptSource } = await import("../src/sessions/transcript-source.ts");
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const scopeLabel = "personal:tester" as ScopeId;
+  const scopeLabel = personalScope("tester") as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester");
   const writer = { sessionId: session.id };
@@ -417,7 +418,7 @@ for (const stopBeforeIntake of [false, true]) {
     };
     const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
-    const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
+    const session = await store.getOrCreateByThread("web:steer-tool", "dm", personalScope("tester") as ScopeId);
     const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
@@ -623,7 +624,7 @@ for (const abort of ["shutdown", "stop"] as const) {
   test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and replays its cause" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
     const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
     const store = createPostgresSessionStore(testDatabaseUrl());
-    const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
+    const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", personalScope("tester") as ScopeId);
     const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
@@ -732,7 +733,7 @@ test("a request rejected as too long retries once without its inline documents i
 test("a park lets the running tool finish, records its real result and stops before the next model step", async () => {
   const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("web:park-tool", "dm", "personal:tester" as ScopeId);
+  const session = await store.getOrCreateByThread("web:park-tool", "dm", personalScope("tester") as ScopeId);
   const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   let calls = 0;
@@ -808,7 +809,7 @@ test("a park lets the running tool finish, records its real result and stops bef
 test("a park requested during the turn's last model step lets the turn finish", async () => {
   const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("web:park-last-step", "dm", "personal:tester" as ScopeId);
+  const session = await store.getOrCreateByThread("web:park-last-step", "dm", personalScope("tester") as ScopeId);
   const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   const parkRequest = new AbortController();

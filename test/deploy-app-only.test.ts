@@ -191,7 +191,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.equal((await get("renamed")).status, 200, "same immutable app retains its grant after rename");
     await app.archiveApp(shared.id);
     assert.equal((await get("renamed")).status, 404, "archived app cannot be reached even with its grant");
-    await app.setAppPublic("shared", true, { createdBy: "owner@example.test", personAtKeyboard: true });
+    await app.setAppPublic("shared", true, { createdBy: "owner@example.test", signOff: async () => true });
     const publicVisit = await get("shared");
     assert.equal(publicVisit.status, 200);
     assert.equal(JSON.parse(publicVisit.body)["x-portal-identity"], undefined, "public link access remains anonymous");

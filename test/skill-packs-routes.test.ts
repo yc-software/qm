@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
@@ -68,32 +69,6 @@ function makeRepoWithSharedLib(skillName: string): { dir: string; sha: string } 
   mkdirSync(join(dir, "lib"), { recursive: true });
   writeFileSync(join(dir, "skills", skillName, "SKILL.md"), md(`name: ${skillName}\ndescription: d\nscope: company`));
   writeFileSync(join(dir, "lib", "shared.mjs"), `export const who = "${skillName}";`);
-  g("add", "-A");
-  g("commit", "-q", "-m", "init");
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).toString().trim();
-  return { dir, sha };
-}
-
-function makeRepoWithLayerCollision(): { dir: string; sha: string } {
-  const dir = mkdtempSync(join(tmpdir(), "qm-layer-col-fixture-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
-  const g = (...a: string[]): void => {
-    execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
-  };
-  g("init", "-q");
-  mkdirSync(join(dir, "skills", "pack-active"), { recursive: true });
-  mkdirSync(join(dir, "skills", "layer-owned"), { recursive: true });
-  writeFileSync(
-    join(dir, "skills", "pack-active", "SKILL.md"),
-    md("name: pack-active\ndescription: active\nscope: company"),
-  );
-  writeFileSync(join(dir, "skills", "layer-owned", "helper.txt"), "from pack");
   g("add", "-A");
   g("commit", "-q", "-m", "init");
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, env }).toString().trim();
@@ -338,60 +313,6 @@ test("supporting files are namespaced per pack, so same paths never clobber", as
   } finally {
     rmSync(a.dir, { recursive: true, force: true });
     rmSync(b.dir, { recursive: true, force: true });
-    await s.close();
-  }
-});
-
-test("pack reconciliation and deployment-layer replacement serialize their materialization claims", async () => {
-  const repo = makeRepoWithLayerCollision();
-  const s = start();
-  try {
-    const reg = await json(
-      await fetch(`${s.base}/v1/admin/skill-packs`, {
-        method: "POST",
-        headers: ADMIN,
-        body: JSON.stringify({ url: repo.dir, ref: repo.sha }),
-      }),
-    );
-    const id = reg.pack.id as string;
-    const originalPut = s.built.skillBundles.put.bind(s.built.skillBundles);
-    let entered!: () => void;
-    let release!: () => void;
-    const bundleEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const bundleRelease = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    s.built.skillBundles.put = async (bundle) => {
-      entered();
-      await bundleRelease;
-      await originalPut(bundle);
-    };
-
-    const importing = fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
-      method: "POST",
-      headers: ADMIN,
-      body: JSON.stringify({ selected: "all" }),
-    });
-    await bundleEntered;
-    const replacing = s.built.deploymentLayerStore.put(
-      {
-        contract: 1,
-        tools: [],
-        skills: [
-          { path: "skills/layer-owned/SKILL.md", content: md("name: layer-owned\ndescription: deployment") },
-          { path: "skills/layer-owned/helper.txt", content: "from deployment" },
-        ],
-      },
-      "test",
-    );
-    release();
-
-    assert.equal((await importing).status, 200);
-    await assert.rejects(replacing, /skills\/layer-owned\/helper\.txt, already claimed by pack:/);
-  } finally {
-    rmSync(repo.dir, { recursive: true, force: true });
     await s.close();
   }
 });
@@ -886,18 +807,18 @@ test("imports a pack into MULTIPLE scopes at once; catalog reports per-scope; im
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+        body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", personalScope("admin-alice")] }),
       }),
     );
     assert.equal(imp.imported.length, 4, "2 eligible skills × 2 scopes = 4 installs");
 
     assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["reg-alpha", "reg-beta"]);
-    assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["reg-alpha", "reg-beta"]);
+    assert.deepEqual(await packSkillsIn(s.base, personalScope("admin-alice"), id), ["reg-alpha", "reg-beta"]);
 
     const cat = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
     assert.deepEqual(cat.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.importedScopes.sort(), [
       "org:default-org",
-      "personal:admin-alice",
+      personalScope("admin-alice"),
     ]);
 
     const list = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
@@ -944,14 +865,14 @@ test("re-importing into ONE scope archives only that scope's deselected skills, 
     await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
       method: "POST",
       headers: ADMIN,
-      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", personalScope("admin-alice")] }),
     });
 
     const imp2 = await json(
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: ["scoped-a"], scopeIds: ["personal:admin-alice"] }),
+        body: JSON.stringify({ selected: ["scoped-a"], scopeIds: [personalScope("admin-alice")] }),
       }),
     );
     assert.deepEqual(imp2.archived, ["scoped-b"], "alice's deselected skill is archived");
@@ -962,7 +883,7 @@ test("re-importing into ONE scope archives only that scope's deselected skills, 
       "the OTHER scope's skills are untouched",
     );
     assert.deepEqual(
-      await packSkillsIn(s.base, "personal:admin-alice", id),
+      await packSkillsIn(s.base, personalScope("admin-alice"), id),
       ["scoped-a"],
       "only the re-imported skill remains in the targeted scope",
     );
@@ -1007,7 +928,7 @@ test("sync refreshes EVERY scope the pack was imported into", async () => {
     await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
       method: "POST",
       headers: ADMIN,
-      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", personalScope("admin-alice")] }),
     });
 
     writeSkill("ms-a", "CHANGED");
@@ -1027,7 +948,7 @@ test("sync refreshes EVERY scope the pack was imported into", async () => {
     assert.equal(synced.imported.length, 0, "sync adds nothing new");
 
     assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["ms-a"]);
-    assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["ms-a"]);
+    assert.deepEqual(await packSkillsIn(s.base, personalScope("admin-alice"), id), ["ms-a"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     await s.close();
@@ -1099,11 +1020,11 @@ test("a pack skill whose name collides with a native skill in ANOTHER scope stil
     const imp = await fetch(`${s.base}/v1/admin/skill-packs/${reg.pack.id}/import`, {
       method: "POST",
       headers: ADMIN,
-      body: JSON.stringify({ selected: "all", scopeIds: ["personal:admin-alice"] }),
+      body: JSON.stringify({ selected: "all", scopeIds: [personalScope("admin-alice")] }),
     });
     assert.equal(imp.status, 200, "org's same-named native skill must not clobber-block a sub-scope import");
     assert.deepEqual((await json(imp)).imported, ["shared-name"], "the pack skill imports into its own scope");
-    assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", reg.pack.id), ["shared-name"]);
+    assert.deepEqual(await packSkillsIn(s.base, personalScope("admin-alice"), reg.pack.id), ["shared-name"]);
     const orgNative = (
       await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
     ).skills.find((k: any) => k.name === "shared-name" && k.ownerScopeId === "org:default-org");

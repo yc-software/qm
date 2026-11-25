@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/monitors/monitor-broker.ts";
 import { createMonitorStore, type MonitorStore } from "../src/monitors/monitor-store.ts";
-import { scopeActor, scopeId } from "../src/types.ts";
+import { scopeActor, scopeId, personalScope } from "../src/types.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
-const SCOPE = "personal:U1";
+const SCOPE = personalScope("U1");
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
 
 function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
@@ -70,7 +70,7 @@ test("watch arms a monitor inheriting the turn's owner, scope, thread, and desti
   assert.equal(r.expiresAt, rec.expiresAt + 1000);
   const m = await store.get(r.monitorId);
   assert.equal(m?.owner, "U1");
-  assert.equal(m?.ownerScopeId, "personal:U1");
+  assert.equal(m?.ownerScopeId, personalScope("U1"));
   assert.equal(m?.threadRef, "thread-1");
   assert.equal(m?.destination?.target, "D1");
   assert.equal(m?.cursor, 7);
@@ -140,7 +140,7 @@ test("watch refuses a job from another scope and an unknown job", async () => {
   const { broker, registry } = await agent();
   await registry.register({
     processId: "p-other",
-    scopeId: "personal:U2",
+    scopeId: personalScope("U2"),
     sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: x",

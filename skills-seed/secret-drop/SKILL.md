@@ -13,8 +13,6 @@ and never tell the person to add it on the keychain page by hand.
 
 ## Mint the link
 
-Only on a turn a person sent. Scheduled and trigger-fired turns are refused.
-
 ```sh
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \
   -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
@@ -25,7 +23,7 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \
 - `fields` declares the form inputs (1–8). Keys are env var names; `secret:false` shows the
   input in clear text (usernames, emails). For a single token, omit `fields` and pass
   `"envKey":"ACME_API_KEY"` instead.
-- The link belongs to the person whose turn this is. If a different teammate in this
+- The link belongs to the person this run acts for. If a different teammate in this
   conversation will fill it, add `"onBehalfOf":"<their id>"`.
 - Send the header exactly as shown. `Authorization: Bearer` is not accepted.
 
@@ -45,7 +43,7 @@ link-bound token, so a rebuilt URL will not work.
 
 When an org admin registers a memory brain (`PUT /v1/admin/memory-registry/brains/<id>`), or a
 member connects their own (`PUT /v1/memory/brain`), its client secret never goes through chat or
-the agent. Mint a brain link instead, on that person's own turn:
+the agent. Mint a brain link for that person instead:
 
 ```sh
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" \

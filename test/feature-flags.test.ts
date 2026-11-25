@@ -2,15 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
   await store.setEnabled("inbox_loops", "channel:C1", true, "admin");
-  await store.setEnabled("inbox_loops", "personal:U1", true, "admin");
+  await store.setEnabled("inbox_loops", personalScope("U1"), true, "admin");
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
   assert.equal(await store.enabled("inbox_loops", "channel:C2"), false);
-  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, ["channel:C1", "personal:U1"]);
+  assert.deepEqual((await store.get("inbox_loops"))?.enabledScopes, ["channel:C1", personalScope("U1")]);
   await store.setEnabled("inbox_loops", "channel:C1", false, "admin");
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
 });

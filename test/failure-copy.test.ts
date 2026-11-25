@@ -40,5 +40,11 @@ test("the shared failure policy renders quarantine canned, refused reasons verba
     "I couldn't finish that: the model provider blocked the reply (Provider finish_reason: content_filter).",
   );
 
+  const keyRefused = { status: "failed", errorCode: "account", reason: "Billing account is not in good standing" };
+  assert.equal(
+    userFacingFailureText(keyRefused),
+    "I couldn't finish that: the model provider refused the model key (Billing account is not in good standing); whoever owns that key needs to fix its billing or access, or replace it.",
+  );
+
   assert.equal(userFacingFailureText({ status: "refused" }), GENERIC_FAILURE_TEXT);
 });

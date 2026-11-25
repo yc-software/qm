@@ -184,7 +184,8 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
     --sandbox-dir <path>                   path to the sandbox layer dir (default: sandbox/ in the deploy dir)
 
 ${bold("TENANTS (operator)")} ${dim("— runs in the QM repo with DATABASE_URL set to the database owner login")}
-  tenant create [--brand-name <name>]      create a tenant and print its id
+  tenant create [--brand-name <name>] [--partner-chat-account <account>]
+                                           create a tenant; reuse a bound account without changing settings
   tenant list                              list tenants
   tenant settings set <tenant> <key> <json>
                                            set one tenant setting (null removes it)

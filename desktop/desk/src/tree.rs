@@ -71,6 +71,11 @@ const TEXT_ROLES: &[&str] = &["AXStaticText", "AXTextArea", "AXTextField", "AXHe
 const TOGGLES: &[&str] = &["AXCheckBox", "AXRadioButton", "AXSwitch", "AXToggle", "AXMenuItem"];
 const QUIET_SUBROLES: &[&str] = &["AXUnknown", "AXStandardWindow", "AXTextAttachment"];
 pub const MAX_TEXT: usize = 1000;
+const SECURE: &str = "AXSecureTextField";
+
+pub fn secure(role: &str, subrole: Option<&str>) -> bool {
+    role == SECURE || subrole == Some(SECURE)
+}
 const FOLDS: &[&str] = &["AXHeading", "AXLink"];
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -93,6 +98,7 @@ pub struct Props {
     pub settable: bool,
     pub actions: Vec<String>,
     pub list_item: bool,
+    pub secure: bool,
 }
 
 pub fn clip(s: &str, n: usize) -> String {
@@ -159,7 +165,7 @@ impl Props {
             .as_ref()
             .map(|v| v.text.as_str())
             .or(self.value.as_deref())
-            .filter(|v| Some(*v) != name && toggle.is_none() && self.heading_level().is_none());
+            .filter(|v| !self.secure && Some(*v) != name && toggle.is_none() && self.heading_level().is_none());
         let description = self.description.as_deref().filter(|d| Some(*d) != name);
         let placeholder = self.placeholder.as_deref().filter(|_| value.is_none());
         let keep = self.list_item
@@ -173,6 +179,7 @@ impl Props {
             || self.focused
             || self.selected
             || self.settable
+            || self.secure
             || !self.actions.is_empty();
         let level = self.heading_level().filter(|_| name.is_some());
         let bullet = self.list_item && self.role == "AXGroup";
@@ -211,6 +218,9 @@ impl Props {
             s += &format!(" url \"{}\"", clip(u, 160));
         }
         let mut tags = vec![];
+        if self.secure {
+            tags.push("password");
+        }
         if self.focused {
             tags.push("focused");
         }
@@ -236,7 +246,7 @@ impl Props {
         if !secondary.is_empty() {
             s += &format!(" <{}>", secondary.join(","));
         }
-        if let Some(markdown) = &self.rich_text {
+        if let Some(markdown) = self.rich_text.as_ref().filter(|_| !self.secure) {
             s += &format!(" markdown:\n{markdown}");
         }
         (s, keep)
@@ -864,6 +874,26 @@ mod tests {
 
     fn props(role: &str) -> Props {
         Props { role: role.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn password_fields_are_marked_and_never_show_a_value() {
+        assert!(secure("AXTextField", Some("AXSecureTextField")));
+        assert!(secure("AXSecureTextField", None));
+        assert!(!secure("AXTextField", Some("AXSearchField")));
+        let p = Props {
+            subrole: Some("AXSecureTextField".into()),
+            label: Some("Password".into()),
+            value: Some("hunter2".into()),
+            rich_text: Some("hunter2".into()),
+            secure: true,
+            ..props("AXTextField")
+        };
+        let (line, keep) = p.describe();
+        assert!(keep);
+        assert_eq!(line, "TextField:SecureTextField \"Password\" [password]");
+        let unlabeled = Props { secure: true, ..props("AXTextField") };
+        assert!(unlabeled.describe().1);
     }
 
     #[test]

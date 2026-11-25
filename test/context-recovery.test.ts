@@ -12,13 +12,14 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const modelContext = async (sessions: SessionStore, sessionId: string) =>
   forModelContext((await sessions.getContextWindow(sessionId)).items);
 
 async function fixture(keepPercent: number | null = null) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("recovery", "dm", "personal:test");
+  const session = await sessions.getOrCreateByThread("recovery", "dm", personalScope("test"));
   const writer = { sessionId: session.id };
   for (let i = 0; i < 12; i++)
     await sessions.append(writer, {
@@ -42,7 +43,7 @@ async function fixture(keepPercent: number | null = null) {
     session,
     writer,
     visibleHistory: await modelContext(sessions, session.id),
-    scopeId: "personal:test",
+    scopeId: personalScope("test"),
     orgScopeId: "org:test",
     actorId: "test",
   };

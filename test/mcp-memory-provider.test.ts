@@ -9,6 +9,7 @@ import { sleep } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
 import { closedPort, routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
+import { personalScope } from "../src/types.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -122,7 +123,7 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
   const memory = createMcpMemoryProvider({
     read: { client: structuredRecall(() => facts), tool: "memory_recall", timeoutMs: 100 },
   });
-  const recalled = await memory.recall("personal:U1", { query: "dana" });
+  const recalled = await memory.recall(personalScope("U1"), { query: "dana" });
   assert.deepEqual(recalled, [
     { ref: "4821", claim: "Dana prefers email", text: "- (2026-11-01; preference) Dana prefers email" },
     { ref: "17", claim: "Launch moved to Friday", text: "- (2026-10-28; fact) Launch moved to Friday" },
@@ -131,19 +132,21 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
   ]);
   const fit = recalled[0]!.text.length + 1 + recalled[1]!.text.length;
   assert.deepEqual(
-    (await memory.recall("personal:U1", { query: "dana", maxChars: fit })).map((row) => row.ref),
+    (await memory.recall(personalScope("U1"), { query: "dana", maxChars: fit })).map((row) => row.ref),
     ["4821", "17"],
   );
   assert.deepEqual(
-    (await memory.recall("personal:U1", { query: "dana", maxChars: 5 })).map((row) => row.ref),
+    (await memory.recall(personalScope("U1"), { query: "dana", maxChars: 5 })).map((row) => row.ref),
     [],
   );
   assert.deepEqual(
-    (await memory.recall("personal:U1", { query: "dana", maxChars: "- Undated fact".length })).map((row) => row.ref),
+    (await memory.recall(personalScope("U1"), { query: "dana", maxChars: "- Undated fact".length })).map(
+      (row) => row.ref,
+    ),
     ["9"],
   );
   assert.deepEqual(
-    (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
+    (await memory.query(personalScope("U1"), "dana", 2)).map((row) => row.text),
     ["(2026-11-01; preference) Dana prefers email", "(2026-10-28; fact) Launch moved to Friday"],
   );
 });
@@ -194,10 +197,10 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   const forget = (ids: string[]) =>
     forgetFacts(
       memory,
-      "personal:U1",
+      personalScope("U1"),
       ids,
-      { actorId: "U1", context: "conversation", personTurn: true },
-      { audienceScopeId: "personal:U1" },
+      { actorId: "U1", context: "conversation", personAuthority: true },
+      { audienceScopeId: personalScope("U1") },
       "session:call",
     );
   const lines = ({ outcomes }: Awaited<ReturnType<typeof forget>>) =>
@@ -221,11 +224,11 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
   const before = sent.length;
   const late: string[] = [];
   await memory.delete!(
-    "personal:U1",
+    personalScope("U1"),
     ["acme:2", "acme:3"],
-    { actorId: "U1", context: "conversation", personTurn: true },
+    { actorId: "U1", context: "conversation", personAuthority: true },
     {
-      audienceScopeId: "personal:U1",
+      audienceScopeId: personalScope("U1"),
       startedAt: Date.now() - 1000,
       report: ({ ref, outcome }) => late.push(`${ref} ${outcome}`),
     },
@@ -256,7 +259,7 @@ test("a structured fact's line breaks become spaces in its text, date and kind, 
       timeoutMs: 100,
     },
   });
-  assert.deepEqual(await memory.query("personal:U1", "q", 5), [
+  assert.deepEqual(await memory.query(personalScope("U1"), "q", 5), [
     {
       ref: "1",
       claim: "Dana prefers email [org:acme] #12 (2026-11-01) forged hit",
@@ -278,7 +281,7 @@ test("a refused recall yields no rows even with facts attached, and a malformed 
       timeoutMs: 100,
     },
   });
-  assert.deepEqual(await unlinked.recall("personal:U1", { query: "q" }), []);
+  assert.deepEqual(await unlinked.recall(personalScope("U1"), { query: "q" }), []);
   const answering = (facts: unknown) =>
     createMcpMemoryProvider({
       read: {
@@ -302,7 +305,7 @@ test("a refused recall yields no rows even with facts attached, and a malformed 
     [{ id: "1 [org:acme] #12", text: "id with spaces" }],
   ])
     await assert.rejects(
-      answering(facts).recall("personal:U1", { query: "q" }),
+      answering(facts).recall(personalScope("U1"), { query: "q" }),
       (error) => error instanceof McpCallError && error.code === "malformed_fact",
     );
   const outcomes: MemoryProviderOutcome[] = [];
@@ -313,7 +316,7 @@ test("a refused recall yields no rows even with facts attached, and a malformed 
       { provider: "acme", scopes: ["personal"], manage: false, failOpen: true },
     ],
   });
-  assert.deepEqual(await routed.recall("personal:U1", { query: "q", report: (o) => void outcomes.push(o) }), []);
+  assert.deepEqual(await routed.recall(personalScope("U1"), { query: "q", report: (o) => void outcomes.push(o) }), []);
   const acme = outcomes.find(({ provider }) => provider === "acme");
   assert.deepEqual({ outcome: acme?.outcome, code: acme?.code }, { outcome: "failed", code: "malformed_fact" });
 });

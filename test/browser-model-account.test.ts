@@ -8,6 +8,7 @@ import { BROWSER_MODEL_AUD, mintCapabilityToken, type CapabilityClaims } from ".
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
+import { personalScope } from "../src/types.ts";
 
 type Upstream = { host: string; headers: Headers; body: Record<string, unknown> };
 
@@ -68,7 +69,7 @@ async function browserEndpoint(
         "x-agent-capability": await mintCapabilityToken(
           {
             actorId: "U1",
-            scopeId: "personal:U1",
+            scopeId: personalScope("U1"),
             aud: BROWSER_MODEL_AUD,
             sessionId: "browser-session",
             exp: Date.now() + 60_000,

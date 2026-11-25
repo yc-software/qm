@@ -1,0 +1,34 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { rosterAdmits, withSpeakerMembership } from "../src/resolution/scope-membership.ts";
+import type { ScopeId } from "../src/types.ts";
+
+const room = "group:C0NEW" as ScopeId;
+const otherRoom = "group:C0OTHER" as ScopeId;
+const stored = async (principalId: string, scope: ScopeId) =>
+  scope === otherRoom && principalId === "regan@example.com";
+
+test("a verified speaker's turn proves their membership in its own scope while the store lags", async () => {
+  const check = withSpeakerMembership(stored, { actorId: "josh@example.com", scopeId: room, verified: true });
+  assert.equal(await check("josh@example.com", room), true);
+  assert.equal(await check("JOSH@example.com", room), true);
+  assert.equal(await check("regan@example.com", room), false);
+});
+
+test("a speaker's turn says nothing about other scopes or unverified turns", async () => {
+  const verified = withSpeakerMembership(stored, { actorId: "josh@example.com", scopeId: room, verified: true });
+  assert.equal(await verified("josh@example.com", otherRoom), false);
+  assert.equal(await verified("regan@example.com", otherRoom), true);
+  const unverified = withSpeakerMembership(stored, { actorId: "josh@example.com", scopeId: room, verified: false });
+  assert.equal(await unverified("josh@example.com", room), false);
+  const noStore = withSpeakerMembership(undefined, { actorId: "josh@example.com", scopeId: room, verified: true });
+  assert.equal(await noStore("josh@example.com", otherRoom), false);
+});
+
+test("a roster admits its members and its own conversation, never another conversation's actor", () => {
+  const project = "group:web-project-p1" as ScopeId;
+  assert.equal(rosterAdmits(["alice"], "alice", project), true);
+  assert.equal(rosterAdmits(["alice"], "bob", project), false);
+  assert.equal(rosterAdmits(["alice"], "system:group:web-project-p1", project), true);
+  assert.equal(rosterAdmits(["alice"], "system:group:web-project-p2", project), false);
+});

@@ -1,11 +1,13 @@
 import { createChatSurface } from "./chat";
 import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
-import { subscribeDeliveries } from "./core-bridge";
+import { api, subscribeDeliveries } from "./core-bridge";
+import { handleDesktopSignal } from "./desktop-computer";
 import { applySessionState } from "./session-list";
 import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
 import { clearTranscriptCache, refreshCachedTranscript } from "./transcript-cache";
+import { showReplyNotice } from "./notifications";
 import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 
@@ -106,6 +108,13 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
+      if (event.state === "notify") {
+        if (event.notice) showReplyNotice(event.notice);
+        return;
+      }
+      const ui = event.ui as { kind?: string; callId?: string; stop?: boolean } | undefined;
+      if (event.state === "ui" && ui?.kind === "desktop")
+        return handleDesktopSignal(ui, (path, body) => api(path, { method: "POST", body: JSON.stringify(body) }));
       if (event.state === "ui") {
         handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);
         return;

@@ -10,20 +10,21 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { personalScope } from "../src/types.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
-    ownerScopeId: "personal:U_ALICE",
+    ownerScopeId: personalScope("U_ALICE"),
     schedule: { everyMs: 60_000 },
     action: "read a private dummy account",
     runtime: { modelId: "gpt-6-luna", effortLevel: "low" },
     destination: {
       type: "principal",
       target: "U_BOB",
-      audienceScopeId: "personal:U_BOB",
+      audienceScopeId: personalScope("U_BOB"),
       onBehalfOf: "U_ALICE",
     },
   });
@@ -35,7 +36,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     ownerId: "U_ALICE",
     requesterId: "U_ALICE",
     orgId: "test",
-    requesterScopeId: "personal:U_ALICE",
+    requesterScopeId: personalScope("U_ALICE"),
     requesterThreadRef: `cron:${cron.id}:fire:123456789abc`,
     requesterDestination: cron.destination,
     purpose: "read a private dummy account",
@@ -93,7 +94,7 @@ test("failed cron credential resolution notifies only the owner", async () => {
   const pending = await f.deliveries.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_ALICE");
-  assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
+  assert.equal(pending[0]!.destination.audienceScopeId, personalScope("U_ALICE"));
   assert.match(pending[0]!.text, /^Access approved, but the task could not restart on its own\./);
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });

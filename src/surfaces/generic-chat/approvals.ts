@@ -2,6 +2,7 @@ import type { App } from "../../api/app-types.ts";
 import { userFacingFailureClause } from "../../core/failure-copy.ts";
 import type { KeychainApprovalView, KeychainApprovals } from "../../credentials/keychain-approval.ts";
 import { samePerson } from "../../directory/person.ts";
+import { automationDestination } from "../../core/turn-origin.ts";
 import { isSystemActor, type ActorAssertion, type Delivery, type Destination, type TurnRequest } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
@@ -27,7 +28,7 @@ import {
 import type { SurfaceAction } from "../contract.ts";
 import type { GenericChatClient } from "./client.ts";
 import { editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { GENERIC_CHAT, genericChatUserIds, parseGenericChatRef } from "./protocol.ts";
+import { GENERIC_CHAT, genericChatUserIds, parseGenericChatAccount, parseGenericChatRef } from "./protocol.ts";
 
 type ApprovalSubject = Pick<PendingApproval, "command" | "summary" | "kind">;
 
@@ -143,8 +144,11 @@ function keychainCard(view: KeychainApprovalView, account: string | undefined): 
 }
 
 export function genericChatApprovalCardRoute(request: TurnRequest): Destination | undefined {
+  if (isSystemActor(request.actor.externalId)) return undefined;
+  const dest = automationDestination(request);
+  if (dest?.type === GENERIC_CHAT) return dest;
   const ref = request.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
-  if (!ref || !request.liveReplies || isSystemActor(request.actor.externalId)) return undefined;
+  if (!ref || !request.liveReplies) return undefined;
   return {
     type: GENERIC_CHAT,
     target: request.deliveryTarget!,
@@ -187,6 +191,9 @@ export function createGenericChatApprovals(deps: {
   async function invoke(click: GenericChatActionClick): Promise<void> {
     const parsed = parseAction(click.actionId);
     if (!parsed) return;
+    const eventId = parseGenericChatAccount(click.account)?.origin
+      ? `${click.account}:${click.eventId}`
+      : click.eventId;
     const where = { account: click.account, kind: click.kind, chat: click.chat };
     const settle = (card: Card): Promise<void> =>
       editGenericChatMessage(deps, where, click.messageId, card.body, card.actions);
@@ -194,7 +201,7 @@ export function createGenericChatApprovals(deps: {
       await postGenericChatMessage(
         deps,
         { ...where, ...(click.thread ? { thread: click.thread } : {}) },
-        { text, idempotencyKey: `action:${click.eventId}`, recipientUserId: click.userId },
+        { text, idempotencyKey: `action:${eventId}`, recipientUserId: click.userId },
       );
     };
 
@@ -202,14 +209,16 @@ export function createGenericChatApprovals(deps: {
     if (command) {
       const record = await deps.app.getApproval(parsed.value);
       const request = record?.request;
-      const ref = request?.deliveryTarget ? parseGenericChatRef(request.deliveryTarget) : null;
+      const dest = request ? automationDestination(request) : undefined;
+      const target = request?.deliveryTarget ?? (dest?.type === GENERIC_CHAT ? dest.target : undefined);
+      const ref = target ? parseGenericChatRef(target) : null;
       if (!record || !request || ref?.account !== click.account || ref.chat !== click.chat)
         return settle({ body: `_${APPROVAL_EXPIRED}_`, actions: [] });
       if (!samePerson(request.actor.externalId, click.actor.externalId)) return tell(APPROVAL_REQUESTER_ONLY);
       const decision = approvalDecision(command);
       const queued = await deps.app.turn({
         ...replayableTurn(request),
-        surface: GENERIC_CHAT,
+        surface: request.surface,
         actor: click.actor,
         approval: {
           requestId: parsed.value,
@@ -217,7 +226,7 @@ export function createGenericChatApprovals(deps: {
           ...(decision !== "deny" ? { scope: decision } : {}),
         },
         async: true,
-        idempotencyKey: `${GENERIC_CHAT}:action:${click.eventId}`,
+        idempotencyKey: `${GENERIC_CHAT}:action:${eventId}`,
       });
       if (!queued.runId && queued.status === "pending_approval")
         return tell(
@@ -225,7 +234,10 @@ export function createGenericChatApprovals(deps: {
         );
       const line = commandDecisionBody(record, decision, click.actor.displayName);
       return settle({
-        body: queued.runId ? line : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
+        body:
+          queued.runId || queued.status === "queued"
+            ? line
+            : `${line}\n\nI can't continue — ${userFacingFailureClause(queued)}.`,
         actions: [],
       });
     }

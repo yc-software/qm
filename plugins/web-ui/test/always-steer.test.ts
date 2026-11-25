@@ -61,7 +61,7 @@ test("a mid-run send with the steer preference asks core to steer and queues onl
     const { seedRuntimeConfig, invalidateRuntimeConfigs } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { setAlwaysSteer } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     const model = {
       id: "alpha",
       name: "Alpha",

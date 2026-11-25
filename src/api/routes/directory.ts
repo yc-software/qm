@@ -1,10 +1,10 @@
-import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
+import { isPrincipalType, PRINCIPAL_TYPES, scopeId, scopeLabel, personalScope } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { cleanDisplayName } from "../../identity/user-store.ts";
 import { personLabel } from "../../identity/person-names.ts";
 import { sendJson } from "../http.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj, orgScope, resolveSelfRead } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 
@@ -196,14 +196,16 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   else if (r.kind === "ambiguous") found = r.candidates;
   const matches = found.map((m) => {
     const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
-    return slackId ? { ...m, slackId } : m;
+    const scopeId = personalScope(m.principalId);
+    return slackId ? { ...m, slackId, scopeId } : { ...m, scopeId };
   });
   return sendJson(res, 200, { matches });
 }
 
 async function channelsFor(ctx: ApiCtx): Promise<void> {
-  const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  const access = resolveSelfRead(ctx, { botMessage: "bot turns cannot list channels" });
+  if (!access) return;
+  const { principalId, inOwnPrivate, roomScope } = access;
   const typed = (ctx.url.searchParams.get("q") ?? "").trim().toLowerCase();
   const term = typed.startsWith("#") ? typed.slice(1) : typed;
   const rank = (name: string) => {
@@ -212,7 +214,11 @@ async function channelsFor(ctx: ApiCtx): Promise<void> {
     return lower.startsWith(term) ? 1 : 2;
   };
   const channels = (await ctx.app.directoryChannelsFor(principalId))
-    .filter((channel) => channel.name.toLowerCase().includes(term))
+    .filter(
+      (channel) =>
+        channel.name.toLowerCase().includes(term) &&
+        (inOwnPrivate || !channel.isPrivate || scopeId("channel", channel.channelId) === roomScope),
+    )
     .sort((a, b) => rank(a.name) - rank(b.name) || Number(a.name > b.name) - Number(a.name < b.name))
     .map((channel) => ({
       scopeId: `channel:${channel.channelId}`,
@@ -221,6 +227,11 @@ async function channelsFor(ctx: ApiCtx): Promise<void> {
       isPrivate: channel.isPrivate === true,
     }));
   return sendJson(ctx.res, 200, { channels });
+}
+
+async function scopeLabels(ctx: ApiCtx): Promise<void> {
+  const scopes = ctx.url.searchParams.getAll("scope");
+  return sendJson(ctx.res, 200, { labels: Object.fromEntries(scopes.map((scope) => [scope, scopeLabel(scope)])) });
 }
 
 async function channelMembership(ctx: ApiCtx): Promise<void> {
@@ -238,7 +249,7 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/directory/channels",
     browser: true,
     actor: "query.principalId",
-    auth: "source",
+    auth: "either",
     handle: channelsFor,
   },
   {
@@ -256,6 +267,7 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: resolveDirectory,
   },
+  { method: "GET", path: "/v1/scope-labels", browser: true, actor: "person", auth: "either", handle: scopeLabels },
   ...withActor("system", [
     { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
     { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },

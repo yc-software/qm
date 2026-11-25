@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
@@ -88,7 +88,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     const search = await post("/v1/memory/search", { query: "other scope", scope: ORG }, headers);
     assert.match(JSON.stringify(await search.json()), /other scope fact/);
     assert.equal((await get("/v1/memory/self?scope=personal:U2", headers)).status, 403);
-    assert.equal((await post("/v1/memory/search", { query: "x", scope: "personal:U2" }, headers)).status, 403);
+    assert.equal((await post("/v1/memory/search", { query: "x", scope: personalScope("U2") }, headers)).status, 403);
     assert.equal((await post("/v1/memory/search", { query: "x", scope: [ORG] }, headers)).status, 400);
     assert.equal((await post("/v1/memory/facts", { facts: ["stolen"], scope: "org" }, headers)).status, 403);
     assert.doesNotMatch(await built.memory.read(ORG), /stolen/);
@@ -245,8 +245,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     );
     assert.equal(edited.status, 200);
     const ended = { "x-agent-capability": await capFor("A1", admin, { ...liveRunClaims("A1"), runId: "ended-run" }) };
-    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 403);
-    assert.match(await built.memory.read(ORG), /org notebook curated/);
+    assert.equal((await send("DELETE", "/v1/memory/facts", { ids: [planning.id], scope: "org" }, ended)).status, 200);
+    assert.doesNotMatch(await built.memory.read(ORG), /org notebook curated/);
   });
 
   it('without scope:"org", an admin token still writes the turn\'s own notebook', async () => {
@@ -277,7 +277,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   it("400s an unknown scope selector", async () => {
     const cap = await capFor("U1", { write: U1, orgWrite: ORG, read: [U1] });
     assert.equal(
-      (await post("/v1/memory/facts", { facts: ["x"], scope: "personal:U2" }, { "x-agent-capability": cap })).status,
+      (await post("/v1/memory/facts", { facts: ["x"], scope: personalScope("U2") }, { "x-agent-capability": cap }))
+        .status,
       400,
     );
     assert.equal((await get("/v1/memory/self?scope=team", { "x-agent-capability": cap })).status, 403);
@@ -285,19 +286,19 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 
   it("scope:persona:<id> writes for write/owner holders and 403s readers", async () => {
     for (const who of ["U1", "U2", "U3"])
-      await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+      await built.featureFlags.setEnabled("personas", personalScope(who), true, "admin");
     const pid = ((await built.app.personas!.create("U1", { name: "Ada" })) as { value: { id: string } }).value.id;
     const access = [
-      { scopeId: "personal:U1", role: "owner" },
-      { scopeId: "personal:U2", role: "write" },
-      { scopeId: "personal:U3", role: "read" },
+      { scopeId: personalScope("U1"), role: "owner" },
+      { scopeId: personalScope("U2"), role: "write" },
+      { scopeId: personalScope("U3"), role: "read" },
     ];
     await built.app.personas!.setAccess("U1", pid, access);
     const hdr = async (who: string) => ({
       "x-agent-capability": await capFor(
         who,
         { write: scopeId("personal", who), read: [] },
-        { ...liveRunClaims(who), liveActor: true },
+        { ...liveRunClaims(who), internalAudience: true, personAuthority: true },
       ),
     });
     const body = { facts: ["persona note"], scope: `persona:${pid}` };

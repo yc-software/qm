@@ -11,7 +11,7 @@ test("failed first side-chat attachment submissions restore the raw draft for re
     const { createComposerSurface } = await env.vite.ssrLoadModule("/src/composer.ts");
     const { seedRuntimeConfig } = await env.vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { appState } = await env.vite.ssrLoadModule("/src/shell-state.ts");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     const model = {
       id: "alpha",
       name: "Alpha",

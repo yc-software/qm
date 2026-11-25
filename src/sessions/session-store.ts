@@ -402,7 +402,6 @@ export interface SessionStore {
     scopeId: ScopeId,
     channelName?: string,
     surface?: string,
-    clientTools?: Session["clientTools"],
     facts?: SessionFacts,
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
@@ -521,4 +520,12 @@ export interface SessionStore {
   distinctParticipants(): Promise<string[]>;
 
   participantsOf(sessionId: string): Promise<string[]>;
+
+  claimReplyNotifications(sessionId: string, people: readonly string[] | "everyone"): Promise<ReplyNotificationClaim[]>;
+}
+
+export interface ReplyNotificationClaim {
+  principalId: string;
+  title: string | null;
+  text: string;
 }

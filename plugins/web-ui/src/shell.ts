@@ -56,6 +56,12 @@ import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { reloadIntoServedRelease } from "./stale-release";
+import {
+  notificationPrompt,
+  onNotificationStateChange,
+  startNotifications,
+  stopPushNotifications,
+} from "./notifications";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -91,6 +97,7 @@ import {
   startNewChat,
   startTemporaryChat,
   openNewChat,
+  openConversationIds,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -301,6 +308,7 @@ const ICON = {
 };
 
 export async function signOut(): Promise<void> {
+  await stopPushNotifications().catch(swallowAs("web-ui: remove push subscription on sign-out", undefined));
   stopAnalytics();
   stopBrowserErrors();
   const portal = authMode === "portal";
@@ -525,12 +533,17 @@ function gateFor(mode: AuthMode): AuthGate {
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
+onNotificationStateChange(() => {
+  if (shellMounted) mountShell();
+});
+
 export function mountShell(): void {
   applySavedSidebarWidth();
   const impersonatedBy = appState.me?.impersonatedBy ?? null;
-  let banner: TemplateResult | typeof nothing = nothing;
+  let banner: TemplateResult | typeof nothing;
   if (impersonatedBy) banner = impersonationBanner(impersonatedBy);
   else if (authMode === "dev") banner = devBanner(appState.me?.user ?? "");
+  else banner = notificationPrompt();
   render(
     html`
       ${banner}
@@ -723,7 +736,7 @@ export function renderSidebarTop(): void {
             personas.length
               ? html`
                   <div class="new-chat-menu-sep" role="separator"></div>
-                  <div class="new-chat-menu-head" role="presentation">Personas</div>
+                  <div class="new-chat-menu-head" role="presentation">Bots</div>
                   ${personas.map(
                     (persona) => html`
                       <button
@@ -1129,6 +1142,7 @@ window.addEventListener("popstate", () => {
 });
 
 document.addEventListener("visibilitychange", reloadIntoServedRelease);
+window.addEventListener("online", reloadIntoServedRelease);
 
 window.addEventListener("focus", () => {
   if (!appState.me || reloadIntoServedRelease()) return;
@@ -1258,7 +1272,7 @@ export async function boot(): Promise<void> {
     return;
   }
   const sessions = refreshSessions({ showLoading: true });
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = appState.me.personalScope;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);
@@ -1270,6 +1284,10 @@ export async function boot(): Promise<void> {
   renderList();
   shellMounted = true;
   ensureDeliveryStream();
+  startNotifications(
+    (sessionId) => void openSessionAtMessage(sessionId, null, undefined, "push"),
+    (sessionId) => openConversationIds().includes(sessionId),
+  );
   warmDeferredChunks();
   void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;

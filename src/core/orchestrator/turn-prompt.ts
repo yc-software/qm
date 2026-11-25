@@ -3,8 +3,11 @@ import type { DirectoryMember, DirectoryStore } from "../../directory/directory-
 import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keychain.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
-import { isPollSurface } from "../../triggers/run-trigger.ts";
-import type { ScopeId, Session } from "../../types.ts";
+import { firedByPoll } from "../../triggers/run-trigger.ts";
+import { personalScope, type ScopeId, type Session } from "../../types.ts";
+import { isAgentReply, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import type { FeatureName } from "../../feature-flags.ts";
+import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "../side-chat-context.ts";
@@ -37,8 +40,6 @@ export async function appendTurnGuidance(turn: {
   actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
   actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
-  automatedTurn: boolean;
-  childWake: boolean;
   ephemeral?: boolean;
 }): Promise<string> {
   const {
@@ -55,8 +56,6 @@ export async function appendTurnGuidance(turn: {
     actorIsOrgAdmin,
     actorAdminRole,
     orgMemoryWritable,
-    automatedTurn,
-    childWake,
   } = turn;
   let { systemPrompt } = turn;
   if (appConnections)
@@ -125,17 +124,48 @@ export async function appendTurnGuidance(turn: {
         "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.",
     );
   }
-  if (automatedTurn && input.surface && isPollSurface(input.surface)) {
+  if (firedByPoll(input)) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
     );
   }
-  if (childWake) {
-    turnEvents.push(
-      "This turn was started by one of your subagents, not a person typing. To end it without posting, call `finish_silently` and write no text; anything you write is shown to the person.",
-    );
-  }
   return systemPrompt;
+}
+
+export async function replyToRewrite(
+  deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
+  tenant: TurnCapabilities["tenant"],
+  personId: string,
+  history: readonly Item[],
+  flag: FeatureName = "wake_reply_rewrite",
+): Promise<Item | undefined> {
+  const replies = history
+    .slice(history.findLastIndex(typedBy) + 1)
+    .filter((item) => isShownReply(item) && !!item.turnId);
+  if (!replies.length || !(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
+  const sources = await deps.runs?.requestSources(
+    tenant,
+    replies.map((reply) => reply.turnId!),
+  );
+  return replies.findLast((reply) => {
+    const source = sources?.get(reply.turnId!);
+    return source && samePerson(source.actorId, personId) && !firedByPoll(source);
+  });
+}
+
+export const replacesReply = (entry: NewItem): boolean =>
+  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped;
+
+export function wakeTurnEvent(childWake: boolean, rewrites: Item | undefined): string {
+  const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;
+  if (!rewrites)
+    return `${started} To end it without posting, call \`finish_silently\` and write no text; anything you write is shown to the person.`;
+  return (
+    `${started} Your reply replaces your last message to the person, the one beginning "${snippet(rewrites.text ?? "", 60)}"; they will see only the new one. ` +
+    "Write it as your answer to what they asked, as you would give it had you had every result from the start: each result stated as a fact about what they asked about, not as news about the work (which worker found it, how many are back, when, how, or whether it finished, or what it took to get). " +
+    "Anything not yet known is simply still to come, and anything waiting on them stays." +
+    (childWake ? " To leave that message as it is, call `finish_silently` and write no text." : "")
+  );
 }
 
 export async function addConversationBlocks(turn: {
@@ -147,7 +177,7 @@ export async function addConversationBlocks(turn: {
   strictReadOnly: boolean;
   turnContextBlocks: SystemContextBlocks;
   credentialDescriptions: CredentialCatalog["credentialDescriptions"];
-  openSpeakerKeychain: CredentialCatalog["openSpeakerKeychain"];
+  openOwnerKeychain: CredentialCatalog["openOwnerKeychain"];
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   rosterMembers: DirectoryMember[] | undefined;
@@ -162,7 +192,7 @@ export async function addConversationBlocks(turn: {
     strictReadOnly,
     turnContextBlocks,
     credentialDescriptions,
-    openSpeakerKeychain,
+    openOwnerKeychain,
     scopeKeychainGrants,
     directoryIndexFor,
   } = turn;
@@ -204,7 +234,7 @@ export async function addConversationBlocks(turn: {
     const keychainBlock = renderKeychainManifest({
       scopeId,
       conversationKind: conversation.kind,
-      openSpeakerKeychain,
+      openOwnerKeychain,
       actorId: actor.id,
       members,
       entriesByOwner,

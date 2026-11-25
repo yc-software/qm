@@ -14,7 +14,6 @@ const merge = (base: CredentialFile[], stored: CredentialFile[], refreshed: Cred
     stored,
     refreshed,
     hash,
-    refreshOnly: false,
   });
   return {
     files: Object.fromEntries(result.files.map((f) => [f.path, Buffer.from(f.contentBase64, "base64").toString()])),

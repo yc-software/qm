@@ -207,29 +207,6 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("only a caller that declares an owner fire produces one, and only for a person", async () => {
-    const requests: TurnRequest[] = [];
-    const d = deps(async (request) => {
-      requests.push(request);
-      return { status: "ok" };
-    });
-    const base = { owner: "U1", ownerScopeId: scopeId("personal", "U1"), input: "scan", surface: "cron" };
-    await runTrigger(d, { ...base, fireKey: "cron:unmarked" });
-    await runTrigger(d, { ...base, ownerFire: true, fireKey: "cron:marked" });
-    await runTrigger(d, {
-      ...base,
-      owner: "system:channel:C1",
-      ownerScopeId: scopeId("channel", "C1"),
-      ownerFire: true,
-      fireKey: "cron:conversation",
-    });
-    assert.deepEqual(
-      requests.map((r) => r.origin?.kind === "automation" && r.origin.ownerFire === true),
-      [false, true, false],
-      "a cron the conversation owns runs as the scope, which is nobody's authority",
-    );
-  });
-
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {
     const d = deps(async () => ({ status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }));
     const out = await runTrigger(d, {

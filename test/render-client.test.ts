@@ -142,9 +142,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
   assert.equal(saved.expiresAtMs, Date.parse(snapshot.expiresAt));
   assert.deepEqual(await client.getSnapshot(saved), saved);
   await client.deleteSnapshot(saved);
-  const { expiresAt, ...snapshotBody } = requests[0]!.body as unknown as { expiresAt: string };
-  assert.deepEqual(snapshotBody, { kind: "runtime", name: "qm-test" });
-  assert.ok(Date.parse(expiresAt) - Date.now() > 9 * 365 * 86400_000);
+  assert.deepEqual(requests[0]!.body, { kind: "runtime", name: "qm-test", ttlSeconds: 0 });
   assert.deepEqual(requests.slice(1), [
     { method: "GET", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
     { method: "DELETE", path: "/v1/sandbox-groups/sbg-test/snapshots/snp-test" },
@@ -316,10 +314,9 @@ test("Render SDK adapter keeps stdout, stderr, and nonzero exit status of an upl
     sent.map((request) => request.path),
     ["/v1/sandboxes/sbx-test/files/upload/token", "/files", "/v1/sandboxes/sbx-test/runs/stream/token", "/stream"],
   );
-  const command = (JSON.parse(sent[2]!.body) as { command: string }).command;
+  const command = (JSON.parse(sent[3]!.body) as { command: string }).command;
   assert.match(command, SPOOLED);
   assert.equal(SPOOLED.exec(command)![1], "10");
-  assert.deepEqual(JSON.parse(sent[3]!.body), { command });
   const path = SPOOLED.exec(command)![2]!;
   assert.ok(sent[1]!.body.startsWith(cleanup(path)));
   assert.ok(sent[1]!.body.endsWith("\nexample command"));
@@ -413,6 +410,7 @@ for (const { operation, status, cleanup } of [
 ]) {
   test(`Render SDK adapter handles ${operation} failure in a ${status} sandbox`, async (t) => {
     const commands: string[] = [];
+    let tokens = 0;
     t.mock.method(globalThis, "fetch", async (input: Request | string | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       const path = new URL(request.url).pathname;
@@ -423,11 +421,12 @@ for (const { operation, status, cleanup } of [
           : Response.json({ uri: "https://sandbox.example/files", method: "PUT", token: "file-token" });
       if (path === "/files") return new Response(null, { status: 204 });
       if (path.endsWith("/runs/stream/token")) {
-        commands.push(((await request.json()) as { command: string }).command);
-        if (operation === "exec" && commands.length === 1)
+        tokens++;
+        if (operation === "exec" && tokens === 1)
           return Response.json({ message: "sandbox is not ready" }, { status: 404 });
         return Response.json({ uri: "https://sandbox.example/stream", method: "POST", token: "t", executionId: "exe" });
       }
+      if (path === "/stream") commands.push(((await request.json()) as { command: string }).command);
       return new Response('event: exit\ndata: {"exit_code":0}\n\n', {
         headers: { "content-type": "text/event-stream" },
       });
@@ -443,8 +442,9 @@ for (const { operation, status, cleanup } of [
       }
       return true;
     });
-    assert.equal(commands.length, Number(operation === "exec") + Number(cleanup));
-    if (cleanup) assert.match(commands.at(-1)!, /^rm -f '/);
+    assert.equal(tokens, Number(operation === "exec") + Number(cleanup));
+    assert.equal(commands.length, Number(cleanup));
+    if (cleanup) assert.match(commands[0]!, /^rm -f '/);
   });
 }
 
@@ -519,7 +519,7 @@ test("Render SDK adapter rejects truncated streams and removes the uploaded scri
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   await assert.rejects(client.runScript("sbx-test", "side effect", 10), /terminal event/);
   const commands = sent
-    .filter((request) => request.path.endsWith("/runs/stream/token"))
+    .filter((request) => request.path === "/stream")
     .map((request) => (JSON.parse(request.body) as { command: string }).command);
   assert.equal(commands.length, 2);
   assert.match(commands[0]!, SPOOLED);
@@ -546,7 +546,7 @@ test("Render SDK adapter keeps scripts and secrets out of run token requests and
     assert.equal(request.body.includes(secret), false);
     assert.equal(request.body.includes(payload.slice(0, 64)), false);
   }
-  assert.match((JSON.parse(runs[0]!.body) as { command: string }).command, SPOOLED);
+  assert.match(http.proxyCommands[0]!, SPOOLED);
   assert.ok(http.proxyCommands.every((command) => command.length < 400 && !command.includes(secret)));
   assert.equal(http.uploads.length, 1);
   assert.ok(http.uploads[0]!.path.startsWith(`${RENDER_SCRIPT_DIR}/`));
@@ -574,6 +574,7 @@ test("Render SDK adapter removes scripts that an earlier run left behind", async
 
 test("Render SDK adapter bounds a stalled run token request by the script deadline and a short cleanup", async (t) => {
   const commands: string[] = [];
+  let tokens = 0;
   t.mock.method(globalThis, "fetch", async (input: Request | string | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -581,19 +582,20 @@ test("Render SDK adapter bounds a stalled run token request by the script deadli
       return Response.json({ uri: "https://sandbox.example/files", method: "PUT", token: "file-token" });
     if (url.pathname === "/files") return new Response(null, { status: 204 });
     if (url.pathname.endsWith("/runs/stream/token")) {
-      commands.push(((await request.json()) as { command: string }).command);
-      if (commands.length === 1) return new Promise<Response>(() => undefined);
+      tokens++;
+      if (tokens === 1) return new Promise<Response>(() => undefined);
       return Response.json({ uri: "https://sandbox.example/stream", method: "POST", token: "t", executionId: "exe" });
     }
+    commands.push(((await request.json()) as { command: string }).command);
     return new Response('event: exit\ndata: {"exit_code":0}\n\n', { headers: { "content-type": "text/event-stream" } });
   });
   const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
   const started = Date.now();
   await assert.rejects(client.runScript("sbx-test", "sleep 60", 1));
   assert.ok(Date.now() - started < 15_000);
-  assert.equal(commands.length, 2);
-  assert.match(commands[0]!, SPOOLED);
-  assert.match(commands[1]!, /^rm -f '/);
+  assert.equal(tokens, 2);
+  assert.equal(commands.length, 1);
+  assert.match(commands[0]!, /^rm -f '/);
 });
 
 test("Render SDK adapter removes an uploaded script when the run cannot start", async (t) => {

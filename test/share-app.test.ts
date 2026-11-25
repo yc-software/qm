@@ -17,9 +17,11 @@ import { resolveShareTarget as resolveTarget } from "../src/api/artifact-share.t
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { signOffs } from "./support/signed-off-action.ts";
+import type { PendingApprovalRecord } from "../src/types.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -76,7 +78,17 @@ function apiHarness(directory?: Dir) {
 }
 
 const cap = (actorId: string, orgId = "acme"): CapabilityClaims =>
-  ({ actorId, orgId, scopeId: scopeId("personal", actorId), exp: 9_999_999_999, liveActor: true }) as CapabilityClaims;
+  ({
+    actorId,
+    orgId,
+    scopeId: scopeId("personal", actorId),
+    exp: 9_999_999_999,
+    internalAudience: true,
+    personAuthority: true,
+  }) as CapabilityClaims;
+
+const signedOff = signOffs({ getItems: async () => [] });
+const approved = async () => true;
 
 const one = (principalId: string, displayName: string): RecipientResolution => ({
   kind: "one",
@@ -91,6 +103,7 @@ function callManage(
   body: unknown,
   featureFlags = externalSharingOn,
   person?: string,
+  signOff = true,
 ) {
   const out: { status?: number; body?: any } = {};
   const res = {
@@ -102,12 +115,22 @@ function callManage(
       out.body = d ? JSON.parse(d) : undefined;
     },
   };
+  const url = new URL(`http://localhost/v1/apps/${id}`);
+  const action = { method: "POST", path: url.pathname, ...(body === undefined ? {} : { body }) };
+  const headers =
+    capability && signOff
+      ? signedOff.approve(
+          { actorId: capability.actorId, sessionId: "dm:live", runId: `live:${capability.actorId}` },
+          action,
+        )
+      : {};
   const ctx = {
     res,
     app,
+    method: "POST",
     params: { type: "deploy", id },
     body,
-    capability: capability && { ...liveRunClaims(capability.actorId), ...capability },
+    capability: capability && { ...liveRunClaims(capability.actorId), sessionId: "dm:live", ...capability },
     actor: person ? { p: person, exp: Date.now() + 60_000 } : null,
     tenant,
     secret: "test-secret",
@@ -115,11 +138,13 @@ function callManage(
       featureFlags,
       control: createControlService(app),
       runs: liveRunStore(),
+      sessions: signedOff.sessions,
+      approvals: testMap<PendingApprovalRecord>(),
       apiBaseUrl: "https://api.example",
       publicUrl: "https://web.example",
     },
-    url: new URL(`http://localhost/v1/apps/${id}`),
-    req: { headers: { host: "localhost" } },
+    url,
+    req: { headers: { host: "localhost", ...headers } },
   } as unknown as ApiCtx;
   return handle(ctx).then(() => out);
 }
@@ -365,14 +390,14 @@ test('resolveShareTarget: scope "org"→org, scope id verbatim, recipient→pers
     scope: "org:default-org",
     label: "everyone in the org",
   });
-  assert.deepEqual(await resolveShareTarget(app, { scope: "personal:U9" }), {
+  assert.deepEqual(await resolveShareTarget(app, { scope: personalScope("U9") }), {
     kind: "ok",
-    scope: "personal:U9",
+    scope: personalScope("U9"),
     label: "personal:U9",
   });
   assert.deepEqual(await resolveShareTarget(app, { recipient: "ann" }), {
     kind: "ok",
-    scope: "personal:U-ann",
+    scope: personalScope("U-ann"),
     label: "Ann",
   });
   assert.equal((await resolveShareTarget(app, { recipient: "ghost" })).kind, "none");
@@ -401,19 +426,19 @@ const appSandbox = (): Sandbox => {
   } as unknown as Sandbox;
 };
 
-function toolCtx(deploy: DeployService, controlClaims = cap("U1")): ToolContext {
+function toolCtx(deploy: DeployService, signOff = true): ToolContext {
   return createToolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
     writableScopeId: scopeId("personal", "U1"),
     readOnlyScopeIds: [scopeId("org", "default-org")],
     commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
+    authorizeCommand: () => signOff,
     grantedHandles: [],
     deploy,
     acl: {} as never,
     createdBy: "U1",
-    controlClaims,
+    controlClaims: cap("U1"),
   } as never);
 }
 
@@ -485,7 +510,7 @@ test("republish, rename and rollback never change visibility; only the separate 
   assert.equal(after?.public, undefined);
   assert.equal(after?.name, "vis");
   assert.equal((await deploy.reachApp("vis", "U2")).status, "denied");
-  await deploy.setAppPublic(d.id, true, { createdBy: "U1", personAtKeyboard: true });
+  await deploy.setAppPublic(d.id, true, { createdBy: "U1", signOff: approved });
   assert.equal((await deploy.getApp(d.id))?.public, true);
   await deploy.deployOrUpdate({ ...owner, name: "vis" });
   await deploy.deployOrUpdate({ ...owner, name: "vis2", renameFrom: "vis" });
@@ -551,7 +576,7 @@ test("app public access is explicit, owner-only, and reversible", async () => {
   assert.equal((await app.getApp("public-toggle"))?.public, true);
 
   const sharedWhilePublic = await callShare(app, cap("U1"), "public-toggle", {
-    scope: "personal:U2",
+    scope: personalScope("U2"),
     access: "view",
   });
   assert.equal(sharedWhilePublic.body.public, true, "person changes preserve and return general access");
@@ -587,7 +612,7 @@ test("without an apps domain, a public link is refused on the share route and th
   assert.equal((await callShare(app, cap("U1"), "path-only", { public: false })).status, 200);
 });
 
-test("the apps tool and the share action change public access only with a person at the keyboard", async () => {
+test("the apps tool and the share action raise an approval card before an app goes public", async () => {
   const { deploy } = makeDeploy();
   const app = createApp({
     advisoryLock: testAdvisoryLock(),
@@ -601,10 +626,16 @@ test("the apps tool and the share action change public access only with a person
     files: [],
     name: "solo",
   });
-  const fired = { ...cap("U1"), triggered: true };
-  await assert.rejects(() => toolCtx(deploy, fired).setAppPublic("solo", true), /Only the person/);
-  assert.equal((await callShare(app, fired, "solo", { public: true })).body.error, "human_consent_required");
+  await assert.rejects(
+    () => toolCtx(deploy, false).setAppPublic("solo", true),
+    /requires approval: Make app solo public/,
+  );
+  const card = await callShare(app, cap("U1"), "solo", { public: true }, externalSharingOn, undefined, false);
+  assert.deepEqual([card.status, card.body.error], [202, "approval_required"]);
   assert.equal((await app.getApp("solo"))?.public, undefined);
+  assert.equal((await callShare(app, cap("U1"), "solo", { public: true })).body.public, true);
+  await deploy.setAppPublic("solo", false, { createdBy: "U1", signOff: async () => false });
+  assert.equal((await app.getApp("solo"))?.public, undefined, "taking a link down needs no card");
   assert.equal((await toolCtx(deploy).setAppPublic("solo", true)).public, true);
   assert.equal((await callShare(app, null, "solo", { public: false }, externalSharingOn, "U1")).body.public, false);
 });
@@ -646,7 +677,7 @@ test("with external app sharing off, public links and outside emails are refused
   assert.equal(org.status, 200);
   assert.deepEqual((await deploy.appGrantees("locked")).map((g) => g.scope).sort(), [
     "org:default-org",
-    "personal:teammate@acme.test",
+    personalScope("teammate@acme.test"),
   ]);
 
   const d = (await app.getApp("locked"))!;
@@ -660,7 +691,7 @@ test("with external app sharing off, public links and outside emails are refused
     }),
     /external_app_sharing/,
   );
-  assert.ok(!(await deploy.appGrantees("locked")).some((g) => g.scope === "personal:guest@elsewhere.test"));
+  assert.ok(!(await deploy.appGrantees("locked")).some((g) => g.scope === personalScope("guest@elsewhere.test")));
 });
 
 test("app permissions are visible only to the owner, including for managers", async () => {
@@ -672,44 +703,56 @@ test("app permissions are visible only to the owner, including for managers", as
     files: [],
     name: "permissions",
   });
-  await callShare(app, cap("U1"), "permissions", { scope: "personal:U2", access: "manage" });
+  await callShare(app, cap("U1"), "permissions", { scope: personalScope("U2"), access: "manage" });
   const owner = await callManage(getAppShares, app, cap("U1"), "permissions", {});
   assert.equal(owner.status, 200);
-  assert.deepEqual(owner.body.grantees, [{ scope: "personal:U2", permission: "write" }]);
+  assert.deepEqual(owner.body.grantees, [{ scope: personalScope("U2"), permission: "write" }]);
   assert.equal((await callManage(getAppShares, app, cap("U2"), "permissions", {})).status, 403);
   assert.equal((await callManage(getAppShares, app, null, "permissions", {})).status, 403);
   assert.equal((await callManage(getAppShares, app, cap("U1"), "missing", {})).status, 404);
-  await callShare(app, cap("U1"), "permissions", { scope: "personal:U2", access: "none" });
+  await callShare(app, cap("U1"), "permissions", { scope: personalScope("U2"), access: "none" });
   assert.deepEqual((await callManage(getAppShares, app, cap("U1"), "permissions", {})).body.grantees, []);
 });
 
 test("a signed-in person reads and changes their app's sharing as themselves, without an agent capability", async () => {
   const { app } = apiHarness();
-  await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [], name: "browser-share" });
+  await app.deploy({
+    ownerScopeId: personalScope("U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "browser-share",
+  });
   const asPerson = (handle: (ctx: ApiCtx) => Promise<void>, person: string, body: unknown) =>
     callManage(handle, app, null, "browser-share", body, externalSharingOn, person);
-  assert.equal((await asPerson(shareApp, "U1", { scope: "personal:U2", access: "view" })).status, 200);
+  assert.equal((await asPerson(shareApp, "U1", { scope: personalScope("U2"), access: "view" })).status, 200);
   const shares = await asPerson(getAppShares, "U1", {});
-  assert.deepEqual([shares.status, shares.body.grantees], [200, [{ scope: "personal:U2", permission: "read" }]]);
+  assert.deepEqual([shares.status, shares.body.grantees], [200, [{ scope: personalScope("U2"), permission: "read" }]]);
   assert.equal((await asPerson(getAppShares, "U2", {})).status, 403);
   assert.equal((await asPerson(shareApp, "U2", { scope: "org", access: "view" })).status, 403);
 });
 
 test("app email grants normalize, dedupe, revoke, and reject external manage without changing the grant", async () => {
   const { app, deploy } = apiHarness();
-  await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [], name: "email-app" });
+  await app.deploy({
+    ownerScopeId: personalScope("U1"),
+    createdBy: "U1",
+    entrypoint: "x",
+    files: [],
+    name: "email-app",
+  });
   for (const email of ["  Invitee@Example.com  ", "invitee@example.com"]) {
     const r = await callShare(app, cap("U1"), "email-app", { email });
     assert.equal(r.status, 200);
-    assert.equal(r.body.target.scope, "personal:invitee@example.com");
+    assert.equal(r.body.target.scope, personalScope("invitee@example.com"));
   }
-  const expected = [{ scope: "personal:invitee@example.com", permission: "read" }];
+  const expected = [{ scope: personalScope("invitee@example.com"), permission: "read" }];
   assert.deepEqual(await deploy.appGrantees("email-app"), expected);
   assert.equal((await deploy.reachApp("email-app", "invitee@example.com")).status, "ok");
   assert.equal((await deploy.reachApp("email-app", "other@example.com")).status, "denied");
   for (const body of [
     { email: "invitee@example.com", access: "manage" },
-    { scope: "personal:invitee@example.com", access: "manage" },
+    { scope: personalScope("invitee@example.com"), access: "manage" },
     { email: "not an email" },
     { email: 123 },
     { email: "invitee@example.com", scope: "org" },
@@ -728,9 +771,11 @@ test("app email grants normalize, dedupe, revoke, and reject external manage wit
 
 test("directory email recipients retain manage access", async () => {
   const { deploy } = makeDeploy(async (email) => email === "member@example.com");
-  const d = await deploy.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [] });
-  await deploy.shareApp(d.id, "personal:Member@Example.com", "write", { createdBy: "U1" });
-  assert.deepEqual(await deploy.appGrantees(d.id), [{ scope: "personal:member@example.com", permission: "write" }]);
+  const d = await deploy.deploy({ ownerScopeId: personalScope("U1"), createdBy: "U1", entrypoint: "x", files: [] });
+  await deploy.shareApp(d.id, personalScope("Member@Example.com"), "write", { createdBy: "U1" });
+  assert.deepEqual(await deploy.appGrantees(d.id), [
+    { scope: personalScope("member@example.com"), permission: "write" },
+  ]);
   assert.equal(await deploy.canManageApp(d.id, { actorId: "member@example.com" }), true);
 });
 
@@ -749,7 +794,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     createdBy: "U1",
     entrypoint: "x",
     files: [],
@@ -781,7 +826,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     return body;
   };
   assert.deepEqual(await allowed(email), { allowed: false });
-  await app.shareApp(d.id, `personal:${email}`, "read", { createdBy: "U1" });
+  await app.shareApp(d.id, personalScope(email), "read", { createdBy: "U1" });
   assert.deepEqual(await allowed(" Invitee@Example.com "), { allowed: true, appOnly: true });
   assert.deepEqual(
     await allowed(email, { enabled: async () => false } as unknown as FeatureFlagStore),
@@ -803,15 +848,15 @@ test("exact email read grants admit app-only login and guest reach without membe
   assert.deepEqual(await allowed(email), { allowed: false });
   assert.equal(await app.effectiveAppPermission(d, email), null);
   await identity.reactivate(email);
-  await app.shareApp(d.id, `personal:${email}`, null, { createdBy: "U1" });
+  await app.shareApp(d.id, personalScope(email), null, { createdBy: "U1" });
   assert.deepEqual(await allowed(email), { allowed: false });
   assert.equal(await app.effectiveAppPermission(d, email), null);
   for (const grant of [
-    { ref: `deployment:${d.id}`, granteeScopeId: `personal:${email}`, permission: "write" as const },
-    { ref: "deployment:missing", granteeScopeId: `personal:${email}`, permission: "read" as const },
+    { ref: `deployment:${d.id}`, granteeScopeId: personalScope(email), permission: "write" as const },
+    { ref: "deployment:missing", granteeScopeId: personalScope(email), permission: "read" as const },
     { ref: `deployment:${d.id}`, granteeScopeId: "org:default-org" as const, permission: "read" as const },
   ])
-    await acl.grant(tenant, { ownerScopeId: "personal:U1", grantedBy: "U1", ...grant });
+    await acl.grant(tenant, { ownerScopeId: personalScope("U1"), grantedBy: "U1", ...grant });
   assert.deepEqual(
     await allowed(email),
     { allowed: false },
@@ -829,20 +874,28 @@ test("uniform app share accepts exact emails and enforces view-only outside the 
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     auditLog: { record() {} },
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [] });
+  const d = await app.deploy({ ownerScopeId: personalScope("U1"), createdBy: "U1", entrypoint: "x", files: [] });
   const control = createControlService(app);
-  const r = await control.shareArtifact({ type: "deploy", id: d.id, email: "Invitee@Example.com" }, cap("U1"));
+  const r = await control.shareArtifact(
+    { type: "deploy", id: d.id, email: "Invitee@Example.com" },
+    cap("U1"),
+    approved,
+  );
   assert.ok(r.ok, JSON.stringify(r));
-  assert.equal(r.target.scope, "personal:invitee@example.com");
+  assert.equal(r.target.scope, personalScope("invitee@example.com"));
   const blocked = await control.shareArtifact(
     { type: "deploy", id: d.id, email: "invitee@example.com", permission: "write" },
     cap("U1"),
+    approved,
   );
   assert.equal(blocked.ok, false);
-  assert.deepEqual(await deploy.appGrantees(d.id), [{ scope: "personal:invitee@example.com", permission: "read" }]);
+  assert.deepEqual(await deploy.appGrantees(d.id), [
+    { scope: personalScope("invitee@example.com"), permission: "read" },
+  ]);
   const moved = await control.shareArtifact(
     { type: "deploy", id: d.id, email: "invitee@example.com", move: true },
     cap("U1"),
+    approved,
   );
   assert.equal(moved.ok, false);
 });
@@ -864,7 +917,7 @@ companyTest("new email grants send an app-specific invitation once; re-adds and 
     },
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     createdBy: "U1",
     entrypoint: "x",
     files: [],
@@ -914,7 +967,7 @@ companyTest("failed invitation delivery leaves the grant and reports the failure
       inviteMailer: mailer,
     } as unknown as Parameters<typeof createApp>[0]);
     const d = await app.deploy({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       createdBy: "U1",
       entrypoint: "x",
       files: [],
@@ -925,7 +978,9 @@ companyTest("failed invitation delivery leaves the grant and reports the failure
     assert.equal(added.body.invitation.emailSent, false);
     assert.match(added.body.invitation.emailProblem, mailer ? /mail unavailable/ : /not configured/);
     assert.equal(added.body.invitation.appUrl, "https://acme1-status-page.apps.example.com/");
-    assert.deepEqual(await deploy.appGrantees(d.id), [{ scope: "personal:invitee@example.com", permission: "read" }]);
+    assert.deepEqual(await deploy.appGrantees(d.id), [
+      { scope: personalScope("invitee@example.com"), permission: "read" },
+    ]);
   }
 });
 
@@ -946,7 +1001,7 @@ test("a company without an app handle gets no app link in the invitation and no 
     },
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     createdBy: "U1",
     entrypoint: "x",
     files: [],
@@ -976,10 +1031,11 @@ companyTest("uniform app share uses the same invitation sender", async () => {
       },
     },
   } as unknown as Parameters<typeof createApp>[0]);
-  const d = await app.deploy({ ownerScopeId: "personal:U1", createdBy: "U1", entrypoint: "x", files: [] });
+  const d = await app.deploy({ ownerScopeId: personalScope("U1"), createdBy: "U1", entrypoint: "x", files: [] });
   const result = await createControlService(app).shareArtifact(
     { type: "deploy", id: d.id, email: "invitee@example.com" },
     cap("U1"),
+    approved,
   );
   assert.ok(result.ok, JSON.stringify(result));
   assert.equal(result.invitation?.emailSent, true);

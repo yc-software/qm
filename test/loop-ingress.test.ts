@@ -15,6 +15,7 @@ import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();
@@ -24,7 +25,7 @@ async function world() {
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "Event review",
     playbook: "Review",
     successCondition: "Reviewed",
@@ -321,12 +322,13 @@ test("Gmail history pagination advances only after durable ingestion, and expire
   assert.equal((entries.at(-1) as any).sourcePayload.gmail.rfcMessageId, "<original>");
 });
 
-test("ingestion configuration rejects nonowners and unattended callers", async () => {
+test("ingestion configuration rejects nonowners and accepts its owner", async () => {
   const w = await world();
   const route = loopIngressRoutes.find((route) => "method" in route && route.method === "POST")!;
   for (const [actor, expected] of [
     ["mallory", 403],
     [null, 403],
+    ["alice", 201],
   ] as const) {
     let status = 0;
     await route.handle({
@@ -351,7 +353,7 @@ test("ingestion configuration rejects nonowners and unattended callers", async (
     } as unknown as ApiCtx);
     assert.equal(status, expected);
   }
-  assert.equal((await w.sources.all()).length, 0);
+  assert.equal((await w.sources.all()).length, 1);
 });
 
 test("new conversation input supersedes held outputs and preserves an edited draft", async () => {

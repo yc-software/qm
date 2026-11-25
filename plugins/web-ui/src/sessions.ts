@@ -128,7 +128,7 @@ import {
   splitInterceptsOpen,
   splitState,
 } from "./split";
-import { liveTurnThreadRef } from "./working-dot";
+import { liveTurnOf } from "./working-dot";
 import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 import {
@@ -502,7 +502,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   }
   const personaId = item.groupKind === "persona" ? item.scopeId.slice("persona:".length) : null;
   if (personaId) glyph = Bot;
-  let fallbackName = personaId ? "Persona" : "Project";
+  let fallbackName = personaId ? "Bot" : "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
@@ -515,7 +515,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   return html`
     <section
       class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
-      aria-label=${`${name} ${personaId ? "persona" : "project"}`}
+      aria-label=${`${name} ${personaId ? "bot" : "project"}`}
       @dragenter=${drop?.dragenter}
       @dragover=${drop?.dragover}
       @dragleave=${drop?.dragleave}
@@ -684,7 +684,7 @@ function personaMenuPopover(personaId: string): TemplateResult {
           viewPersona(personaId);
         }}
       >
-        ${icon(Bot, 15)}<span>View persona</span>
+        ${icon(Bot, 15)}<span>View bot</span>
       </button>
       ${
         personaEditable(personaId)
@@ -697,7 +697,7 @@ function personaMenuPopover(personaId: string): TemplateResult {
                 viewPersona(personaId, true);
               }}
             >
-              ${icon(Pencil, 15)}<span>Edit persona</span>
+              ${icon(Pencil, 15)}<span>Edit bot</span>
             </button>`
           : nothing
       }
@@ -952,18 +952,17 @@ export const syncWorkingPulse = (el?: Element): void => {
 function liveThreads(): ReadonlySet<string> {
   const live = new Set<string>();
   for (const conv of allConversations()) {
-    const ref = liveTurnThreadRef({
-      mountedThreadRef: conv.state.threadRef,
-      isStreaming: Boolean(conv.state.agent?.state.isStreaming),
-      pendingSend: conv.state.pendingSend,
-    });
+    const ref = liveTurnOf(conv.state);
     if (ref) live.add(ref);
   }
   return live;
 }
 
+export const workingMark = (): TemplateResult =>
+  html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>`;
+
 function statusMarks(ind: RowIndicators): TemplateResult {
-  return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
+  return html`${ind.working ? workingMark() : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }`;
 }
@@ -1960,7 +1959,7 @@ export function sessionsReady(): Promise<void> {
   return sessionsState.loaded ? Promise.resolve() : listReady;
 }
 
-function openConversationIds(): string[] {
+export function openConversationIds(): string[] {
   const opening = sessionsState.openingKey ? [sessionsState.openingKey] : [];
   return [...opening, ...allConversations().flatMap((conv) => (conv.state.sessionId ? [conv.state.sessionId] : []))];
 }
