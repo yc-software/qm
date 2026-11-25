@@ -105,11 +105,6 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
   const pg = createPgPool(connectionString, [
     {
-      id: "runs/store/0010-drop-turn-metrics",
-      upgradeFrom: "runs/store/0009-claim-priority-index",
-      statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
-    },
-    {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
       statements: [
@@ -471,6 +466,15 @@ END $base_schema$`,
       };
       await claimThenBind(() => claimRows(pg, "claim_expired_runs", [now]), reap);
       return { requeued, parked };
+    },
+
+    async deleteByThread(tenant: Tenant, threadRef: string): Promise<string[]> {
+      const { rows } = await pg
+        .forTenant(tenant)
+        .query("DELETE FROM runs WHERE session_id = $1 AND status NOT IN ('pending', 'running') RETURNING id", [
+          threadRef,
+        ]);
+      return rows.map((r) => r.id as string);
     },
 
     async close(): Promise<void> {

@@ -16,8 +16,8 @@
       <p class="eyebrow">COMPUTER ACCESS</p>
       <h1>Let <span data-name>QM</span> help on your Mac.</h1>
       <p class="intro">
-        Enable these two permissions to let <span data-name>QM</span> read app windows and click or type when you ask it
-        to.
+        Enable these three permissions to let <span data-name>QM</span> read app windows and click or type when you ask
+        it to.
       </p>
       <section aria-label="Required permissions">
         <div class="row">
@@ -36,7 +36,25 @@
           </div>
           <button data-settings="screen_recording">Set up ↗</button>
         </div>
+        <div class="row">
+          <div>
+            <h2>Input Monitoring</h2>
+            <p>Keep your own typing from colliding with automated input.</p>
+            <span id="input_monitoring-status" class="status">Checking…</span>
+          </div>
+          <button data-settings="input_monitoring">Set up ↗</button>
+        </div>
       </section>
+      <div id="location" class="row" role="alert" hidden>
+        <div>
+          <h2>Move <span data-name>QM</span> to Applications</h2>
+          <p>
+            It's running from Downloads or a temporary copy, where macOS won't keep these permissions. Move it to
+            Applications, then set up the permissions there.
+          </p>
+        </div>
+        <button id="move">Move to Applications</button>
+      </div>
       <section class="instructions" aria-label="Setup steps">
         <h2 id="guide-title">Start with Accessibility</h2>
         <ol>
@@ -46,7 +64,7 @@
             <strong>If it’s missing, drag the app below into that list.</strong> You can also click
             <strong>+</strong> and select it in Finder.
           </li>
-          <li>Turn on its switch. Repeat for the other permission.</li>
+          <li>Turn on its switch. Repeat for the other permissions.</li>
         </ol>
         <div class="guide">
           <div

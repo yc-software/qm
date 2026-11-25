@@ -14,6 +14,7 @@ import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts
 import { settle } from "./support/settle.ts";
 import { boundTenant, withoutTenant, type Tenant } from "../src/tenants/context.ts";
 import { tenantLookup } from "../src/tenants/lookup.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "egress-audit-tenant-capability-secret".repeat(2);
 const a = randomUUID();
@@ -65,8 +66,8 @@ async function ingest(
 test("egress-audit ingest on a multitenant core saves each record under the tenant it names", () =>
   withoutTenant(async () => {
     const result = await ingest([
-      { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
-      { host: "b.example", verdict: "denied", scopeLabel: "personal:U1", tenant: b },
+      { host: "a.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: a },
+      { host: "b.example", verdict: "denied", scopeLabel: personalScope("U1"), tenant: b },
     ]);
     assert.equal(result.status, 200);
     assert.deepEqual(result.body, { accepted: 2, rejected: 0 });
@@ -79,9 +80,9 @@ test("egress-audit ingest on a multitenant core saves each record under the tena
 test("egress-audit ingest rejects records with no tenant or a malformed one when the core has several tenants", () =>
   withoutTenant(async () => {
     const result = await ingest([
-      { host: "none.example", verdict: "ok", scopeLabel: "personal:U1" },
-      { host: "bad.example", verdict: "ok", scopeLabel: "personal:U1", tenant: "not-a-tenant" },
-      { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+      { host: "none.example", verdict: "ok", scopeLabel: personalScope("U1") },
+      { host: "bad.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: "not-a-tenant" },
+      { host: "a.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: a },
     ]);
     assert.deepEqual(result.body, { accepted: 1, rejected: 2 });
     assert.deepEqual(result.saved, [{ host: "a.example", tenant: a }]);
@@ -90,8 +91,8 @@ test("egress-audit ingest rejects records with no tenant or a malformed one when
 test("egress-audit ingest rejects a well-formed tenant id the core does not have", () =>
   withoutTenant(async () => {
     const result = await ingest([
-      { host: "ghost.example", verdict: "ok", scopeLabel: "personal:U1", tenant: randomUUID() },
-      { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+      { host: "ghost.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: randomUUID() },
+      { host: "a.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: a },
     ]);
     assert.deepEqual(result.body, { accepted: 1, rejected: 1 });
     assert.deepEqual(result.saved, [{ host: "a.example", tenant: a }]);
@@ -102,8 +103,8 @@ test("egress-audit ingest on a single-tenant core files tenantless records under
     await bindBootTenant(async () => b);
     try {
       const result = await ingest([
-        { host: "old.example", verdict: "ok", scopeLabel: "personal:U1" },
-        { host: "a.example", verdict: "ok", scopeLabel: "personal:U1", tenant: a },
+        { host: "old.example", verdict: "ok", scopeLabel: personalScope("U1") },
+        { host: "a.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: a },
       ]);
       assert.deepEqual(result.body, { accepted: 2, rejected: 0 });
       assert.deepEqual(result.saved, [
@@ -122,8 +123,8 @@ describeTwoTenants("egress-audit ingest under row-level security", (db) => {
       const [first, second] = db.tenants;
       const result = await ingest(
         [
-          { host: "first.example", verdict: "ok", scopeLabel: "personal:U1", tenant: first },
-          { host: "second.example", verdict: "denied", scopeLabel: "personal:U1", tenant: second },
+          { host: "first.example", verdict: "ok", scopeLabel: personalScope("U1"), tenant: first },
+          { host: "second.example", verdict: "denied", scopeLabel: personalScope("U1"), tenant: second },
         ],
         sink,
         { tenantLookup: tenantLookup(db.app) },

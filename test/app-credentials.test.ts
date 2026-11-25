@@ -4,7 +4,7 @@ import { appCredentialSlugs } from "../src/deploy/app-credentials.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
@@ -33,7 +33,7 @@ test("a published app gets only enabled broker credentials that are switched on 
       grantedBy: "admin",
     });
   await grant("acme-data", ORG);
-  await grant("finance-api", "personal:cfo");
+  await grant("finance-api", personalScope("cfo"));
   await grant("off-for-apps", ORG);
   await grant("disabled", ORG);
   await grant("no-secret", ORG);

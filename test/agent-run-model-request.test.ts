@@ -5,6 +5,7 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { personalScope } from "../src/types.ts";
 
 const modelId = "gpt-5.4";
 
@@ -70,7 +71,7 @@ test("Pi reports each model request to the turn before the reply streams, and on
       systemPrompt: "Reply ok.",
       history: [],
       tools: {} as AgentTurnInput["tools"],
-      scopeLabel: "personal:test",
+      scopeLabel: personalScope("test"),
       orgScopeId: "org:test",
       emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as never,
       recordModelCall: () => {},

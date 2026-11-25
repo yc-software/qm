@@ -14,9 +14,11 @@ import { createControlService } from "../src/api/control-service.ts";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -35,7 +37,7 @@ function signed(method: string, path: string, body = ""): Record<string, string>
 }
 
 function claims(actorId: string): CapabilityClaims {
-  return { actorId, scopeId: `personal:${actorId}`, exp: Date.now() + 60_000 };
+  return { actorId, scopeId: personalScope(actorId), exp: Date.now() + 60_000 };
 }
 
 async function token(actorId: string, scopeId: CapabilityClaims["scopeId"], scopeVersion?: string): Promise<string> {
@@ -104,8 +106,8 @@ test("Project trigger access follows current membership while Slack-group owner 
   });
 
   const control = createControlService(built.app, built.scheduler);
-  assert.ok((await control.listCrons(claims("member"))).crons.some((cron) => cron.id === projectCron.id));
-  assert.ok((await control.listCrons(claims("owner"))).visible.some((cron) => cron.id === projectCron.id));
+  assert.ok((await control.listCrons(claims("member"), testTenant)).crons.some((cron) => cron.id === projectCron.id));
+  assert.ok((await control.listCrons(claims("owner"), testTenant)).visible.some((cron) => cron.id === projectCron.id));
   assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
 
   const server = createServer(built.app, {
@@ -160,7 +162,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok(!listedCrons.visible.some((cron) => cron.id === projectCron.id));
   assert.ok(listedCrons.owned.some((cron) => cron.id === slackCron.id));
 
-  const controlledCrons = await control.listCrons(claims("member"));
+  const controlledCrons = await control.listCrons(claims("member"), testTenant);
   assert.ok(!controlledCrons.crons.some((cron) => cron.id === projectCron.id));
   assert.ok(!controlledCrons.visible.some((cron) => cron.id === projectCron.id));
   assert.ok(controlledCrons.crons.some((cron) => cron.id === slackCron.id));

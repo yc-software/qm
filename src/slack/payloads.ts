@@ -145,6 +145,30 @@ export function parseBlockAction<T extends string>(
   return actionId === undefined ? undefined : { actionId, value: String(a.value ?? "") };
 }
 
+function slackBotProfileName(m: { bot_profile?: unknown }): string | undefined {
+  const name =
+    m.bot_profile && typeof m.bot_profile === "object" ? (m.bot_profile as { name?: unknown }).name : undefined;
+  return typeof name === "string" && name.trim() ? name.trim() : undefined;
+}
+
+export function slackBotName(m: { username?: unknown; bot_profile?: unknown }): string | undefined {
+  const username = typeof m.username === "string" ? m.username.trim() : "";
+  return username || slackBotProfileName(m);
+}
+
+export function slackCustomBotName(
+  m: { username?: unknown; bot_profile?: unknown },
+  defaultName?: string,
+): string | undefined {
+  const username = typeof m.username === "string" ? m.username.trim() : "";
+  if (!username) return undefined;
+  const lower = username.toLowerCase();
+  const profile = slackBotProfileName(m);
+  if (profile && lower === profile.toLowerCase()) return undefined;
+  if (defaultName && lower === defaultName.trim().toLowerCase()) return undefined;
+  return username;
+}
+
 export interface SlackHistoryMessage {
   blocks?: unknown[];
   edited?: { ts?: string };

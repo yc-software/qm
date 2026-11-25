@@ -4,19 +4,20 @@ import { randomUUID } from "node:crypto";
 import { recordAuditInBinding, type AuditEvent } from "../src/audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../src/admin/error-log.ts";
 import { withTenant, withoutTenant, type Tenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 const auditEvent: AuditEvent = {
   at: 1,
   principalId: "a@example.com",
   action: "x",
   resource: "r",
-  scopeLabel: "personal:a@example.com",
+  scopeLabel: personalScope("a@example.com"),
 };
 const errorEvent: Omit<ErrorEvent, "ts"> = {
   category: "c",
   code: "k",
   message: "m",
-  scopeLabel: "personal:a@example.com",
+  scopeLabel: personalScope("a@example.com"),
 };
 
 test("the audit and error bridges record with the bound tenant's token", () => {

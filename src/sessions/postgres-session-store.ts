@@ -1,3 +1,4 @@
+import { rosterIds } from "../directory/person.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
@@ -13,6 +14,7 @@ import type {
   SessionStore,
   StoreOptions,
 } from "./session-store.ts";
+import { claimRows } from "../tenants/claim.ts";
 import { ancestry, SESSION_MIGRATIONS } from "./session-schema.ts";
 import { createSessionSpend } from "./session-spend.ts";
 import { createLlmCaptures } from "./llm-captures.ts";
@@ -76,7 +78,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     tenantLookup: tenantLookup(db),
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -113,12 +115,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         scopeId,
         threadRef,
         createdAt: now(),
-        ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, ephemeral) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -129,7 +130,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           surface ?? null,
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
-          clientTools?.length ? JSON.stringify(clientTools) : null,
+          facts?.ephemeral === true,
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
@@ -150,14 +151,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async sideChatsOf(sessionId, principalId) {
-      const condition = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL
-         AND EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
-           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') ORDER BY s.created_at`;
+      const forks = `s.forked_from_session_id = $${principalId === undefined ? 1 : 2} AND s.side_chat IS NOT NULL`;
+      const asked = `EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
+           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage')`;
+      const queued = `EXISTS (SELECT 1 FROM runs r WHERE r.tenant_id = ${TENANT} AND r.session_id = s.thread_ref
+           AND r.status IN ('pending', 'running'))`;
       const rows = await q(
         principalId === undefined
-          ? `SELECT s.* FROM sessions s WHERE ${condition}`
-          : participantSessionsSql(` AND ${condition}`),
-        principalId === undefined ? [sessionId] : [principalId, sessionId],
+          ? `SELECT s.* FROM sessions s WHERE ${forks} AND ${asked} ORDER BY s.created_at`
+          : participantSessionsSql(` AND ${forks} AND (${asked} OR ${queued}) ORDER BY s.created_at`),
+        principalId === undefined ? [sessionId] : [rosterIds(principalId), sessionId],
       );
       return rows.map(principalId === undefined ? rowToSession : rowToParticipantSession);
     },
@@ -254,6 +257,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
+    async claimExpiredEphemeral(cutoff, limit = 100, afterId = "") {
+      return claimRows(db, "claim_expired_ephemeral_sessions", [cutoff, limit, afterId]);
+    },
+
+    async markEphemeralExpired(tenant, sessionId) {
+      await db
+        .forTenant(tenant)
+        .q("UPDATE sessions SET created_at = 0, last_activity = 0 WHERE id = $1 AND ephemeral = true", [sessionId]);
+    },
+
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
@@ -288,7 +301,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (!ids.length) return [];
       const rows = await q(
         participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
-        [principalId, ids],
+        [rosterIds(principalId), ids],
       );
       return rows.map(rowToParticipantSession);
     },
@@ -348,12 +361,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async listByScope(scope): Promise<Session[]> {
-      const rows = await q("SELECT * FROM sessions WHERE scope_id = $1 ORDER BY created_at DESC, id DESC", [scope]);
+      const rows = await q(
+        "SELECT * FROM sessions WHERE scope_id = $1 AND NOT ephemeral ORDER BY created_at DESC, id DESC",
+        [scope],
+      );
       return rows.map(rowToSession);
     },
 
     async scopeHasSessions(scope): Promise<boolean> {
-      const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1) AS present", [scope]);
+      const rows = await q("SELECT EXISTS(SELECT 1 FROM sessions WHERE scope_id = $1 AND NOT ephemeral) AS present", [
+        scope,
+      ]);
       return Boolean(rows[0]?.present);
     },
 

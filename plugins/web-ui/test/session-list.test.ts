@@ -456,6 +456,14 @@ test("conversations with a persona you can use group under that persona instead 
   assert.deepEqual(groups, { "persona:ada": ["1"], "personal:alice": ["2", "3"], "persona:idle": [] });
 });
 
+test("sorting by activity drops persona groups so persona chats sit in the flat list", () => {
+  const personas = [{ scopeId: "persona:ada", name: "Ada", kind: "persona" as const }];
+  const withAda = { ...saved("1", "web:alice:ada"), personaId: "ada" };
+  assert.deepEqual(groupProjectSessions([withAda], sidebarProjectSeeds([], true, personas)), [
+    { kind: "session", session: withAda },
+  ]);
+});
+
 test("a pending (not-yet-sent) chat in a project scope nests under its project", () => {
   const seeds = [{ scopeId: "group:web-project-p1", name: "P1" }];
   const fresh = { ...pending("web:alice:new"), type: "group" as const, scopeId: seeds[0]!.scopeId };
@@ -678,7 +686,11 @@ test("sidebar excludes attached subagents including pinned and orphaned children
 
 test("surfaceOf tells web chats, the chat surfaces the server names, and everything else apart", () => {
   const sessions = [{ surface: "slack" }, { surface: "partner-chat" }, { surface: "web" }, { surface: "swarm" }, {}];
-  appState.me = { user: "tester", org: "test" };
+  appState.me = {
+    user: "tester",
+    personalScope: "personal:tester",
+    org: "test",
+  };
   assert.deepEqual(sessions.map(surfaceOf), ["core", "core", "web", "core", "core"]);
   appState.me.chatSurfaces = [
     { kind: "slack", label: "Slack" },

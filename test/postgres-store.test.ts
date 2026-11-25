@@ -8,7 +8,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { rowToSession } from "../src/sessions/session-rows.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type Principal, type TurnRequest, type TurnResult, personalScope } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
@@ -59,7 +59,7 @@ test("pg session row mapping ignores incomplete fork provenance", () => {
   const session = rowToSession({
     id: "fork",
     type: "dm",
-    scope_id: "personal:U1",
+    scope_id: personalScope("U1"),
     thread_ref: "thread",
     created_at: 1,
     forked_from_session_id: "source",
@@ -164,10 +164,10 @@ test("pg saved spend refreshes changed days and preserves live attribution", { s
     await store.refreshSpendRollup!();
     await check();
     assert.ok((await read()).every((r) => r.origin === "cron"));
-    await raw.query("UPDATE sessions SET scope_id = $2 WHERE id = $1", [session.id, "personal:saved-moved"]);
+    await raw.query("UPDATE sessions SET scope_id = $2 WHERE id = $1", [session.id, personalScope("saved-moved")]);
     await store.refreshSpendRollup!();
     await check();
-    assert.ok((await read()).every((r) => r.scopeId === "personal:saved-moved"));
+    assert.ok((await read()).every((r) => r.scopeId === personalScope("saved-moved")));
     await store.deleteSession(parent.id);
     await store.refreshSpendRollup!();
     await check();
@@ -468,8 +468,8 @@ test("pg spend rollup handles unusual usage rows and later writes", { skip }, as
       (await read()).reduce((sum, row) => sum + row.costUsd, 0),
       3,
     );
-    await raw.query("UPDATE sessions SET scope_id = 'personal:USPENDMOVED' WHERE id = $1", [session.id]);
-    const moved = (await store.spendRollup(range)).filter((r) => r.scopeId === "personal:USPENDMOVED");
+    await raw.query("UPDATE sessions SET scope_id = $2 WHERE id = $1", [session.id, personalScope("USPENDMOVED")]);
+    const moved = (await store.spendRollup(range)).filter((r) => r.scopeId === personalScope("USPENDMOVED"));
     assert.equal(
       moved.reduce((sum, row) => sum + row.calls, 0),
       4,
@@ -2418,26 +2418,6 @@ test(
     }
   },
 );
-
-test("desktop tool definitions survive a store restart without changing on later turns", { skip }, async () => {
-  const { desktopComputerTool } = await import("../plugins/chassis/src/desktop-computer.ts");
-  const first = createPostgresSessionStore(URL!);
-  const session = await first.getOrCreateByThread(
-    `desktop-${randomUUID()}`,
-    "dm",
-    scopeId("personal", "U1"),
-    undefined,
-    "web",
-    [desktopComputerTool],
-  );
-  const restarted = createPostgresSessionStore(URL!);
-  const loaded = await restarted.getOrCreateByThread(session.threadRef, "dm", session.scopeId, undefined, "web");
-  assert.deepEqual(loaded.clientTools, [desktopComputerTool]);
-  const changed = await restarted.getOrCreateByThread(session.threadRef, "dm", session.scopeId, undefined, "web", [
-    { ...desktopComputerTool, description: "new version" },
-  ]);
-  assert.deepEqual(changed.clientTools, [desktopComputerTool]);
-});
 
 test("pg session lists leave out spawn metadata and group scopes per participant", { skip }, async () => {
   await assertLeanListing(createPostgresSessionStore(URL!), "pg-lean");

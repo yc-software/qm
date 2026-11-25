@@ -5,6 +5,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { refusalNote } from "../src/surfaces/refusals.ts";
+import { personalScope } from "../src/types.ts";
 
 const webTurn = (actor: string, extra: Partial<TurnRequest> = {}): TurnRequest => ({
   surface: "web",
@@ -25,7 +26,7 @@ test("a company web turn refuses a model the deployment cannot resolve", async (
 
 test("a company web turn refuses when its stored runtime's provider has no key", async () => {
   const built = buildApp(testConfig({}));
-  await built.config.setRuntimeSelection("personal:alice", { modelId: "gpt-5.6-sol" });
+  await built.config.setRuntimeSelection(personalScope("alice"), { modelId: "gpt-5.6-sol" });
   const result = await built.app.turn(webTurn("alice"));
   assert.equal(result.status, "refused");
   assert.equal(result.reason, "that model isn't available on this deployment (its provider isn't configured)");

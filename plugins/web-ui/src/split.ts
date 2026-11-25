@@ -55,7 +55,6 @@ import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { tip } from "./tooltip";
 import { personaName, sessionPersonaChip } from "./personas";
-import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
@@ -78,7 +77,7 @@ import {
   sessionsState,
   sessionTitle,
   archiveSessionById,
-  syncWorkingPulse,
+  workingMark,
   backgroundIcons,
 } from "./sessions";
 import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
@@ -1239,7 +1238,7 @@ class PaneTab implements ITabRenderer {
     const parent = sessionId ? sessionParent(sessionId) : undefined;
     render(
       html`
-        ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
+        ${working ? workingMark() : nothing}
         ${awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing}
         ${
           crumb

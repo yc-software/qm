@@ -52,10 +52,10 @@ one is refused until the first is unpinned. Removing the channel's grant unpins 
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
-write. Only an owner can attach a credential, only their own, and only on a turn they
-sent that is still running; readers use it through the persona but never hold it.
-Detaching a credential, changing who holds a role and deleting the persona also take an
-owner, on a turn they sent that is still running.
+write. Only an owner can attach a credential, only their own, and attaching one raises an
+approval card to them; readers use it through the persona but never hold it. Detaching a
+credential and changing who holds a role also take an owner; deleting the persona takes an
+owner and their approval card.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named
@@ -79,9 +79,13 @@ if the sender holds a role on the persona (counting the conversation's channel),
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
 - adds a `## Persona` block after the organization and conversation instructions.
 
-If the sender has no role, the persona is skipped and the block says so. Files and crons
-stay in the conversation's scope, and so does memory in a DM or in a conversation that only
-picked the persona.
+If the sender has no role, the persona is skipped and the block says so. Files stay in the
+conversation's scope, and so does memory in a DM or in a conversation that only picked the
+persona (persona owners and write holders can also write directly to `persona:<id>` memory).
+Crons created in a DM while wearing a persona default to being owned by that persona when the
+sender holds write or owner on it (override with `persona: null`); persona-owned crons are
+managed by the persona's owners and write holders, and when posting to a DM they fan out into
+linked per-person copies when shared with teammates.
 
 A channel or group that pins a persona uses the persona's notebook in place of its own:
 automatic capture and the `memory` tool save there, and the room's own notebook is kept but

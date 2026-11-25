@@ -1,3 +1,4 @@
+import type { WebPush } from "../notifications/web-push.ts";
 import type { WebEvents } from "./routes/web-events.ts";
 import type { WebShell } from "../web/shell.ts";
 import type { WebMeConfig } from "./routes/web-me.ts";
@@ -7,6 +8,7 @@ import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ModelGatewayTransportConfig, ModelProvider } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { PendingApprovalRecord } from "../types.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
@@ -110,6 +112,7 @@ export interface ServerDeps {
   };
   requireSignedPortalIdentity?: boolean;
   web?: { events: WebEvents; me: WebMeConfig; shell: WebShell };
+  webPush?: WebPush;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   selfServe?: SelfServe;
@@ -220,6 +223,7 @@ export interface ServerDeps {
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   keychainApprovals?: KeychainApprovals;
+  approvals?: DurableMap<PendingApprovalRecord>;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   secretDrops?: SecretDropStore;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;

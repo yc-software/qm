@@ -15,12 +15,13 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "request-tenant-capability-secret".repeat(2);
 const a = randomUUID();
 const b = randomUUID();
 
-const claims = () => ({ actorId: "U1", scopeId: "personal:U1" as const, exp: Date.now() + 60_000 });
+const claims = () => ({ actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + 60_000 });
 
 async function probe(
   route: Pick<Route, "auth" | "tenant"> | undefined,

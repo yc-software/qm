@@ -32,6 +32,7 @@ import {
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
+import { actionApproved } from "../../action-approval.ts";
 import { scopeActivity } from "./scope-activity.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
@@ -86,6 +87,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (!(await actionApproved(ctx, { summary: `Change ${resource} for ${targetScope}` }))) return;
   if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
     try {
@@ -115,7 +117,10 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
 export async function adminPermissions(deps: ApiCtx["deps"], tenant: Tenant, actor: Principal) {
   if (!deps.admin || !(await activePrincipal(deps, actor.id))) return null;
   const status = await deps.admin.adminStatusOf(tenant, actor);
-  return { ...status, permissions: status.isAdmin ? ["admin"] : [] };
+  let permissions: string[] = [];
+  if (status.role === "org_admin") permissions = ["admin"];
+  else if (status.role === "owner") permissions = ["owner"];
+  return { ...status, permissions };
 }
 
 export async function whoami(ctx: ApiCtx): Promise<void> {

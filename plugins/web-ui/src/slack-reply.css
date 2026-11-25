@@ -6,9 +6,75 @@ qm-slack-reply {
   width: min(var(--content-w), 100%);
   box-sizing: border-box;
   margin: 0 auto;
-  padding: 12px var(--composer-inset) 20px;
+  padding: 12px var(--composer-inset) max(20px, calc(10px + env(safe-area-inset-bottom)));
+}
+@container chat (max-width: 860px) {
+  .slack-reply-box {
+    padding-inline: 8px;
+  }
 }
 .slack-reply-box .welcome-slack {
   max-width: none;
   margin-bottom: 0;
+}
+.slack-reply-pill {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 32px;
+  grid-template-areas: "files files files" "avatar input send" "note note note";
+  align-items: end;
+  gap: 0 10px;
+  box-sizing: border-box;
+  padding: 7px 7px 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--background);
+}
+.slack-reply-pill > .inbox-avatar {
+  grid-area: avatar;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 3px;
+  border-radius: 50%;
+  font-size: calc(var(--slack-font-size) * 0.67);
+}
+.slack-reply-pill > .composer-input {
+  grid-area: input;
+  min-width: 0;
+  min-height: 32px;
+  max-height: 136px;
+  padding: 6px 0;
+  font-size: var(--slack-font-size);
+  line-height: 20px;
+}
+@media (hover: none) {
+  .slack-reply-pill > .composer-input {
+    font-size: max(16px, var(--slack-font-size));
+  }
+}
+.slack-reply-actions {
+  display: flex;
+  grid-area: send;
+}
+.slack-reply-actions > .send-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+.slack-reply-actions > .send-btn:disabled {
+  cursor: default;
+}
+.slack-reply-pill > :is(.composer-error, .composer-note) {
+  grid-area: note;
+}
+.slack-reply-pill > .attachment-strip {
+  grid-area: files;
+  margin-bottom: 8px;
+}
+.slack-reply-pill > :is(.emoji-completion, .mention-completion) {
+  position: absolute;
+  z-index: 50;
+  bottom: calc(100% + 8px);
+  left: 0;
+  max-width: 100%;
 }

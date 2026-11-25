@@ -13,6 +13,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -53,7 +54,7 @@ test("list, rename, archive, disable, enable, run, delete are owner-gated", asyn
     schedule: { everyMs: 3_600_000 },
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
   });
   const id = created.id;
 
@@ -136,7 +137,7 @@ test("retained cron runs are private to people who can manage the cron", async (
     schedule: { everyMs: 3_600_000 },
     owner: "run-owner",
     createdBy: "run-owner",
-    ownerScopeId: "personal:run-owner",
+    ownerScopeId: personalScope("run-owner"),
   });
   const firedAt = Date.now();
   for (let i = 0; i < 21; i++)
@@ -179,12 +180,14 @@ test("list splits owned crons from ones visible through shared scopes, and visib
       action: "tick",
       owner: "bob",
       createdBy: "bob",
-      ownerScopeId: "personal:bob",
+      ownerScopeId: personalScope("bob"),
       ...extra,
     } as never);
   const publicCron = await mk({ ownerScopeId: "channel:C9" });
   const privateCron = await mk({ ownerScopeId: "channel:P1" });
-  const dmCron = await mk({ destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" } });
+  const dmCron = await mk({
+    destination: { type: "principal", target: "alice", audienceScopeId: personalScope("alice") },
+  });
   const personalCron = await mk({});
 
   const aliceList = (await (await fetch(`${coreBase}/api/crons`, asUser("alice"))).json()) as {
@@ -259,7 +262,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
   await built.app.grant(tenant, {
     ownerScopeId: "channel:PRIV",
     ref: `cron:${privCron.id}`,
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "write",
     grantedBy: "bob",
   });
@@ -302,7 +305,7 @@ test("cron runtime patches pass through the web API, validate, and clear", async
     schedule: { everyMs: 60_000 },
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
   });
   const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
@@ -326,8 +329,8 @@ test("a browser cron edit accepts only the fields the web app edits", async () =
     schedule: { everyMs: 60_000 },
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
-    destination: { type: "principal", target: "alice", audienceScopeId: "personal:alice" },
+    ownerScopeId: personalScope("alice"),
+    destination: { type: "principal", target: "alice", audienceScopeId: personalScope("alice") },
   } as never);
   const patch = (body: unknown) =>
     fetch(`${coreBase}/api/crons/${cron.id}`, asUser("alice", { method: "PATCH", body: JSON.stringify(body) }));

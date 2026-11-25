@@ -39,7 +39,7 @@ service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the r
 computer. In the acting person's own personal conversation, only a command that names a
 saved file login moves to the turn's scratch computer, because a file login is the one kind
 of credential that saves back. Token and environment credentials stay on the person's own
-computer with its workspace. The owner's other runs, scheduled and unattended ones included,
+computer with its workspace. The owner's other runs, scheduled ones included,
 use that same computer, so any of them can change the programs such a command runs.
 
 A background job in a shared conversation that names such a credential, or in any
@@ -58,9 +58,8 @@ jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
 `watch`, and `unwatch`. A job that names a saved file login runs on a job computer, so it
-takes no `send_input`. When a person's live turn started it, it saves that login's changes as
-live when it exits, so it takes `stop` only from a person's live turn; a scheduled run, a bot's
-turn and other unattended runs are refused.
+takes no `send_input`. When it saves that login's changes on exit, a bot's turn cannot stop
+it.
 Process IDs retain their durable saved target even after the scope default changes. Watches retain their durable monitor registration and wake this
 conversation with output or exit. Provider loss or expiry can still interrupt a process.
 

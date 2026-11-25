@@ -76,6 +76,13 @@ test("project paths open the contexts view with a resolvable project identifier"
   });
 });
 
+test("bot paths open the personas view, and personas links are written as bot paths", () => {
+  assert.equal(deepLinkPath("", "personas", null), "/bots");
+  assert.equal(deepLinkPath("/web-ui", "personas", null, null, "p-ada"), "/web-ui/bots/p-ada");
+  assert.deepEqual(parseDeepLink("", "/bots/p-ada", ""), { view: "personas", session: null, item: "p-ada" });
+  assert.deepEqual(parseDeepLink("", "/personas/p-ada", ""), { view: "personas", session: null, item: "p-ada" });
+});
+
 test("parseDeepLink degrades a malformed percent-escape to no view instead of throwing", () => {
   assert.deepEqual(parseDeepLink("", "/%E0%A4%A", ""), { view: null, session: null, item: null });
 });

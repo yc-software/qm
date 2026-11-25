@@ -367,7 +367,7 @@ test("approval denial is rendered as a normal status, not a stream error", async
   assert.equal(final.stopReason, "stop");
   assert.equal(final.errorMessage, undefined);
   assert.equal((final as AssistantWork & { approvalDecision?: string }).approvalDecision, "denied");
-  assert.equal(block?.type === "text" ? block.text : "", "Denied.");
+  assert.equal(block?.type === "text" ? block.text : "", "Declined.");
   assert.equal(work?.status, "complete");
   assert.equal(work?.activity.length, 1);
 });
@@ -375,7 +375,7 @@ test("approval denial is rendered as a normal status, not a stream error", async
 test("a refusal that only mentions a denied approval in its reason is a failure, not a denial", async () => {
   const streamFn = makeRunResumeStreamFn("run-refused", {
     status: "done",
-    result: { status: "refused", reason: "approval denied for git push --force origin main" },
+    result: { status: "refused", reason: "approval declined for git push --force origin main" },
     partial: "",
     startedAt: 100,
     finishedAt: 200,

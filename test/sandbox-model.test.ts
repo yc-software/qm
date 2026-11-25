@@ -17,6 +17,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+import { personalScope } from "../src/types.ts";
 
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
@@ -73,7 +74,12 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   });
   const base = `${await listen(server as unknown as ReturnType<typeof httpServer>)}/v1/sandbox-model`;
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const claims = { actorId: "U1", scopeId: "personal:U1" as const, aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 };
+  const claims = {
+    actorId: "U1",
+    scopeId: personalScope("U1"),
+    aud: SANDBOX_MODEL_AUD,
+    exp: Date.now() + 60_000,
+  };
   const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
   const openai = (body: unknown, credential = token) =>
     fetch(`${base}/v1/chat/completions`, {
@@ -161,18 +167,18 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get("retry-after"), "7");
   assert.ok(!(await limited.text()).includes(key));
-  for (const upstreamStatus of [401, 403, 500]) {
+  for (const upstreamStatus of [401, 403, 500, 503]) {
     status = upstreamStatus;
-    assert.equal((await openai(chat)).status, 502, String(upstreamStatus));
+    assert.equal((await openai(chat)).status, upstreamStatus < 500 ? 502 : upstreamStatus, String(upstreamStatus));
   }
   status = 200;
 
   overBudget = true;
   assert.equal((await openai(chat)).status, 429);
   overBudget = false;
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await built.config.setSecurityPosture(personalScope("U1"), "strict");
   assert.equal((await openai(chat)).status, 403);
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 9);
 });
 
 test("a sandbox-model token is refused on every other route", async (t) => {
@@ -182,11 +188,11 @@ test("a sandbox-model token is refused on every other route", async (t) => {
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const token = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    { actorId: "U1", scopeId: personalScope("U1"), aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
     TEST_CAPABILITY_SECRET,
   );
   const control = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
+    { actorId: "U1", scopeId: personalScope("U1"), aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
     TEST_CAPABILITY_SECRET,
   );
   const browser = (headers: Record<string, string>) =>
@@ -209,7 +215,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
     modelGateway: { url: "https://models.invalid", apiKey: key, apiKeyHeader: "api-key", models: routes },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => {
@@ -230,17 +236,17 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   const claims = await verifyCapabilityToken(env.MODEL_GATEWAY_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, SANDBOX_MODEL_AUD);
   assert.equal(claims?.actorId, "U1");
-  assert.equal(claims?.scopeId, "personal:U1");
+  assert.equal(claims?.scopeId, personalScope("U1"));
   assert.match((await turn("!sysprompt", "prompt")).reply ?? "", /MODEL_GATEWAY_TOKEN/);
 
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await built.config.setSecurityPosture(personalScope("U1"), "strict");
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
 test("deployments without a gateway still hand the sandbox the model URL and a turn token", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => {
@@ -298,7 +304,7 @@ test("sandbox code reaches a company's own provider through core's chat completi
   await built.refreshCustomProviders();
   const base = `${root}/v1/sandbox-model`;
   const token = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+    { actorId: "U1", scopeId: personalScope("U1"), aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
     TEST_CAPABILITY_SECRET,
   );
   const call = (path: string, body: unknown) =>

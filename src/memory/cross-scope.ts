@@ -3,12 +3,20 @@ import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
 import { factLine, fromOtherSession, normalizeClaim, type MemoryCandidate, type MemorySource } from "./facts.ts";
 import { quotedData, untrustedText } from "../util/text.ts";
+import { scopeLabel } from "../types.ts";
 
 export interface RecalledFact {
   scope: ScopeId;
   id?: string;
   text: string;
   source?: MemorySource;
+}
+
+export interface BrainCard {
+  scope: ScopeId;
+  provider: string;
+  ref: string;
+  text: string;
 }
 
 type ScopedRow = MemoryCandidate & { scope: ScopeId };
@@ -35,7 +43,7 @@ export const RECALL_CHECKED =
   "Each fact below was checked against who is in this conversation before it was shown, so everyone here may be told it, whichever room or person it names.";
 
 const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
-  `### ${recallLabel(labels.get(scope) ?? scope)}${source ? ` · ${recallLabel(source.label)}` : ""}`;
+  `### ${recallLabel(labels.get(scope) ?? scopeLabel(scope))}${source ? ` · ${recallLabel(source.label)}` : ""}`;
 
 const BLOCK_FRAME = quotedData("").length;
 
@@ -92,6 +100,9 @@ export function renderRecall(facts: readonly RecalledFact[], labels: ReadonlyMap
     .map(({ block, rows }) => `${heading(block, labels)}\n${quotedData(rows.join("\n"))}`)
     .join("\n\n");
 }
+
+export const renderCards = (cards: readonly BrainCard[]): string =>
+  cards.length ? `### Brain cards\n${quotedData(cards.map(({ text }) => text).join("\n"))}` : "";
 
 export async function searchAcrossScopes(
   memory: MemoryService,

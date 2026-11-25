@@ -2,7 +2,11 @@ const api = window.permissions;
 const message = document.getElementById("message");
 const enable = document.getElementById("enable");
 const proceed = document.getElementById("continue");
-const names = { accessibility: "Accessibility", screen_recording: "Screen & System Audio Recording" };
+const names = {
+  accessibility: "Accessibility",
+  screen_recording: "Screen & System Audio Recording",
+  input_monitoring: "Input Monitoring",
+};
 let selected = "accessibility";
 let checking = false;
 let requesting = false;
@@ -15,17 +19,18 @@ async function refresh() {
       node.textContent = state.name;
     });
     if (state.icon) document.getElementById("icon").src = state.icon;
-    for (const permission of ["accessibility", "screen_recording"]) {
+    document.getElementById("location").hidden = !state.misplaced;
+    for (const permission of Object.keys(names)) {
       const label = document.getElementById(`${permission}-status`);
       label.textContent = state[permission] ? "✓ Allowed" : "Needs access";
       label.classList.toggle("ready", state[permission]);
     }
-    const ready = state.accessibility && state.screen_recording;
+    const ready = Object.keys(names).every((permission) => state[permission]);
     enable.hidden = ready;
     proceed.hidden = !ready;
     message.textContent = ready
-      ? "You're ready. Both permissions are enabled."
-      : "We haven’t detected both permissions yet. Follow the steps above, then check again.";
+      ? "You're ready. All three permissions are enabled."
+      : "We haven’t detected all three permissions yet. Follow the steps above, then check again.";
   } catch (error) {
     message.textContent = error.message;
   } finally {
@@ -51,6 +56,12 @@ document.querySelectorAll("[data-settings]").forEach((button) => {
   );
 });
 document.getElementById("finder").addEventListener("click", () => action(() => api.finder()));
+document.getElementById("move").addEventListener("click", () =>
+  action(async () => {
+    if (!(await api.move()))
+      message.textContent = "Couldn't move the app. Drag it into Applications in Finder, then reopen it.";
+  }),
+);
 document.getElementById("drag").addEventListener("dragstart", (event) => {
   event.preventDefault();
   api.drag();
@@ -59,7 +70,7 @@ document.getElementById("later").addEventListener("click", () => action(() => ap
 proceed.addEventListener("click", () =>
   action(async () => {
     if (!(await api.close(true))) {
-      message.textContent = "Access changed. Enable both permissions to continue.";
+      message.textContent = "Access changed. Enable all three permissions to continue.";
       await refresh();
     }
   }),

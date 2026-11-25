@@ -13,6 +13,7 @@ import type { ConversationTurn, OverheardMessage } from "../types.ts";
 import {
   isOverheard,
   isAgentReply,
+  isToolPost,
   isUserItem,
   messageTs,
   stepMessage,
@@ -25,7 +26,7 @@ import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../slack/message-revisions.ts";
 import { contextSummaryHeader, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummary } from "../sessions/session-store.ts";
-import { isoFromTs, messageTag } from "../util/message-tag.ts";
+import { isoFromTs, messageTag, speakerAttrs } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { zeroUsage } from "../model/model-runtime.ts";
@@ -158,12 +159,13 @@ export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
 
 export function renderOverheard(p: OverheardEntryPayload): string {
   const body = p.text || (p.files?.length ? "(shared file)" : "");
+  const from = p.sourceRole ?? "human";
   return messageTag(
     {
       overheard: true,
-      from: p.sourceRole ?? "human",
+      from,
       ...(p.ts ? { id: p.ts, sentAt: isoFromTs(p.ts) } : {}),
-      ...(p.name?.trim() ? { author: p.name.trim() } : {}),
+      ...speakerAttrs(p.name, from),
       ...(p.mentions && Object.keys(p.mentions).length ? { mentions: p.mentions } : {}),
     },
     body,
@@ -232,7 +234,7 @@ export function legacyAssistant(content: AssistantMessage["content"], timestamp:
 
 type Positioned = { index: number; block: AssistantMessage["content"][number] };
 
-function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
+function stepBlocks(e: Item, step: ReplayStep, postedText?: string): Positioned[] {
   const p = e.body;
   const at = step.index ?? 0;
   if (e.kind === "Reasoning")
@@ -252,7 +254,8 @@ function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
       type: "toolCall",
       id: e.callId,
       name: e.tool ?? "tool",
-      arguments: argumentsJson === undefined ? recordedToolArguments(e) : recordedWireArguments(argumentsJson, e),
+      arguments:
+        argumentsJson === undefined ? recordedToolArguments(e, postedText) : recordedWireArguments(argumentsJson, e),
       ...wire,
     };
     return [{ index: at, block }];
@@ -274,7 +277,7 @@ function recordedWireArguments(argumentsJson: string, call: Item): ToolCall["arg
   }
 }
 
-export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
+export function recordedToolArguments(call: Pick<Item, "body">, postedText?: string): Record<string, unknown> {
   const { rerun, result: _r, approvedRequestId: _a, ...recorded } = visibleBody(call);
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
@@ -284,7 +287,7 @@ export function recordedToolArguments(call: Pick<Item, "body">): Record<string, 
   return {
     ...rest,
     ...(Array.isArray(recordedFiles) ? { files: recordedFiles } : {}),
-    text: "[sent earlier — text not retained]",
+    text: postedText ?? "[sent earlier — text not retained]",
   };
 }
 
@@ -335,6 +338,9 @@ export function reconstructMessagesFromHistory(
     if (e.kind === "ToolCall" && e.callId) callById.set(e.callId, e);
     else if (e.kind === "ToolResult" && e.callId) resultByCallId.set(e.callId, e);
   }
+  const postedText = new Map(
+    history.flatMap((e) => (isAgentReply(e) && isToolPost(e) ? [[e.body.callId as string, e.text ?? ""]] : [])),
+  );
   const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
@@ -360,7 +366,7 @@ export function reconstructMessagesFromHistory(
     const step = itemStep(e);
     if (step) {
       if (step.stopReason === "aborted" || step.stopReason === "error") continue;
-      const blocks = stepBlocks(e, step);
+      const blocks = stepBlocks(e, step, e.callId ? postedText.get(e.callId) : undefined);
       if (!blocks.length) continue;
       let message = steps.get(step.id);
       if (!message) {
@@ -403,6 +409,7 @@ export function reconstructMessagesFromHistory(
           });
       }
     } else if (isAgentReply(e)) {
+      if (isToolPost(e) && callById.has(e.body.callId as string)) continue;
       const t = itemText(e);
       const via = typeof e.body.via === "string" ? e.body.via : undefined;
       if (t && via) raw.push(userMsg(messageTag({ from: "agent", via }, t), e.createdAt));
@@ -427,7 +434,7 @@ export function reconstructMessagesFromHistory(
         type: "toolCall",
         id: e.callId,
         name: e.tool ?? "tool",
-        arguments: recordedToolArguments(e),
+        arguments: recordedToolArguments(e, postedText.get(e.callId)),
       };
       if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {
@@ -485,10 +492,10 @@ export function seedPriorTurns(
     const text = String(t.text ?? "").trim();
     if (!text) continue;
     if (seen.has(normalizeForDedup(text))) continue;
-    const tag =
-      t.role === "assistant"
-        ? messageTag({ from: "agent", ...(t.name ? { via: t.name } : {}) }, text)
-        : messageTag({ from: t.role === "bot" ? "bot" : "human", ...(t.name ? { author: t.name } : {}) }, text);
+    let from: "agent" | "bot" | "human" = "human";
+    if (t.role === "assistant") from = "agent";
+    else if (t.role === "bot") from = "bot";
+    const tag = messageTag({ from, ...speakerAttrs(t.name, from) }, text);
     reconciled.push({ role: "user", text: tag });
   }
   const merged: SeededMessage[] = [];

@@ -176,7 +176,7 @@ function optionFields(d: any, o: any, i: number) {
             >`
         : ""
     }
-    ${o.action === "use_persona" ? field("Persona id", o.persona, (v) => (o.persona = v)) : ""}
+    ${o.action === "use_persona" ? field("Bot id", o.persona, (v) => (o.persona = v)) : ""}
     <button class="btn danger" @click=${() => (d.options.splice(i, 1), redraw())}>Remove option</button>
   </fieldset>`;
 }

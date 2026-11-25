@@ -132,7 +132,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
   const display = arrangeForDisplay(msgs).filter(({ message: m }) => !m.isTrigger);
   const rawTurns: ConversationTurn[] = display.map(({ message: m, isReply }) => {
     const text = messageTurnText(m, isReply, view.nameById);
-    if (m.isSelf) return { role: "assistant", text };
+    if (m.isSelf) return { role: "assistant", ...(m.name ? { name: m.name } : {}), text };
     return { role: m.isBot ? "bot" : "user", name: m.name || "someone", text };
   });
   const priorTurns = mergeConsecutiveTurns(rawTurns);
@@ -146,7 +146,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
       return {
         ts: m.ts,
         role,
-        ...(m.isSelf ? {} : { name: m.name || "someone" }),
+        ...(m.name || !m.isSelf ? { name: m.name || "someone" } : {}),
         ...(m.principalId && !m.isSelf ? { speakerId: m.principalId } : {}),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
@@ -178,12 +178,8 @@ export function mergeConsecutiveTurns(turns: readonly ConversationTurn[]): Conve
     t.role !== "assistant" && t.name ? `${t.name}: ${t.text}` : t.text;
   for (const t of turns) {
     const prev = out[out.length - 1];
-    if (!prev || prev.role !== t.role) {
-      out.push(
-        t.role !== "assistant" && t.name
-          ? { role: t.role, name: t.name, text: t.text }
-          : { role: t.role, text: t.text },
-      );
+    if (!prev || prev.role !== t.role || (t.role === "assistant" && prev.name !== t.name)) {
+      out.push({ role: t.role, ...(t.name ? { name: t.name } : {}), text: t.text });
       continue;
     }
     if (prev.role !== "assistant" && prev.name !== undefined) {

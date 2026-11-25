@@ -10,11 +10,12 @@ import { testConfig } from "./support/test-config.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { projectScopeId } from "../src/projects/project-store.ts";
 import { principalDestination } from "../src/reach/reach.ts";
+import { personalScope } from "../src/types.ts";
 
 test("a cron shared with a person becomes their paused linked copy until they edit it", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-share-")) }));
   const source = await app.createCron({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     title: "Weather",
@@ -24,7 +25,7 @@ test("a cron shared with a person becomes their paused linked copy until they ed
 
   const { copy } = await app.shareCron(testTenant, source.id, "U2", "U1");
   assert.equal(copy.owner, "U2");
-  assert.equal(copy.ownerScopeId, "personal:U2");
+  assert.equal(copy.ownerScopeId, personalScope("U2"));
   assert.equal(copy.enabled, false);
   assert.equal(copy.destination?.type, "web");
   const notice = (await app.pendingDeliveries("web")).find((d) => d.destination.target === copy.destination?.target);
@@ -49,7 +50,7 @@ test("a cron shared with a person becomes their paused linked copy until they ed
 test("unsharing a cron detaches each copy and leaves it with its owner", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-unshare-")) }));
   const source = await app.createCron({
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
@@ -69,7 +70,7 @@ test("unsharing a cron detaches each copy and leaves it with its owner", async (
 test("a copy of a project cron keeps its persona and project, and the persona's owner lends it to the recipient", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cron-share-origin-")) }));
   const { app } = built;
-  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+  for (const who of ["U1", "U2"]) await built.featureFlags.setEnabled("personas", personalScope(who), true, "admin");
   const project = (await app.createProject("U1", "Launch"))!;
   const persona = await app.personas!.create("U1", { name: "Ada" });
   assert.equal(persona.status, "ok");

@@ -11,6 +11,7 @@ import { encodeRef, serviceCredRef } from "../../src/acl/resource-ref.ts";
 import type { AclStore } from "../../src/acl/acl-store.ts";
 import type { SecurityScreener } from "../../src/security/security-screener.ts";
 import { testTenant as tenant } from "./test-tenant.ts";
+import { personalScope } from "../../src/types.ts";
 
 export const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -18,7 +19,7 @@ export const automationOrigin = (request?: { origin?: TurnOrigin }) =>
 export const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
   const c = req.conversation;
-  if (c.kind === "dm") return `personal:${req.actor.externalId}`;
+  if (c.kind === "dm") return personalScope(req.actor.externalId);
   if ((c.kind === "channel" || c.kind === "group") && c.channelRef) return `${c.kind}:${c.channelRef}`;
   return null;
 }

@@ -8,9 +8,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const url = pathToFileURL(path.join(directory, "permissions.html")).href;
 const execute = promisify(execFile);
+const HEIGHT = 900;
 const panes = {
   accessibility: "Privacy_Accessibility",
   screen_recording: "Privacy_ScreenCapture",
+  input_monitoring: "Privacy_ListenEvent",
 };
 let window;
 let completion;
@@ -27,7 +29,22 @@ async function status(prompt = false) {
   });
   const result = JSON.parse(stdout);
   if (result.type !== "permissions") throw new Error(result.message ?? "Could not check computer permissions");
-  return { accessibility: result.accessibility === true, screen_recording: result.screen_recording === true };
+  return {
+    accessibility: result.accessibility === true,
+    screen_recording: result.screen_recording === true,
+    input_monitoring: result.input_monitoring === true,
+  };
+}
+
+function granted(current) {
+  return Object.keys(panes).every((permission) => current[permission]);
+}
+
+export function misplaced(bundle = appBundle()) {
+  return (
+    app.isPackaged &&
+    (bundle.includes("/AppTranslocation/") || bundle.startsWith(path.join(app.getPath("downloads"), path.sep)))
+  );
 }
 
 export function registerComputerPermissions() {
@@ -41,7 +58,7 @@ export function registerComputerPermissions() {
   };
   ipcMain.handle("qm:permissions-status", async (event) => {
     assertWindow(event);
-    return { ...(await status()), name: app.getName(), icon: icon?.toDataURL() };
+    return { ...(await status()), name: app.getName(), icon: icon?.toDataURL(), misplaced: misplaced() };
   });
   ipcMain.handle("qm:permissions-prompt", async (event) => {
     assertWindow(event);
@@ -51,13 +68,18 @@ export function registerComputerPermissions() {
     assertWindow(event);
     if (!Object.hasOwn(panes, permission)) throw new Error("Unknown permission");
     const area = screen.getDisplayMatching(window.getBounds()).workArea;
-    window.setPosition(area.x + area.width - 580, area.y + Math.max(0, Math.floor((area.height - 790) / 2)));
+    window.setPosition(area.x + area.width - 580, area.y + Math.max(0, Math.floor((area.height - HEIGHT) / 2)));
     window.setAlwaysOnTop(true, "floating");
     await shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${panes[permission]}`);
   });
   ipcMain.handle("qm:permissions-finder", (event) => {
     assertWindow(event);
     shell.showItemInFolder(appBundle());
+  });
+  ipcMain.handle("qm:permissions-move", (event) => {
+    assertWindow(event);
+    if (!misplaced()) return true;
+    return app.moveToApplicationsFolder();
   });
   ipcMain.on("qm:permissions-drag", (event) => {
     assertWindow(event);
@@ -67,7 +89,7 @@ export function registerComputerPermissions() {
     assertWindow(event);
     if (proceed) {
       const current = await status();
-      if (!current.accessibility || !current.screen_recording) return false;
+      if (!granted(current)) return false;
     }
     if (proceed) stopComputer();
     window?.close();
@@ -94,7 +116,7 @@ export async function showComputerPermissions(onlyIfMissing = false) {
   if (onlyIfMissing) {
     try {
       const current = await status();
-      if (current.accessibility && current.screen_recording) return;
+      if (granted(current) && !misplaced()) return;
     } catch (error) {
       console.error("Computer permission preflight failed:", error.message);
     }
@@ -106,7 +128,7 @@ export async function showComputerPermissions(onlyIfMissing = false) {
   window = new BrowserWindow({
     title: `${app.getName()} · Computer access`,
     width: 560,
-    height: 790,
+    height: HEIGHT,
     resizable: false,
     backgroundColor: "#f7f6f2",
     webPreferences: {

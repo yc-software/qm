@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
 import type { ScopeId } from "../types.ts";
-import type { ByteSource } from "./durable-byte-store.ts";
+import type { ByteRange, ByteSource } from "./durable-byte-store.ts";
 
 export type FileDirection = "in" | "out";
 export type FileSource = "live" | "backfill";
@@ -73,7 +73,7 @@ export interface FileArtifactStore {
 
   get(id: string, opts?: { includeDisabled?: boolean }): Promise<FileArtifact | null>;
 
-  open(id: string): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
+  open(id: string, range?: ByteRange): Promise<{ artifact: FileArtifact; sizeBytes: number; stream: Readable } | null>;
 
   listOwnedByScopes(scopes: readonly ScopeId[], opts?: ListOwnedOptions): Promise<FilePage>;
 

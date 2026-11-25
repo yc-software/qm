@@ -4,17 +4,17 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { personalScope } from "../src/types.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
   await built.deploymentLayerReady;
   for (const actor of ["U1", "U2"]) {
-    const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
-    await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
+    const computer = await built.sandboxResources.create(actor, personalScope(actor), "sprites", "default");
+    await built.sandboxResources.setDefault(actor, personalScope(actor), computer.id);
   }
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let provisions = 0;
@@ -55,7 +55,7 @@ async function fixture(t: TestContext) {
 
 test("published skill sources and assets read without a sandbox, respecting scope and archive", async (t) => {
   const b = await fixture(t);
-  const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
+  const skill = await b.publish(personalScope("U1"), "PUBLISHED_BODY");
   assert.match(await b.turn("!sysprompt"), /^- source-helper — /m);
   assert.match(
     await b.turn("!skill source-helper"),
@@ -72,7 +72,7 @@ test("published skill sources and assets read without a sandbox, respecting scop
 test("a body-only skill loads without any sandbox work", async (t) => {
   const b = await fixture(t);
   const skill = await b.skills.create({
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     createdBy: "U1",
     manifest: { name: "notes-only", description: "text only", body: "JUST_TEXT", requiredCapabilities: [] },
   });
@@ -85,7 +85,7 @@ test("a body-only skill loads without any sandbox work", async (t) => {
 
 test("published skill loads reject invalid and control paths without provisioning", async (t) => {
   const b = await fixture(t);
-  await b.publish("personal:U1", "PUBLISHED_BODY");
+  await b.publish(personalScope("U1"), "PUBLISHED_BODY");
   for (const [name, path] of [
     ["missing", "SKILL.md"],
     ["source-helper", "../SKILL.md"],
@@ -103,7 +103,7 @@ test("published skill loads reject invalid and control paths without provisionin
 test("published source follows scope shadowing and preserves sandbox-authored working copies", async (t) => {
   const b = await fixture(t);
   await b.publish("org:default-org", "ORG_BODY");
-  const personal = await b.publish("personal:U1", "PERSONAL_BODY");
+  const personal = await b.publish(personalScope("U1"), "PERSONAL_BODY");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
   await b.turn("!write skills/source-helper/SKILL.md LOCAL_EDIT");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
@@ -124,7 +124,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     skill: {
       id: "s",
       version: 1,
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       manifest: {
         name: "source-helper",
         body: "BODY",
@@ -143,10 +143,10 @@ test("a body read avoids sandbox work and a file request materializes that skill
     deps: {
       skills: { recordUse: async () => {} },
       sandboxResources: {
-        resolve: async () => ({ id: "box", ownerScopeId: "personal:U1" }),
+        resolve: async () => ({ id: "box", ownerScopeId: personalScope("U1") }),
         access: async (_actor: string, id: string) => {
           if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
-          return { id, ownerScopeId: "personal:U1" };
+          return { id, ownerScopeId: personalScope("U1") };
         },
       },
       sandbox: {
@@ -166,9 +166,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
     input: { origin: { kind: "human" } },
     actor: { id: "U1" },
     session: { id: "s" },
-    resolution: { writableScopeId: "personal:U1", readOnlyScopeIds: [] },
-    scopeId: "personal:U1",
-    memoryScopeId: "personal:U1",
+    resolution: { writableScopeId: personalScope("U1"), readOnlyScopeIds: [] },
+    scopeId: personalScope("U1"),
+    memoryScopeId: personalScope("U1"),
     turnSessionKey: "s",
     connectorEnv: {},
     visibleSkillsForTurn: async () => visible,
@@ -180,7 +180,10 @@ test("a body read avoids sandbox work and a file request materializes that skill
   bodyOnly.skill!.manifest.files = [];
   delete bodyOnly.skill!.pack;
   visible.push(bodyOnly);
-  assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+  assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), {
+    content: "BODY",
+    sourceScopeId: personalScope("U1"),
+  });
   await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
   await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
   assert.equal(provisions, 0);
@@ -222,7 +225,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
 test("pack assets run from the skills root and stay across turns", async (t) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");
   const b = await fixture(t);
-  const skill = await b.publish("personal:U1", "PACK_BODY", "source-pack");
+  const skill = await b.publish(personalScope("U1"), "PACK_BODY", "source-pack");
   const files = [{ path: "example.sh", content: "printf PACK_ASSET" }];
   await b.skillBundles.put({ packId: "source-pack", commit: "c", files, hash: computeBundleHash(files) });
   assert.match(await b.turn("!skill source-helper"), /\.agent-skills\/\w+\/[a-f0-9]{16}\/\.packs\/source-pack/);

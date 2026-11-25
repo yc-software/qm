@@ -8,7 +8,8 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
   const h = await harness({
     path: "/s/sess-deep",
     api: (path) => {
-      if (path === "/me") return stamped({ user: "tester", org: "test", permissions: [] });
+      if (path === "/me")
+        return stamped({ user: "tester", personalScope: "personal:tester", org: "test", permissions: [] });
       if (path.startsWith("/api/sessions?")) return stamped({ sessions: [], pinned: [], nextCursor: null });
       return undefined;
     },
@@ -65,7 +66,11 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
     assert.equal(reloads, 0);
 
     form.remove();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
     focus();
+    assert.equal(reloads, 0);
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
+    window.dispatchEvent(new Event("online"));
     assert.equal(reloads, 1);
 
     document.dispatchEvent(new Event("visibilitychange"));

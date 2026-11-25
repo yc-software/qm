@@ -10,7 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -102,7 +102,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.equal(cron.destination.type, "principal");
     assert.equal(cron.destination.target, "U-alice");
     assert.equal(cron.destination.onBehalfOf, "U-carol");
-    assert.equal(cron.destination.audienceScopeId, "personal:U-alice");
+    assert.equal(cron.destination.audienceScopeId, personalScope("U-alice"));
     assert.equal(cron.owner, "U-carol");
   });
 

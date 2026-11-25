@@ -15,9 +15,13 @@ export class OnboardingSlack extends LitElement {
     connected: { state: true },
     busy: { state: true },
     error: { state: true },
+    justInstalled: { state: true },
   };
   private connected = false;
+  private installStarted = false;
+  private justInstalled = false;
   private installAvailable: boolean | undefined;
+  private unavailable = false;
   private busy = false;
   private error = "";
   private request?: AbortController;
@@ -62,8 +66,16 @@ export class OnboardingSlack extends LitElement {
       });
       if (!response.ok) throw new Error();
       const status = await response.json();
+      const wasConnected = this.connected;
       this.installAvailable = status.installAvailable === true;
       this.connected = status.configured === true && !status.setupUnavailable && status.setup?.connected !== false;
+      if (this.connected && !wasConnected && this.installStarted) {
+        this.installStarted = false;
+        this.justInstalled = true;
+        this.dispatchEvent(new window.CustomEvent("slack-installed", { bubbles: true }));
+      }
+      if (!this.connected) this.justInstalled = false;
+      this.unavailable = status.setupUnavailable === true && !this.installAvailable;
       this.error = "";
     } catch {
       if (this.isConnected) {
@@ -81,12 +93,17 @@ export class OnboardingSlack extends LitElement {
     }
   }
 
+  private watchInstall(): void {
+    this.installStarted = true;
+    this.pollUntil = Date.now() + 10 * 60_000;
+    void this.refresh();
+  }
+
   private async install(): Promise<void> {
     if (this.busy || this.installAvailable === undefined) return;
     try {
       if (await openDesktopBrowser(`${SLACK_SETTINGS}?slack=install`)) {
-        this.pollUntil = Date.now() + 10 * 60_000;
-        void this.refresh();
+        this.watchInstall();
         return;
       }
     } catch {
@@ -99,14 +116,16 @@ export class OnboardingSlack extends LitElement {
       return;
     }
     popup.opener = null;
-    if (this.installAvailable === false) {
+    if (this.installAvailable === false && !this.unavailable) {
       popup.location.href = `${SLACK_SETTINGS}?setup=slack`;
+      this.watchInstall();
       return;
     }
     popup.document.title = "Connecting Slack";
     popup.document.body.textContent = "Opening Slack…";
     this.busy = true;
     this.error = "";
+    let failure = "Could not start Slack installation. Please try again.";
     try {
       const response = await fetch(`${INSTALLATION_API}/start`, {
         method: "POST",
@@ -117,7 +136,10 @@ export class OnboardingSlack extends LitElement {
         signal: AbortSignal.timeout(15000),
       });
       const result = await response.json();
-      if (!response.ok || typeof result.url !== "string") throw new Error();
+      if (!response.ok || typeof result.url !== "string") {
+        if (typeof result.message === "string" && result.message) failure = result.message;
+        throw new Error();
+      }
       const target = new URL(result.url);
       if (target.protocol !== "https:" || target.username || target.password || popup.closed) throw new Error();
       const form = popup.document.createElement("form");
@@ -125,11 +147,10 @@ export class OnboardingSlack extends LitElement {
       form.action = target.href;
       popup.document.body.append(form);
       form.submit();
-      this.pollUntil = Date.now() + 10 * 60_000;
-      void this.refresh();
+      this.watchInstall();
     } catch {
       popup.close();
-      this.error = "Could not start Slack installation. Please try again.";
+      this.error = failure;
     } finally {
       this.busy = false;
     }
@@ -138,9 +159,16 @@ export class OnboardingSlack extends LitElement {
   protected render() {
     let label = this.busy ? "Opening Slack…" : "Add to Slack";
     if (this.installAvailable === undefined) label = "Checking Slack…";
+    let status = html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`;
+    if (this.justInstalled)
+      status = html`<div class="welcome-slack slack-installed" role="status">
+        <span class="slack-installed-mark"
+          >${slackMark(24)}<span class="slack-installed-check">${icon(Check, 10)}</span></span
+        ><span><strong>QM added to Slack</strong><small>Your team can now work with QM in Slack.</small></span>
+      </div>`;
     return html`${
       this.connected
-        ? html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`
+        ? status
         : html`<button
             class="welcome-slack"
             type="button"
@@ -148,7 +176,8 @@ export class OnboardingSlack extends LitElement {
             @click=${() => void this.install()}
           >
             ${slackMark(24)}<span
-              ><strong>${label}</strong><small>Work with QM where your team already talks.</small></span
+              ><strong>${label}</strong
+              ><small>Choose your company’s own workspace, not a shared community one.</small></span
             >${icon(ArrowUpRight, 16)}
           </button>`
     }

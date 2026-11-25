@@ -26,6 +26,7 @@ import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } f
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
 import { startedBy } from "./support/live-run.ts";
+import { sleep } from "../src/util/async.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -708,7 +709,11 @@ test("retirement waits for background startup to commit its live registry row", 
     destroyed = true;
   };
   const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
-  release.resolve();
+  try {
+    assert.equal(await Promise.race([retiring.then(() => "retired"), sleep(100).then(() => "waiting")]), "waiting");
+  } finally {
+    release.resolve();
+  }
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
   assert.equal((await registry.get("job"))?.sandboxId, record.id);
@@ -951,7 +956,7 @@ test("concurrent routed commands hold no Postgres session connection while they 
   }
 });
 
-test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+test("a verified speaker's current turn can create only its own new scope computer without directory mutations", async () => {
   const { resources, router } = fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   await resources.initialize();

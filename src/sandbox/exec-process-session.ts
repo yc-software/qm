@@ -68,17 +68,19 @@ function redactPipedIntoWithToken(command: string): string {
   return `${upstream.slice(0, producer.index)}echo <redacted>${upstream.slice(upstream.trimEnd().length)}|${consumed}${rest}`;
 }
 
-export function redactCommand(command: string, env?: Record<string, string>): string {
+export function redactCommandSecrets(command: string, env?: Record<string, string>): string {
   const flagsRedacted = createSecretValueMasker(env)(command).replace(
     /(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi,
     "$1<redacted>",
   );
-  return redactPipedIntoWithToken(flagsRedacted)
-    .replace(
-      /(export\s+(?=\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER))\w+=')[^']*'/gi,
-      "$1<redacted>'",
-    )
-    .slice(0, 500);
+  return redactPipedIntoWithToken(flagsRedacted).replace(
+    /(export\s+(?=\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER))\w+=')[^']*'/gi,
+    "$1<redacted>'",
+  );
+}
+
+export function redactCommand(command: string, env?: Record<string, string>): string {
+  return redactCommandSecrets(command, env).slice(0, 500);
 }
 
 export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSessions {

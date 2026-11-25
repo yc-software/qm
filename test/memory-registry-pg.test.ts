@@ -34,6 +34,7 @@ import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { sleep } from "../src/util/async.ts";
+import { personalScope } from "../src/types.ts";
 
 const change = {
   actor: "admin-alice",
@@ -96,7 +97,7 @@ test("two instances racing to bind one member to one brain: exactly one binding 
   const green = stores(url);
   await blue.update(personalBrain());
   const bind = (store: typeof blue, id: string) =>
-    store.update((record) => putBinding(record, id, { brain: "acme-personal", scope: "personal:U1" }, change));
+    store.update((record) => putBinding(record, id, { brain: "acme-personal", scope: personalScope("U1") }, change));
   const results = await Promise.allSettled([bind(blue, "a"), bind(green, "b"), bind(blue, "c"), bind(green, "d")]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   for (const result of results)
@@ -118,21 +119,31 @@ test("an already-built memory service serves a new binding, then stops at its re
     registryFetch: routedTo(brain.url),
   });
   await memory.capture(
-    "personal:U1",
+    personalScope("U1"),
     ["Alice prefers tea."],
     Date.now(),
     { actorId: "U1", context: "conversation" },
     { mode: "explicit" },
   );
   const texts = async () =>
-    plain(await memory.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1", query: "codename" }));
+    plain(
+      await memory.recall(personalScope("U1"), {
+        actorId: "U1",
+        audienceScopeId: personalScope("U1"),
+        query: "codename",
+      }),
+    );
 
   assert.deepEqual(await texts(), ["Alice prefers tea."]);
   await registry.update(personalBrain());
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1"), capture: "explicit" }, change),
   );
-  const rows = await memory.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1", query: "codename" });
+  const rows = await memory.recall(personalScope("U1"), {
+    actorId: "U1",
+    audienceScopeId: personalScope("U1"),
+    query: "codename",
+  });
   assert.deepEqual(
     rows.map((row) => [plain([row])[0], row.source?.label]),
     [
@@ -143,11 +154,11 @@ test("an already-built memory service serves a new binding, then stops at its re
   assert.equal(brain.requests.at(-1)?.actor, "U1");
 
   await memory.capture(
-    "personal:U1",
+    personalScope("U1"),
     ["Alice's anchor is HMS-OSPREY-7."],
     Date.now(),
     { actorId: "U1", context: "conversation" },
-    { mode: "explicit", audienceScopeId: "personal:U1" },
+    { mode: "explicit", audienceScopeId: personalScope("U1") },
   );
   assert.equal(brain.calls.filter(({ tool }) => tool === "memory_write").length, 1);
 
@@ -167,24 +178,24 @@ test("the first binding keeps notebook memory for other members, projects and ex
     registryFetch: routedTo(brain.url),
   });
   for (const [scope, fact] of [
-    ["personal:U1", "Alice walks to work."],
-    ["personal:U2", "Bob bikes to work."],
+    [personalScope("U1"), "Alice walks to work."],
+    [personalScope("U2"), "Bob bikes to work."],
     ["group:web-project-1", "The project ships on Fridays."],
   ] as const)
     await memory.capture(scope, [fact], Date.now(), { actorId: "U1", context: "conversation" }, { mode: "automatic" });
   await registry.update(personalBrain());
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1") }, change),
   );
 
   const recalled = async (scope: string, actorId: string) =>
     plain(await memory.recall(scope, { actorId, audienceScopeId: scope, query: "work" }));
-  assert.deepEqual(await recalled("personal:U1", "U1"), ["Alice walks to work.", BRAIN_FACT]);
-  assert.deepEqual(await recalled("personal:U2", "U2"), ["Bob bikes to work."]);
+  assert.deepEqual(await recalled(personalScope("U1"), "U1"), ["Alice walks to work.", BRAIN_FACT]);
+  assert.deepEqual(await recalled(personalScope("U2"), "U2"), ["Bob bikes to work."]);
   assert.deepEqual(await recalled("group:web-project-1", "U1"), ["The project ships on Fridays."]);
   assert.equal(
     await memory.capture(
-      "personal:U2",
+      personalScope("U2"),
       ["Bob drinks coffee."],
       Date.now(),
       { actorId: "U2", context: "conversation" },
@@ -193,7 +204,7 @@ test("the first binding keeps notebook memory for other members, projects and ex
     1,
   );
   assert.deepEqual(
-    (await memory.facts!("personal:U1")).map((fact) => fact.text),
+    (await memory.facts!(personalScope("U1"))).map((fact) => fact.text),
     ["Alice walks to work."],
   );
   assert.equal(brain.calls.filter(({ tool }) => tool === "memory_write").length, 0);
@@ -212,16 +223,16 @@ test("an invalid registry version leaves the last valid one serving", async (t) 
   });
   await registry.update(personalBrain());
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1") }, change),
   );
   assert.ok(
-    (await memory.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1" })).some(
+    (await memory.recall(personalScope("U1"), { actorId: "U1", audienceScopeId: personalScope("U1") })).some(
       (row) => row.text === BRAIN_FACT,
     ),
   );
   await map.put("org", { schema: 99 } as unknown as MemoryRegistry);
   assert.ok(
-    (await memory.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1" })).some(
+    (await memory.recall(personalScope("U1"), { actorId: "U1", audienceScopeId: personalScope("U1") })).some(
       (row) => row.text === BRAIN_FACT,
     ),
   );
@@ -230,7 +241,10 @@ test("an invalid registry version leaves the last valid one serving", async (t) 
     registry,
     registryFetch: routedTo(brain.url),
   });
-  assert.deepEqual(await fresh.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1" }), []);
+  assert.deepEqual(
+    await fresh.recall(personalScope("U1"), { actorId: "U1", audienceScopeId: personalScope("U1") }),
+    [],
+  );
 });
 
 test("a disabled binding gives a problem line and never calls the brain", async (t) => {
@@ -244,10 +258,10 @@ test("a disabled binding gives a problem line and never calls the brain", async 
   });
   await registry.update(personalBrain({}));
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1") }, change),
   );
   const { value, problems } = await withProviders("search", (report) =>
-    memory.query("personal:U1", "anything", 5, { actorId: "U1", audienceScopeId: "personal:U1", report }),
+    memory.query(personalScope("U1"), "anything", 5, { actorId: "U1", audienceScopeId: personalScope("U1"), report }),
   );
   assert.deepEqual(value, []);
   assert.deepEqual(
@@ -274,7 +288,7 @@ test("a disabled binding stays quiet in a conversation that would withhold its b
   });
   await registry.update(personalBrain({}));
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1") }, change),
   );
   const actor = { id: "U1", type: "internal" as const };
   const problems = async (targetScope: string) =>
@@ -286,10 +300,10 @@ test("a disabled binding stays quiet in a conversation that would withhold its b
           nativeScopes: [targetScope],
           audience: [actor],
           open: true,
-        }).query("personal:U1", "anything", 5, { actorId: "U1", audienceScopeId: targetScope, report }),
+        }).query(personalScope("U1"), "anything", 5, { actorId: "U1", audienceScopeId: targetScope, report }),
       )
     ).problems.map(({ code }) => code);
-  assert.deepEqual(await problems("personal:U1"), ["memory_provider_disabled"]);
+  assert.deepEqual(await problems(personalScope("U1")), ["memory_provider_disabled"]);
   assert.deepEqual(await problems("channel:C1"), []);
   assert.deepEqual(brain.calls, []);
 });
@@ -305,23 +319,26 @@ test("a disabled binding reports a problem only for writes a served binding woul
   });
   await registry.update(personalBrain({}));
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1"), capture: "explicit" }, change),
   );
   const problems = async (actorId: string, context: Omit<MemoryCaptureContext, "report">) =>
     (
       await writeFacts(
         memory,
-        "personal:U1",
+        personalScope("U1"),
         ["Prefers aisle seats"],
         { actorId, context: "conversation" },
         context,
         undefined,
       )
     ).problems.map(({ code }) => code);
-  assert.deepEqual(await problems("U1", { mode: "explicit", audienceScopeId: "personal:U1" }), [
+  assert.deepEqual(await problems("U1", { mode: "explicit", audienceScopeId: personalScope("U1") }), [
     "memory_provider_disabled",
   ]);
-  assert.deepEqual(await problems("system:personal:U1", { mode: "explicit", audienceScopeId: "personal:U1" }), []);
+  assert.deepEqual(
+    await problems("system:personal:U1", { mode: "explicit", audienceScopeId: personalScope("U1") }),
+    [],
+  );
   assert.deepEqual(
     await problems("U1", { mode: "explicit", audienceScopeId: "channel:C1", conversationScopeId: "channel:C1" }),
     [],
@@ -352,7 +369,7 @@ test("a stored brain whose id an env provider took leaves the env provider servi
   const registry = stores(url, overlay);
   await registry.update(personalBrain());
   await registry.update((record) =>
-    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1", capture: "explicit" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: personalScope("U1"), capture: "explicit" }, change),
   );
   const memory = createRegistryMemoryService({
     defaultMemory: createPostgresMemoryService(url),
@@ -361,16 +378,16 @@ test("a stored brain whose id an env provider took leaves the env provider servi
     registryFetch: routedTo(brain.url),
   });
   const searched = await withProviders("search", (report) =>
-    memory.query("personal:U1", "codename", 5, { actorId: "U1", audienceScopeId: "personal:U1", report }),
+    memory.query(personalScope("U1"), "codename", 5, { actorId: "U1", audienceScopeId: personalScope("U1"), report }),
   );
   assert.deepEqual(searched.problems, []);
   assert.ok((searched.value ?? []).some(({ text }) => text.includes(BRAIN_FACT)));
   const written = await writeFacts(
     memory,
-    "personal:U1",
+    personalScope("U1"),
     ["Prefers aisle seats"],
     { actorId: "U1", context: "conversation" },
-    { mode: "explicit", audienceScopeId: "personal:U1" },
+    { mode: "explicit", audienceScopeId: personalScope("U1") },
     undefined,
   );
   assert.deepEqual(written.problems, []);
@@ -464,7 +481,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   );
   const bound = await api.call("PUT", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org", {
     brain: "acme-personal",
-    scope: "personal:U1",
+    scope: personalScope("U1"),
   });
   assert.equal(bound.status, 200);
   assert.equal(
@@ -518,7 +535,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
   const cap = await mintCapabilityToken(
     {
       actorId: "admin-alice",
-      scopeId: "personal:admin-alice",
+      scopeId: personalScope("admin-alice"),
       aud: CONTROL_PLANE_AUD,
       ...liveRunClaims("admin-alice"),
       exp: Date.now() + CAPABILITY_TTL_MS,
@@ -552,7 +569,7 @@ test("an admin's agent can register and bind a brain but never carries its secre
   assert.deepEqual(stored.brains[0]!.auth, { clientId: "qm-personal" });
   assert.equal(stored.brains[0]!.url, brain.url);
   assert.equal(stored.brains[0]!.label, "Acme memory");
-  const binding = { brain: "acme-personal", scope: "personal:U1", capture: "explicit" };
+  const binding = { brain: "acme-personal", scope: personalScope("U1"), capture: "explicit" };
   assert.equal((await agent("PUT", "bindings/alice", binding)).status, 200);
   const memory = createRegistryMemoryService({
     defaultMemory: createPostgresMemoryService(testDatabaseUrl()),
@@ -560,15 +577,15 @@ test("an admin's agent can register and bind a brain but never carries its secre
     registryFetch: routedTo(live.url),
   });
   const recall = () =>
-    memory.recall("personal:U1", { actorId: "U1", audienceScopeId: "personal:U1", query: "codename" });
+    memory.recall(personalScope("U1"), { actorId: "U1", audienceScopeId: personalScope("U1"), query: "codename" });
   await recall();
-  await memory.query("personal:U1", "codename", 5, { actorId: "U1", audienceScopeId: "personal:U1" });
+  await memory.query(personalScope("U1"), "codename", 5, { actorId: "U1", audienceScopeId: personalScope("U1") });
   await memory.capture(
-    "personal:U1",
+    personalScope("U1"),
     ["Alice's anchor is HMS-OSPREY-7."],
     Date.now(),
     { actorId: "U1", context: "conversation" },
-    { mode: "explicit", audienceScopeId: "personal:U1" },
+    { mode: "explicit", audienceScopeId: personalScope("U1") },
   );
   assert.deepEqual(live.calls, []);
   await built.memoryRegistry.update((record) =>
@@ -632,7 +649,7 @@ test("an agent reaches every registry route only where the registry may be shown
   server.listen(0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   await built.memoryRegistry.update((record) =>
-    putBinding(personalBrain()(record), "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
+    putBinding(personalBrain()(record), "alice", { brain: "acme-personal", scope: personalScope("U1") }, change),
   );
   const admin = { ...liveRunClaims("admin-alice"), actorId: "admin-alice", aud: CONTROL_PLANE_AUD };
   const capabilityIn = (scopeId: string) =>
@@ -673,7 +690,7 @@ test("an agent reaches every registry route only where the registry may be shown
     assert.doesNotMatch(refused.text, /personal:U1|brain\.acme\.example|qm-personal|alice/, `${method} ${path}`);
   }
   assert.equal(await record(), before);
-  const dm = await capabilityIn("personal:admin-alice");
+  const dm = await capabilityIn(personalScope("admin-alice"));
   for (const [method, path, body, status] of routes)
     assert.equal((await call(dm, method, path, body)).status, status, `${method} ${path}`);
   await createPostgresMapFactory(config.databaseUrl!)
@@ -719,7 +736,7 @@ test("blue-green: a binding written through one instance serves turns on the oth
     (
       await blueApi.call("PUT", "/v1/admin/memory-registry/bindings/alice", "admin-alice@default-org", {
         brain: "acme-personal",
-        scope: "personal:U1",
+        scope: personalScope("U1"),
       })
     ).status,
     200,
@@ -739,7 +756,7 @@ test("blue-green: a binding written through one instance serves turns on the oth
   assert.equal(brain.calls.length, recalls);
 });
 
-const ALICE_SCOPE = "personal:U1";
+const ALICE_SCOPE = personalScope("U1");
 const writes = (brain: { calls: BrainCall[] }) => brain.calls.filter(({ tool }) => tool === "memory_write").length;
 const forgets = (brain: { calls: BrainCall[] }) => brain.calls.filter(({ tool }) => tool === "forget_fact");
 const BRAIN_REF = { ids: ["acme-personal:42"] };
@@ -787,7 +804,7 @@ test("a registry brain forgets by ref only while a binding serves it, so a revoc
       memory,
       ALICE_SCOPE,
       BRAIN_REF.ids,
-      { actorId: "U1", context: "conversation", personTurn: true },
+      { actorId: "U1", context: "conversation", personAuthority: true },
       { audienceScopeId: ALICE_SCOPE },
       "session:call",
     );
@@ -849,7 +866,8 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
       actorId: "U1",
       scopeId: ALICE_SCOPE,
       audienceScopeId: ALICE_SCOPE,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       runId: "ended-run",
       memory: { write: ALICE_SCOPE, read: [ALICE_SCOPE] },
       exp: Date.now() + CAPABILITY_TTL_MS,
@@ -858,7 +876,7 @@ test("only Alice's own conversation writes to her brain; admin, onboarding and s
   );
   const ended = await api.call("DELETE", "/v1/memory/facts", endedTurn, BRAIN_REF, "x-agent-capability");
   assert.equal(ended.status, 403);
-  assert.match(ended.text, /only while that turn is running/);
+  assert.match(ended.text, /approval_unavailable/);
 
   assert.deepEqual(
     (await notebook(built)).map((text) => text.replace(/ on \d{4}-\d\d-\d\d\.$/, ".")),
@@ -1002,7 +1020,7 @@ test("Alice's own turn into a notebook-only subagent leaves her brain alone, and
   assert.equal(brain.calls.length, before);
 });
 
-test("only Alice's own DM turn forgets a brain fact; her subagent and the turn its report starts are refused", async (t) => {
+test("a brain fact is forgotten only after Alice's sign-off, whether her DM turn or her subagent asks; a fixture with no approval store cannot raise the card", async (t) => {
   const { brain, built, api, bind } = await boundToBrain(t);
   await bind();
   const text = "!memoryforget acme-personal:42";
@@ -1013,12 +1031,20 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
     conversation: { kind: "dm", threadRef: "dm:U1:forget" },
     text,
   };
-  assert.equal((await built.app.turn(dm)).reply, "forgot 1");
+  const asked = await built.app.turn(dm);
+  assert.equal(asked.reply, "[blocked] needs your sign-off");
+  const card = asked.pendingApprovals![0]!;
+  assert.match(card.command, /Forget brain facts acme-personal:42/);
+  assert.equal(forgets(brain).length, 0);
+  const signed = await built.app.turn({ ...dm, approval: { requestId: card.requestId, approved: true } });
+  assert.equal(signed.reply, "forgot 1");
   const [parent] = await built.runs.list({ threadRef: "dm:U1:forget", limit: 1 });
   const own = (await built.sessions.getByThread("dm:U1:forget"))!;
   const child = await built.sessions.getOrCreateByThread("agent:main:subagent:forget", "dm", ALICE_SCOPE);
   await built.sessions.setParentSession(child.id, own.id);
   const { actor, conversation } = parent!.request;
+  const original = { ...parent!.request };
+  delete original.approval;
   await built.sessions.setSpawnMeta(child.id, { actor, conversation, surface: "test" });
   await built.sessions.addParticipant(child.id, "U1");
   const enqueue = async (threadRef: string, sessionSenderId: string) =>
@@ -1027,7 +1053,7 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
         sessionId: threadRef,
         maxAttempts: 1,
         request: {
-          ...parent!.request,
+          ...original,
           conversation: { ...conversation, threadRef },
           delegatingRunId: parent!.id,
           sessionSenderId,
@@ -1041,8 +1067,8 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
       actorId: "U1",
       scopeId: ALICE_SCOPE,
       audienceScopeId: ALICE_SCOPE,
-      liveActor: true,
-      liveAuthor: true,
+      internalAudience: true,
+      personAuthority: true,
       runId: held.id,
       runAttempt: held.attempts,
       runLeaseToken: held.leaseToken!,
@@ -1053,17 +1079,19 @@ test("only Alice's own DM turn forgets a brain fact; her subagent and the turn i
     TEST_CAPABILITY_SECRET,
   );
   const overHttp = await api.call("DELETE", "/v1/memory/facts", token, BRAIN_REF, "x-agent-capability");
-  assert.match(overHttp.text, /Nothing was changed/);
+  assert.equal(overHttp.status, 403);
+  assert.match(overHttp.text, /approval_unavailable/);
   await built.runs.complete(held.id, held.leaseToken!, { status: "ok" });
   built.runtime.start();
   t.after(() => built.runtime.stop());
-  const replyTo = async (runId: string) => {
+  const cardFor = async (runId: string) => {
     for (let current = await built.runs.get(runId); ; current = await built.runs.get(runId)) {
-      if (current?.status === "done" || current?.status === "failed") return current.result?.reply;
+      if (current?.status === "done" || current?.status === "failed")
+        return current.result?.pendingApprovals?.[0]?.command;
       await sleep(25);
     }
   };
-  assert.match((await replyTo(await enqueue(child.threadRef, own.id)))!, /Nothing was changed/);
-  assert.match((await replyTo(await enqueue(own.threadRef, child.id)))!, /Nothing was changed/);
+  assert.equal(await cardFor(await enqueue(child.threadRef, own.id)), "Forget brain facts acme-personal:42");
+  assert.equal(await cardFor(await enqueue(own.threadRef, child.id)), "Forget brain facts acme-personal:42");
   assert.equal(forgets(brain).length, 1);
 });

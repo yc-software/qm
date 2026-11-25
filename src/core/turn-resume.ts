@@ -1,7 +1,7 @@
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { unrecordedToolResult } from "../agent/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
-import { isAgentReply, isOverheard, type Item, type NewItem } from "../sessions/items.ts";
+import { isAgentReply, isOverheard, isToolPost, type Item, type NewItem } from "../sessions/items.ts";
 import { isObj } from "../util/objects.ts";
 
 const differentTurn = (item: Item, turn: Item): boolean =>
@@ -25,6 +25,7 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
     const e = items[i]!;
     if (e.turnId !== null && e.turnId !== runId) continue;
     if (e.kind === "Stop") return null;
+    if (isToolPost(e)) continue;
     if (isAgentReply(e)) {
       const start = items.slice(0, i).findLast((x) => isTurnStart(x) && (x.turnId === null || x.turnId === runId));
       if (!start || !differentTurn(e, start)) return null;
@@ -59,7 +60,7 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
   let answer: RecordedTurn["answer"];
   for (let i = start + 1; i < items.length; i++) {
     const e = items[i]!;
-    if (differentTurn(e, items[start]!)) continue;
+    if (differentTurn(e, items[start]!) || isToolPost(e)) continue;
     if (isAgentReply(e)) {
       answer = {
         seq: e.seq,

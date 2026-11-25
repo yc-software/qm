@@ -211,6 +211,15 @@ test("mergeConsecutiveTurns merges consecutive assistant turns plainly (one spea
     { role: "assistant", text: "part two" },
   ]);
   assert.deepEqual(merged, [{ role: "assistant", text: "part one\npart two" }]);
+  const named = mergeConsecutiveTurns([
+    { role: "assistant", name: "Ada", text: "a" },
+    { role: "assistant", name: "Ada", text: "b" },
+    { role: "assistant", name: "QM", text: "c" },
+  ]);
+  assert.deepEqual(named, [
+    { role: "assistant", name: "Ada", text: "a\nb" },
+    { role: "assistant", name: "QM", text: "c" },
+  ]);
 });
 
 test("mergeConsecutiveTurns leaves a strictly-alternating sequence untouched", () => {
@@ -336,7 +345,7 @@ test("renderConversationView: overheard is one un-merged entry per non-trigger m
   assert.deepEqual(overheard[1]!.files, ["plan.png"]);
   assert.match(overheard[1]!.text, /@Alice/);
   assert.equal(overheard[2]!.role, "self");
-  assert.equal(overheard[2]!.name, undefined);
+  assert.equal(overheard[2]!.name, "Agent");
 });
 
 test("renderConversationView: another bot's post reaches the model as from=bot, apart from people's posts", () => {
@@ -380,7 +389,7 @@ test("renderConversationView: the agent's own reply becomes an assistant turn bu
   assert.equal(priorTurns[0]!.role, "user");
   assert.equal(priorTurns[0]!.name, "Alice");
   assert.equal(priorTurns[1]!.role, "assistant");
-  assert.equal(priorTurns[1]!.name, undefined);
+  assert.equal(priorTurns[1]!.name, "Agent");
   assert.match(priorTurns[1]!.text, /doing great, thanks!/);
   assert.doesNotMatch(detectContext, /doing great/);
   assert.match(detectContext, /Alice: how are you\?/);

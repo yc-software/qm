@@ -168,7 +168,8 @@ describe("a published app's broker token follows the app it was minted for, on e
           aud: CREDENTIAL_BROKER_AUD,
           credentials: ["sample-api"],
           botActor: true,
-          liveActor: true,
+          internalAudience: true,
+          personAuthority: true,
           members: [{ id: "B1", type: "internal" }],
           exp: Date.now() + APP_CREDENTIAL_TTL_MS,
         },
@@ -180,7 +181,8 @@ describe("a published app's broker token follows the app it was minted for, on e
       actorId: "B1",
       scopeId: "channel:C1",
       botActor: true,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       members: [{ id: "B1", type: "internal" }],
     };
     assert.deepEqual(authorized, [expected, expected]);

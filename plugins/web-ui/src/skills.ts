@@ -915,7 +915,7 @@ export async function renderSkills(): Promise<void> {
     if (!skillsRefreshes.isCurrent(request) || seq !== appState.viewRenderSeq || appState.currentView !== "skills")
       return;
     skillRows = (r.skills ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
-    const personal = appState.me ? `personal:${appState.me.user}` : "";
+    const personal = appState.me?.personalScope ?? "";
     createScopes = [
       { scopeId: personal, name: "Personal (only you)" },
       ...(contexts.contexts ?? [])

@@ -53,6 +53,7 @@ test("pending permission setup takes activation and does not open a workspace af
       },
       ipcMain: { handle() {} },
       Menu: { buildFromTemplate: (template) => template, setApplicationMenu() {} },
+      powerMonitor: new EventEmitter(),
       shell: {},
       session: { fromPartition: () => ({}) },
       dialog: { showErrorBox: (...args) => errors.push(args) },

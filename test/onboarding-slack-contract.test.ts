@@ -23,14 +23,13 @@ test("missing-bot setup presents available links together, without inventing URL
   assert.match(admin, /all three links together in one message/);
   assert.match(admin, /Create token/);
   assert.match(admin, /Submit token/);
-  assert.match(admin, /Add to Slack/);
   assert.match(admin, /Never invent URLs/);
   assert.match(admin, /not a generic keychain token-drop/);
   assert.match(admin, /without another assistant reply/);
   assert.doesNotMatch(admin, /walk the admin through.*one step at a time/i);
 });
 
-test("admins set up a connector source before voice or work questions", () => {
+test("admins set up a connector source before work questions", () => {
   assert.match(PROACTIVE_OPENER_PROMPT, /first step is connecting their tools/);
   assert.ok(onboarding.indexOf("Connector source first for admins") < onboarding.indexOf("Slack bot first for admins"));
   assert.match(onboarding, /Never ask for the key or client\s+secrets in chat/);

@@ -13,18 +13,19 @@ export type SelfApiCall = (
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  headers?: Record<string, string>,
 ) => Promise<SelfApiResponse>;
 
 export function createSelfApiCall(baseUrl: string, capability: string): SelfApiCall {
   baseUrl = trimTrailingSlashes(baseUrl);
-  return async (method, path, body, signal) => {
+  return async (method, path, body, signal, headers) => {
     const [pathname = ""] = path.split("?");
     if (pathname.split("/").some((segment) => segment === "." || segment === "..")) {
       throw new Error(`Invalid API path: ${path}`);
     }
     const response = await fetch(`${baseUrl}${path}`, {
       method,
-      headers: { [CAPABILITY_HEADER]: capability, "content-type": "application/json" },
+      headers: { ...headers, [CAPABILITY_HEADER]: capability, "content-type": "application/json" },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       redirect: "error",
       signal,

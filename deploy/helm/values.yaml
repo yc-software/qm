@@ -11,6 +11,16 @@ serviceAccount:
   name: ""
   annotations: {}
 
+vault:
+  addr: ""
+  kvMount: ""
+  namespace: ""
+  auth:
+    method: ""
+    mount: ""
+    role: ""
+    tokenAudience: ""
+
 nameOverride: ""
 fullnameOverride: ""
 

@@ -11,7 +11,7 @@ import {
   type StoredRenderScratch,
 } from "../src/sandbox/render-sandbox.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import { computerVerdict, supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
@@ -69,7 +69,7 @@ function setup(
       checkpointIntervalMs,
       onError: (error) => errors.push({ code: error.code, message: error.message }),
     });
-  const scope = scopeId("personal", "tester");
+  const scope = "personal:tester" as ScopeId;
   t.after(() => {
     fake.cleanup();
     rmSync(dir, { recursive: true, force: true });

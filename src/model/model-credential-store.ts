@@ -1,5 +1,10 @@
 import { validateHeaderValue } from "node:http";
-import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ModelProviderAvailability } from "./pi-models.ts";
 import { MODEL_PROVIDERS, type ModelProvider } from "./provider-endpoints.ts";
@@ -32,9 +37,12 @@ export interface ModelCredentialStore {
 export function createModelCredentialStore(input: {
   backing: DurableMap<StoredModelCredential>;
   keyMaterial: string | Buffer;
+  secrets?: SecretStoreFactory;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
-  const key = deriveConnectorKey(input.keyMaterial, "model-credentials");
+  const secrets = (input.secrets ?? createEncryptedSecretStore)(
+    deriveConnectorKey(input.keyMaterial, "model-credentials"),
+  );
 
   async function record(provider: ModelProvider): Promise<StoredModelCredential | null> {
     return input.backing.get(provider);
@@ -44,7 +52,7 @@ export function createModelCredentialStore(input: {
     async resolve(provider) {
       const saved = await record(provider);
       if (saved?.disabled) return null;
-      return saved?.secretEnc ? decryptSecret(saved.secretEnc, key) : input.fallback?.[provider]?.trim() || null;
+      return saved?.secretEnc ? secrets.get(saved.secretEnc) : input.fallback?.[provider]?.trim() || null;
     },
 
     async set(provider, apiKey, updatedBy) {
@@ -52,22 +60,27 @@ export function createModelCredentialStore(input: {
       if (!secret) throw new Error("API key is required");
       const actor = updatedBy.trim();
       if (!actor) throw new Error("updatedBy is required");
+      const saved = await record(provider);
+      const secretEnc = await secrets.put(`model-credentials/${provider}`, secret);
       await input.backing.put(provider, {
         provider,
-        secretEnc: encryptSecret(secret, key),
+        secretEnc,
         disabled: false,
         updatedAt: Date.now(),
         updatedBy: actor,
       });
+      await deleteReplacedSecrets(secrets, [saved?.secretEnc], [secretEnc]);
     },
 
     async delete(provider, updatedBy) {
+      const saved = await record(provider);
       await input.backing.put(provider, {
         provider,
         disabled: true,
         updatedAt: Date.now(),
         updatedBy,
       });
+      if (saved?.secretEnc) await secrets.delete(saved.secretEnc);
     },
 
     async statuses() {
@@ -114,10 +127,13 @@ function customProviderSpec(saved: StoredCustomProvider): CustomProviderSpec {
 export function createCustomProviderStore(input: {
   backing: DurableMap<StoredCustomProvider>;
   keyMaterial: string | Buffer;
+  secrets?: SecretStoreFactory;
   write?: <T>(fn: () => Promise<T>) => Promise<T>;
 }) {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
-  const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+  const secrets = (input.secrets ?? createEncryptedSecretStore)(
+    deriveConnectorKey(input.keyMaterial, "custom-model-providers"),
+  );
 
   return {
     async enabled(): Promise<CustomProviderSpec[]> {
@@ -139,7 +155,7 @@ export function createCustomProviderStore(input: {
     async resolveKey(id: string): Promise<string | null> {
       const saved = await input.backing.get(id);
       if (!saved || saved.disabled || !saved.apiKeyEnc) return null;
-      const apiKey = decryptSecret(saved.apiKeyEnc, key);
+      const apiKey = await secrets.get(saved.apiKeyEnc);
       validateHeaderValue("apiKey", apiKey);
       return apiKey;
     },
@@ -152,7 +168,9 @@ export function createCustomProviderStore(input: {
         const existing = await input.backing.get(spec.id);
         const trimmedKey = apiKey?.trim();
         const live = existing?.disabled ? undefined : existing;
-        const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : live?.apiKeyEnc;
+        const apiKeyEnc = trimmedKey
+          ? await secrets.put(`custom-model-providers/${spec.id}`, trimmedKey)
+          : live?.apiKeyEnc;
         await input.backing.put(spec.id, {
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
@@ -160,6 +178,7 @@ export function createCustomProviderStore(input: {
           updatedAt: Date.now(),
           updatedBy: actor,
         });
+        await deleteReplacedSecrets(secrets, [live?.apiKeyEnc], [apiKeyEnc]);
       });
     },
 
@@ -173,6 +192,7 @@ export function createCustomProviderStore(input: {
           updatedAt: Date.now(),
           updatedBy,
         });
+        if (existing.apiKeyEnc) await secrets.delete(existing.apiKeyEnc);
         return true;
       });
     },

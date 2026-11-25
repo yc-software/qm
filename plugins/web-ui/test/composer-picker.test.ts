@@ -155,7 +155,13 @@ test("the personal-account picker preserves composer choices and saves context d
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test", individualModelAuth: true, modelAuthConnected: true };
+    appState.me = {
+      user: "tester",
+      personalScope: "personal:tester",
+      org: "test",
+      individualModelAuth: true,
+      modelAuthConnected: true,
+    };
     const host = document.querySelector<HTMLElement>("#composer")!;
     const agent = { state: { isStreaming: false, messages: [] } } as unknown as Agent;
     const draw = (): void => render(composer!.composerForm(agent), host);

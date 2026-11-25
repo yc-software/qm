@@ -27,7 +27,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { audit, isObj, livePersonTurn } from "./shared.ts";
+import { audit, isObj, requirePersonAuthority, resolveSelfRead } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { forInboxLoopsPeople } from "./loops.ts";
 
@@ -304,7 +304,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
   if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const b = body as {
     provider?: unknown;
     accountType?: unknown;
@@ -470,11 +470,15 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
 }
 
 async function oauthStatus(ctx: ApiCtx): Promise<void> {
-  const { res, deps, url } = ctx;
+  const { res, deps } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const access = resolveSelfRead(ctx, {
+    botMessage: "bot turns cannot read connector status",
+    privateOnlyMessage: "connector status is only available in your own private conversation",
+  });
+  if (!access) return;
+  const { principalId } = access;
   audit(ctx, { principalId, action: "connector.oauth.status", resource: "connectors", scopeLabel: principalId });
   return sendJson(res, 200, {
     principalId,
@@ -484,7 +488,7 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 
 async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
@@ -663,7 +667,7 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/connectors/oauth/status",
     browser: true,
     actor: "query.principalId",
-    auth: "source",
+    auth: "either",
     handle: oauthStatus,
   },
   {

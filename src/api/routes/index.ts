@@ -21,6 +21,7 @@ import { turnRoutes } from "./turns.ts";
 import { webTurnRoutes } from "./web-turns.ts";
 import { webEventRoutes } from "./web-events.ts";
 import { webMeRoutes } from "./web-me.ts";
+import { webPushRoutes } from "./web-push.ts";
 import { voiceRoutes } from "./voice.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
@@ -40,6 +41,8 @@ import { directoryRoutes } from "./directory.ts";
 import { contextRoutes } from "./context.ts";
 import { pinRoutes } from "./pins.ts";
 import { uiCanvasRoutes } from "./ui-canvas.ts";
+import { desktopCallRoutes } from "./desktop-calls.ts";
+import { desktopDownloadRoutes } from "./desktop-download.ts";
 import { surfaceCacheRoutes } from "./surface-cache.ts";
 import { environmentRoutes } from "./environments.ts";
 import { emojiRoutes } from "./emoji.ts";
@@ -130,6 +133,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...webTurnRoutes,
   ...webEventRoutes,
   ...webMeRoutes,
+  ...webPushRoutes,
   ...voiceRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
@@ -155,6 +159,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...contextRoutes,
   ...pinRoutes,
   ...uiCanvasRoutes,
+  ...desktopCallRoutes,
+  ...desktopDownloadRoutes,
   ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,

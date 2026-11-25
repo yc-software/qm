@@ -1,6 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { renderJobCommand } from "../../cli/src/render-job-command.ts";
-import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
@@ -58,6 +63,7 @@ export function createRenderAppStorage(opts: {
   region?: string;
   store: DurableMap<StoredRenderAppStorage>;
   keyMaterial: string | Buffer;
+  secrets?: SecretStoreFactory;
   api?: RenderApi;
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -74,7 +80,9 @@ export function createRenderAppStorage(opts: {
     endpoint.pathname !== "/"
   )
     throw new Error("Render app storage requires a MinIO service and a valid endpoint");
-  const key = deriveConnectorKey(opts.keyMaterial, "render-app-storage");
+  const secrets = (opts.secrets ?? createEncryptedSecretStore)(
+    deriveConnectorKey(opts.keyMaterial, "render-app-storage"),
+  );
   const api = opts.api ?? createRenderApi(opts);
   const prefixFor = (id: string) => `${opts.prefix ?? ""}app-data/${id}/`;
   const path = `/services/${encodeURIComponent(opts.minioServiceId)}`;
@@ -88,7 +96,7 @@ export function createRenderAppStorage(opts: {
       service.type !== "web_service"
     )
       throw new Error("The MinIO service does not belong to this Render environment");
-    const password = decryptSecret(record.secretKeyEnc, key);
+    const password = await secrets.get(record.secretKeyEnc);
     const policy = JSON.stringify(renderAppStoragePolicy(opts.bucket, prefixFor(record.deploymentId)));
     const script = `set -eu
 umask 077
@@ -133,18 +141,21 @@ printf 'QM app storage enable applied\\n'
     async ensure(appId, repair = false) {
       if (!uuidSchema.lowercase().safeParse(appId).success) throw new Error("Render app storage requires an app UUID");
       let record = await opts.store.get(appId);
-      if (!record)
+      if (!record) {
+        const secretKeyEnc = await secrets.put(`render-app-storage/${appId}`, randomBytes(30).toString("base64url"));
         record = await opts.store.putIfAbsent(appId, {
           deploymentId: appId,
           accessKey: randomBytes(10).toString("hex").toUpperCase(),
-          secretKeyEnc: encryptSecret(randomBytes(30).toString("base64url"), key),
+          secretKeyEnc,
           enabled: false,
         });
+        await deleteReplacedSecrets(secrets, [secretKeyEnc], [record.secretKeyEnc]);
+      }
       if (record.deploymentId !== appId) throw new Error("Render app storage identity does not match");
       if (repair || !record.enabled) await provision(record);
       return {
         AWS_ACCESS_KEY_ID: record.accessKey,
-        AWS_SECRET_ACCESS_KEY: decryptSecret(record.secretKeyEnc, key),
+        AWS_SECRET_ACCESS_KEY: await secrets.get(record.secretKeyEnc),
         AWS_REGION: opts.region ?? "us-east-1",
         AWS_ENDPOINT_URL_S3: endpoint.toString(),
         AWS_REQUEST_CHECKSUM_CALCULATION: "WHEN_REQUIRED",

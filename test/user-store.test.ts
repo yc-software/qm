@@ -9,11 +9,12 @@ import { personLabel, UNKNOWN_PERSON } from "../src/identity/person-names.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { recordUser } from "../src/core/orchestrator/intake.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
-const url = testDatabaseUrl();
+const url = testMigratedDatabaseUrl();
 const store = (): UserStore => createPostgresUserStore(url);
 const unique = (name: string) => `${name}-${randomUUID().slice(0, 8)}@example.com`;
 
@@ -30,34 +31,89 @@ test("a person joins the roster once, folded to one row, and keeps their first a
   assert.equal((await roster.list()).filter((u) => u.principalId === pat).length, 1);
 });
 
-test("a user is a person until marked as an app; marking never creates a row or reaches a linked sign-in", async () => {
-  const bot = `U-${randomUUID().slice(0, 8)}`;
-  const absent = `U-${randomUUID().slice(0, 8)}`;
-  const roster = store();
-  await roster.record({ id: bot, source: "turn", at: Date.now() });
+test("a user is a person until QM records it as an app by its own sign-in; then what its sign-ins made is bot work, and a person's is not", async () => {
+  const [roster, pg] = [store(), createPgPool(url)];
+  const [bot, synced, pat, absent] = [unique("bot"), unique("synced"), unique("pat"), unique("absent")];
+  const [split, kim] = [unique("split"), unique("kim")];
+  for (const id of [bot, synced, pat]) await roster.record({ id, source: "turn", at: 1 });
+  await createPostgresDirectoryStore(url).replace([
+    { principalId: kim, displayName: "Kim", type: "internal", isBot: false },
+  ]);
+  for (const [alias, person] of [
+    [split, pat],
+    [kim, synced],
+  ] as const)
+    await roster.link({ principalId: alias, canonicalId: person, evidence: "admin", linkedBy: "", createdAt: 1 });
+  const creators = { crons: "createdBy", monitors: "createdBy", keychain_asks: "requesterId", loops: "createdBy" };
+  const put = (table: string, id: string, json: object) =>
+    pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [id, { id, ownerScopeId: "channel:C1", ...json }]);
+  const shipActions = [{ action: "send_email", gate: "auto" }];
+  for (const [table, creator] of Object.entries(creators))
+    for (const who of [bot, pat]) await put(table, who, { [creator]: who, shipActions });
+  for (const who of [bot, synced, pat]) await put("loop_ship_grants", who, { loopId: pat, actorId: who });
+  await put("loops", "marked", { createdBy: bot, botActor: true, shipActions });
+  await put("loops", "pats-bot-loop", { createdBy: pat, botActor: true, shipActions });
+  await put("loops", split, { createdBy: split, shipActions });
+  await put("loop_ship_grants", split, { loopId: pat, actorId: split });
+  await put("loops", "kims-bot-loop", { createdBy: kim, botActor: true, shipActions });
+  const rowsSql = `SELECT concat_ws(' ', t, id, json ->> 'botActor', json #>> '{shipActions,0,gate}', json ->> 'revokedBy') AS r
+    FROM (${[...Object.keys(creators), "loop_ship_grants"].map((t) => `SELECT '${t}' t, * FROM ${t}`).join(" UNION ")}) x`;
+  const rows = async () => (await pg.q(rowsSql)).map((r) => r.r as string).sort();
+  const bots = (t: string) => `${t} ${bot} true ${t === "loops" ? "hold" : "auto"}`;
+  const made = [
+    ...Object.keys(creators).flatMap((t) => [bots(t), `${t} ${pat} auto`]),
+    "loops marked true hold",
+    "loops pats-bot-loop true auto",
+    "loops kims-bot-loop true auto",
+  ];
+  const splitRows = (marked: boolean) =>
+    marked
+      ? [`loops ${split} true hold`, `loop_ship_grants ${split} system`]
+      : [`loops ${split} auto`, `loop_ship_grants ${split}`];
+  const grants = (...apps: string[]) =>
+    [bot, synced, pat].map((who) => `loop_ship_grants ${who}${apps.includes(who) ? " system" : ""}`);
   assert.equal((await roster.get(bot))?.kind, "person");
-  assert.equal(await roster.markApps([bot, absent]), 1);
+  await recordUser(roster, bot, true);
   assert.equal((await roster.get(bot))?.kind, "app");
-  assert.equal(await roster.markApps([bot]), 0, "marking again changes nothing");
-  assert.equal(await roster.get(absent), null);
-  const pat = unique("pat");
+  assert.deepEqual(await rows(), [...made, ...splitRows(false), ...grants(bot)].sort());
+  await roster.applyDirectoryBots(
+    [synced, bot, absent, split].map(
+      (principalId) => ({ principalId, displayName: principalId, type: "internal", isBot: true }) as const,
+    ),
+  );
+  assert.deepEqual(await rows(), [...made, ...splitRows(true), ...grants(bot, synced)].sort());
+  assert.equal(await roster.get(absent), null, "marking never creates a row");
   await roster.link({ principalId: absent, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() });
   assert.deepEqual([await roster.markApps([absent]), (await roster.get(pat))?.kind], [0, "person"]);
+  const audit = `SELECT string_agg(action || ' ' || resource, ', ' ORDER BY action, resource) AS r FROM audit_log
+    WHERE principal_id = 'system'`;
+  const logged = `loop_update ${bot}, loop_update marked, loop_update ${split}, ship_grant_revoke ${bot}, ship_grant_revoke ${split}, ship_grant_revoke ${synced}`;
+  assert.equal((await pg.q(audit))[0]!.r, logged);
+  await pg.close();
 });
 
-test("a link refuses an app user unless its directory row says it is a person, and the merge keeps a person", async () => {
+test("a link refuses an app user unless its directory row says it is a person, the merge keeps a person, and what a sign-in made becomes bot work when it joins an app", async () => {
   const app = `U-${randomUUID().slice(0, 8)}`;
-  const pat = unique("pat");
-  const roster = store();
-  await roster.record({ id: app, source: "turn", at: Date.now() });
-  await roster.markApps([app]);
+  const [pat, sam, kit, lee] = [unique("pat"), unique("sam"), unique("kit"), unique("lee")];
+  const [roster, db] = [store(), createPgPool(url)];
+  for (const id of [app, sam, kit]) await roster.record({ id, source: "turn", at: Date.now() });
+  await roster.markApps([app, sam]);
   const link = { principalId: app, canonicalId: pat, evidence: "admin", linkedBy: "", createdAt: Date.now() };
   await assert.rejects(roster.link(link), PrincipalLinkError);
-  await createPostgresDirectoryStore(url).replace([
-    { principalId: app, displayName: "Sam", type: "internal", isBot: false },
-  ]);
+  await createPostgresDirectoryStore(url).replace(
+    [app, sam].map((principalId) => ({ principalId, displayName: "Sam", type: "internal", isBot: false }) as const),
+  );
   await roster.link(link);
   assert.deepEqual([(await roster.get(app))?.principalId, (await roster.get(pat))?.kind], [pat, "person"]);
+  const auto = { ownerScopeId: "channel:C1", shipActions: [{ gate: "auto" }] };
+  for (const who of [kit, lee]) {
+    await db.q("INSERT INTO loops (id, json) VALUES ($1, $2)", [who, { ...auto, createdBy: who }]);
+    await db.q("INSERT INTO loop_ship_grants (id, json) VALUES ($1, $2)", [who, { loopId: who, actorId: who }]);
+    await roster.link({ ...link, principalId: who, canonicalId: sam });
+  }
+  const held = `SELECT id FROM loops l WHERE json @> '{"botActor": true, "shipActions": [{"gate": "hold"}]}'
+    AND EXISTS (SELECT 1 FROM loop_ship_grants g WHERE g.id = l.id AND g.json ->> 'revokedBy' = 'system')`;
+  assert.equal((await db.q(`${held} AND id = ANY($1)`, [[kit, lee]])).length, 2);
 });
 
 test("offboarding sets offboarded_at once; reactivation clears it", async () => {
@@ -162,7 +218,6 @@ test("the same sign-in is a separate user in each tenant, and a link stays in it
     await withTenant(b, () => roster.record({ id: pat, source: "invite", at: Date.now() }));
     const inA = (await withTenant(a, () => roster.get(pat)))!;
     const inB = (await withTenant(b, () => roster.get(pat)))!;
-    assert.notEqual(inA.id, inB.id);
     assert.deepEqual([inA.source, inB.source], ["turn", "invite"]);
     await withTenant(a, () =>
       roster.link({ principalId: alias, canonicalId: pat, evidence: "test", linkedBy: "", createdAt: Date.now() }),

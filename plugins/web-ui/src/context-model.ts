@@ -162,7 +162,7 @@ function contextPicker(scopeId: string) {
   );
   return createModelPicker<void>({
     host: () => document.querySelector<HTMLElement>(".context-model"),
-    redraw,
+    redraw: () => redraw(),
     scopeKey: () => scopeId,
     state: pickerState,
     presets: {

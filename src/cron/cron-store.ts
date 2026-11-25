@@ -14,6 +14,7 @@ import {
   contentPart,
   createDeduped,
   type CreateTriggerInput,
+  normalizeTitle,
   ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
@@ -45,7 +46,6 @@ export interface CronPatch {
   archived?: boolean;
   destination?: Destination;
   owner?: string;
-  taskAuthor?: "automation" | null;
   sessionRef?: string | null;
   script?: CronScript | null;
   forkedAt?: number;
@@ -107,12 +107,6 @@ export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
 
-function normalizeTitle(title: string | undefined): string | undefined {
-  const trimmed = title?.trim().replace(/\s+/g, " ");
-  if (!trimmed) return undefined;
-  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
-}
-
 function cronFields(patch: CronPatch): Partial<Cron> {
   const fields: Partial<Cron> = {};
   if (patch.runtime !== undefined) fields.runtime = patch.runtime;
@@ -129,7 +123,6 @@ function cronFields(patch: CronPatch): Partial<Cron> {
   if (patch.destination !== undefined) fields.destination = patch.destination;
   if (patch.archived === true) fields.enabled = false;
   if (patch.owner !== undefined) fields.owner = patch.owner;
-  if (patch.taskAuthor !== undefined) fields.taskAuthor = patch.taskAuthor ?? undefined;
   if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
   if (patch.script !== undefined) fields.script = patch.script ?? undefined;
   if (patch.forkedAt !== undefined) fields.forkedAt = patch.forkedAt;

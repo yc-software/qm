@@ -13,6 +13,8 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { text, type ToolKit } from "./kit.ts";
 
+const POLL_SLICE_SECONDS = 60;
+
 function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
   return s.state === "exited" ? `exited ${s.code}` : "running";
 }
@@ -173,27 +175,34 @@ export function computerTools(kit: ToolKit) {
       credentials?: string[];
     },
   ) => {
-    const scratch = (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
+    const scratch = opts?.ephemeral === true || (params.scope ?? "scoped").trim().toLowerCase() === "scratch";
     return runExecute(callId, params, { scratch });
   };
 
   const runCommand = (
     callId: string,
     params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
-  ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
+  ) =>
+    params.background && !opts?.ephemeral ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params);
 
+  const { background: _bg, sandbox_id: _sb, ...ephemeralExecParams } = executeBaseParams;
   const execute = defineTool({
     name: "execute",
     label: "execute",
-    description: scopeDescription,
-    parameters: Type.Object({
-      ...executeBaseParams,
-      scope: Type.Optional(
-        Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-          description: "Which computer runs this; see the tool description.",
+    description: opts?.ephemeral
+      ? "Run a shell command in a blank per-turn scratch computer discarded after this turn. " +
+        EXECUTE_TIMEOUT_GUIDANCE
+      : scopeDescription,
+    parameters: opts?.ephemeral
+      ? Type.Object(ephemeralExecParams)
+      : Type.Object({
+          ...executeBaseParams,
+          scope: Type.Optional(
+            Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+              description: "Which computer runs this; see the tool description.",
+            }),
+          ),
         }),
-      ),
-    }),
     execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
   });
 
@@ -371,7 +380,8 @@ export function computerTools(kit: ToolKit) {
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
       `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} Connected-app (Composio) calls stop working when the launching turn ends, so keep them in foreground execute. It cannot deliver files; attach them from a live turn.\n` +
+      "To wait for a job, poll with wait_seconds (it returns on new output or exit) or watch it and end your turn; never sleep in execute. " +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a turn instead.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: Type.Object({
       action: Type.Union([
@@ -401,7 +411,7 @@ export function computerTools(kit: ToolKit) {
       wait_seconds: Type.Optional(
         Type.Integer({
           minimum: 0,
-          maximum: 60,
+          maximum: bgTtlMaxSec,
           description: "poll: block up to this long for output or exit (default 0).",
         }),
       ),
@@ -433,8 +443,9 @@ export function computerTools(kit: ToolKit) {
                 ...(waitSeconds !== undefined ? { waitSeconds } : {}),
               });
             const steered = ref.steered;
+            const deadline = Date.now() + (params.wait_seconds ?? 0) * 1000;
             const pollUntilSteered = () => {
-              const waiting = poll(params.wait_seconds);
+              const waiting = poll(Math.min(POLL_SLICE_SECONDS, Math.ceil(Math.max(0, deadline - Date.now()) / 1000)));
               void waiting.catch((error: unknown) => {
                 if (steered?.aborted) swallow("background: poll left behind for a steer", error);
               });
@@ -443,7 +454,9 @@ export function computerTools(kit: ToolKit) {
                 return poll();
               });
             };
-            const r = steered?.aborted ? await poll() : await pollUntilSteered();
+            let r = steered?.aborted ? await poll() : await pollUntilSteered();
+            while (!steered?.aborted && r.status.state === "running" && !r.chunks && Date.now() < deadline)
+              r = await pollUntilSteered();
             const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,

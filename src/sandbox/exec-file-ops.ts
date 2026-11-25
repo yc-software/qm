@@ -19,6 +19,7 @@ import {
   type StageOptions,
 } from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { personalScope } from "../types.ts";
 
 export const tempPathBeside = (absPath: string): string =>
   posix.join(posix.dirname(absPath), `.qm-${randomBytes(8).toString("hex")}`);
@@ -265,7 +266,7 @@ export function createBackendBlobStaging(
         {
           actorId: `${label}-sandbox`,
           aud: BLOB_TRANSFER_AUD,
-          scopeId: `personal:${label}-sandbox`,
+          scopeId: personalScope(`${label}-sandbox`),
           blob: grant,
           exp: Date.now() + (forTimeoutSec ?? STAGE_TIMEOUT_SEC) * 1000 + BLOB_TRANSFER_TTL_MS,
         },

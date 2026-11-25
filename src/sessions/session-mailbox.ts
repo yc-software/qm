@@ -11,8 +11,6 @@ export interface SessionMessage {
   actor: OrchestratorInput["actor"];
   botActor?: boolean;
   text: string;
-  sourceEntrySeq?: number;
-  audience: OrchestratorInput["conversation"]["audience"];
   createdAt: number;
   consumed?: boolean;
   wake?: true;

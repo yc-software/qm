@@ -75,6 +75,7 @@ export async function stageSlackFiles(
   deps: {
     token: string;
     trustedHost?: string;
+    where: { account?: string; chat: string };
     core: { stageBlob(bytes: Uint8Array): Promise<{ blobId: string }> };
     directory: { classifyUserCached(client: any, userId: string): Promise<{ actor: { displayName?: string } }> };
   },
@@ -87,9 +88,12 @@ export async function stageSlackFiles(
     [...hydrated, ...files.slice(MAX_ATTACHMENTS_PER_TURN)],
     (f) => downloadSlackFile(f, { token: deps.token, ...(deps.trustedHost ? { trustedHost: deps.trustedHost } : {}) }),
     (bytes) => deps.core.stageBlob(bytes),
-    async (userId) =>
-      userId ? (await deps.directory.classifyUserCached(client, userId)).actor.displayName : undefined,
-    " — check my file-access permission (files:read)",
+    {
+      where: { surface: "slack-plugin", ...deps.where },
+      resolveAuthor: async (userId) =>
+        userId ? (await deps.directory.classifyUserCached(client, userId)).actor.displayName : undefined,
+      unreadableHint: " — check my file-access permission (files:read)",
+    },
   );
 }
 

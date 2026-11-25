@@ -78,6 +78,26 @@ const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_cal
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
+const CALL_LABEL_FIELD = "purpose";
+const CALL_LABEL_SCHEMA = Type.Optional(
+  Type.String({
+    description:
+      'What this call does, in one plain line, e.g. "Send Ada a Slack DM about the Friday meeting". Shown on the approval card; it does not change what runs.',
+  }),
+);
+
+function withCallLabelField(parameters: unknown): unknown | null {
+  if (!isObj(parameters) || parameters.type !== "object" || !isObj(parameters.properties)) return null;
+  if (CALL_LABEL_FIELD in parameters.properties) return null;
+  return { ...parameters, properties: { ...parameters.properties, [CALL_LABEL_FIELD]: CALL_LABEL_SCHEMA } };
+}
+
+function splitCallLabel(params: unknown, labelled: boolean): { params: unknown; label?: string } {
+  if (!isObj(params)) return { params };
+  if (!labelled) return { params, ...(typeof params.purpose === "string" ? { label: params.purpose } : {}) };
+  const { [CALL_LABEL_FIELD]: label, ...rest } = params;
+  return { params: rest, ...(typeof label === "string" && label.trim() ? { label: label.trim() } : {}) };
+}
 
 interface ToolApprovalDeclaration {
   needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
@@ -99,7 +119,7 @@ function keyedApprovalBlockedText(reason: string, callKey: string): string {
   );
 }
 
-function approvalCallText(label: string, params: unknown): string {
+export function approvalCallText(label: string, params: unknown): string {
   return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
 }
 
@@ -110,9 +130,12 @@ export function withToolApprovalGate(
   const { ref, recordCall, recordResult } = kit;
   if (TOOL_APPROVAL_EXEMPT.has(tool.name)) return tool;
   const inner = tool.execute.bind(tool);
+  const labelledParameters = tool.needsApproval === undefined ? null : withCallLabelField(tool.parameters);
   return {
     ...tool,
-    async execute(callId: string, params: unknown) {
+    ...(labelledParameters ? { parameters: labelledParameters as ToolDefinition["parameters"] } : {}),
+    async execute(callId: string, rawParams: unknown) {
+      const { params, label } = splitCallLabel(rawParams, !!labelledParameters);
       const gate = ref.toolApprovalGate;
       const resourceAction =
         RESOURCE_TOOL_NAMES.has(tool.name) && isObj(params) && typeof params.action === "string"
@@ -170,7 +193,7 @@ export function withToolApprovalGate(
                 approvalKey: callKey,
                 summary: commandLabel,
                 grantModes: { session: false, always: false },
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+                ...(label ? { purpose: label } : {}),
                 ...(isObj(params) ? { call: { tool: tool.name, input: params } } : {}),
               }
             : {
@@ -179,14 +202,14 @@ export function withToolApprovalGate(
                 kind: "approval",
                 approvalKey: `tool:${approvalIdentity}`,
                 ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
-                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+                ...(label ? { purpose: label } : {}),
               },
         );
         ref.pausedOnApproval = true;
         await recordCall(callId, {
           tool: tool.name,
           ...(resourceAction ? { action: resourceAction } : {}),
-          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+          ...(label ? { purpose: label } : {}),
           blocked: "needs_approval",
           reason,
         });

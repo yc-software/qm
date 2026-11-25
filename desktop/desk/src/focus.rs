@@ -56,8 +56,17 @@ fn synthetic_focus(pid: i32, window: u32, subtype: i16) -> Result<(), Failure> {
     Ok(())
 }
 
+fn foreground() -> Result<i32, Failure> {
+    let unidentified = |reason: String| Failure::new(ErrorCode::ActionFailed, format!("Cannot identify the foreground app: {reason}"));
+    match crate::mac::system_focused_pid().map_err(unidentified)? {
+        Some(pid) => Ok(pid),
+        None => crate::intervention::front_process_pid()
+            .map_err(|process| unidentified(format!("accessibility reports no focused application; {process}"))),
+    }
+}
+
 fn frontmost() -> Option<i32> {
-    crate::mac::system_focused_pid()
+    foreground().ok()
 }
 
 type Update = unsafe extern "C" fn(i32) -> i32;
@@ -202,7 +211,7 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     })();
     let restoration = (|| {
         check_current()?;
-        if !matches!(frontmost(), Some(pid) if pid == original || pid == target) {
+        if !matches!(foreground()?, pid if pid == original || pid == target) {
             return Ok(());
         }
         if frontmost() != Some(original) && !original_app.activateWithOptions(NSApplicationActivationOptions::empty()) {
@@ -214,13 +223,13 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
             std::thread::sleep(Duration::from_millis(8));
         }
         check_current()?;
-        if frontmost() != Some(original) {
+        if foreground()? != original {
             return Err(Failure::new(ErrorCode::ActionFailed, "Original foreground app did not return after activation"));
         }
         if let Some((id, original_window)) = original_window {
             restore_order(target, id, &original_window)?;
         }
-        if frontmost() == Some(original) {
+        if foreground()? == original {
             transition.verify_keyboard_owner()?;
         }
         check_current()
@@ -350,9 +359,7 @@ pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    let original = crate::intervention::refresh_focus(
-        frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?,
-    )?;
+    let original = crate::intervention::refresh_focus(foreground()?)?;
     let state = activation.retained.ensure(target)?;
     if !state.ready(window)? {
         activation.activated.borrow_mut().retain(|(pid, _)| *pid != target);
@@ -384,7 +391,7 @@ impl Focus {
             return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
         }
         retained.ensure(target)?;
-        let original = frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?;
+        let original = foreground()?;
         let keyboard_owner = crate::intervention::keyboard_focus_pid()?;
         let intervention = crate::intervention::Intervention::begin(target, original, keyboard_owner)?;
         let activation = Rc::new(Activation { selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()), retained });

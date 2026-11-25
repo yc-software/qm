@@ -98,7 +98,12 @@ export function createSlackDeliverer(deps: {
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
   function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
-    const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
+    const p = d.provenance;
+    let source: { page: "crons" | "webhooks"; id: string; title?: string } | undefined;
+    const cronId = p?.trigger === "cron" ? cronIdOf(p.sourceThreadRef) : null;
+    if (cronId) source = { page: "crons", id: cronId, title: p?.sourceTitle };
+    else if (p?.trigger === "webhook" && p.sourceId)
+      source = { page: "webhooks", id: p.sourceId, title: p.sourceTitle };
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = [
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
@@ -108,7 +113,7 @@ export function createSlackDeliverer(deps: {
       persona: d.destination.persona,
       project: d.destination.project,
       webUiPublicUrl: deps.webUiPublicUrl,
-      ...(id ? { cron: { id, title: d.provenance?.sourceTitle } } : {}),
+      ...(source ? { source } : {}),
     });
     return origin ? [...attribution, origin] : attribution;
   }

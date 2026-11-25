@@ -51,13 +51,15 @@ test("Slack conversations show directory Slack photos on messages and in the hea
       [...document.querySelectorAll(".chat-participants img")].map((i) => i.getAttribute("src")),
       [photos["eve@example.com"], photos["regan@example.com"]],
     );
-    assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com"], "one lookup per person");
+    assert.ok(document.querySelector(".chat-participant-names")?.textContent?.includes(","));
+    assert.equal(document.querySelector(".chat-subtitle"), null);
+    assert.deepEqual(lookups.sort(), ["eve@example.com", "regan@example.com", "tester"], "one lookup per person");
   } finally {
     await h.close();
   }
 });
 
-test("a Slack channel transcript sets other people apart, groups a speaker's run and shows the Slack app icon", async () => {
+test("a Slack channel transcript groups a speaker's run and shows the Slack app icon", async () => {
   const session = { ...SESSION, type: "channel" as const, createdAt: 1, surface: "slack", canContinue: false };
   const said = (kind: "UserMessage" | "SteeringMessage", seq: number, text: string, body: Record<string, unknown>) =>
     item(kind, { seq, createdAt: seq, turnId: "t", text, body });
@@ -67,7 +69,12 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
     listSessions: [session],
     api: (path) =>
       path === "/me"
-        ? Response.json({ user: "tester", org: "test", slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png" })
+        ? Response.json({
+            user: "tester",
+            personalScope: "personal:tester",
+            org: "test",
+            slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png",
+          })
         : undefined,
     items: [
       said("UserMessage", 1, "deploys broke", { name: "Pete", overheard: true }),
@@ -77,6 +84,12 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
       said("SteeringMessage", 5, "thanks!", { name: "T", speakerId: "tester" }),
       item("AgentMessage", { seq: 6, turnId: "t", body: { workStartedAt: 1, workFinishedAt: 6 } }),
       item("AgentMessage", { seq: 7, turnId: "u", text: "as Ada", body: { personaId: "ada", workFinishedAt: 7 } }),
+      item("UserMessage", {
+        seq: 8,
+        turnId: "v",
+        text: '[Slack reaction] Pete reacted with :eyes: on your message: "as Ada" (it now has :eyes:).',
+        body: { name: "Pete", overheard: true },
+      }),
     ],
   });
   try {
@@ -85,23 +98,20 @@ test("a Slack channel transcript sets other people apart, groups a speaker's run
     const rows = [...document.querySelectorAll(".message-stack > .message-row")];
     assert.deepEqual(
       rows.map((row) => [
-        row.classList.contains("others-row"),
-        row.querySelector(".pin-content")?.textContent?.trim(),
+        Boolean(row.querySelector(":scope > .speaker-label")),
+        row.querySelector(".slack-wire-text")?.textContent?.trim(),
         row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
         row.classList.contains("continued-row"),
       ]),
       [
         [true, "deploys broke", undefined, false],
-        [false, "@qm DM me", undefined, false],
+        [true, "@qm DM me", undefined, false],
         [false, "thanks!", undefined, true],
-        [false, undefined, "https://avatars.slack-edge.com/app_72.png", false],
-        [false, undefined, undefined, false],
+        [true, undefined, "https://avatars.slack-edge.com/app_72.png", false],
+        [true, undefined, undefined, false],
       ],
     );
-    assert.deepEqual(
-      rows.map((row) => Boolean(row.querySelector(":scope > .speaker-label"))),
-      [true, true, false, true, true],
-    );
+    assert.equal(rows.at(-1)!.querySelector(".slack-reaction")!.textContent!.replaceAll(/\s/g, ""), "👀1");
     assert.ok(
       rows.at(-1)!.querySelector(":scope > .speaker-label > .brand-mark"),
       "a persona's reply keeps the brand mark",

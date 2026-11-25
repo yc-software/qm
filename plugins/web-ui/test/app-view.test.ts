@@ -19,6 +19,11 @@ import {
   type AppView,
 } from "../src/app-view.ts";
 
+const BLAIR = {
+  user: "blair@example.com",
+  personalScope: "personal:blair@example.com",
+};
+
 function publishedApp(patch: Partial<AppView>): AppView {
   return {
     id: "deployment-id",
@@ -63,7 +68,7 @@ test("a restored notification cannot inherit Undo from a stale archived list row
   const restoredToast = appAfterRestore(staleArchivedRow);
   assert.equal(appArchiveUndoAvailable(restoredToast), false);
   assert.equal(restoredToast.status, "running");
-  assert.equal(appTab(restoredToast, "blair@example.com"), "yours");
+  assert.equal(appTab(restoredToast, BLAIR), "yours");
 });
 
 test("restore ignores a stale archived row when refresh failed", () => {
@@ -74,7 +79,7 @@ test("restore ignores a stale archived row when refresh failed", () => {
   });
   const restored = appAfterRestore(requested, undefined, undefined);
   assert.equal(restored.status, "running");
-  assert.equal(appTab(restored, "blair@example.com"), "shared");
+  assert.equal(appTab(restored, BLAIR), "shared");
 });
 
 test("a superseded restore refresh cannot overwrite a newer authoritative row", () => {
@@ -102,22 +107,22 @@ test("an actual restore refresh failure inserts the optimistic running row", () 
 });
 
 test("tabs separate manageable, shared, and archived apps", () => {
-  assert.equal(appTab(publishedApp({ permission: "write" }), "blair@example.com"), "yours");
+  assert.equal(appTab(publishedApp({ permission: "write" }), BLAIR), "yours");
   assert.equal(
     appTab(
       publishedApp({ permission: "write", createdBy: "casey@example.com", ownerScopeId: "personal:casey@example.com" }),
-      "blair@example.com",
+      BLAIR,
     ),
     "shared",
   );
   assert.equal(
     appTab(
       publishedApp({ permission: "write", createdBy: "blair@example.com", ownerScopeId: "personal:casey@example.com" }),
-      "blair@example.com",
+      BLAIR,
     ),
     "shared",
   );
-  assert.equal(appTab(publishedApp({ permission: "read", status: "archived" }), "blair@example.com"), "archived");
+  assert.equal(appTab(publishedApp({ permission: "read", status: "archived" }), BLAIR), "archived");
 });
 
 test("the empty Yours message stays tab-local when a manageable transfer is Shared", () => {
@@ -126,7 +131,7 @@ test("the empty Yours message stays tab-local when a manageable transfer is Shar
     createdBy: "blair@example.com",
     permission: "write",
   });
-  assert.equal(appTab(transferred, "blair@example.com"), "shared");
+  assert.equal(appTab(transferred, BLAIR), "shared");
   assert.equal(appTabEmptyMessage("yours"), "No apps of your own yet.");
 });
 
@@ -145,8 +150,8 @@ test("a restored app returns to its live ownership tab", () => {
     createdBy: "casey@example.com",
     permission: "write",
   });
-  assert.equal(appTab(restoredPersonal, "blair@example.com"), "yours");
-  assert.equal(appTab(restoredShared, "blair@example.com"), "shared");
+  assert.equal(appTab(restoredPersonal, BLAIR), "yours");
+  assert.equal(appTab(restoredShared, BLAIR), "shared");
 });
 
 test("last deployed uses the applied version instead of a pending version", () => {
@@ -204,14 +209,12 @@ test("list filtering composes tab, context, search, and newest-first sorting", (
       tab: "yours",
       scope: "channel:eng",
       query: "report",
-      viewer: "blair@example.com",
+      viewer: BLAIR,
     }).map((d) => d.id),
     ["new", "created-in-eng", "old"],
   );
   assert.deepEqual(
-    filterApps(publishedApps, { tab: "shared", scope: null, query: "beta", viewer: "blair@example.com" }).map(
-      (d) => d.id,
-    ),
+    filterApps(publishedApps, { tab: "shared", scope: null, query: "beta", viewer: BLAIR }).map((d) => d.id),
     ["shared"],
   );
 });
@@ -221,7 +224,7 @@ test("sorting supports newest, name, and status without changing the filtered se
     publishedApp({ id: "z", displayName: "Zulu", status: "stopped", versions: [{ version: 1, createdAt: 300 }] }),
     publishedApp({ id: "a", displayName: "Alpha", status: "running", versions: [{ version: 1, createdAt: 200 }] }),
   ];
-  const options = { tab: "yours" as const, scope: null, query: "", viewer: "blair@example.com" };
+  const options = { tab: "yours" as const, scope: null, query: "", viewer: BLAIR };
   assert.deepEqual(
     filterApps(publishedApps, { ...options, sort: "newest" }).map((d) => d.id),
     ["z", "a"],

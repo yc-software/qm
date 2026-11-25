@@ -82,6 +82,16 @@ export function safeAttachmentName(name: string): string {
   return base;
 }
 
+export const attachmentMetadata = (
+  attachment: Pick<IncomingAttachment, "name" | "mimetype" | "author">,
+  sharer?: string,
+): string =>
+  JSON.stringify({
+    name: safeAttachmentName(attachment.name),
+    mimetype: attachment.mimetype,
+    author: attachment.author ?? sharer,
+  });
+
 export function mimeFromName(name: string): string {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   return MIME_BY_EXT[ext] ?? "application/octet-stream";

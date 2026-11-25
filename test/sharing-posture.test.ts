@@ -86,7 +86,7 @@ test("Open membership re-checks durable organization, person, room, and membersh
   assert.equal(await isOpenScopeMember({ ...input, scope: personal }), false);
 });
 
-test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {
+test("open sources need a person's authority and bind carry to the authenticated actor", async () => {
   const config = testConfigStore("acme", { defaultSharingPosture: "open" });
   const sessions = { listByParticipant: async () => [] };
   const targetScope = scopeId("channel", "C1");
@@ -94,41 +94,16 @@ test("open sources accept live human-authored ambient turns and bind carry to th
   const base = {
     posture: "open" as const,
     actor,
-    trustedLiveHuman: true,
+    personAuthority: true,
     targetScope,
     config,
     sessions,
     isCurrentSharedScopeMember: async () => true,
   };
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "human" } }), [scopeId("personal", "U2")]);
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "automation" } }), []);
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient", live: true } }), [
-    scopeId("personal", "U2"),
-  ]);
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient" } }), []);
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "ambient", live: false } }), []);
-  assert.deepEqual(
-    await sharingSourcesForTurn({ ...base, trustedLiveHuman: false, origin: { kind: "ambient", live: true } }),
-    [],
-  );
-  assert.deepEqual(
-    await sharingSourcesForTurn({
-      ...base,
-      isCurrentSharedScopeMember: async () => false,
-      origin: { kind: "ambient", live: true },
-    }),
-    [],
-  );
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, origin: { kind: "direct" } }), []);
-  assert.deepEqual(
-    await sharingSourcesForTurn({ ...base, actor: { id: "U2", type: "guest" }, origin: { kind: "human" } }),
-    [],
-  );
-  assert.deepEqual(
-    await sharingSourcesForTurn({ ...base, isCurrentSharedScopeMember: async () => false, origin: { kind: "human" } }),
-    [],
-  );
-  assert.deepEqual(await sharingSourcesForTurn({ ...base, trustedLiveHuman: false, origin: { kind: "human" } }), []);
+  assert.deepEqual(await sharingSourcesForTurn(base), [scopeId("personal", "U2")]);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, personAuthority: false }), []);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, actor: { id: "U2", type: "guest" } }), []);
+  assert.deepEqual(await sharingSourcesForTurn({ ...base, isCurrentSharedScopeMember: async () => false }), []);
 });
 
 test("current membership resolves directory identity aliases and fails closed when none match", async () => {
@@ -174,8 +149,7 @@ test("DM carry is recent, bounded, non-transitive, source-vetoed, and revoked by
   const sources = await sharingSourcesForTurn({
     posture: "open",
     actor,
-    origin: { kind: "human" },
-    trustedLiveHuman: true,
+    personAuthority: true,
     targetScope: personal,
     config,
     sessions: { listByParticipant: async () => sessions },
@@ -259,8 +233,7 @@ test("Open examines a bounded candidate window even when every membership is rev
   const sources = await sharingSourcesForTurn({
     posture: "open",
     actor: { id: "U1", type: "internal" },
-    origin: { kind: "human" },
-    trustedLiveHuman: true,
+    personAuthority: true,
     targetScope: scopeId("personal", "U1"),
     config,
     sessions: {

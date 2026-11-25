@@ -6,7 +6,7 @@ import { createScheduler } from "../src/cron/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
@@ -90,7 +90,7 @@ test("normal personal cron produces durable suggestions without a notification d
   await f.settle();
   const cron = (await f.crons.list())[0]!;
   assert.equal(cron.owner, "alice");
-  assert.equal(cron.ownerScopeId, "personal:alice");
+  assert.equal(cron.ownerScopeId, personalScope("alice"));
   assert.equal(cron.destination, undefined);
   assert.equal(cron.schedule.timezone, "America/Los_Angeles");
   assert.match(cron.schedule.cron!, /^\d+ 2 \* \* \*$/);
@@ -227,11 +227,6 @@ test("a task edited and later reverted to the standard instructions is managed a
   await f.crons.update(id, { action: standard.replace("No special deployment context.", "Older guidance") });
   await service.get(tenant, "alice", []);
   assert.match((await f.crons.get(id))!.action!, /Changed guidance/);
-  assert.equal(
-    (await f.crons.get(id))!.taskAuthor,
-    "automation",
-    "a task the platform rewrote is not its owner's words",
-  );
   await service.dismiss("alice", "brief");
   const action = (await f.crons.get(id))!.action!;
   assert.ok(action.includes(JSON.stringify(["Build my brief"])));

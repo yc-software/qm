@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
+import { modelBrand } from "./icons.ts";
 import { EFFORT_LEVELS, migrateStoredModelValue, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
@@ -97,6 +98,30 @@ export function modelLoadoutOptions(options: readonly ModelOption[], entries: re
       compatible[0];
     return preferred ? [preferred] : [];
   });
+}
+
+const BRAND_ORDER = ["claude", "openai", "gemini"] as const;
+
+export interface ModelProviderGroup {
+  label: string;
+  options: ModelOption[];
+}
+
+export function groupModelsByProvider(options: readonly ModelOption[]): ModelProviderGroup[] {
+  const groups = new Map<string, { rank: number; options: ModelOption[] }>();
+  for (const option of options) {
+    const group = groups.get(option.groupLabel);
+    if (group) {
+      group.options.push(option);
+      continue;
+    }
+    const brand = modelBrand(option.displayProvider ?? String(option.model.provider));
+    const rank = BRAND_ORDER.findIndex((key) => key === brand);
+    groups.set(option.groupLabel, { rank: rank < 0 ? BRAND_ORDER.length : rank, options: [option] });
+  }
+  return [...groups]
+    .sort(([a, x], [b, y]) => x.rank - y.rank || a.localeCompare(b))
+    .map(([label, { options }]) => ({ label, options }));
 }
 
 const LOADOUT_STORAGE_KEY = "web-ui:loadout";
