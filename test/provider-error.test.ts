@@ -57,23 +57,19 @@ test("a LiteLLM 429 budget_exceeded keeps its status, type, code and body as pro
   assert.deepEqual([err.code, err.status, err.retryable], ["model_budget", 429, false]);
 });
 
+const sse = (events: ({ type?: string } & Record<string, unknown>)[]) =>
+  events.map((event) => `event: ${event.type ?? "chunk"}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+const usage = { input_tokens: 1, output_tokens: 0, total_tokens: 1 };
+
 test("an Anthropic error event mid-stream keeps its error type as providerError", async (t) => {
   const url = await serve(t, (res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
-    const start = {
-      type: "message_start",
-      message: {
-        id: "msg_1",
-        type: "message",
-        role: "assistant",
-        model: "claude",
-        content: [],
-        stop_reason: null,
-        usage: { input_tokens: 1, output_tokens: 0 },
-      },
-    };
-    const error = { type: "error", error: { type: "overloaded_error", message: "Overloaded" } };
-    res.end(`event: message_start\ndata: ${JSON.stringify(start)}\n\nevent: error\ndata: ${JSON.stringify(error)}\n\n`);
+    res.end(
+      sse([
+        { type: "message_start", message: { id: "m", role: "assistant", content: [], usage } },
+        { type: "error", error: { type: "overloaded_error", message: "Overloaded" } },
+      ]),
+    );
   });
   const model = { ...getRequiredModel("claude-opus-5"), baseUrl: url } as Model<Api>;
 
@@ -164,9 +160,6 @@ test("over-window prompts classify as context_too_long from structured signals",
   );
 });
 
-const sse = (events: ({ type?: string } & Record<string, unknown>)[]) =>
-  events.map((event) => `event: ${event.type ?? "chunk"}\ndata: ${JSON.stringify(event)}\n\n`).join("");
-const usage = { input_tokens: 1, output_tokens: 0, total_tokens: 1 };
 const served: Record<string, { provider: string; body: (reason: string) => string }> = {
   "anthropic-messages": {
     provider: "anthropic",
