@@ -1,16 +1,16 @@
 import type { TurnRuntimePurpose } from "../resolution/config-store.ts";
 
-export function infrequentCronTurn(input: { surface?: string; triggered: boolean; infrequentCron?: boolean }): boolean {
-  return input.triggered && input.surface === "cron" && input.infrequentCron === true;
+export function infrequentCronTurn(input: { surface?: string; automated: boolean; infrequentCron?: boolean }): boolean {
+  return input.automated && input.surface === "cron" && input.infrequentCron === true;
 }
 
 export function turnRuntimePurpose(
-  input: { surface?: string; triggered: boolean; infrequentCron?: boolean },
+  input: { surface?: string; automated: boolean; infrequentCron?: boolean },
   subagent = false,
 ): TurnRuntimePurpose | undefined {
   if (subagent) return "subagent";
   if (infrequentCronTurn(input)) return "infrequentCron";
-  if (input.triggered && (input.surface === "cron" || input.surface === "loop")) return "cron";
+  if (input.automated && (input.surface === "cron" || input.surface === "loop")) return "cron";
   return undefined;
 }
 

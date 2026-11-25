@@ -273,7 +273,7 @@ export function createTurnMethods(
       const individualAuth = modelAccount !== "company";
       const automated = req.origin?.kind === "automation";
       const runtimePurpose = turnRuntimePurpose(
-        { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
+        { surface: req.surface, automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
       const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
@@ -337,7 +337,7 @@ export function createTurnMethods(
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
         ...((!individualAuth || req.surface === "web") && req.model ? { model: req.model } : {}),
-        ...turnModelOptions({ ...req, triggered: automated }),
+        ...turnModelOptions({ ...req, automated }),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
           ? {

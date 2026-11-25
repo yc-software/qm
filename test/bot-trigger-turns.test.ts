@@ -59,7 +59,7 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
   assert.deepEqual([person.botActor, bot.botActor], [undefined, true], "the bot's cron fires as bot work");
   assert.deepEqual(
     runtimes.map((result) => (result.ok ? "ok" : result.error)),
-    ["ok", "live_actor_required"],
+    ["ok", "authority_required"],
     "a person's cron may pick its own model for the fire; a bot's cron may not",
   );
   const manage = async (id: string) => [

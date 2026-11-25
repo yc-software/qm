@@ -100,6 +100,7 @@ import type {
   ReachOptions,
   AppGrantee,
   AppActor,
+  SigningAppActor,
 } from "../deploy/deploy-service.ts";
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -503,7 +504,7 @@ export interface App {
     revokedBy: string,
   ): Promise<void>;
   grantees(tenant: Tenant, ownerScopeId: ScopeId, ref: string): Promise<ShareAccess[]>;
-  promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
+  promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, personAuthority: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   isOrgAdmin(principalId: string): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
@@ -668,12 +669,12 @@ export interface App {
     principalId: string,
     patch: { description?: string; body?: string },
     opts?: SkillEditor,
-  ): Promise<Skill | "trigger_blocked" | null>;
+  ): Promise<Skill | "authority_required" | null>;
   restoreOwnedSkill(
     id: string,
     principalId: string,
     opts?: SkillEditor,
-  ): Promise<Skill | "exists" | "trigger_blocked" | null>;
+  ): Promise<Skill | "exists" | "authority_required" | null>;
   listSkillPacks(): Promise<SkillPack[]>;
   getSkillPack(id: string): Promise<SkillPack | null>;
   registerSkillPack(input: NewSkillPack): Promise<SkillPack>;
@@ -692,7 +693,7 @@ export interface App {
   }): Promise<Skill | null>;
   deleteOwnedSkill(
     input: SkillEditor & { principalId: string; id: string },
-  ): Promise<"missing" | "forbidden" | "trigger_blocked" | "deleted">;
+  ): Promise<"missing" | "forbidden" | "authority_required" | "deleted">;
   rollbackApp(id: string, version: number, actor?: string): Promise<void>;
   archiveApp(id: string): Promise<void>;
   restoreApp(id: string, actorId?: string): Promise<PublishedApp>;
@@ -705,12 +706,8 @@ export interface App {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(
-    idOrName: string,
-    isPublic: boolean,
-    actor: AppActor & { personAtKeyboard: boolean },
-  ): Promise<PublishedApp>;
-  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  setAppPublic(idOrName: string, isPublic: boolean, actor: SigningAppActor): Promise<PublishedApp>;
+  setAppConnectors(idOrName: string, connectors: string[], actor: SigningAppActor): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;

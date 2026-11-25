@@ -160,7 +160,7 @@ a notification for the root or for a worker the bot may no longer direct is stor
 `mailbox` instead of waking it, so no bot turn runs for it; a person's next turn in the
 root reads it. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
-recipients receive queued unattended turns, not forged human steer signals.
+recipients receive queued turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
 and acknowledgment does not enqueue another run. Agent-only turns have no Slack
 delivery target, and the delivery layer also refuses swarm result delivery.
@@ -254,7 +254,7 @@ allowed to view that session and belong to the swarm scope. People can inspect t
 swarm and send `control` actions; `spawn`, `send`, `context` and message reads are
 agent-only. Request actor and provenance selector fields are rejected rather than
 ignored. Human-origin actions are separately recorded; their asynchronous
-notifications still run unattended.
+notifications run as queued agent turns.
 
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database

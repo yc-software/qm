@@ -39,7 +39,7 @@ service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the r
 computer. In the acting person's own personal conversation, only a command that names a
 saved file login moves to the turn's scratch computer, because a file login is the one kind
 of credential that saves back. Token and environment credentials stay on the person's own
-computer with its workspace. The owner's other runs, scheduled and unattended ones included,
+computer with its workspace. The owner's other runs, scheduled ones included,
 use that same computer, so any of them can change the programs such a command runs.
 
 A background job in a shared conversation that names such a credential, or in any

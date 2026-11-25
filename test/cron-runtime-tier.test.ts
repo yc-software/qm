@@ -52,7 +52,7 @@ async function cronTurnRuntime(
   schedule: CronSchedule,
   runtime?: RuntimeChoice,
 ): Promise<RuntimeChoice> {
-  const turn = { triggered: true, surface: "cron", infrequentCron: firesAtMostDaily(schedule, now) };
+  const turn = { automated: true, surface: "cron", infrequentCron: firesAtMostDaily(schedule, now) };
   const options = turnModelOptions({
     ...turn,
     ...(runtime?.effortLevel ? { thinkingLevel: runtime.effortLevel } : {}),
@@ -94,11 +94,11 @@ test("a pinned cron runtime wins in both tiers", async () => {
 });
 
 test("loops and cron-spawned subagents keep their purposes", () => {
-  assert.equal(turnRuntimePurpose({ triggered: true, surface: "loop", infrequentCron: true }), "cron");
-  assert.equal(turnRuntimePurpose({ triggered: true, surface: "cron", infrequentCron: true }), "infrequentCron");
-  assert.equal(turnRuntimePurpose({ triggered: true, surface: "cron", infrequentCron: true }, true), "subagent");
-  assert.equal(turnRuntimePurpose({ triggered: false, surface: "cron", infrequentCron: true }), undefined);
-  assert.deepEqual(turnModelOptions({ triggered: true, surface: "loop", infrequentCron: true }), {});
+  assert.equal(turnRuntimePurpose({ automated: true, surface: "loop", infrequentCron: true }), "cron");
+  assert.equal(turnRuntimePurpose({ automated: true, surface: "cron", infrequentCron: true }), "infrequentCron");
+  assert.equal(turnRuntimePurpose({ automated: true, surface: "cron", infrequentCron: true }, true), "subagent");
+  assert.equal(turnRuntimePurpose({ automated: false, surface: "cron", infrequentCron: true }), undefined);
+  assert.deepEqual(turnModelOptions({ automated: true, surface: "loop", infrequentCron: true }), {});
 });
 
 test("a session's stored runtime serves turns with no model, below requested and purpose runtimes", async () => {

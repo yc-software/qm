@@ -165,7 +165,7 @@ test("published surface upgrade preserves request carriers, Slack access and des
       text: "keep me",
       slackSource: source,
       externalSlack: access,
-      liveActor: true,
+      personAuthority: true,
       triggerTs: "1.0",
       origin: { kind: "human", messageTs: "1.0" },
     };

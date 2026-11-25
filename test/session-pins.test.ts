@@ -33,7 +33,7 @@ describe("conversation pins self-API", async () => {
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
         internalAudience: true,
-        liveActor: true,
+        personAuthority: true,
         ...(threadRef ? { threadRef } : {}),
         ...(botActor ? { botActor } : {}),
       },
