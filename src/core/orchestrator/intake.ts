@@ -191,7 +191,9 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
     const screened = [
       wordsToScreen(said, speaker, actor.id),
       ...(request?.inboundNotes ?? []),
-      ...(request?.attachments ?? []).map(attachmentMetadata),
+      ...(request?.attachments?.length
+        ? request.attachments.map((attachment) => attachmentMetadata(attachment, request.actor.displayName))
+        : []),
     ]
       .filter(Boolean)
       .join("\n\n");

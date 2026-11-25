@@ -82,11 +82,14 @@ export function safeAttachmentName(name: string): string {
   return base;
 }
 
-export const attachmentMetadata = (attachment: Pick<IncomingAttachment, "name" | "mimetype" | "author">): string =>
+export const attachmentMetadata = (
+  attachment: Pick<IncomingAttachment, "name" | "mimetype" | "author">,
+  sharer?: string,
+): string =>
   JSON.stringify({
     name: safeAttachmentName(attachment.name),
     mimetype: attachment.mimetype,
-    author: attachment.author,
+    author: attachment.author ?? sharer,
   });
 
 export function mimeFromName(name: string): string {
