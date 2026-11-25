@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createDeliveryStore, turnDeliveryProvenance } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
@@ -45,6 +45,21 @@ function agent(
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (typeof reply === "function") return reply(req);
+    const live = automationOrigin(req);
+    if (req.surfaceTools && live?.destination) {
+      await deliveries.enqueue({
+        destination: live.destination,
+        text: reply,
+        idempotencyKey: `post:${req.idempotencyKey}`,
+        provenance: turnDeliveryProvenance({
+          origin: live,
+          surface: req.surface,
+          fireKey: `post:${req.idempotencyKey}`,
+          sourceScopeId: personalScope(req.actor.externalId),
+          sourceThreadRef: req.conversation.threadRef,
+        }),
+      });
+    }
     return { status: "ok", reply };
   };
   const scheduler = createScheduler({
@@ -1765,8 +1780,8 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   result = { status: "failed" };
   await runNowSettled(scheduler, cron.id);
   const after = await texts();
-  assert.equal(after.length, 3, "a failure after a success notifies again");
-  assert.match(after[2]!, /^⚠️ Scheduled task “Daily standup” did not run: /);
+  assert.equal(after.length, 2, "a failure after a success notifies again (the live fire posts its own output)");
+  assert.match(after[1]!, /^⚠️ Scheduled task “Daily standup” did not run: /);
   assert.deepEqual(
     (await crons.listFires(cron.id)).runs.map((r) => r.status),
     ["refused", "refused", "ok", "failed"],
@@ -1872,7 +1887,8 @@ test("a manual fire whose wait is cut by shutdown is re-driven onto the same run
   );
   assert.deepEqual(
     (await deliveries.pending("slack")).map((d) => d.text),
-    [`finished ${started.fireKey}`],
+    [],
+    "a live cron fire posts from inside its run; the re-drive enqueues nothing of its own",
   );
 
   await scheduler.tick(Date.now() + 2 * AFTER_REDRIVE_GRACE_MS);
@@ -1935,7 +1951,8 @@ test("a scheduled fire handed off before its schedule changed is still completed
   assert.equal(redriven?.status, "ok");
   assert.deepEqual(
     (await deliveries.pending("slack")).map((d) => d.text),
-    [`finished ${handOff?.fireKey}`],
+    [],
+    "a live cron fire posts from inside its run; the re-drive enqueues nothing of its own",
   );
   assert.ok((await scheduler.runNow(cron.id)).started);
   await scheduler.drained();

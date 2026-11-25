@@ -87,7 +87,13 @@ import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { isOwnScopeBotWork } from "../resolution/context-filter.ts";
 import { reachEnqueue } from "../reach/reach.ts";
-import { deliverAddressedReply, interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
+import {
+  deliverAddressedReply,
+  interimReplyDelivery,
+  liveFire,
+  settleLiveFire,
+  turnGuidance,
+} from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
@@ -226,6 +232,7 @@ import {
   rewriteTargets,
   supersedeMarker,
   wakeTurnEvent,
+  answeredSinceTriggerEvent,
 } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
 import {
@@ -2022,6 +2029,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine"), history));
         else if (childWake || rewrites?.some(isShownReply))
           turnEvents.push(wakeTurnEvent(childWake, rewrites?.filter(isShownReply) ?? []));
+        const answeredSince = await answeredSinceTriggerEvent(deps.deliveries, input, session).catch(
+          swallowAs("orchestrator: answered-since-trigger check", undefined),
+        );
+        if (answeredSince) turnEvents.push(answeredSince);
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2560,7 +2571,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onInterimReply: interimReplyDelivery({
               surfaceName,
               spineTurn: input.surfaceTools === true,
-              addressed: input.addressed === true,
+              addressed: input.addressed === true && !liveFire(input),
               strictReadOnly,
               destination: defaultDestination,
               deliveries: deps.deliveries,
@@ -2779,6 +2790,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           withManagedRosterVersion,
         });
 
+        if (surfaceToolDeps) finalResult = settleLiveFire(input, spine, result, finalResult, reply);
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);

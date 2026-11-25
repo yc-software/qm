@@ -1,5 +1,6 @@
 import { samePerson, personKey } from "../../directory/person.ts";
 import type { DirectoryMember, DirectoryStore } from "../../directory/directory-store.ts";
+import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keychain.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
@@ -20,6 +21,8 @@ import {
   type SystemContextBlocks,
 } from "./prompt-blocks.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { liveFire } from "./reply-check.ts";
+import { isTurnReplyPost } from "./turn-helpers.ts";
 
 export const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
 
@@ -125,8 +128,13 @@ export async function appendTurnGuidance(turn: {
     );
   }
   if (firedByPoll(input)) {
+    const live = liveFire(input) && input.origin.kind === "automation" ? input.origin.destination : undefined;
+    const tool = live && (deps.surfaces.get(live.type)?.kind ?? "slack");
     turnEvents.push(
-      "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
+      "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything." +
+        (tool
+          ? ` Only the \`${tool}\` tool's \`post\` action reaches its destination; your final text is private and is not delivered.`
+          : ""),
     );
   }
   return systemPrompt;
@@ -169,6 +177,35 @@ export function supersedeMarker(prior: readonly Item[], emitted: readonly Item[]
 
 export const replacesReply = (entry: NewItem): boolean =>
   isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped;
+
+export async function answeredSinceTriggerEvent(
+  deliveries: Pick<DeliveryStore, "listBySourceSession">,
+  input: Pick<OrchestratorInput, "addressed" | "surfaceTools" | "origin" | "runId" | "actor">,
+  session: Pick<Session, "id" | "threadRef">,
+): Promise<string | undefined> {
+  if (!input.addressed || !input.surfaceTools || input.origin.kind !== "human") return undefined;
+  const triggerMs = Number(input.origin.messageTs) * 1000;
+  if (!Number.isFinite(triggerMs) || triggerMs <= 0) return undefined;
+  const posted = (await deliveries.listBySourceSession(session.id, session.threadRef)).filter(
+    (d) =>
+      d.createdAt >= triggerMs &&
+      isTurnReplyPost(d.idempotencyKey) &&
+      d.provenance?.sourceRunId !== input.runId &&
+      !d.failedReason &&
+      !d.destination.react &&
+      !d.destination.delete &&
+      !d.destination.edit &&
+      d.text.trim(),
+  );
+  const latest = posted.at(-1);
+  if (!latest) return undefined;
+  const sender = input.actor.displayName ?? "The sender";
+  return (
+    `${sender}'s message arrived while another of your turns was running here, and since it arrived you already posted in this conversation:\n` +
+    `"""\n${latest.text.trim()}\n"""\n` +
+    "If that already answers them, call `finish_silently` without posting. Otherwise post only what is still unanswered; do not repeat what you already said."
+  );
+}
 
 export function wakeTurnEvent(childWake: boolean, replies: readonly Item[]): string {
   const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;

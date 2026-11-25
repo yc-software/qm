@@ -15,7 +15,7 @@ export function logDeliveryExpiry(d: Delivery, now: number, reason = "overaged")
 }
 
 export function turnDeliveryProvenance(input: {
-  origin: Pick<TurnOrigin, "kind">;
+  origin: TurnOrigin | Pick<TurnOrigin, "kind">;
   surface: string | undefined;
   fireKey: string;
   sourceScopeId: ScopeId;
@@ -25,7 +25,10 @@ export function turnDeliveryProvenance(input: {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
 }): DeliveryProvenance {
+  const source = "source" in input.origin ? input.origin.source : undefined;
   return {
+    ...(source?.title ? { sourceTitle: source.title } : {}),
+    ...(source?.id ? { sourceId: source.id } : {}),
     trigger: input.origin.kind === "automation" ? (input.surface ?? "wake") : "conversation",
     surface: input.surface ?? "unknown",
     fireKey: input.fireKey,

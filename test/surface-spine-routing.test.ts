@@ -735,3 +735,69 @@ test("a shared web project turn answers with its final text, not surface tools",
     await built.runtime.stop();
   }
 });
+
+test("a live cron fire posts with `post`; final text alone is nudged once, then recorded failed and never posted", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const fire = (text: string, root: string): TurnRequest => ({
+      surface: "cron",
+      actor,
+      conversation: { kind: "channel", threadRef: `cron:fire:${root}`, channelRef: "C-cron", audience: [actor] },
+      text,
+      origin: {
+        kind: "automation",
+        fire: true,
+        destination: { type: "slack", target: `slack:C-cron:${root}`, audienceScopeId: scopeId("channel", "C-cron") },
+        source: { title: "Daily digest", id: "cron-1" },
+      },
+      surfaceTools: true,
+      addressed: true,
+      async: false,
+    });
+    assert.equal((await built.app.turn(fire("!post the digest", "1.1"))).status, "ok");
+    const failed = await built.app.turn(fire("!shed", "2.2"));
+    assert.equal(failed.errorCode, "fire_unposted");
+    const sent = (await built.deliveries.pending("slack")) as any[];
+    assert.deepEqual(
+      sent
+        .filter((d) => d.destination.target.startsWith("slack:C-cron:"))
+        .map((d) => [d.text, d.provenance.sourceTitle]),
+      [["the digest", "Daily digest"]],
+    );
+    const session = await built.sessions.getByThread("cron:fire:2.2");
+    const nudges = (await built.sessions.listLlmRequests(session!.id)).filter((r) =>
+      JSON.stringify(r.promptEnvelope).includes("[system] Nothing from this run"),
+    );
+    assert.equal(nudges.length, 1);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a queued addressed turn is told what was already posted in the thread since its message arrived", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const [channel, root] = ["C-answered", "950.1"];
+    await built.app.turn({
+      ...mention("!post the answer", channel, root),
+      origin: { kind: "ambient" },
+      async: false,
+    });
+    await built.app.turn({
+      ...mention("!finish-silent", channel, root),
+      origin: { kind: "human", messageTs: String(Date.now() / 1000 - 5) },
+      async: false,
+    });
+    const session = await built.sessions.getByThread(`ch:${channel}:${root}`);
+    const last = JSON.stringify((await built.sessions.listLlmRequests(session!.id)).at(-1)?.promptEnvelope);
+    assert.ok(last.includes('you already posted in this conversation:\\n\\"\\"\\"\\nthe answer'), last);
+    assert.deepEqual(
+      ((await built.deliveries.pending("slack")) as any[]).map((d) => d.text),
+      ["the answer"],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});

@@ -123,7 +123,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     });
     assert.equal(ranTurn, true);
     assert.equal(out.ran, true);
-    assert.equal((await d.deliveries.pending("slack")).length, 1, "output delivered");
+    assert.equal(out.status, "ok");
   });
 
   it("a group-DM home destination (slack-typed, group audience scope) is gated by the GROUPS tables, not the channel tables", async () => {
@@ -206,7 +206,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
   });
 });
 
-describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
+describe("runTrigger: a cron fire with a destination runs live and posts with the surface tool", () => {
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {
     const d = deps(async () => ({ status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }));
     const out = await runTrigger(d, {
@@ -225,23 +225,38 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.equal(pending[0]!.text, "⚠️ could not run: something went wrong on my end");
   });
 
-  it("a destination-bearing cron keeps the compose-then-enqueue path: no surface tools, one delivery", async () => {
+  it("a destination-bearing cron runs live with the surface tools, and core enqueues nothing", async () => {
     let req: TurnRequest | undefined;
     const d = deps(async (r) => {
       req = r;
-      return { status: "ok", reply: "your digest" };
+      return { status: "ok", reply: "Posted above." };
     });
-    await runTrigger(d, {
+    const out = await runTrigger(d, {
       owner: "U1",
       ownerScopeId: scopeId("channel", "C1"),
       input: "compose the digest",
       fireKey: "cron:c1:t1",
       surface: "cron",
-      threadRef: "cron:c1:t1",
       destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
     });
-    assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
-    assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
+    assert.equal(req?.surfaceTools && req.addressed, true, "the fire must post or finish_silently");
+    assert.equal(out.status, "ok");
+    assert.equal((await d.deliveries.pending("slack")).length, 0, "the private final text is never delivered");
+  });
+
+  it("an unposted fire is recorded failed with no error notice", async () => {
+    const d = deps(async () => ({ status: "failed", reason: "unposted", errorCode: "fire_unposted" }));
+    const out = await runTrigger(d, {
+      owner: "U1",
+      ownerScopeId: scopeId("channel", "C1"),
+      input: "compose the digest",
+      fireKey: "cron:c1:t2",
+      surface: "cron",
+      destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+      errorNotice: (s) => `⚠️ could not run: ${s}`,
+    });
+    assert.equal(out.status, "failed");
+    assert.equal((await d.deliveries.pending("slack")).length, 0);
   });
 });
 

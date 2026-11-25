@@ -5,12 +5,12 @@ import { reachEnqueue } from "../../reach/reach.ts";
 import { forModelContext } from "../../agent/context-compaction.ts";
 import type { Item } from "../../sessions/items.ts";
 import { enqueueDirectReply, type createSurfaceToolDeps, type SpineState } from "../../surfaces/surface-tools.ts";
-import type { DeliveryProvenance, Destination, Session } from "../../types.ts";
+import type { DeliveryProvenance, Destination, Session, TurnResult } from "../../types.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import type { materializeInbound } from "../attachments.ts";
 import { spokenByPerson } from "../turn-origin.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
-import { stripAckPrefix, type TurnPostKeys } from "./turn-helpers.ts";
+import { INTERIM_KEY_SUFFIX, stripAckPrefix, type TurnPostKeys } from "./turn-helpers.ts";
 
 export interface InterimReplyContext {
   surfaceName: string;
@@ -32,7 +32,7 @@ export function interimReplyDelivery(ctx: InterimReplyContext): (text: string) =
     if (ctx.spineTurn && (!ctx.addressed || ctx.postedSoFar() > 0)) return false;
     const interim = stripAckPrefix(text, ctx.ackText()).trim();
     if (!interim) return false;
-    const key = `${ctx.postKeys.key(ctx.destination, 0)}:interim`;
+    const key = `${ctx.postKeys.key(ctx.destination, 0)}${INTERIM_KEY_SUFFIX}`;
     await reachEnqueue({
       deliveries: ctx.deliveries,
       destination: ctx.destination,
@@ -81,6 +81,34 @@ interface AddressedReplyTurn<R extends AgentTurnResult> {
   ) => Promise<R>;
 }
 
+export function liveFire(input: Pick<OrchestratorInput, "surfaceTools" | "origin">): boolean {
+  return (
+    input.surfaceTools === true &&
+    input.origin.kind === "automation" &&
+    input.origin.fire === true &&
+    !!input.origin.destination
+  );
+}
+
+export function settleLiveFire(
+  input: OrchestratorInput,
+  spine: SpineState,
+  result: Pick<AgentTurnResult, "silent">,
+  finalResult: TurnResult,
+  reply: string,
+): TurnResult {
+  if (!liveFire(input) || finalResult.status !== "silent" || finalResult.stopped) return finalResult;
+  if (spine.surfaceOutboundCount > 0) return { ...finalResult, status: "ok", reply };
+  if (result.silent) return finalResult;
+  return {
+    ...finalResult,
+    status: "failed",
+    reply,
+    reason: "the triggered run ended without posting or calling finish_silently",
+    errorCode: "fire_unposted",
+  };
+}
+
 export async function deliverAddressedReply<R extends AgentTurnResult>(
   turn: AddressedReplyTurn<R>,
   result: R,
@@ -108,6 +136,7 @@ export async function deliverAddressedReply<R extends AgentTurnResult>(
   if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
     void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
   const followedUpByPerson = !input.addressed && spokenByPerson(input.origin) && !sessionTurn;
+  const fire = liveFire(input);
   if (
     (input.addressed || followedUpByPerson) &&
     !strictReadOnly &&
@@ -119,7 +148,7 @@ export async function deliverAddressedReply<R extends AgentTurnResult>(
     !result.stopped
   ) {
     const primaryReply = stripAckPrefix(result.reply ?? "", ackText()).trim();
-    if (input.addressed && primaryReply && defaultDestination) {
+    if (input.addressed && !fire && primaryReply && defaultDestination) {
       try {
         await enqueueDirectReply({
           deliveries: deps.deliveries,
@@ -138,17 +167,19 @@ export async function deliverAddressedReply<R extends AgentTurnResult>(
     if (
       spine.surfaceOutboundCount === 0 &&
       !result.pendingApprovals?.length &&
-      (primaryReply || (input.addressed && !isPollFire))
+      (primaryReply || fire || (input.addressed && !isPollFire))
     ) {
       const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
       result = await runAgentTurn(
-        input.addressed
-          ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
-          : `[system] Your text above was not delivered: in this thread only the \`${surfaceName}\` tool's \`post\` action reaches people. Post your reply with \`post\`, or decline explicitly with finish_silently.`,
+        fire
+          ? `[system] Nothing from this run has been posted: your final text is private and reaches no one. Post the run's output with the \`${surfaceName}\` tool's \`post\` action, or call finish_silently if there is nothing to send.`
+          : input.addressed
+            ? `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`
+            : `[system] Your text above was not delivered: in this thread only the \`${surfaceName}\` tool's \`post\` action reaches people. Post your reply with \`post\`, or decline explicitly with finish_silently.`,
         inbound.images.length ? { images: inbound.images } : {},
         { history: nudgeHistory },
       );
-      if (input.addressed && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
+      if (input.addressed && !fire && spine.surfaceOutboundCount === 0 && !result.silent && !result.stopped) {
         const fallback = stripAckPrefix(result.reply ?? "", ackText()).trim();
         if (fallback && defaultDestination) {
           try {

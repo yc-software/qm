@@ -373,6 +373,7 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       fire?: true;
+      source?: { title?: string; id?: string };
     }
   | { kind: "direct" };
 

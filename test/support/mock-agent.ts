@@ -297,13 +297,17 @@ export function createMockAgent(): Agent {
         reply = "";
       } else if (
         command0.startsWith("[system] You were addressed") ||
-        command0.startsWith("[system] Your text above was not delivered")
+        command0.startsWith("[system] Your text above was not delivered") ||
+        command0.startsWith("[system] Nothing from this run")
       ) {
         if (shedSessions.has(turn.session.id)) {
           reply = "worklog: did the thing but never posted";
         } else {
+          const unsent = command0.startsWith("[system] Nothing from this run")
+            ? turn.history.findLast((e) => e.kind === "AgentMessage" && e.text?.trim())?.text
+            : undefined;
           await record({ kind: "ToolCall", tool: "slack", body: { action: "post" } });
-          const r = await turn.tools.post("nudged reply");
+          const r = await turn.tools.post(unsent ?? "nudged reply");
           await record({ kind: "ToolResult", tool: "post", body: { ok: r.ok } });
           usedTool = true;
           reply = r.ok ? "(posted after nudge)" : `[not sent] ${r.message ?? "failed"}`;

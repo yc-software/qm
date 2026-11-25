@@ -277,6 +277,12 @@ export interface TurnPostKeys {
   readonly ackKey: string;
 }
 
+export const INTERIM_KEY_SUFFIX = ":interim";
+const POST_KEY_PREFIX = "post:";
+
+export const isTurnReplyPost = (key: string): boolean =>
+  key.startsWith(POST_KEY_PREFIX) && !key.endsWith(INTERIM_KEY_SUFFIX);
+
 export function turnPostKeys(turnKey: string): TurnPostKeys {
   let next = 0;
   return {
@@ -285,7 +291,7 @@ export function turnPostKeys(turnKey: string): TurnPostKeys {
       next = completed;
     },
     take: () => next++,
-    key: (destination, seq) => `post:${turnKey}:${destination.type}:${destination.target}:${seq}`,
+    key: (destination, seq) => `${POST_KEY_PREFIX}${turnKey}:${destination.type}:${destination.target}:${seq}`,
   };
 }
 
