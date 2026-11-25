@@ -63,7 +63,7 @@ The first three columns were read in code. The last is **[interpretation]**.
 
 ## The parts
 
-### `src/credentials` (about 3,000 lines; `keychain.ts` about 1,900)
+### `src/credentials`
 
 **Job.** Store credentials, decide who may use them, and turn a record into variables or files for one command.
 
@@ -71,7 +71,7 @@ The first three columns were read in code. The last is **[interpretation]**.
 
 **Surprising.** (1) `CONNECTOR_SECRET_KEY` is required: `buildApp` in `src/wiring.ts` refuses to start without it. The code still carries branches for a missing keychain (a `503 keychain_unavailable` answer, random per-process keys). (2) "Broker" names both a record `kind` and a delivery. A `kind: "broker"` record with `delivery: "env"` is an org credential that _is_ handed out as a variable. (3) A Composio key is recognized only by its env key name (`isBackendCredential`). It is stored as `delivery: "env"` and never delivered. (4) A file login never expires by date (`credExpired` skips `file`). (5) A grant has three sources: an approved ask, a redeemed secret drop in a shared conversation, and an org admin through `POST /v1/admin/keychain/grants`. (6) Write-back is a three-way merge (`mergeCredentialFiles` in `src/credentials/file-merge.ts`) that keeps whichever token cache expires later. A saved login is limited to 500 files and 8 MiB. (7) `src/credentials/resident-paths.ts` is not keychain code. It builds the script sandbox backends run to link well-known login paths in the home directory into `/tmp/agent-creds`.
 
-### `src/connectors` (about 1,800 lines; `oauth.ts` about 800)
+### `src/connectors`
 
 **Job.** OAuth for the eight built-in providers: build the consent URL, exchange the code, refresh the token.
 
@@ -79,7 +79,7 @@ The first three columns were read in code. The last is **[interpretation]**.
 
 **Surprising.** (1) Tokens are stored per API host, not per provider. One Google sign-in writes five records, and the variable name comes from the host (`envKey` in `src/credentials/connector-token.ts`). (2) Each host has three account slots: `default`, `personal`, `company`. (3) Slack and Notion tokens do not refresh (`refresh: null`). (4) Registered MCP servers with per-person sign-in appear as extra providers at run time (`setPublicOAuthClients`). (5) `src/connectors/connector-client-store.ts` also holds the encryption helpers (`encryptSecret`, `decryptSecret`, `deriveConnectorKey`) that the keychain and other stores import. (6) The directory also holds things that are not connectors: `src/connectors/background-exec-broker.ts` (background `execute` jobs), `src/connectors/emoji-upload-service.ts` with `src/connectors/browser-session-store.ts` (Slack custom emoji through a saved browser session, table `browser_sessions`), and `src/connectors/gmail-sent.ts`.
 
-### `src/mcp` (about 1,100 lines)
+### `src/mcp`
 
 **Job.** Turn registered MCP servers into agent tools and call them.
 
@@ -103,7 +103,7 @@ The first three columns were read in code. The last is **[interpretation]**.
 
 **Surprising.** (1) "A person is at the keyboard" does not survive the turn. Once the run has ended, or the token belongs to an earlier attempt, `verifyCapability` marks the token `triggered`: it keeps the owner's authority but person-only steps refuse it. App-connection calls go further and refuse outright (`activeRun`). (2) There is no revocation list. A token ends by expiry, by the live checks, or by rotating the signing secret. (3) `exp: 0` means no expiry and is accepted for five audiences only. (4) An older `payload.signature` format is still verified (`verifyLegacyPayload` in `src/auth/signed-token.ts`). (5) `resolveCapabilityDestination` reads where a reply may be delivered from the token ([surfaces](./surfaces.md)).
 
-### `src/core/orchestrator/credential-catalog.ts` (about 500 lines)
+### `src/core/orchestrator/credential-catalog.ts`
 
 **Job.** Per turn, decide which handles exist and how each resolves.
 
@@ -111,7 +111,7 @@ The first three columns were read in code. The last is **[interpretation]**.
 
 **Surprising.** A read-only turn gets no credentials at all. A turn from an external Slack workspace gets no keychain or connector credentials, and only the service credentials its workspace policy lists ([surfaces](./surfaces.md)). One execution may use at most one one-time grant. A command sent to another scope's computer may not carry credentials.
 
-### App-connection routes: `src/api/routes/composio*.ts`, `slack-composio.ts`, `slack-native.ts` (about 1,700 lines)
+### App-connection routes: `src/api/routes/composio*.ts`, `slack-composio.ts`, `slack-native.ts`
 
 **Job.** A narrow proxy to Composio bound to the caller's identity: list apps, start consent, list connections, list tools, run a tool, send one raw request, upload media to X.
 

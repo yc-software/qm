@@ -54,7 +54,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 
 ## The parts
 
-### `src/surfaces` (about 3,700 lines, plus `generic-chat/`)
+### `src/surfaces`
 
 **Job.** Say what a chat host is, and hold what both hosts share: driving one turn, approval cards, attachments, reactions, refusals, and the agent's surface tool.
 
@@ -68,7 +68,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 - `web-spine.ts`, `ui-state.ts`, `ui-canvas.ts`, `desktop-calls.ts` and `client-relay.ts` serve the web UI and desktop app ([web-clients](./web-clients.md)).
 - Shared file limits are `MAX_ATTACHMENT_BYTES` (1 GB) and `MAX_ATTACHMENTS_PER_TURN` (10) in `attachments.ts`.
 
-### `src/slack` (about 9,500 lines)
+### `src/slack`
 
 **Job.** The Slack plugin. One `startSlackPlugin` call per account builds a Bolt app and registers its handlers; the default account also drains the tenant's Slack deliveries. The largest files are `directory.ts` (copies people, channels and memberships into core's directory, see [scopes](./scopes.md)), `delivery.ts` and `deliveries.ts` (posting and retry), `turn-handler.ts`, `approvals.ts` and `events.ts`.
 
@@ -84,7 +84,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 - Accounts from `SLACK_ACCOUNTS` handle their own inbound turns. Only the default account publishes the emoji catalog, answers context requests and pushes the directory.
 - `lib.ts` is a list of re-exports. `README.md` is setup help for a local Slack app, and `manifest.json` lists the scopes and events the plugin needs.
 
-### `src/surfaces/generic-chat` (about 1,600 lines)
+### `src/surfaces/generic-chat`
 
 **Job.** A second chat host for any chat product that implements the protocol under Contracts.
 
@@ -98,7 +98,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 - By default the agent's tool is text only on this host (`textOnly`): no reactions, edits, deletes or files. A `protocol: 2` turn lifts that for its own chat (`turnCapabilities`, `src/surfaces/registry.ts`). Pins are never supported.
 - It reuses Slack's emoji tables (`src/slack/emoji-map.ts`, `src/slack/ack-emoji.ts`) and stages files through `SlackCoreClient`.
 
-### `src/api/slack-core-client.ts` (about 450 lines)
+### `src/api/slack-core-client.ts`
 
 **Job.** The in-process facade a chat host calls instead of core's HTTP API: submit a turn, wait for a run, stage a blob, push the directory, ingest mirror events, acknowledge deliveries.
 
@@ -106,7 +106,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 
 **Surprising.** It is built in every deployment, including ones with no Slack. Its name describes its first user, not a connection.
 
-### `src/surface-cache` (about 1,350 lines)
+### `src/surface-cache`
 
 **Job.** The mirror, channel policy, and the records of ambient judging.
 
@@ -114,7 +114,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 
 **Surprising.** Tables are named `channel_*` and serve every mirrored surface. Slack mirrors a room only when all its members are internal, unless external participants are enabled (`createMirror`, `src/slack/mirror.ts`). The first read of a Slack conversation in each process also fetches one page of live history and stores it (`createSlackHistoryReader`, `src/slack/history.ts`).
 
-### `src/delivery` (about 1,200 lines)
+### `src/delivery`
 
 **Job.** The outbox: store, claim, expire.
 
@@ -138,7 +138,7 @@ Slack also keeps `slack_task_acknowledgements` (the emoji that marks a DM reques
 
 **Surprising.**
 
-- `src/api/routes/surface.ts` is, despite its name, about 1,600 lines of session, memory, skill and settings routes. Only `/v1/surface-config`, `/v1/custom-emoji` and `/v1/channel-header-pin` belong to this area.
+- `src/api/routes/surface.ts` is, despite its name, mostly session, memory, skill and settings routes. Only `/v1/surface-config`, `/v1/custom-emoji` and `/v1/channel-header-pin` belong to this area.
 - `src/api/routes/admin/slack-installation.ts` holds both the admin endpoints for a stored installation and the endpoints the shared Slack service calls. `admin/slack-mirror.ts` lets an admin read the mirror.
 - `src/api/routes/slack-reply.ts` lets a person who is viewing a Slack session in the web UI reply into the Slack thread as themselves, through their own Slack connection ([credentials](./credentials.md)). The message is also written into the session.
 - `src/api/routes/surface-cache.ts` exposes mirror ingest and channel policy over HTTP. `emoji.ts` adds a custom emoji to the Slack workspace through a Slack browser session the person saved.

@@ -105,17 +105,13 @@ Where other paths diverge:
 
 **Job.** Answer the agent when it asks to read "this conversation" on the web surface. **Surprising.** Web has no channel history: only the current thread is readable, a file request is refused with a sentence the model can read, and a search across conversations returns nothing, marked as unconfigured.
 
-### `src/feature-flags.ts`
-
-**Job.** The list of feature names and the store that says which scopes have each. **Key idea.** A flag is on for a person when its row lists the organization scope or that person's personal scope. No row means off. **Surprising.** Several flags are marked `personalOnly`, and flags are edited by admins in the admin UI, not in deployment configuration, so two people on one deployment can see different products.
-
 ### `plugins/web-ui`
 
-**Job.** The browser application: about 55,000 lines of TypeScript on Lit and 22,000 lines of CSS, built by Vite into two entry documents (`index.html`, `shared.html`). **Key idea.** It imports nothing from core. It shares code only through `plugins/chassis` and talks to core only over the aliases, almost always through `webFetch` and `api` in `core-bridge.ts`. The weight is in `chat.ts` (transcript, about 4,000 lines), `core-bridge.ts` (the whole client side of the API, about 2,500), `sessions.ts` (sidebar), `composer.ts`, `inbox.ts` and `split.ts` (multiview: several conversations and other panes side by side, built on dockview, with the layout synced through UI state). Browse pages (files, crons, webhooks, skills, apps, memory, personas, contexts) are one file each over a small shared page frame (`plugins/web-ui/src/list-page.ts`). **Surprising.** Its own `README.md` describes product behavior in detail and stays in the repository; this document covers structure. The app keeps its own copy of the session item shape (`plugins/web-ui/src/items.ts`). `plugins/web-ui/public/sw.js` is a service worker used only for push notifications, not for offline use. In development the dev-instance supervisor builds the bundle (`scripts/dev/lib/deps.ts`) and core serves it as a release; no separate dev server sits in the request path.
+**Job.** The browser application, TypeScript on Lit, built by Vite into two entry documents (`index.html`, `shared.html`). **Key idea.** It imports nothing from core. It shares code only through `plugins/chassis` and talks to core only over the aliases, almost always through `webFetch` and `api` in `core-bridge.ts`. The weight is in `chat.ts` (transcript), `core-bridge.ts` (the whole client side of the API), `sessions.ts` (sidebar), `composer.ts`, `inbox.ts` and `split.ts` (multiview: several conversations and other panes side by side, built on dockview, with the layout synced through UI state). Browse pages (files, crons, webhooks, skills, apps, memory, personas, contexts) are one file each over a small shared page frame (`plugins/web-ui/src/list-page.ts`). **Surprising.** Its own `README.md` describes product behavior in detail; this document covers structure. The app keeps its own copy of the session item shape (`plugins/web-ui/src/items.ts`). `plugins/web-ui/public/sw.js` is a service worker used only for push notifications, not for offline use. In development the dev-instance supervisor builds the bundle (`scripts/dev/lib/deps.ts`) and core serves it as a release; no separate dev server sits in the request path.
 
 ### `plugins/web-ui/src/admin`
 
-**Job.** The admin UI: organization settings, users, spend, logs and artifact browsers, about 8,000 lines, under `/settings/<view>`. **Key idea.** It is mounted inside the chat app's Settings view by `adminMounter` (`plugins/web-ui/src/admin/sections.ts`) and calls `/api/admin/...`, the aliases of `/v1/admin/...`. **Surprising.** It is different code with its own stylesheet (`admin.css`, about 3,000 lines) and its own layout classes, not the chat app's components. Admin routes refuse impersonated sessions.
+**Job.** The admin UI: organization settings, users, spend, logs and artifact browsers, under `/settings/<view>`. **Key idea.** It is mounted inside the chat app's Settings view by `adminMounter` (`plugins/web-ui/src/admin/sections.ts`) and calls `/api/admin/...`, the aliases of `/v1/admin/...`. **Surprising.** It is different code with its own stylesheet (`admin.css`) and its own layout classes, not the chat app's components. Admin routes refuse impersonated sessions.
 
 ### `plugins/chassis`
 
@@ -127,7 +123,7 @@ Where other paths diverge:
 
 ### `desktop/`
 
-**Job.** An Electron shell around an existing deployment's web UI, about 2,600 lines of JavaScript, plus `desk`, a Rust helper of about 8,500 lines that observes and drives Mac apps. **Key idea.** The app adds three things to the page through a preload script: window chrome, `openBrowser`, and `computer.call`, which the page uses to carry out claimed desktop calls. It bundles no backend. **Surprising.** Computer use is macOS only (the page ignores the bridge on other platforms). Automatic updates run only in packaged Apple Silicon builds and read a static feed attached to this repository's `desktop-updates` release.
+**Job.** An Electron shell around an existing deployment's web UI, plus `desk`, a Rust helper that observes and drives Mac apps. **Key idea.** The app adds three things to the page through a preload script: window chrome, `openBrowser`, and `computer.call`, which the page uses to carry out claimed desktop calls. It bundles no backend. **Surprising.** Computer use is macOS only (the page ignores the bridge on other platforms). Automatic updates run only in packaged Apple Silicon builds and read a static feed attached to this repository's `desktop-updates` release.
 
 ### `ios/`
 
@@ -178,7 +174,7 @@ Invalid values of `WEB_UI_ANALYTICS`, `SENTRY_BROWSER_DSN` or `WEB_UI_SUGGESTED_
 - **Three hand-kept copies of the item shape.** Core (`src/sessions/items.ts`), the web UI (`plugins/web-ui/src/items.ts`) and the iOS app (`ios/QM/Item.swift`) each define what a transcript item looks like. This is the master's _Duplication_ lens. **[interpretation]**
 - **Every screen exists up to twice.** The alias list is the real client API, and the web UI and the iOS app implement it separately, so a behavior change multiplies by clients.
 - **The alias table is a second routing layer.** A new browser feature needs a `/v1` route, a `browser` mark and an alias entry; missing any one gives a 404 that looks like a missing route.
-- **Feature flags multiply the product.** At least nine flags change what the web UI shows or how web turns behave, per person. Combined with optional keys and storage choices, two deployments, or two people on one, can see different web UIs. This is the master's _Config-matrix expansion_ lens. **[interpretation]**
+- **Feature flags multiply the product.** Many flags change what the web UI shows or how web turns behave, per person. Combined with optional keys and storage choices, two deployments, or two people on one, can see different web UIs. This is the master's _Config-matrix expansion_ lens. **[interpretation]**
 - **Transitional code still present.** The page keeps a "dev" sign-in mode (`submitDevSignin` posts to `/signin`, and its `AuthMode` type still includes `dev`), but no server in the repository serves `/signin` and `/v1/web/me` always answers `mode: "portal"`. `WEB_UI_BASE` can still build the bundle for a path prefix, but the web shell maps only root paths to release files **[interpretation]**.
 
 ## Contracts
@@ -197,7 +193,7 @@ A release id is 64 hex characters: the SHA-256 over one line per bundle file, so
 
 **Web events stream** (`GET /api/deliveries/events`). Named events: `session_state` (JSON with `threadRef`, `sessionId`, `state`, `at`, and `ui` or `notice` when present), `delivery` (`{threadRef}`), `inbox_item` (`{loopId, itemId, op}`), `session_state_resync` and `inbox_resync` (refetch everything), and `ping` every 15 seconds.
 
-**Run event stream** (`GET /api/runs/:id/events`). JSON frames with `type`: `RUN_STARTED`, then `CUSTOM` frames named `delta` (`offset`, `delta`, `startOffset`), `reasoning` (`step`, `index`, `offset`, `delta`) and `run` (a full run snapshot), then `RUN_FINISHED`.
+**Run event stream.** `GET /api/runs/:id/events` is the alias of `GET /v1/runs/:id/events`; the frames are in [turns](./turns.md#contracts).
 
 **`WEB_UI_ANALYTICS`.** A JSON object with `module` (a same-origin path or an HTTPS URL of an ES module), optional `connect` (a list of HTTPS origins the module may call) and optional `options`. The module must export `createAnalytics({ org, user, options })`, returning an object with optional `page`, `track` and `stop` methods. QM ships no analytics vendor.
 

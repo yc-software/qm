@@ -56,7 +56,7 @@ Two other paths use the same parts:
 
 ## The parts
 
-### `src/agent/agent-tools/sessions.ts` — the two tools (about 400 lines)
+### `src/agent/agent-tools/sessions.ts` — the two tools
 
 **Job.** Define `subagents` (`open`, `read`, `send_message`, `wait`) and `sessions` (`list`, `search`, `read`, `send_message`, `new`, `fork`), and turn each syscall result into a sentence for the model (`deliveryOutcome`).
 
@@ -64,7 +64,7 @@ Two other paths use the same parts:
 
 **Surprising.** (1) `noComputer` is stored as `readOnly`; a read-only child gets no isolation record and cannot lift the restriction for its own children. (2) `sessions` refuses subagent targets and `subagents` is the only way to reach them, but both call the same `write` and `read` syscalls. (3) `new` and `fork` need a person attending the turn and are refused on read-only turns and on a Slack bot's work; they create web sessions through `startSession` in `src/api/start-session.ts`. (4) `read` with no target lists only children that are not retired.
 
-### `src/sessions/session-syscalls.ts` — open, message, read, stop (about 1,300 lines)
+### `src/sessions/session-syscalls.ts` — open, message, read, stop
 
 **Job.** Everything a turn may do to another session (`open`, `write`, `read`, `receive`, `acknowledge`, `list`, `search`, `start`), plus the tree helpers other modules import: `treeSessions`, `stopSessionRuns`, `stopSessionTree`, `runStopped`, `delegatedAuthorization`, `requiresDelegation`.
 
@@ -88,7 +88,7 @@ Two other paths use the same parts:
 | Goal cancelled from the goal bar           | `cancelSessionGoal` in `src/api/app-sessions.ts` | none                               | Not signalled. `runStopped` reports them stopped: their session tools refuse and their results arrive without a wake. |
 | Swarm control `stopped`                    | `control` in `src/swarms/swarm-service.ts`       | none                               | Applies to the worker's descendants in the swarm (`controlState`).                                                    |
 
-### `src/sessions/subagent-mail.ts` and `src/runs/run-returns.ts` — results and wakes (about 650 lines)
+### `src/sessions/subagent-mail.ts` and `src/runs/run-returns.ts` — results and wakes
 
 **Job.** Turn a finished child run into mail for its parent, decide whether that mail wakes the parent, and keep trying until it has landed.
 
@@ -103,7 +103,7 @@ Two other paths use the same parts:
 5. A reply longer than 16,000 characters is cut in the mail; the full text stays in the child's transcript.
 6. Message wakes do not use `returned_at`. They use the `wake` flag on the mailbox row, recovered by `sweepUnreadMailWakes` and by `wakeForUnreadMail` when any run in the recipient's thread ends.
 
-### `src/sessions/session-mailbox.ts` and `src/agent/agent-tools/record.ts` — mail delivery (about 60 lines, plus part of about 320)
+### `src/sessions/session-mailbox.ts` and `src/agent/agent-tools/record.ts` — mail delivery
 
 **Job.** Store mail (`createSessionMailbox`) and hand it to a running turn.
 
@@ -111,7 +111,7 @@ Two other paths use the same parts:
 
 **Surprising.** On a web turn that speaks through the surface tool (`web_dm_spine`), mail is not read into a tool result that ends the turn, so it waits for the turn it wakes. A message the screen quarantines pauses the turn on an approval; denying the approval consumes the message ([security](./security.md)).
 
-### `src/sessions/child-isolation.ts` and `src/sessions/subagent-runtime.ts` — placement and model (about 220 lines)
+### `src/sessions/child-isolation.ts` and `src/sessions/subagent-runtime.ts` — placement and model
 
 **Job.** Decide the child's computer and directory (`childIsolation`), create them on first use (`ensureChildSandbox`, `prepareChildWorkdir`), and choose its model (`openRuntime`).
 
@@ -119,7 +119,7 @@ Two other paths use the same parts:
 
 **Surprising.** (1) The default flips to `worktree` when the parent itself runs in a subagent directory, so grandchildren do not share a worktree. (2) A `worktree` child gets `subagents/<slug>-<hash>` and branch `subagent/<slug>-<hash>`; if the base is not a git repository it is a plain empty directory. (3) A `sandbox` child's computer id is its session id and is created when the child first runs. (4) With no `model` given, the child inherits the parent's model only when the parent is off the scope default; otherwise it resolves as purpose `subagent` ([models](./models.md)).
 
-### `src/sessions/subagent-status.ts` and `src/sessions/session-work.ts` — what is still working (about 260 lines)
+### `src/sessions/subagent-status.ts` and `src/sessions/session-work.ts` — what is still working
 
 **Job.** Answer "what is this child doing?" for the tools (`subagentActivity`, `renderSubagentActivity`, `liveSubagentsNote`) and "is this conversation busy?" for surfaces (`createSessionWork`).
 
@@ -127,15 +127,11 @@ Two other paths use the same parts:
 
 **Surprising.** A session with no run of its own still counts as busy while a descendant runs, a child's return is pending, or a background job or watch it owns is live. The tool listing names that state `waiting on subagents`.
 
-### `src/wake` — a message meets live work (about 350 lines)
+### `src/wake` — a message meets live work
 
-**Job.** `routeIncoming` decides what an incoming message does when its conversation already has a live run: start its own turn, steer into the live one, stop it, or be dropped as empty. `src/wake/wake-envelope.ts` builds the `<wake>` text that unprompted and webhook turns start from ([surfaces](./surfaces.md), [background-work](./background-work.md)). `src/wake/engaged-registry.ts` keeps an in-process list of threads whose turns were routed to surface tools; `src/wake/sweep.ts` pokes the run reaper for any listed thread with no active run and drops it from the list.
+The part belongs to [turns](./turns.md). Two facts matter here. Nothing in `src/wake` queues delegation wakes; those live in `src/sessions/subagent-mail.ts`. When a conversation is idle but its subagents are running, a halt still stops the tree, and any other message starts a normal turn (`only-subagents-live`).
 
-**Key idea.** `routeIncoming` is a pure function of the message, the live turn and the sender's mid-turn preference. A person's message that is exactly `stop` (after an optional mention of the agent, with an optional `.` or `!`) is a halt (`isHalt`).
-
-**Surprising.** Nothing in `src/wake` queues delegation wakes; those live in `src/sessions/subagent-mail.ts`. When a conversation is idle but its subagents are running, a halt still stops the tree, and any other message starts a normal turn (`only-subagents-live`).
-
-### `src/swarms` and `src/api/routes/swarms.ts` — swarms (about 1,800 lines; `swarm-service.ts` about 1,200)
+### `src/swarms` and `src/api/routes/swarms.ts` — swarms
 
 **Job.** Create and run pools of worker sessions: membership, messages, budgets, pause and stop, worker computers and the shared board.
 
@@ -151,7 +147,7 @@ Two other paths use the same parts:
 6. `stopped` is final and reaches descendants. `paused` returns queued, unstarted runs to `pending`; a turn that starts for a paused worker is held and retried.
 7. Only a Slack bot's own turns may add workers to a swarm a bot started, and such a swarm never takes a forum. The bot loses the swarm once anyone else posts a message in it or a person's turn uses one of its computers.
 
-### `src/core/side-chat-context.ts` and `src/sessions/side-chat.ts` — side chats (about 110 lines)
+### `src/core/side-chat-context.ts` and `src/sessions/side-chat.ts` — side chats
 
 **Job.** Give a side chat its rules (`SIDE_CHAT_GUIDANCE`) and give the origin conversation a view of its side chats (`sideChatContext`).
 

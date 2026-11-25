@@ -72,7 +72,7 @@ Where other paths diverge:
 
 `src/persistence` is about 2,300 lines and `src/tenants` about 2,000.
 
-### `src/persistence/pg-pool.ts` — connections, the tenant setting, the migration runner (about 700 lines)
+### `src/persistence/pg-pool.ts` — connections, the tenant setting, the migration runner
 
 **Job.** Give every store a `PgPool`: `q` and `query` for single statements, `forTenant(tenant)` for the token path, `pool()` and `sessionPool()` for raw connections, `registerMigration` and `migrate` for schema.
 
@@ -80,7 +80,7 @@ Where other paths diverge:
 
 **Surprising.** (1) A query with no tenant bound, no timeout and no abort signal is sent bare, without a transaction. On a tenanted table it fails under an app login and returns every tenant's rows under an owner login (both observed). (2) `pool()` and `sessionPool()` return raw `pg` pools that know nothing about tenants; `withPgTransaction` is the helper that sets the tenant on a raw connection. (3) A per-query `timeoutMs` is a transaction-local `statement_timeout`, for the same pooler reason. (4) A closed `PgPool` cannot reopen. (5) The runner has special forms a migration can opt into: `prepare` (statements run first, outside the transaction, with no statement timeout; used for batched backfills), `autocommit`, concurrent-index migrations (only `CREATE INDEX CONCURRENTLY IF NOT EXISTS` statements; an invalid leftover index is dropped and rebuilt), `legacyId` (adopt a row from the older `schema_migrations` table instead of re-running), `upgradeFrom` (run only if the ledger holds the named anchor) and `expectedChecksum` (pin a released migration's text in source).
 
-### `src/persistence/durable-map.ts` — one table per noun, one JSON document per row (about 450 lines)
+### `src/persistence/durable-map.ts` — one table per noun, one JSON document per row
 
 **Job.** `createPostgresMap` gives a store `get`, `put`, `merge`, `update`, `all`, `select` and similar over a table of `(tenant_id, id, json)`. Roughly 100 of the 165 or so tables in a migrated database have this shape (observed on an empty database after migrating).
 
@@ -92,7 +92,7 @@ Where other paths diverge:
 
 **Job.** `createPostgresAdvisoryLock` gives `withLock`, `withSharedLock`, `tryWithLock` and `tryWithLocks`: mutual exclusion by string key. `createPostgresLeaderLease` gives `hold(key, fn)`: run `fn` only if no other process holds the key, and return `null` at once otherwise.
 
-**Key idea.** Both are Postgres session-level advisory locks on session-pool connections, so a process that dies releases them with no cleanup code. About twenty periodic sweeps (cron tick, run reaper, wake sweep, monitor poller, app reaper, memory indexer and others) are wrapped in `leaderLease.hold`, so one core process runs each at a time.
+**Key idea.** Both are Postgres session-level advisory locks on session-pool connections, so a process that dies releases them with no cleanup code. The periodic sweeps (cron tick, run reaper, wake sweep, monitor poller, app reaper, memory indexer and others) are wrapped in `leaderLease.hold`, so one core process runs each at a time.
 
 **Surprising.** (1) Keys are database-wide, not per tenant: one leader sweeps for all tenants. (2) `withLock` waits by polling every 300 ms and throws after five minutes. Nested locks in one async call chain share a connection, but taking the same exclusive key again inside itself is never granted and runs into that timeout; only `tryWithLocks` lets inner `withLock` calls on its own keys pass. (3) `hold` passes `fn` a `lost` promise that resolves if the lock's connection dies; long work must watch it. (4) Each lock held pins one session connection, so the session pool's size bounds the locks one process can hold at once. (5) Both need a direct connection. Behind a transaction pooler the unlock reports "not held", which the lease logs as a hint that `DATABASE_URL` points at a pooler.
 
@@ -166,7 +166,7 @@ Where other paths diverge:
 
 **Key idea.** Three kinds of database must converge on one schema. An empty one runs a _base schema_ migration (`sessions/store/0047-base-schema`; runs and the directory have their own) that creates the tables in one step, then everything after it. One that followed `main` already holds the earlier ids in its ledger, so the base schema does nothing. One from the last published release holds an _anchor_ id, `sessions/store/0033-client-tools`; the migrations in `PUBLISHED_SESSION_UPGRADE` carry `upgradeFrom` that anchor, run only there, and bring it up to the base. A database older than the anchor is refused with a message to upgrade through an intermediate release.
 
-**Surprising.** (1) Released migrations are frozen: `expectedChecksum` pins their text and `test/migration-policy.test.ts` fails if it drifts. A change is always a new migration. (2) Two orders exist. Start-up applies everything sorted by id. A store used before that (a script, a test) applies its own list in array order. The two do not always agree (`sessions/store/0056-persona` is listed after `sessions/store/0057-claims`), so a migration must be correct in either order. (3) `src/migrate-main.ts` builds the whole app, installs the cron queue and runs a readiness check, so it needs the same env as core. (4) An empty database ends with about 1,500 ledger rows, three quarters of them generated per table for durable maps (observed). (5) `scripts/check-published-upgrade.sh`, run in CI, migrates a database with the latest published tag and then with the current tree.
+**Surprising.** (1) Released migrations are frozen: `expectedChecksum` pins their text and `test/migration-policy.test.ts` fails if it drifts. A change is always a new migration. (2) Two orders exist. Start-up applies everything sorted by id. A store used before that (a script, a test) applies its own list in array order. The two do not always agree (`sessions/store/0056-persona` is listed after `sessions/store/0057-claims`), so a migration must be correct in either order. (3) `src/migrate-main.ts` builds the whole app, installs the cron queue and runs a readiness check, so it needs the same env as core. (4) Most ledger rows in an empty database are generated per table for durable maps (observed). (5) `scripts/check-published-upgrade.sh`, run in CI, migrates a database with the latest published tag and then with the current tree.
 
 ### `scripts/tenant-ratchet.ts` and `scripts/tenant-ratchet.json` — counting what is left
 
@@ -174,7 +174,7 @@ Where other paths diverge:
 
 **Key idea.** Four counters: `mintSites` (`withTenant`), `implicitQueries` (`PgPool.q`, `PgPool.query`, `PgPool.pool`, `PgPool.sessionPool`, `withPgTransaction`), `ambientReads` (`boundTenant`, `ambientTenant`, `currentTenant`) and `ambientCaches` (`perTenant`, `tenantListeners`, `onTenantLoad`). CI fails if a count rises, if it falls without the baseline being lowered, or if the JSON names a metric the script does not count.
 
-**Surprising.** (1) New code that calls `pg.q(...)` fails CI. It must take a `Tenant` and use `forTenant`. (2) `--update` only lowers the baseline; raising it is a hand edit. `--list` prints per-file counts. (3) Only calls count: passing `pg.q` by reference is invisible. Helpers that wrap `withTenant`, such as `inTenant` and `inBootTenant`, count once. (4) About 320 implicit query sites remain against about 40 `forTenant` calls. The converted stores are admin grants, ACL grants, the audit log and event sinks, decisions, budgets and teams, plus single calls in other stores.
+**Surprising.** (1) New code that calls `pg.q(...)` fails CI. It must take a `Tenant` and use `forTenant`. (2) `--update` only lowers the baseline; raising it is a hand edit. `--list` prints per-file counts. (3) Only calls count: passing `pg.q` by reference is invisible. Helpers that wrap `withTenant`, such as `inTenant` and `inBootTenant`, count once. (4) Most query sites are still implicit. The converted stores are admin grants, ACL grants, the audit log and event sinks, decisions, budgets and teams, plus single calls in other stores.
 
 ### `src/cron/job-queue.ts` — the one schema QM does not define
 

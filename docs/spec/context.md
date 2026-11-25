@@ -56,15 +56,15 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 
 ### Prompt assembly: `src/core/orchestrator.ts` and `src/core/orchestrator/`
 
-**Job.** Build the system prompt and the environment note. `turn-prompt.ts` (about 300 lines) holds three stages of assembly, `prompt-blocks.ts` (about 400) renders individual blocks, `prompt-snapshot.ts` (about 70) keeps the stored copy, `run-segment.ts` builds the note.
+**Job.** Build the system prompt and the environment note. `turn-prompt.ts` holds three stages of assembly, `prompt-blocks.ts` renders individual blocks, `prompt-snapshot.ts` keeps the stored copy, `run-segment.ts` builds the note.
 
 **Key idea.** Anything that can change between turns must not change the bytes already sent, so that the provider's prompt cache holds **[interpretation]**. The system prompt is frozen per session, and time, sender, events and memory travel in the note attached to the newest message.
 
-**Surprising.** The assembly is not in one place: most of the ordering in step 5 is inline in `handleTurn` (a file of about 2,900 lines), interleaved with credentials, sandboxes and approvals. Adding a block means adding its name to `SYSTEM_CONTEXT_ORDER`; a block not in that list is never rendered. Editing `shared-core.md` does not reach running conversations as a new prompt: each one receives the edit as a line diff in its note until its next compaction.
+**Surprising.** The assembly is not in one place: most of the ordering in step 5 is inline in `handleTurn`, interleaved with credentials, sandboxes and approvals. Adding a block means adding its name to `SYSTEM_CONTEXT_ORDER`; a block not in that list is never rendered. Editing `shared-core.md` does not reach running conversations as a new prompt: each one receives the edit as a line diff in its note until its next compaction.
 
 ### Standing instructions: `src/resolution/`
 
-**Job.** `resolution-service.ts` composes the two SOUL texts; `config-store.ts` (about 830 lines, 22 settings tables, of which the SOUL is one) stores them; `turn-context.ts` decides which notebooks and skill scopes a turn reads; `protocols/` holds eight Markdown files, under 10 KB together.
+**Job.** `resolution-service.ts` composes the two SOUL texts; `config-store.ts` stores them, as one of its settings tables; `turn-context.ts` decides which notebooks and skill scopes a turn reads; `protocols/` holds eight Markdown files, under 10 KB together.
 
 **Key idea.** Instructions layer from general to specific: organization, then scope, then persona. The texts are concatenated; the only precedence is the sentence telling the model that organization instructions win.
 
@@ -87,7 +87,7 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 
 ### Skills: `src/skills/` and `skills-seed/`
 
-**Job.** Store skills, seed the built-in ones, import packs, list skills in the prompt, and place a skill's files on a sandbox when it is read. About 1,800 lines of code; `skills-seed/` holds 31 skills in about 23,000 lines, of which about 16,600 are the design templates of one skill.
+**Job.** Store skills, seed the built-in ones, import packs, list skills in the prompt, and place a skill's files on a sandbox when it is read. Most of the text under `skills-seed/` is the design templates of one skill.
 
 **Key idea.** A skill is a database row, not a file on a computer. Seeds, the deployment layer and packs all go through one function, `upsertSeedSkill` (`seed.ts`): create, review, publish. They differ only in the `createdBy` marker and where they read from. Skills saved through the API take the same three steps in `src/api/app-skills.ts`.
 
@@ -211,7 +211,7 @@ Routes run in this order: the env routes (or, with no env variable, one notebook
 
 ### Attesting the member (`attestActor`)
 
-With `attestActor: true`, every request of a call also carries the member's canonical person id in the HTTP header `x-qm-actor` and their aliases as a JSON list in `x-qm-actor-aliases`. The model cannot set these. A route to an attested provider may list only `personal` or `personal:<id>`, and the provider cannot manage a notebook; other configurations are refused at startup. QM calls an attested provider only for the scope's own member in their own private conversation. Any other read is withheld without a call; any other write is recorded `denied` with code `private_only`. An id that is not 1 to 256 visible ASCII characters is recorded `denied` with `invalid_actor`.
+With `attestActor: true`, every request of a call also carries the attested-actor headers ([scopes](./scopes.md#contracts)). The model cannot set these. A route to an attested provider may list only `personal` or `personal:<id>`, and the provider cannot manage a notebook; other configurations are refused at startup. QM calls an attested provider only for the scope's own member in their own private conversation. Any other read is withheld without a call; any other write is recorded `denied` with code `private_only`. An id that is not 1 to 256 visible ASCII characters is recorded `denied` with `invalid_actor`.
 
 ### Provider outcomes
 

@@ -63,7 +63,7 @@ Where other kinds of fire diverge:
 
 ## The parts
 
-### `src/triggers`: how a fire becomes a turn (about 1,000 lines)
+### `src/triggers`: how a fire becomes a turn
 
 **Job.** `runTrigger` takes a `TriggerSpec` (owner, home scope, input text, fire key, surface, destination) and returns a `TriggerOutcome`. Every fire in this area reaches `App.turn` through it.
 
@@ -71,7 +71,7 @@ Where other kinds of fire diverge:
 
 **Surprising.** (1) Besides crons, webhooks, monitors and loop stages, two credential flows fire through here: `fireAskResolution` and `fireDropResolution` in `src/triggers/keychain-ask.ts` resume a paused task after a credential owner answers a request or a secret arrives ([credentials](./credentials.md)). (2) Behaviour branches on surface strings. `cron`, `loop` and `keychain-ask` are "scheduled": they use the owner's keychain outside a DM, and they report `ownerLeft` when the owner is no longer a member, which makes the scheduler delete the cron. `monitor` alone delivers through surface tools. (3) A turn that pauses for an approval is logged as `pending_approval` with the note `waiting for approval: …` and delivers nothing; the approval card is the [security](./security.md) area's job. (4) `src/triggers/edit-notice.ts` messages a cron's owner when someone else edits it. (5) `src/triggers/trigger-store.ts` holds data migrations for several tables, not only shared store helpers.
 
-### `src/cron`: store, scheduler, queue, fire log, scripts (about 1,900 lines; `scheduler.ts` about 770)
+### `src/cron`: store, scheduler, queue, fire log, scripts
 
 **Job.** Keep crons, decide when each is due, fire each slot once, and record what happened.
 
@@ -79,7 +79,7 @@ Where other kinds of fire diverge:
 
 **Surprising.** (1) There are two firing paths. `fireJob` (pg-boss) is the normal one. If the queue cannot start, the scheduler logs a misconfiguration and falls back to `tick`, which scans every cron once a second under the leader lease. (2) Any instance whose scheduler is started works the queue. The leader lease `cron:scheduler:tick` covers only the repair and maintenance loop, not the fires. (3) That maintenance loop also carries unrelated chores through its `sweepAsks` hook: expiring credential requests, loop ingress maintenance and the loops' stale-fire check are wired there in `src/wiring.ts`. (4) Crons live as JSON rows in a generic key-value table, but fires live in `cron_fires` with typed columns. The fire log keeps the newest 100 fires per cron; older ones are pruned once they are 90 days old. (5) A missed slot is owed, not skipped. Pausing a cron leaves `nextFireAt` alone, so re-enabling it fires the stale slot at once. A calendar slot then advances from its scheduled time and an interval slot from the actual fire time, so a calendar cron fires once for every slot it missed and an interval cron fires once **[interpretation of `claimSlot`; the single stale fire is covered by a test, the repeat is not]**. (6) `everyMs` of a day or more is rejected and intervals under a minute are refused: daily work must use `{cron, timezone}`.
 
-### `src/cron/authority.ts`: whose authority a fire carries (under 30 lines)
+### `src/cron/authority.ts`: whose authority a fire carries
 
 **Job.** Decide whether a fire runs with its owner's full standing.
 
@@ -92,7 +92,7 @@ Where other kinds of fire diverge:
 - Every automation turn also carries the `triggered` claim, so `personAtKeyboard` (`src/api/artifact-share.ts`) is false inside any fire. Code that still calls it refuses instead of raising an approval card: the control service's `createWebhook` and `updateWebhook` ("requires a live turn started by its owner"), and loop policy changes in `src/api/routes/loops.ts` (`requireLiveHuman`, error `human_required`).
 - Loop item turns started by a non-person caller pass `unattended`, which removes `ownerFire` (`src/loops/loop-fire.ts`). `run-trigger.ts` passes `triggered: true` to `turnModelOptions`, which only picks default effort and speed.
 
-### `src/webhooks` (about 500 lines)
+### `src/webhooks`
 
 **Job.** Authenticate an inbound HTTP request and turn it into one fire.
 
@@ -100,7 +100,7 @@ Where other kinds of fire diverge:
 
 **Surprising.** (1) The 202 does not wait for the turn to be queued, and nothing reads `webhook_history` to re-drive an event. If the process stops in between, recovery depends on the sender retrying. (2) For most schemes the delivery id is a hash of the body, so two identical bodies count as one event for 14 days (the `idempotency` retention). (3) A failed authorization check at fire time disables the webhook. (4) A webhook created through the web route is always personal and has no destination; only the `webhook` tool (`src/agent/agent-tools/control.ts`) can attach one.
 
-### `src/monitors` (about 700 lines)
+### `src/monitors`
 
 **Job.** Wake the conversation that started a background job when the job says something worth hearing.
 
@@ -108,7 +108,7 @@ Where other kinds of fire diverge:
 
 **Surprising.** (1) A watch ends itself: after an exit, expiry or loss fire the monitor is disabled, and disabled monitors are deleted after seven days. (2) Output fires are spaced at least 60 seconds apart and capped at 20 fires per pass. (3) Patterns are literal alternatives with optional `^` and `$` anchors, not regular expressions (`compileMonitorPattern`). (4) Heartbeat fires tell the agent to finish silently unless something changed. (5) The poller is not stopped by the deployment drain described below; only its lease keeps it to one process.
 
-### `src/loops` (about 6,000 lines; `loop-fire.ts` about 1,070, `item-ledger.ts` about 700)
+### `src/loops`
 
 **Job.** Run standing work over a queue of items and hold anything outward-facing until a person, or a standing grant, ships it.
 
@@ -118,7 +118,7 @@ Where other kinds of fire diverge:
 
 **Ingestion** (`src/loops/ingress.ts`, `src/loops/gmail-push.ts`). `receive` authenticates an event and stores a delivery row before answering 202. `process` later moves deliveries into the ledger and fires the loop with discovery off. Failed deliveries retry with backoff from one minute up to an hour; completed receipts are kept 30 days. A duplicate event reuses its item. A newer event for the same conversation supersedes held drafts, but waits while an output is shipping or awaiting confirmation. A paused loop keeps its deliveries; a disabled source rejects new ones. Returned items are worked again even when no new event arrives. For Gmail the first watch starts at the mailbox's current history id (nothing is imported from before), the watch is renewed daily without moving the saved cursor, history is also reconciled every ten minutes, an expired cursor falls back to a full Inbox resync, and the cursor advances only after every item is stored. Disabling a Gmail source never stops the mailbox-wide watch, because another loop may share it. Slack sources have no history reconciliation.
 
-### API: administration, sharing, routes and tools (about 3,300 lines)
+### API: administration, sharing, routes and tools
 
 **Job.** Decide who may change a record, and expose create, edit, run and list to people and agents.
 
@@ -148,7 +148,7 @@ Nothing here selects a deployment shape; a shape is the sum of these settings ([
 | Deployment identity for hand-over                                  | env `BACKGROUND_DEPLOYMENT_ID` (allocated by deployment tooling; needs `DEPLOYMENT_CONTROL_SECRET`, at least 32 characters and different from `CORE_SIGNING_SECRET`, or config loading throws) | unset                                                     | Key falls back to `GIT_SHA`. With neither, no stand-down ever happens. Setting it also turns on the deployment live-smoke route ([deployments](./deployments.md)).                                                                                                                                                       |
 | pg-boss cron queue                                                 | schema `pgboss`, installed at boot by `installCronQueue` (needs rights to create it)                                                                                                           | installed                                                 | Scheduler logs a misconfiguration and falls back to one-second interval ticks under the leader lease.                                                                                                                                                                                                                    |
 | Concurrent cron fires per process                                  | env `CRON_FIRE_CONCURRENCY`                                                                                                                                                                    | 4 (clamped to 1–32)                                       | n/a                                                                                                                                                                                                                                                                                                                      |
-| Job watches                                                        | the sandbox backend supports process sessions (`supportsProcessSessions`; see [sandboxes](./sandboxes.md))                                                                                     | depends on backend                                        | No monitor poller and no watch broker on the turn.                                                                                                                                                                                                                                                                       |
+| Job watches                                                        | the sandbox backend supports process sessions (`supportsProcessSessions`; see [sandboxes](./sandboxes.md))                                                                                     | on: every shipped backend does                            | No monitor poller and no watch broker on the turn.                                                                                                                                                                                                                                                                       |
 | Watch poll interval and heartbeat                                  | env `MONITOR_POLL_MS`, `MONITOR_HEARTBEAT_SEC`                                                                                                                                                 | 10,000 ms; 180 s                                          | Heartbeat 0 disables "still running" fires.                                                                                                                                                                                                                                                                              |
 | Stranded-fire age                                                  | env `RUN_MAX_AGE_MS`                                                                                                                                                                           | 24 hours, or twice `TURN_WALL_CLOCK_SEC` when that is set | n/a                                                                                                                                                                                                                                                                                                                      |
 | Inbox and loops for a person                                       | feature flag `inbox_loops`: a row in `feature_flags` naming `personal:<id>` or the org scope                                                                                                   | off                                                       | Loop and inbox routes answer 403 `feature_disabled` to a signed-in person; sources cannot be created; events for that owner are refused (404) or skipped (Gmail); queued deliveries are kept but not processed. Requests made with an agent capability to the plain `/v1/loops` routes are not checked against the flag. |

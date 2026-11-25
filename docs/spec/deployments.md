@@ -54,7 +54,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 ## The parts
 
-### `cli/src/cli.ts` and `cli/src/commands/` (about 700 and 2,300 lines)
+### `cli/src/cli.ts` and `cli/src/commands/`
 
 **Job.** Parse `qm <command>`, load the folder, and call one command module or the target's backend.
 
@@ -62,7 +62,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Surprising.** (1) `tenant`, `db` and `dev` are not in the npm package. They spawn `scripts/tenant.ts`, `scripts/db.ts` and `scripts/dev/cli.ts` from the Git root, so they work only in a source checkout. (2) `qm sandbox build` (`runSandboxBuild`) is a local validation build; no running sandbox boots its output. Tools reach sandboxes through the deployment layer. (3) `qm ui publish` (`runUiPublish`) changes the browser app without restarting core, but only where the release store is an S3 bucket the operator can write. (4) `check --json` reports by clause id, exits 1 for a failed check and 2 for a bad invocation.
 
-### `cli/src/config.ts` (about 1,700 lines)
+### `cli/src/config.ts`
 
 **Job.** Define and validate `qm.config.jsonc` (`QmConfig`, `loadConfigAt`).
 
@@ -70,7 +70,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Surprising.** (1) Strictness stops one level down. `env.<service>` is an open map of strings that every backend forwards unchanged. A misspelled or retired name under `env.core` passes `qm check` and does nothing. (2) Some names under `env.core` are read by the CLI and never by core, for example `AWS_PUBLIC_ORIGIN_URL`. (3) About 400 of the lines validate the `aws` block alone.
 
-### `cli/src/providers.ts`, `cli/src/services.ts`, `cli/src/secrets.ts` (about 1,100 lines)
+### `cli/src/providers.ts`, `cli/src/services.ts`, `cli/src/secrets.ts`
 
 **Job.** The three catalogs the rest of the CLI reads: targets and the sandbox backends each allows (`SANDBOX_BACKEND_POLICY`); services and the environment derived for them (`orgEnv`, `brokerWiring`); and secrets (`FIRST_PARTY_SECRET_SPECS`).
 
@@ -78,7 +78,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Surprising.** (1) `slack` and `auth` appear under `services` but are not workloads: `serviceHost` maps both to `core`. (2) The CLI names seven sandbox backends; core accepts eleven (`sandboxBackendEnvStrict` in `src/sandbox/sandbox-settings.ts`). The other four are reached only by writing `env.core.SANDBOX_BACKEND` by hand. See [sandboxes](./sandboxes.md).
 
-### `cli/src/backends/` (about 9,000 lines; `cli/src/backends/aws.ts` about 4,600)
+### `cli/src/backends/`
 
 **Job.** One module per target, each implementing `Backend` (`cli/src/backends/types.ts`): `up`, `status`, `logs`, `down`, `rollback`, `doctor`, `secretsPush`, and optionally `checkLive` and `migrateCandidate`. `cli/src/backends/registry.ts` maps a target to its backend, scaffold, accepted `up` flags and config checks.
 
@@ -94,23 +94,23 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Surprising.** (1) Terraform is vendored. After `init` the copy in `infra/` belongs to the deployment, and upgrading the CLI does not change it. `assertTerraformScaffoldSupportsConfig` refuses to deploy over a copy that is too old. (2) `cli/templates/deployment/references/porter.md` ships in the package, but `scaffoldDeploymentSkill` copies only the `fly`, `aws`, `render`, `slack` and `email` references. (3) The repository's own `.codex/skills/deploy-qm/` and root `deployment.md` are pointers to these files, not copies.
 
-### `src/config.ts` (about 700 lines)
+### `src/config.ts`
 
 **Job.** `loadConfig` turns the environment into one typed `Config`, once, at boot.
 
 **Key idea.** Fail at boot, not at first use. A bad number, an unknown choice or a missing required secret throws before the server listens.
 
-**Surprising.** (1) An unknown variable is ignored without a word. The environment has no closed key set. (2) "Production" means `NODE_ENV=production`, which `deploy/core/Dockerfile` sets. Every image-based deployment is production to these checks, a local Docker test drive included. (3) `loadConfig` is not the only reader. `sandboxSettings` (`src/sandbox/sandbox-settings.ts`) and `deploySettings` (`src/deploy/deploy-settings.ts`) parse their own variables, the front door has its own boot checks (`bootChecks` in `plugins/portal/src/index.ts`), and about twenty files in `src` read the environment. By grep, `src` and `plugins` read about 390 distinct names. About 160 of them are named anywhere in the CLI, its templates, `deploy/`, `porter/` or the root `.env.example`.
+**Surprising.** (1) An unknown variable is ignored without a word. The environment has no closed key set. (2) "Production" means `NODE_ENV=production`, which `deploy/core/Dockerfile` sets. Every image-based deployment is production to these checks, a local Docker test drive included. (3) `loadConfig` is not the only reader. `sandboxSettings` (`src/sandbox/sandbox-settings.ts`) and `deploySettings` (`src/deploy/deploy-settings.ts`) parse their own variables, the front door has its own boot checks (`bootChecks` in `plugins/portal/src/index.ts`), and other files in `src` read the environment directly. Most of the names core reads are named nowhere in the CLI, its templates, `deploy/`, `porter/` or the root `.env.example`.
 
-### `src/start.ts` and `src/wiring.ts` (about 250 and 3,500 lines)
+### `src/start.ts` and `src/wiring.ts`
 
 **Job.** `buildApp` in `src/wiring.ts` is the composition root: it constructs every store, service and route dependency from a `Config`. `startQm` in `src/start.ts` starts them in the fixed order of step 8.
 
 **Key idea.** One core process is the whole product: API, run workers, scheduler, Slack, sign-in and the web UI. A deployment scales by running more copies of that process against one database.
 
-**Surprising.** (1) Migrations run inside every core's boot, before it listens. During a rollout the new core migrates a database the old core is still serving. **[interpretation]** Each operator upgrades when they choose and may skip releases, so a migration has to work from any older schema with no step coordinated from outside. (2) Which copy does background work is decided at run time. Each core registers under a deployment key, `BACKGROUND_DEPLOYMENT_ID` or else the build's `GIT_SHA`. When a newer key is live, the older core stops claiming runs, firing crons and holding Slack connections (`createDrainController` in `src/runs/drain.ts`). See [turns](./turns.md) and [background work](./background-work.md). (3) Several missing settings only log a warning at boot: no `ADMIN_GRANTS`, an apps domain whose wildcard DNS does not resolve, a Docker app provider with no daemon. (4) `buildApp` is one function of about 2,800 lines.
+**Surprising.** (1) Migrations run inside every core's boot, before it listens. During a rollout the new core migrates a database the old core is still serving. **[interpretation]** Each operator upgrades when they choose and may skip releases, so a migration has to work from any older schema with no step coordinated from outside. (2) Which copy does background work is decided at run time, by deployment key; see [background-work](./background-work.md). (3) Several missing settings only log a warning at boot: no `ADMIN_GRANTS`, an apps domain whose wildcard DNS does not resolve, a Docker app provider with no daemon. (4) `buildApp` is one very long function.
 
-### `src/deployment/` (about 1,300 lines)
+### `src/deployment/`
 
 **Job.** Core's side of the deployment directory: which secrets core demands (`secret-schema.ts`), the deployment layer at run time (`load-layer.ts`, `deployment-layer-store.ts`), and the live session test (`postdeploy-smoke.ts`).
 
@@ -118,11 +118,11 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 **Surprising.** (1) A new entry under the `production` gate stops every existing deployment at its next upgrade. On AWS, Docker and Render the CLI names the missing secret before it changes anything (`secretArns`, `missingRequiredSecrets`). A chart-driven deployment finds out when core refuses to boot. (2) The full list of always-required settings is longer than this file. `buildApp` demands `DATABASE_URL` everywhere; `loadConfig` demands `PUBLIC_PORT` in production; `sandboxSettings` demands an explicit `SANDBOX_BACKEND` in production; the front door demands its sign-in settings. (3) Core imports CLI source. `deployment-layer.ts` re-exports `parseToolDescriptor` and `compileApproval` from `cli/src/tool-descriptor.ts`, and `deploy/core/Dockerfile` copies eight named `cli/src` files into the image. Moving one of those files breaks the core image, not the CLI. (4) The layer is stored per tenant and each core re-reads it every 30 seconds, so `qm layer sync` changes tools and skills without a restart.
 
-### `src/feature-flags.ts` (about 130 lines)
+### `src/feature-flags.ts`
 
-**Job.** Per-scope switches for optional or unfinished product features. `FEATURES` names them, thirteen at this commit. `createFeatureFlagStore` reads and writes their rows.
+**Job.** Per-scope switches for optional or unfinished product features. `FEATURES` names them. `createFeatureFlagStore` reads and writes their rows.
 
-**Key idea.** A flag is a row, not a setting. Its `enabledScopes` lists the scopes it is on for; the org scope means everyone. No row means off.
+**Key idea.** A flag is a row, not a setting. Its `enabledScopes` lists the scopes it is on for; the org scope means everyone. No row means off. Several flags are `personalOnly`.
 
 **Surprising.** Flags are not environment variables and not in `qm.config.jsonc`. No deployment template can turn one on. A feature behind a flag is off in every deployment until an admin there enables it. See [scopes](./scopes.md).
 
@@ -144,7 +144,7 @@ Ada is an operator at Acme. She sets up a [Package deployment](../SPEC.md#deploy
 
 ### `scripts/`
 
-**Job.** CI helpers (`select-ci.ts`, `reuse-ci.ts`, `wall-of-shame-check.ts`, `run-root-test-shard.mjs`, `check-published-upgrade.sh`, `smoke-core-image.sh`), the entry points the CLI spawns (`tenant.ts`, `db.ts`), provider image builders and smoke tests, and the dev instance supervisor in `scripts/dev/` (about 3,900 lines).
+**Job.** CI helpers (`select-ci.ts`, `reuse-ci.ts`, `wall-of-shame-check.ts`, `run-root-test-shard.mjs`, `check-published-upgrade.sh`, `smoke-core-image.sh`), the entry points the CLI spawns (`tenant.ts`, `db.ts`), provider image builders and smoke tests, and the dev instance supervisor in `scripts/dev/`.
 
 **Key idea.** A dev instance is a real stack, not a mock: one supervised core with real Postgres, a real model and a real sandbox, in a numbered port slot so several worktrees run side by side. `scripts/dev/supervisor/main.ts` restarts crashed children and probes health.
 
@@ -188,7 +188,7 @@ Line counts mislead here too. The weight is in choices that multiply and in jobs
 
 **Things that multiply each other.** A deployment is one pick from each of five lists: four targets; eleven sandbox backends in core, seven of them named by the CLI and narrowed per target by `SANDBOX_BACKEND_POLICY`; six app-hosting providers (`DEPLOY_PROVIDER`); three sign-in routes (the built-in broker, Slack OIDC, another OIDC provider); and five image sources (the release's digests, `--build-from`, `imageOverrides`, an AWS candidate, Render's Git build). Each combination has its own required secrets and derived environment. A change tested on one combination says little about another. The master's Wall of shame records this under Config-matrix expansion and Prod-like QA.
 
-**Environment names against the places that set them.** Core reads about 390 names and the CLI, charts and templates name about 160. The rest reach a deployment only when its operator types them. An opt-in variable that nothing sets is off in every deployment. That is the Config-matrix expansion entry about an opt-in flag no template set.
+**Environment names against the places that set them.** Core reads far more names than the CLI, charts and templates set. The rest reach a deployment only when its operator types them. An opt-in variable that nothing sets is off in every deployment. That is the Config-matrix expansion entry about an opt-in flag no template set.
 
 **Parallel mechanisms doing one job.**
 
@@ -250,11 +250,11 @@ slack-app-manifest.yml, slack-sso-manifest.yml (Slack OIDC only), deployment.md,
 
 **AWS candidate and progress files.** `up --build-only` writes `{"contract": 1, "accountId", "region", "label", "images", "imageProvenance", "architectures"}`. With `QM_DEPLOY_PROGRESS_FILE` (an absolute path) and `QM_DEPLOY_PROGRESS_TOKEN` set on a candidate deploy, the CLI writes `{"phase": "monitoring", "token", "orgId", "targets"}` once every service update is submitted. The exit status still decides success.
 
-**Web UI release store.** Under `web-ui/` in the object store: `assets/<name>` shared by all releases, `releases/<id>/<file>` with `index.html` written last, and `live.json` as `{"release": "<id>", "deployed": "<id>"}`. An id is 64 hex characters.
+**Web UI release store.** `qm ui publish` writes the layout described in [web-clients](./web-clients.md#contracts).
 
 **Security screen proxy.** `securityScreen.classifier: "proxy"` selects an external classifier. Its wire protocol is in [security](./security.md#contracts).
 
-**Spend and app export.** With `SPEND_EXPORT_TOKEN` set (at least 32 characters, different from every other environment value), `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` and `GET /v1/apps/export?principalId=<id>` accept `Authorization: Bearer <token>`. The spend window is whole UTC days, at most 93. The spend reply is `{"scopeId", "window", "asOf"?, "rows", "crons"}`. Each call is audited as `spend.export` or `app.export`.
+**Spend and app export.** One token, `SPEND_EXPORT_TOKEN`, opens two read-only exports for an outside system: spend ([models](./models.md#contracts)) and a person's visible apps ([artifacts](./artifacts.md#contracts)).
 
 **Clause status.** `qm check --json` reports results under clause ids. This table is parsed by a test, which requires every ENFORCED row to name code that exists.
 

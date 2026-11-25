@@ -56,7 +56,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
 
 ## The parts
 
-### `src/deploy/deploy-service.ts` and `deploy-store.ts` — an app's life (about 1,700 lines)
+### `src/deploy/deploy-service.ts` and `deploy-store.ts` — an app's life
 
 **Job.** Create, update, roll back, rename, archive, restore, move and share apps; keep them warm; decide who may manage one.
 
@@ -64,7 +64,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
 
 **Surprising.** (1) The row is written before the provider runs, so a first publish that fails still leaves the app, with status `stopped` and its name taken; the retry is a redeploy. (2) `stopped` is not sleep. `reachApp` answers `not_found` for any app that is not `running`. An app is `stopped` after the idle reaper destroys it, and only a publish or rollback makes it `running` again. Apps the provider puts to sleep stay `running` in the row. (3) `reachAllowed` in this file is not the access check: every production caller passes `bypassAcl` after deciding in `src/api/app-helpers.ts`. (4) A connector loan is withdrawn when someone other than the publisher changes the running version, or when the app leaves the publisher's personal scope.
 
-### `src/deploy/deploy-git-store.ts` and `live-edits.ts` — source and edits (about 700 lines)
+### `src/deploy/deploy-git-store.ts` and `live-edits.ts` — source and edits
 
 **Job.** Keep each app's source history; apply small edits to a running app.
 
@@ -72,7 +72,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
 
 **Surprising.** Every commit and every ref change bundles and stores the whole repository again. Symlinks and submodules are refused. A live edit runs `npm install` and `npm run dev` when `package.json` has a `dev` script, and the published entrypoint returns when the draft becomes a version.
 
-### `src/deploy/*-deploy-provider.ts` — where apps run (about 3,400 lines)
+### `src/deploy/*-deploy-provider.ts` — where apps run
 
 **Job.** Implement `DeployProvider`. `apply` and `destroy` are required; `resolveEndpoint`, `logs`, `setAlwaysOn`, `reconcile`, `liveEdit`, `rotationDue` and `park` are optional.
 
@@ -89,7 +89,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
 
 **Surprising.** `reconcile`, `liveEdit`, `rotationDue` and `park` exist only on `aws`, so live edits and git-bundle checkouts are an AWS-only path. On `aws`, `/data` is saved as one tar file, at most every five minutes while the app is being reached and again at rotation, and a tar over 180 MiB is skipped. Only a SQLite file at `/data/app.db` can be replicated continuously, and only when a data role is set. The `docker` provider keeps its host-port table in process memory. The `fly` private tunnel refuses to start unless core runs as a Fargate task: it reads ECS task metadata to claim a WireGuard peer (`src/deploy/fly-tunnel-manager.ts`), and shared-app mode requires the tunnel. With Porter ingress set to `public`, the URL QM hands out is the ingress host, which skips core's gate.
 
-### `src/api/routes/apps.ts` — the app gateway (about 1,700 lines)
+### `src/api/routes/apps.ts` — the app gateway
 
 **Job.** All HTTP for apps: the `/v1/apps` routes, the two proxies (`/d/<app>/` and app hosts), the git remote, an admin proxy.
 
@@ -105,7 +105,7 @@ Ada, at Acme, is in her web DM. She asks for a small dashboard; the agent writes
 
 **Surprising.** The types diverge inside the one function. A personal cron shared with a person becomes a linked copy, not a grant. A skill shared with the org is promoted, which only an org admin can do. Moving an artifact to another home exists for apps and skills only. Email invites and the public link exist for apps only, and only while the app sits in the caller's own personal scope (`assertAppOwner`). People outside the directory can view, never manage. The small app helpers are in `src/deploy`: `app-access.ts` (the access label), `email-access.ts`, `share-notice.ts` (the message to a person who gains access), `access-token.ts` (git and viewer tokens), `app-credentials.ts`.
 
-### `src/files` — file artifacts (about 1,200 lines)
+### `src/files` — file artifacts
 
 **Job.** Store the files people and agents exchange and serve them back (`src/api/routes/file-content.ts`).
 
@@ -193,6 +193,8 @@ The four share one API (`/v1/shares/:type/:id`) and one grant table. Listing, se
 **What a published app may rely on.** The entrypoint runs from the app's root directory. The app must listen on `PORT`. Env vars passed to `publish` are set; a publish that names env vars replaces them all, and one that does not keeps the previous ones. `DATA_DIR` is set when the provider has a durable directory; nothing else on disk survives a redeploy. Where app identity is configured, each relayed request from a signed-in viewer carries `x-portal-identity`, verifiable with `VIEWER_IDENTITY_KEY`. The headers core uses for its own authentication are not forwarded.
 
 **App failure records.** A published app's failures become operator error records in its owner's scope, category `deploy`, through `appReporter` in `src/deploy/shared-deploy-provider.ts`: `app_start_failed` (the version never listened on its port, its entrypoint exited, or it answered 5xx on `/` for the whole readiness window), `app_restarted` (the app exited and was restarted since the last check) and `app_down` (the app stopped and nothing restarted it). Each carries up to 4,000 bytes of the app's recent output, with the version's env values and known secret patterns masked. The probes are shell run beside the app, so the app image must provide `sh`; they read the HTTP status with `curl`, else `wget`, and with neither, listening on the port alone counts as ready.
+
+**Apps export.** With `SPEND_EXPORT_TOKEN` set, `GET /v1/apps/export?principalId=<id>` accepts `Authorization: Bearer <token>` and lists the apps that person can see. Each call is audited as `app.export`.
 
 **The app git remote.** `GET /v1/apps/:id/git-url` (agent token only) returns the URL `<api base>/v1/apps/<id>/git` with user `app` and a token as the password, valid for one hour, read or write according to the caller's permission. It speaks git smart HTTP: `info/refs`, `git-upload-pack`, `git-receive-pack`. A push that moves `refs/heads/current` becomes a version or a live-edit draft. Core re-checks the token holder's access on every request.
 

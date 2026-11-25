@@ -66,9 +66,9 @@ Every table above carries a tenant id; see [storage](./storage.md).
 
 ## The parts
 
-The files this area owns come to about 5,000 lines. The gates are called from `handleTurn` in `src/core/orchestrator.ts` (about 2,850 lines), which belongs to [turns](./turns.md).
+The gates are called from `handleTurn` in `src/core/orchestrator.ts`, which belongs to [turns](./turns.md).
 
-### `src/security` (about 570 lines)
+### `src/security`
 
 **Job.** Define postures and what each implies; hold the classifier prompt, chunking and verdict parsing; talk to an external classifier; mask secret values in text.
 
@@ -76,7 +76,7 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** (1) Postures are not a strict ladder. Auto is the only posture that denies private networks; Strict does not. (2) Screening is not a posture feature. It is a deployment setting, off by default, and posture only caps it under Dangerous. (3) `secret-masking.ts` is unrelated to screening: `createSecretValueMasker` replaces environment values of eight characters or more (raw, URL-encoded and base64 forms) with `<redacted:NAME>` in command text and errors.
 
-### `src/policy/command-policy.ts` (about 540 lines)
+### `src/policy/command-policy.ts`
 
 **Job.** Decide allow, deny or require approval for one shell command.
 
@@ -84,7 +84,7 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** (1) It ships with no rules: `defaultOrgPolicy` is an empty denylist, so every command is allowed until an admin or a deployment tool descriptor adds a rule. (2) Org rules come first and the first match wins, so a scope cannot override an org rule; the mode is `allowlist` if the org says so, otherwise the scope's. (3) Deployment-layer rules are tried last and skipped in allowlist mode; the admin simulate route does not evaluate them. (4) Rules apply in every posture, Dangerous included. (5) Patterns pass `compileSafeRegex`: no lookarounds or backreferences.
 
-### Approvals (about 1,100 lines across six files)
+### Approvals
 
 `src/core/orchestrator/approvals.ts` holds the ledger and decisions; `src/core/approval-id.ts` the ids and keys; `src/core/approval-requester.ts` refusal, expiry and undeliverable cards; `src/surfaces/approval-store.ts` and `approval-cards.ts` delivery and buttons; `src/credentials/keychain-approval.ts` the separate credential ask.
 
@@ -94,7 +94,7 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** (1) Two resume styles coexist. Command-policy and Strict approvals grant uses of a key and the model re-issues the step. Connector-tool approvals store the exact call and core runs it. (2) A command approval covers the rule, not the exact text: Allow once lets the next command matching that rule through, and Allow always exempts the rule pattern for that person. A Strict approval likewise covers the tool, not its arguments. On a flagged-input card, a standing answer exempts later flagged input from that surface. (3) Quarantine releases and exact-call approvals are once only. (4) Disabling a grant mode also suspends existing grants of that mode. (5) An unanswered card expires after 60 minutes; the session gets a hidden note saying so. (6) A decision recorded on a crashed attempt is recovered from the session log on retry (`approvedCallsOnEarlierAttempt`).
 
-### `src/core/orchestrator/security-screen.ts` (about 770 lines)
+### `src/core/orchestrator/security-screen.ts`
 
 **Job.** Run the classifier wherever outside content enters a turn, and act on the verdict.
 
@@ -102,7 +102,7 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** (1) Enforce fails open: if the classifier is missing, errors or times out, content passes with a "not screened" notice and an audit row. Mid-turn messages are stricter and are withheld when there is no classifier, the person is over budget, the text is too long or another check is in flight. (2) Inbound content too long to screen (over 200,000 characters) does not pass: a message waits for a once-only approval, and a file or document is withheld with a notice. (3) A flagged inbound request becomes a pending approval of kind `input` before the turn starts; approving replays it without screening again. (4) The model classifier's calls are recorded as model requests and count toward the budget, except in observe.
 
-### Egress policy and the proxy (about 750 lines)
+### Egress policy and the proxy
 
 `src/resolution/egress-policy.ts` parses and evaluates rules; `src/resolution/audience-floor.ts` composes them; `src/egress-authz-main.ts` is the decision service; `deploy/egress-proxy` is the Envoy image; `src/util/network.ts` holds the address lists.
 
@@ -112,7 +112,7 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** (1) Enforcement exists only where the sandbox backend routes traffic through the proxy. Without `EGRESS_PROXY_URL`, or on the `aws`, `local`, `agent37` and `superserve` backends, saved egress rules have no effect on sandboxes. The admin API reports this per scope as `egressEnforcement`. (2) Allow lists do not only tighten. A person's list is the union of the org, conversation, personal and team lists; the turn gets the intersection across the audience. Deny lists are the union. (3) Loopback, link-local and metadata addresses are refused whatever the policy says. (4) A request with no token gets 407 unless `EGRESS_TOKENLESS=open`; an invalid token is denied everything. (5) Core's own outbound calls to URLs that admins or other outside parties supply use a second guard, `publicFetch` in `src/util/network.ts`, which refuses private addresses unless the origin is listed in `PRIVATE_NETWORK_ALLOWED_ORIGINS`. (6) The `egress` list in a deployment tool descriptor is checked by the CLI and never enforced at runtime.
 
-### `src/decisions` (about 1,000 lines)
+### `src/decisions`
 
 **Job.** Let an org admin attach classifier-backed rules to two points of a turn. At `turn_start` a rule can keep, switch runtime or switch persona. At `turn_end` it can keep the reply or send it back with a message.
 
@@ -128,13 +128,9 @@ The files this area owns come to about 5,000 lines. The gates are called from `h
 
 **Surprising.** Audit records an action; it does not prevent one. Reading the audit log is itself audited.
 
-### `src/ratelimit` (about 210 lines)
+### `src/ratelimit`
 
-**Job.** Refuse a turn before it starts when spend is over a cap.
-
-**Key idea.** Two unrelated caps. The _budget_ is a rolling window per person and per org, configured by environment and fed by estimated input-token cost. The _spend limit_ is a per-scope daily and monthly USD cap an admin sets, computed from recorded model spend.
-
-**Surprising.** The directory holds no request rate limiter. Pricing and spend recording belong to [models](./models.md).
+Refuses a turn before it starts when spend is over a cap. The two caps, pricing and spend recording belong to [models](./models.md). The directory holds no request rate limiter.
 
 ### Settings: `src/config.ts` and `src/resolution/config-store.ts`
 
@@ -163,8 +159,6 @@ Nothing here differs by [deployment shape](../SPEC.md#deployment-shapes) in code
 | Private origins core may call     | `PRIVATE_NETWORK_ALLOWED_ORIGINS`                                                                                                                                                            | empty      | Core refuses private addresses in URLs supplied from outside                                                                                                |
 | Standing approval options         | An `approval_grant_modes` row                                                                                                                                                                | both on    | Session and Always are offered where the card allows                                                                                                        |
 | Decision rules                    | Rows in `decision_providers` and `decision_rules`; a provider with no `baseUrl` needs a model gateway                                                                                        | none       | No classifier call at turn start or end                                                                                                                     |
-| Budget                            | `BUDGET_USD_PER_WINDOW` or `ORG_BUDGET_USD_PER_WINDOW` (window `BUDGET_WINDOW_MS`, default one day)                                                                                          | unset      | No budget check                                                                                                                                             |
-| Spend limit                       | A `spend_limit_configs` row                                                                                                                                                                  | none       | No cap                                                                                                                                                      |
 | Approval cards outside the web UI | A connected Slack or generic chat surface                                                                                                                                                    | none       | Cards appear only in the web UI                                                                                                                             |
 | Keychain asks                     | A configured keychain; see [credentials](./credentials.md)                                                                                                                                   | off        | No credential approval cards                                                                                                                                |
 
@@ -190,7 +184,7 @@ In a Multi-tenant deployment the rows are per tenant; the environment settings, 
 - **Cut-off card text.** `redactCommand` both redacts and cuts to 500 characters, and exact-call cards are built from it. Recorded in the Wall of shame under _Arbitrary limits_.
 - **Interfaces with one implementation.** `AuditLog`, `DecisionStore`, `DecisionBackend`, `BudgetTracker` and `SecurityScreener` each have one implementation under `src`.
 - **Transitional: standing quarantine grants.** New release cards are once only, but a stored grant keyed `quarantine:<tool>` still skips screening for that tool (`quarantineReleaseKey`). That path audits `security_posture.tool_result_released`; the current paths audit `security_posture.tool_result_release`.
-- **Transitional: the attended/unattended split.** The design rule is in the master's Background work paragraph: a turn acts with the authority of the person whose instructions it carries, and whether someone is watching is never an input. None of this area's own files read a presence flag: approvals key on the requester's identity and on bot or system actors. The older split still surrounds them. `handleTurn` computes `triggeredTurn`, `liveTurn` and `ownerFireTurn`; `mintTurnCapabilities` puts `liveAuthor` and `triggered` claims on the control token (`liveActor` is still a claim in `src/auth/capability-token.ts`); `personAtKeyboard` in `src/api/artifact-share.ts` reads them, and `src/api/control-service.ts` uses it to refuse webhook registration and edits outright instead of raising a card. The Open sharing posture likewise applies only to human-origin turns marked `trustedLiveHuman` (`sharingSourcesForTurn` in `src/resolution/sharing-access.ts`). Do not extend these.
+- **Transitional: the attended/unattended split.** None of this area's own files read a presence flag: approvals key on the requester's identity and on bot or system actors. The split the master's Background work paragraph says is being removed still surrounds them: `mintTurnCapabilities` puts `liveAuthor` and `triggered` claims on the control token, and callers such as `src/api/control-service.ts` refuse webhook registration and edits outright instead of raising a card. The call sites are listed in [background-work](./background-work.md) and [scopes](./scopes.md). Do not extend them.
 
 ## Contracts
 
@@ -209,7 +203,7 @@ In a Multi-tenant deployment the rows are per tenant; the environment settings, 
 
 **Screening audit record.** Each classification writes one `audit_log` row with action `security_screen.classify`, resource the classifier's provider name (or `model`), and status `allow`, `block`, `would_block` or `error`. The detail is JSON with `hook`, `mode`, `sources`, `requestId`, `attempts`, and when known `surface`, `origin`, `sessionId`, `runId`, `thread`, `score`, `threshold`, `outcome`. It never holds the screened text.
 
-**Egress proxy.** Sandboxes use it as an HTTP proxy on port 48080 and present the turn's token as `Proxy-Authorization`, either `Bearer <token>` or `Basic` with the token as password. For each connection Envoy calls the decision service on `127.0.0.1:48081` with headers `x-egress-authority`, `x-egress-scheme` and the `proxy-authorization` value. It answers 200 with `x-egress-upstream-address: <ip>:<port>`, 403, or 407. If the decision service is down, nothing leaves. The service reads `CAPABILITY_SECRET`, `AUTHZ_PORT`, `EGRESS_TOKENLESS`, `CORE_API_URL`, `CORE_SIGNING_SECRET` and `DATABASE_URL`.
+**Egress proxy.** Sandboxes use it as an HTTP proxy on port 48080 and present the turn's token as `Proxy-Authorization`, either `Bearer <token>` or `Basic` with the token as password. For each connection Envoy calls the decision service on `127.0.0.1:48081` with `GET /check` and the headers `x-egress-authority`, `x-egress-scheme` and the `proxy-authorization` value. It answers 200 with `x-egress-upstream-address: <ip>:<port>`, 403, or 407. If the decision service is down, nothing leaves. The service reads `CAPABILITY_SECRET`, `AUTHZ_PORT`, `EGRESS_TOKENLESS`, `CORE_API_URL`, `CORE_SIGNING_SECRET` and `DATABASE_URL`. The container needs `NET_ADMIN` to install its own block on the cloud metadata address; without it the proxy logs a warning and keeps serving.
 
 **Egress audit relay.** The proxy posts batches to core at `POST /v1/egress-audit`, signed with the core signing secret: `{ "records": [{ "host", "verdict", "scopeLabel"?, "principalId"?, "tenant"?, "port"?, "via"?, "peerIp"? }] }`, at most 500 per request. Core answers `{ "accepted", "rejected" }`. A record is allowed only when `verdict` is `ok`.
 
