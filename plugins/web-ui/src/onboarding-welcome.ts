@@ -109,7 +109,7 @@ export class OnboardingWelcome extends LitElement {
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
-  private pickerState: PickerState = { query: "", expanded: false };
+  private pickerState: PickerState = { query: "" };
   private retryService: PreviewAttempt["service"] | null = null;
   declare about: boolean;
   declare connectionOutcome: ConnectionOutcome;

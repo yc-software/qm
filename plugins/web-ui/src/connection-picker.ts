@@ -2,6 +2,7 @@ import { html, nothing, render } from "lit";
 import { Search, ArrowUpRight, Check, RefreshCw } from "lucide";
 import { connectorLogo } from "./connector-logo";
 import { icon } from "./icons";
+import type { PickerState } from "./connection-preview";
 
 export interface ConnectionService {
   id: string;
@@ -18,7 +19,7 @@ export function mountConnectionPicker(
   container: HTMLElement,
   services: ConnectionService[],
   onSelect: (service: ConnectionService) => void,
-  state: { query: string; expanded: boolean } = { query: "", expanded: false },
+  state: PickerState = { query: "" },
   titled = true,
   popular = 6,
 ): void {
