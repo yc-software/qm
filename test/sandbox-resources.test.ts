@@ -450,7 +450,7 @@ for (const fail of [false, true])
       },
     );
     await started;
-    const record = (await records.all())[0]!;
+    const record = (await records.all()).find((r) => r.state === "provisioning")!;
     let retired = false;
     const retiring = resources.retire("alice", record.id).then(() => {
       retired = true;
