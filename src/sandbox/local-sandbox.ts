@@ -325,7 +325,8 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       const chosen = await opts.imageFor?.(scope);
       if (chosen) {
         const inspected = await dexec(["image", "inspect", "-f", "{{.Id}}", chosen]);
-        if (inspected.code !== 0) throw new Error(`local sandbox image ${chosen} not found`);
+        if (inspected.code !== 0)
+          throw new Error(`local sandbox image ${chosen} not found: ${inspected.stderr.trim()}`);
         imageId = inspected.stdout.trim();
       }
       scopeByContainer.set(name, scope);
