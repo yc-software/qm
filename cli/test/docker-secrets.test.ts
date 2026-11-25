@@ -13,7 +13,6 @@ const SECRETS = {
   CORE_SIGNING_SECRET: "core-signing-supersecret".repeat(2),
   PORTAL_IDENTITY_SECRET: "portal-identity-supersecret",
   SKILL_SIGNING_SECRET: "skill-signing-supersecret".repeat(2),
-  SB_TOKEN: "sandbox-forwarded-supersecret",
   PLUG_TOKEN: "plugin-supersecret",
   SLACK_BOT_TOKEN: "xoxb-dual-role-supersecret",
   SLACK_APP_TOKEN: "xapp-supersecret",
@@ -93,11 +92,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
           },
           { name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false },
         ],
-        sandbox: {
-          app: "sekrit-sandboxes",
-          env: { TZ: "UTC" },
-          secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
-        },
+        sandbox: { app: "sekrit-sandboxes" },
         securityScreen: {
           mode: "enforce",
           classifier: "proxy",
@@ -116,7 +111,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
             CORE_SIGNING_SECRET: "config-placeholder",
             DATABASE_URL: "postgres://config/placeholder",
             PUBLIC_API_URL: "https://config-placeholder.invalid",
-            FLY_RESIDENT_ENV_SB_TOKEN: "config-placeholder",
           },
           slack: { PUBLIC_WEB_URL: "http://folded.example.com/web-ui", CORE_SIGNING_SECRET: "config-placeholder" },
         },
@@ -153,7 +147,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     );
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
     assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
-    assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
     assert.ok(argv.includes("LINEAR_REGION=us"), "undeclared plugin env still flows as -e");
     const signerArgs = argv
       .split("\n")
@@ -177,7 +170,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "unforwarded .env keys are warned about",
     );
     assert.ok(
-      !lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("SB_TOKEN")),
+      !lines.some((l) => /\.env keys not forwarded/.test(l) && l.includes("PLUG_TOKEN")),
       "consumed secret names are not warned about",
     );
 
@@ -188,10 +181,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "secret-store values win over colliding config env on services and plugins",
     );
     assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL routes through the env-file");
-    assert.ok(
-      envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
-      "secretEnv values route through the file",
-    );
     assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets route through the file");
     assert.match(
       envFiles,
@@ -203,14 +192,10 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       envFiles.includes(`PUBLIC_API_URL=${SECRETS.PUBLIC_API_URL}`),
       "the sandbox-reachable self-API URL reaches core",
     );
-    assert.ok(
-      envFiles.includes(`FLY_RESIDENT_ENV_SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}`),
-      "dual-role secret is forwarded into sandboxes",
-    );
     assert.match(
       envFiles,
       new RegExp(`^SLACK_BOT_TOKEN=${SECRETS.SLACK_BOT_TOKEN}$`, "m"),
-      "dual-role secret keeps its plain name for the in-process slack surface",
+      "the in-process slack surface receives its token",
     );
     assert.match(
       envFiles,
@@ -223,7 +208,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "a secretEnv alias delivers the stored value under its declared env name",
     );
     assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
-    assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
     for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
 
     for (const line of readFileSync(fake.argvLog, "utf8").split("\n").filter(Boolean)) {
