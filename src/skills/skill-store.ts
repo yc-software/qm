@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
@@ -73,10 +73,17 @@ export interface SkillResolution {
   shadowed: Skill[];
 }
 
+export interface CatalogSkill {
+  manifest: SkillManifest;
+  createdBy: string;
+  reviewer: string;
+}
+
 export interface SkillStoreOptions {
   signingSecret?: string;
   backing: DurableMap<Skill>;
   advisoryLock: AdvisoryLock;
+  catalog?: { scopeId: ScopeId; skills(): readonly CatalogSkill[] };
 }
 
 export interface SkillStore {
@@ -174,14 +181,63 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
+function catalogSkillId(name: string): string {
+  const hex = createHash("sha256").update(`skill-catalog\0${name}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 export function createSkillStore(opts: SkillStoreOptions): SkillStore {
   const skills = opts.backing;
+  const secret = opts.signingSecret ?? randomUUID();
+  let built: { source: readonly CatalogSkill[]; skills: Skill[] } | null = null;
+  const catalogSkills = (): Skill[] => {
+    if (!opts.catalog) return [];
+    const source = opts.catalog.skills();
+    if (built?.source !== source) {
+      const scopeId = opts.catalog.scopeId;
+      built = {
+        source,
+        skills: source.map(({ manifest, createdBy, reviewer }) => ({
+          id: catalogSkillId(manifest.name),
+          scopeId,
+          manifest,
+          signature: sign(manifest),
+          status: "published",
+          createdBy,
+          version: 1,
+          grantedCapabilities: [...manifest.requiredCapabilities],
+          approvals: [reviewer],
+        })),
+      };
+    }
+    return built.skills;
+  };
+  const withCatalog = (rows: Skill[], scopes?: ReadonlySet<string>): Skill[] => {
+    const own = new Set(rows.flatMap((row) => [row.id, `${row.scopeId}\0${row.manifest.name}`]));
+    return [
+      ...rows,
+      ...catalogSkills().filter(
+        (skill) =>
+          (!scopes || scopes.has(skill.scopeId)) &&
+          !own.has(skill.id) &&
+          !own.has(`${skill.scopeId}\0${skill.manifest.name}`),
+      ),
+    ];
+  };
+  const load = async (id: string): Promise<Skill | null> => {
+    const row = await skills.get(id);
+    if (row) return row;
+    const inherited = catalogSkills().find((skill) => skill.id === id);
+    return inherited ? structuredClone(inherited) : null;
+  };
   const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
     const wanted = new Set<string>(scopes);
     const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
-    return rows.filter((skill) => wanted.has(skill.scopeId));
+    return withCatalog(
+      rows.filter((skill) => wanted.has(skill.scopeId)),
+      wanted,
+    );
   };
-  const secret = opts.signingSecret ?? randomUUID();
   const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
@@ -222,7 +278,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
     async update(id, manifest) {
       assertSafeSkillName(manifest.name);
-      const s = await skills.get(id);
+      const s = await load(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
       s.manifest = manifest;
@@ -234,15 +290,15 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       return s;
     },
 
-    get: (id) => skills.get(id),
-    list: () => skills.all(),
+    get: load,
+    list: async () => withCatalog(await skills.all()),
 
     verify(skill) {
       return sign(skill.manifest) === skill.signature;
     },
 
     async review(id, reviewer, grantCapabilities) {
-      const s = await skills.get(id);
+      const s = await load(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
@@ -255,12 +311,19 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async publish(id) {
-      const s = await skills.get(id);
+      const s = await load(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
       const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
       if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
+      const inherited = catalogSkills().find(
+        (skill) => skill.scopeId === s.scopeId && skill.manifest.name === s.manifest.name,
+      );
+      if (inherited?.signature === s.signature) {
+        await skills.delete(s.id);
+        return structuredClone(inherited);
+      }
       s.status = "published";
       s.updatedAt = Date.now();
       await skills.put(s.id, s);
@@ -268,10 +331,10 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async archive(id) {
-      const existing = await skills.get(id);
+      const existing = await load(id);
       if (!existing) throw new Error(`unknown skill: ${id}`);
       return withNameLock(existing.scopeId, existing.manifest.name, async () => {
-        const s = await skills.get(id);
+        const s = await load(id);
         if (!s) throw new Error(`unknown skill: ${id}`);
         if (s.status === "archived") return s;
         s.status = "archived";
@@ -304,7 +367,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async promote(id, targetScopeId) {
-      const s = await skills.get(id);
+      const s = await load(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
@@ -336,7 +399,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
     },
 
     async move(id, toScopeId) {
-      const s = await skills.get(id);
+      const s = await load(id);
       if (!s) throw new Error(`unknown skill: ${id}`);
       assertSafeSkillName(s.manifest.name);
       if (scopeKind(toScopeId) === "org") {
@@ -345,7 +408,7 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       return withNameLock(toScopeId, s.manifest.name, async () => {
         if (foreignSkillCollision(await inScopes([toScopeId]), toScopeId, s.manifest.name, (x) => x.id === id))
           throw new Error(`a skill named ${s.manifest.name} already exists there`);
-        const current = await skills.get(id);
+        const current = await load(id);
         if (!current) throw new Error(`unknown skill: ${id}`);
         current.scopeId = toScopeId;
         current.updatedAt = Date.now();

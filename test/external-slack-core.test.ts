@@ -55,7 +55,6 @@ test("external Slack strips private and org preloads before the prompt, but keep
   await b.deploymentLayerReady;
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await b.config.setSharingPosture("org:default-org", "open");
@@ -301,7 +300,6 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   await b.identity.refresh();
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await b.serviceCreds.setServiceCredential("org:default-org", {
