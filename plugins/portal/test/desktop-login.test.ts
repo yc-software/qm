@@ -26,7 +26,7 @@ const claims = new Set<string>();
 let claimsUnavailable = false;
 const core = createServer((req, res) => {
   void (async () => {
-    if (new URL(req.url!, origin).pathname !== "/v1/auth/broker/claim") return void res.end("{}");
+    if (new URL(req.url!, origin).pathname !== "/v1/auth/broker/claim") return void res.end('{"isAdmin":false}');
     if (claimsUnavailable) {
       res.statusCode = 503;
       return void res.end("{}");
@@ -202,4 +202,10 @@ test("app-only sessions cannot mint desktop sessions", async () => {
     assert.equal(response.status, 403);
     assert.equal(response.headers.get("set-cookie"), null);
   }
+});
+test("a signed admin login link for a non-admin is refused without a session", async () => {
+  const link = { k: "admin-login", sub: browser.sub, aud: origin, iat: now, exp: now + 60, jti: "a".repeat(24) };
+  const body = new URLSearchParams({ token: seal(link, deriveKey(secret, "portal.admin-login.v1")) });
+  const r = await fetch(`${base}/auth/admin-login`, { method: "POST", redirect: "manual", headers: { origin }, body });
+  assert.deepEqual([r.status, r.headers.get("set-cookie")], [403, null]);
 });

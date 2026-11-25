@@ -319,7 +319,7 @@ async function adminProbeAttempt(sub: string, tenant?: string): Promise<AdminPro
   }
 }
 
-async function adminRoleOf(sub: string, tenant?: string): Promise<AdminProbeRole> {
+async function adminRoleOf(sub: string, tenant?: string): Promise<AdminProbeRole | null> {
   const hit = adminCache.get(sub)?.get(tenant ?? "");
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
@@ -334,11 +334,12 @@ async function adminRoleOf(sub: string, tenant?: string): Promise<AdminProbeRole
     else adminCache.set(sub, new Map([[tenant ?? "", role]]));
     return role;
   }
-  return "none";
+  return null;
 }
 
 async function isAdmin(sub: string, tenant?: string): Promise<boolean> {
-  return (await adminRoleOf(sub, tenant)) !== "none";
+  const role = await adminRoleOf(sub, tenant);
+  return role === "org_admin" || role === "owner";
 }
 
 async function isOrgAdmin(sub: string, tenant?: string): Promise<boolean> {
@@ -1352,10 +1353,9 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
       signInErrorHtml("This admin link is invalid, expired, or already used. Generate a new link with qm admin-login."),
     );
   if (!claims) return fail();
-  const allowed = await adminProbeAttempt(claims.email);
-  if (allowed === null)
-    return sendHtml(res, 503, signInErrorHtml("Admin access could not be checked. Please try again."));
-  if (!allowed) return sendHtml(res, 403, signInErrorHtml("This account does not have admin access."));
+  const role = await adminRoleOf(claims.email);
+  if (role === null) return sendHtml(res, 503, signInErrorHtml("Admin access could not be checked. Please try again."));
+  if (role === "none") return sendHtml(res, 403, signInErrorHtml("This account does not have admin access."));
   try {
     const claimsStore = coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal");
     if (!(await claimOnce(claimsStore, `admin-login:${claims.jti}`, claims.expiresAtMs))) return fail();
