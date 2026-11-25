@@ -1,3 +1,4 @@
+import { MAX_NOTIFY_PAYLOAD_BYTES } from "../persistence/postgres-notify-bus.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
@@ -10,9 +11,8 @@ export interface ReplyNotice {
   body: string;
 }
 
-const PUSH_RECORD_BYTES = 4096;
-const AES128GCM_OVERHEAD_BYTES = 103;
-const REPLY_NOTICE_MAX_BYTES = PUSH_RECORD_BYTES - AES128GCM_OVERHEAD_BYTES;
+const SESSION_EVENT_ENVELOPE_BYTES = 1_024;
+const REPLY_NOTICE_MAX_BYTES = MAX_NOTIFY_PAYLOAD_BYTES - SESSION_EVENT_ENVELOPE_BYTES;
 const UNTITLED = "New reply";
 const NOTIFYING_STATES = new Set<SessionStateEvent["state"]>(["idle", "awaiting_approval"]);
 

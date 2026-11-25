@@ -6,6 +6,7 @@ import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-deli
 import { fitReplyNotice, watchReplyNotices } from "../src/notifications/reply-notifications.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { SessionStateBus, SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { encodeWirePayload } from "../src/runs/postgres-session-state-bus.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import type { ScopeId } from "../src/types.ts";
 import { testRuns } from "./support/live-run.ts";
@@ -77,8 +78,13 @@ test("a reply already read, or in an app's edit chat, does not notify", async ()
   assert.deepEqual([...read.shown, ...appEdit.shown], []);
 });
 
-test("long replies are cut to a bounded notice", () => {
+test("long replies are cut to fit one session-state event on the Postgres bus", () => {
   const notice = fitReplyNotice({ sessionId: "s", title: "t", body: "é".repeat(5000) });
-  assert.ok(Buffer.byteLength(JSON.stringify(notice)) <= 3993);
-  assert.ok(notice.body.endsWith("…") && notice.body.length > 1900);
+  const event = {
+    threadRef: `web:alice@example.com:${randomUUID()}`,
+    sessionId: randomUUID(),
+    participants: ["alice@example.com"],
+  };
+  assert.ok(encodeWirePayload({ ...event, state: "notify", notice, at: Date.now() }));
+  assert.ok(notice.body.endsWith("…") && notice.body.length > 3000);
 });
