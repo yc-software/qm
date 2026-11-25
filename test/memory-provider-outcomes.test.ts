@@ -431,8 +431,8 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   assert.match(unknown.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
   assert.deepEqual(committed.problems, []);
   assert.deepEqual(external(refused.outcomes), [{ outcome: "denied", code: "actor_unlinked" }]);
-  assert.deepEqual(external(broken.outcomes), [{ outcome: "failed", code: undefined }]);
-  assert.deepEqual(external(rejected.outcomes), [{ outcome: "failed", code: undefined }]);
+  assert.deepEqual(external(broken.outcomes), [{ outcome: "unknown", code: undefined }]);
+  assert.deepEqual(external(rejected.outcomes), [{ outcome: "unknown", code: undefined }]);
   assert.match(refused.problems[0]?.detail ?? "", /refused the request \(actor_unlinked\), so it stored nothing/);
   assert.match(refused.problems[0]?.fix ?? "", /Link this member's QM principal id to their member in knowledge/);
 

@@ -71,8 +71,7 @@ export function changeFailure(error: unknown): Pick<MemoryProviderOutcome, "outc
   if (error instanceof MemoryWriteUnconfirmed) return { outcome: "unknown", code: error.code };
   const failed = failedOutcome(error);
   if (failed.outcome === "timed_out") return { outcome: "unknown" };
-  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined || error.answered)
-    return failed;
+  if (!(error instanceof McpCallError) || failed.outcome !== "failed" || error.code !== undefined) return failed;
   if (error.unsent) return { outcome: "failed", code: failed.code ?? "unreachable" };
   return { outcome: "unknown", ...(failed.code ? { code: failed.code } : {}) };
 }
