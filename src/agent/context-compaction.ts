@@ -8,8 +8,6 @@ import { replayableDocumentMetas } from "../core/documents.ts";
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
 const CHAINED_SUMMARY_PREFIX_HEADROOM = 1_000;
-const FALLBACK_SUMMARY_BODY_CHARS = 8_000;
-const FALLBACK_SUMMARY_TAIL_CHARS = 6_000;
 
 function headTailSlice(s: string, maxChars: number, tailChars: number): string {
   if (s.length <= maxChars) return s;
@@ -222,12 +220,6 @@ export function compactionThroughSeq(items: Item[]): number {
     const summary = contextSummary(entry);
     return Math.max(max, summary ? summary.throughSeq : entry.seq);
   }, -1);
-}
-
-export function deterministicCompactSummary(history: Item[]): string {
-  const throughSeq = compactionThroughSeq(history);
-  const body = headTailSlice(compactTranscript(history), FALLBACK_SUMMARY_BODY_CHARS, FALLBACK_SUMMARY_TAIL_CHARS);
-  return `Compacted ${history.length} prior entr${history.length === 1 ? "y" : "ies"} through seq ${throughSeq}.\n${body}`;
 }
 
 export const MAX_COMPACT_SUMMARY_CHARS = MAX_COMPACT_ENTRY_CHARS - CHAINED_SUMMARY_PREFIX_HEADROOM;

@@ -8,27 +8,9 @@ import {
   type CredentialPathSpec,
 } from "../../cli/src/credential-paths.ts";
 
-export {
-  BASE_EPHEMERAL_CRED_LINKS,
-  DISPLACED_DIR_REL,
-  builtInCredentialPaths,
-  type CredentialPathSpec,
-} from "../../cli/src/credential-paths.ts";
-
-export const BASE_RESIDENT_AUTH_PATHS = [
-  ".aws",
-  ".config/gh",
-  ".config/gcloud",
-  ".ssh",
-  ".netrc",
-  ".git-credentials",
-] as const;
+export { DISPLACED_DIR_REL, builtInCredentialPaths, type CredentialPathSpec } from "../../cli/src/credential-paths.ts";
 
 export const EPHEMERAL_CRED_DIR = "/tmp/agent-creds";
-
-export function residentAuthPaths(extra: readonly CredentialPathSpec[] = []): string[] {
-  return [...new Set([...BASE_RESIDENT_AUTH_PATHS, ...extra.map((entry) => entry.path)])];
-}
 
 export function credentialServiceForPath(path: string): string | undefined {
   const normalized = path.replace(/^\.\//, "");
@@ -109,5 +91,3 @@ export function ephemeralCredLinkScript(home: string, extraPaths: readonly Crede
   }
   return parts.join(" && ");
 }
-
-export const EPHEMERAL_CRED_PATHS: ReadonlyArray<{ rel: string; kind: "dir" | "file" }> = ephemeralCredLinkPaths();

@@ -32,24 +32,6 @@ export function isActiveGrant(
   );
 }
 
-export function keychainSummary(
-  providers: Array<{ connected?: boolean; needsReconnect?: boolean }>,
-  credentials: KeychainCredentialState[],
-  grants: KeychainGrantState[],
-  asks: unknown[],
-  at = Date.now(),
-): { connected: number; activeGrants: number; attention: number } {
-  const credentialsById = new Map(credentials.map((credential) => [credential.id, credential]));
-  return {
-    connected: providers.filter((provider) => provider.connected && !provider.needsReconnect).length,
-    activeGrants: grants.filter((grant) => isActiveGrant(grant, credentialsById.get(grant.credentialId), at)).length,
-    attention:
-      providers.filter((provider) => provider.needsReconnect).length +
-      credentials.filter((credential) => isExpiredCredential(credential, at)).length +
-      asks.length,
-  };
-}
-
 export interface KeychainMutation {
   token: symbol;
   epoch: number;

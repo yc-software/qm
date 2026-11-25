@@ -9,7 +9,7 @@ import {
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
-import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
+import { compactTranscript, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/agent/turn-support.ts";
 import { isAgentReply, isUserItem, type Item, type NewItem } from "../../src/sessions/items.ts";
@@ -882,7 +882,7 @@ export function createMockAgent(): Agent {
     },
 
     async compactHistory({ history }) {
-      return deterministicCompactSummary(history);
+      return compactTranscript(history).slice(-8_000);
     },
 
     oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {

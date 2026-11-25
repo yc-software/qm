@@ -21,7 +21,6 @@ import {
   COMPACT_SOFT_FRACTION,
   MAX_COMPACT_SUMMARY_CHARS,
   validateCompactSummary,
-  deterministicCompactSummary,
   estimateHistoryTokens,
   forModelContext,
   overBudgetFraction,
@@ -611,16 +610,6 @@ test("validateCompactSummary accepts a trimmed summary and rejects missing or ov
   assert.throws(() => validateCompactSummary(undefined), /empty summary/);
   assert.throws(() => validateCompactSummary("   "), /empty summary/);
   assert.throws(() => validateCompactSummary("x".repeat(MAX_COMPACT_SUMMARY_CHARS + 1)), /character limit/);
-});
-
-test("the deterministic fallback keeps the newest entries — a late stated constraint survives the slice", () => {
-  const history = [
-    ...Array.from({ length: 40 }, (_, i) => mkItem(i, { kind: "UserMessage", text: `filler ${i} ${"x".repeat(400)}` })),
-    mkItem(40, { kind: "UserMessage", text: "don't touch prod" }),
-  ];
-  const out = deterministicCompactSummary(history);
-  assert.match(out, /don't touch prod/);
-  assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
 });
 
 test("a runaway summarizer output does not commit a compaction checkpoint", async () => {

@@ -1,12 +1,14 @@
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import {
   createLayerToolInstaller,
-  layerToolContentSha,
   layerToolProbeScript,
   type LayerToolInstallIo,
 } from "../src/sandbox/layer-tool-install.ts";
 import type { LayerInstallFile } from "../src/deployment/load-layer.ts";
+
+const contentSha = (content: string): string => createHash("sha256").update(content).digest("hex");
 
 const SCRIPT = "#!/usr/bin/env node\nconsole.log('hi');\n";
 const LIB = "export const x = 1;\n";
@@ -15,7 +17,7 @@ const FILES: LayerInstallFile[] = [
   { to: "/usr/local/lib/acme/lib.mjs", mode: "0644", content: LIB },
 ];
 const probeFor = (files: readonly LayerInstallFile[]) =>
-  layerToolProbeScript(files.map((f) => ({ to: f.to, mode: f.mode, sha: layerToolContentSha(f.content) })));
+  layerToolProbeScript(files.map((f) => ({ to: f.to, mode: f.mode, sha: contentSha(f.content) })));
 
 interface FakeIo extends LayerToolInstallIo {
   scripts: string[];
@@ -44,8 +46,8 @@ function fakeIo(codes: { probe: number; verify?: number }, files: readonly Layer
 test("the probe checks every file's content hash and the exec bit only where the mode grants one", () => {
   const probe = probeFor(FILES);
   assert.ok(probe.startsWith("printf '%s\\n' "));
-  assert.ok(probe.includes(`${layerToolContentSha(SCRIPT)}  /usr/local/bin/acme`));
-  assert.ok(probe.includes(`${layerToolContentSha(LIB)}  /usr/local/lib/acme/lib.mjs`));
+  assert.ok(probe.includes(`${contentSha(SCRIPT)}  /usr/local/bin/acme`));
+  assert.ok(probe.includes(`${contentSha(LIB)}  /usr/local/lib/acme/lib.mjs`));
   assert.ok(probe.includes("| sha256sum -c --status && [ -x '/usr/local/bin/acme' ]"));
   assert.ok(!probe.includes("[ -x '/usr/local/lib/acme/lib.mjs' ]"));
 });
@@ -93,7 +95,7 @@ test("the installer reads the live file list on every provision, so a layer upda
   await install(io);
   assert.equal(io.writes.length, 1);
   assert.equal(io.writes[0]!.data, "#!/bin/sh\necho v2\n");
-  assert.ok(io.scripts[0]!.includes(layerToolContentSha("#!/bin/sh\necho v2\n")));
+  assert.ok(io.scripts[0]!.includes(contentSha("#!/bin/sh\necho v2\n")));
 });
 
 test("a layer with no install files never touches the machine", async () => {

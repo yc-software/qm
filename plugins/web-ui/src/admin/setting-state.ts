@@ -46,30 +46,6 @@ export class SettingState {
   }
 }
 
-export function settingRegistry<T extends SettingState>(states: Map<string, T>) {
-  return {
-    owns: (key: string) => states.has(key),
-    collect: (key: string) => states.get(key)!.collect(),
-    capture(key: string) {
-      const state = states.get(key)!;
-      state.baseline = JSON.stringify(state.collect(false));
-      state.changed();
-    },
-    commit: (key: string, body: unknown) => states.get(key)!.commit(body),
-    status(key: string, message: string, tone = "") {
-      const state = states.get(key)!;
-      state.message = message;
-      state.tone = tone;
-      state.saving = tone === "saving";
-      state.render();
-    },
-    statusKey(id: string) {
-      const key = id.replace(/^st-/, "");
-      return states.has(key) ? key : undefined;
-    },
-  };
-}
-
 export async function putSetting(
   page: Pick<AdminPage, "api" | "current">,
   scope: string,

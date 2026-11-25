@@ -1,22 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  base64ToBytes,
-  base64ToText,
-  bytesToBase64,
-  insertIntoDraft,
-  pasteChipLabel,
-  textToBase64,
-} from "../src/paste-text.ts";
+import { base64ToBytes, base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "../src/paste-text.ts";
 
 test("text round-trips through base64, including multi-byte characters", () => {
   for (const text of ["plain ascii", "emoji 🎉 and accents éàü", "日本語のテキスト", "x".repeat(200_000)]) {
-    assert.equal(base64ToText(textToBase64(text)), text);
+    assert.equal(base64ToText(bytesToBase64(new TextEncoder().encode(text))), text);
   }
-});
-
-test("textToBase64 matches btoa for ascii", () => {
-  assert.equal(textToBase64("hello"), btoa("hello"));
 });
 
 test("bytesToBase64 handles buffers larger than one chunk", () => {

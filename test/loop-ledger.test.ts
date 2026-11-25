@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   INBOX_SUMMARY_FIELDS,
-  agentDraftOf,
+  agentDraftsOf,
   createLoopItemLedger,
   loopItemId,
   type IngestEntryInput,
@@ -303,13 +303,13 @@ test("a re-ingested agent draft becomes the draft authorship is judged against, 
   await ledger.setProposal(item!.id, { data: { body: "my words" }, by: "human" });
   await ledger.ingest([entry({ sourceAt: 2_000, proposal: { data: { body: "agent v2 <!here>" }, by: "agent" } })]);
   const after = (await ledger.get(item!.id))!;
-  assert.deepEqual(agentDraftOf(after)?.data, { body: "agent v2 <!here>" });
+  assert.deepEqual(agentDraftsOf(after).at(-1)?.data, { body: "agent v2 <!here>" });
   assert.deepEqual(
     after.agentDrafts?.map((d) => d.data),
     [{ body: "agent v1" }, { body: "agent v2 <!here>" }],
   );
   await ledger.setProposal(item!.id, { data: { body: "mine again" }, by: "human" });
-  assert.deepEqual(agentDraftOf((await ledger.get(item!.id))!)?.data, { body: "agent v2 <!here>" });
+  assert.deepEqual(agentDraftsOf((await ledger.get(item!.id))!).at(-1)?.data, { body: "agent v2 <!here>" });
 });
 
 test("setProposal can be conditioned on the draft version the caller saw", async () => {
@@ -586,7 +586,7 @@ test("recordVerdict keeps a human-edited draft while sourceAt stands still", asy
   const after = await ledger.recordVerdict(item!.id, verdictInput({ draft: { body: "agent rewrite" } }));
   assert.deepEqual(after!.proposal?.data, { body: "my own words" });
   assert.equal(after!.proposal?.by, "human");
-  assert.deepEqual(agentDraftOf(after!)?.data, { body: "agent draft" });
+  assert.deepEqual(agentDraftsOf(after!).at(-1)?.data, { body: "agent draft" });
   assert.deepEqual(after!.verdict, VERDICT);
 });
 
