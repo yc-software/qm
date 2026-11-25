@@ -56,8 +56,7 @@ async function qualify(built: Awaited<ReturnType<typeof startQm>>["built"]): Pro
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
-    const left = randomUUID();
-    const right = randomUUID();
+    const [left, right] = [randomUUID(), randomUUID()];
     const result = await built.app.turn({
       surface: "qualification",
       actor: { externalId: actorId },
