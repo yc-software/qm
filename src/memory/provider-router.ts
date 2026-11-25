@@ -4,7 +4,6 @@ import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import {
   brainActsAsPerson,
   changesNotebookOnly,
-  type MemoryAuthority,
   type MemoryProviderOutcome,
   type MemoryRecallContext,
   type MemoryService,
@@ -88,10 +87,6 @@ export function createRoutedMemoryService(opts: {
     routesFor(scopeId)
       .filter((route) => route.recall !== false && opts.providers[route.provider]?.brain)
       .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
-  const actsAsPerson = (by: MemoryAuthority | undefined, scopeId: ScopeId, context?: { audienceScopeId?: ScopeId }) => {
-    if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
-      throw brainRefused("Only the person, in their own DM with QM, can look things up in their brain.");
-  };
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
@@ -213,27 +208,21 @@ export function createRoutedMemoryService(opts: {
 
     async brains(scopeId, reader) {
       return Promise.all(
-        brainRoutes(scopeId).map(async ({ provider, label }) => {
-          const brain = opts.providers[provider]!;
-          return {
-            id: provider,
-            label: label ?? provider,
-            ...brain.brain!,
-            tools: await brain.lookupTools!(scopeId, reader).catch((error: unknown) => {
-              opts.onError?.(error, provider, "lookup");
-              return [];
-            }),
-            lookup: (tool, args, by, context) => {
-              actsAsPerson(by, scopeId, context);
-              return brain.lookup!(scopeId, tool, args, by, context);
-            },
-          };
-        }),
+        brainRoutes(scopeId).map(async ({ provider, label }) => ({
+          id: provider,
+          label: label ?? provider,
+          ...opts.providers[provider]!.brain!,
+          tools: await opts.providers[provider]!.lookupTools!(scopeId, reader).catch((error: unknown) => {
+            opts.onError?.(error, provider, "lookup");
+            return [];
+          }),
+        })),
       );
     },
 
     async lookup(scopeId, tool, args, by, context) {
-      actsAsPerson(by, scopeId, context);
+      if (!brainActsAsPerson(by, scopeId, context?.audienceScopeId))
+        throw brainRefused("Only the person, in their own DM with QM, can look things up in their brain.");
       const ref = parseProviderRef(tool);
       const route = ref && brainRoutes(scopeId).find((candidate) => candidate.provider === ref.provider);
       if (!ref || !route) throw brainRefused(`${tool} isn't a tool of a brain connected to this conversation.`);

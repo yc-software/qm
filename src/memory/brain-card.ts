@@ -6,7 +6,7 @@ import { swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { flatText } from "../util/text.ts";
 import type { BrainCard } from "./cross-scope.ts";
-import type { BoundBrain, MemoryAuthority } from "./memory-service.ts";
+import type { BoundBrain, MemoryAuthority, MemoryService } from "./memory-service.ts";
 import { providerRef } from "./provider-router.ts";
 import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 
@@ -15,18 +15,8 @@ type Page = Record<string, unknown> & { slug: string; source_id: string };
 const isPage = (row: unknown): row is Page =>
   isObj(row) && typeof row.slug === "string" && typeof row.source_id === "string";
 
-const within = (refs: readonly string[]) => {
-  const kept: string[] = [];
-  let room = RECALL_MESSAGE_CHARS + 1;
-  for (const ref of refs) {
-    if (ref.length >= room) continue;
-    room -= ref.length + 1;
-    kept.push(ref);
-  }
-  return kept.join("\n");
-};
-
 export async function brainCards(input: {
+  memory: MemoryService;
   brains: readonly BoundBrain[];
   scopeId: ScopeId;
   message: string;
@@ -35,7 +25,7 @@ export async function brainCards(input: {
   by: MemoryAuthority;
   context: { audienceScopeId?: ScopeId; startedAt: number };
 }): Promise<BrainCard[]> {
-  const { scopeId, message, by, context } = input;
+  const { memory, scopeId, message, by, context } = input;
   const brains = input.brains.filter(({ tools }) => tools.some(({ name }) => name === "volunteer_context"));
   const mentioned = [...new Set(mentionedUserIds(message))];
   const named =
@@ -48,16 +38,16 @@ export async function brainCards(input: {
           .catch(swallowAs("brain card: mentioned names", message))
       : Promise.resolve(message);
   const cardsOf = async (brain: BoundBrain): Promise<BrainCard[]> => {
-    const prior = within(
-      input.delivered
-        .filter(({ provider, endpoint }) => provider === brain.id && endpoint === brain.endpoint)
-        .map(({ ref }) => ref),
-    );
+    const prior = input.delivered
+      .filter(({ provider, endpoint }) => provider === brain.id && endpoint === brain.endpoint)
+      .map(({ ref }) => ref)
+      .join("\n");
     const window = await withTimeout(() => named, context.startedAt + brain.timeoutMs - Date.now(), "mentioned names");
     const { pages } =
       (
-        await brain.lookup(
-          "volunteer_context",
+        await memory.lookup!(
+          scopeId,
+          providerRef(brain.id, "volunteer_context"),
           { window: window.slice(0, RECALL_MESSAGE_CHARS), ...(prior ? { prior_context: prior } : {}) },
           by,
           context,

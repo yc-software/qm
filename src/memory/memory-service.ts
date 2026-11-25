@@ -106,31 +106,17 @@ interface MemoryReader {
   audienceScopeId?: ScopeId;
 }
 
-interface BrainCallContext {
-  audienceScopeId?: ScopeId;
-  startedAt?: number;
-}
-
-export interface BrainEndpoint {
-  endpoint: string;
-  timeoutMs: number;
-}
-
-export interface BoundBrain extends BrainEndpoint {
+export interface BoundBrain {
   id: string;
   label: string;
+  endpoint: string;
+  timeoutMs: number;
   tools: McpRemoteTool[];
-  lookup(
-    tool: string,
-    args: Record<string, unknown>,
-    by: MemoryAuthority,
-    context: BrainCallContext,
-  ): Promise<CallToolResult>;
 }
 
 export interface MemoryService {
   attestActor?: boolean;
-  brain?: BrainEndpoint;
+  brain?: Pick<BoundBrain, "endpoint" | "timeoutMs">;
   lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
   brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
   lookup?(
@@ -138,7 +124,7 @@ export interface MemoryService {
     tool: string,
     args: Record<string, unknown>,
     by: MemoryAuthority | undefined,
-    context?: BrainCallContext,
+    context?: { audienceScopeId?: ScopeId; startedAt?: number },
   ): Promise<CallToolResult>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;

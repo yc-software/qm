@@ -209,6 +209,7 @@ export async function resolveTurnContext(input: ContextInput) {
       const by = brainAuthority(personAuthority);
       if (!by || !text || memoryPolicy.card === "off") return [];
       return brainCards({
+        memory,
         brains: await boundBrains(),
         scopeId: memoryScopeId,
         message: text,
@@ -216,7 +217,7 @@ export async function resolveTurnContext(input: ContextInput) {
         directory: input.directory,
         by,
         context: { ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}), startedAt },
-      }).catch(swallowAs("turn context: brain cards", []));
+      });
     },
     searchMemory: async (
       query: string,

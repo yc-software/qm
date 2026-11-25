@@ -70,11 +70,11 @@ export function memoryRecallDelta(
     if (seen.has(cardKey(card))) continue;
     seen.add(cardKey(card));
     if (renderCards([...fitted, card]).length <= BRAIN_CARD_MAX_CHARS) fitted.push(card);
-    else dropped.push(card.ref);
+    else dropped.push(card.provider);
   }
   if (dropped.length)
     console.warn(
-      `[memory] brain cards past the ${BRAIN_CARD_MAX_CHARS}-character block wait for a later turn: ${dropped.join(", ")}`,
+      `[memory] ${dropped.length} brain cards past the ${BRAIN_CARD_MAX_CHARS}-character block wait for a later turn, from ${[...new Set(dropped)].join(", ")}`,
     );
   const cards = fitted.map(cardOf);
   const newCards = renderCards(fitted);

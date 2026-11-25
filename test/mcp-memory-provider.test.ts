@@ -5,7 +5,7 @@ import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { createMcpClient, McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
 import { forgetFacts } from "../src/memory/provider-outcome.ts";
 import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
-import { sleep } from "../src/util/async.ts";
+import { sleep, TimeoutError } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
 import { closedPort, routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
@@ -81,6 +81,13 @@ test("MCP recall is locally bounded and times out", async () => {
   };
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
   await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
+
+  const late: McpClient = {
+    ...hanging,
+    callTool: () => sleep(300).then(() => ({ content: [{ type: "text", text: "late" }] })),
+  };
+  const shared = createMcpMemoryProvider({ read: { client: late, tool: "read", timeoutMs: 1_000 } });
+  await assert.rejects(shared.recall("org:acme", { startedAt: Date.now() - 900 }), TimeoutError);
 });
 
 test("MCP recall returns one row per line of the provider's answer", async () => {
