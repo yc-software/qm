@@ -507,6 +507,7 @@ test("execute stages keep their diagnostic attributes and the command's own run 
   const command = spans.find((span) => span.name === "exec.command")!;
   assert.equal(command.parent_span_id, run.span_id);
   assert.ok(Math.abs(command.end_timestamp - command.start_timestamp - 0.25) < 0.01);
+});
 
 test("ANR integration is registered when error reporting is enabled", async () => {
   const { code, output } = await runReporting(`
