@@ -1471,7 +1471,7 @@ a.chat-row-open {
 .custom-chat-shell.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
 }
-.custom-chat-shell.empty-chat:has(> .chat-topbar) {
+.custom-chat-shell.empty-chat:has(> .chat-topbar):not(:has(qm-onboarding-welcome)) {
   grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 .split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {

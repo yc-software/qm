@@ -1,5 +1,4 @@
-.custom-chat-shell.empty-chat:has(qm-onboarding-welcome),
-.custom-chat-shell.empty-chat:has(> .chat-topbar):has(qm-onboarding-welcome) {
+.custom-chat-shell.empty-chat:has(qm-onboarding-welcome) {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .custom-chat-shell.in-pane.empty-chat:has(qm-onboarding-welcome) {
