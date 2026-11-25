@@ -1014,7 +1014,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       await deps.skillsReady?.();
       const skillSources = tracePhase("turn.skills", () => context.listSkills([scopeId, resolution.orgScopeId]), {
-        counts: countSkills,
+        attributes: countSkills,
       });
       void skillSources.catch(() => undefined);
       const configuredProviders =
