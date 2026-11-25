@@ -45,16 +45,20 @@ Slack threads show a live activity card while QM works. The Slack app must suppo
 [`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) blocks and
 have `chat:write`.
 
-After QM has been working for thirty seconds, one flat task card is posted in the existing
-reply thread and updated in place. Its title is **Still working:**
+One flat task card shows what QM is doing and is updated in place. It appears once QM has
+been working for fifteen seconds without posting anything. When QM has already posted in the
+thread during the turn, the card is added to the bottom of its latest message and removed
+again when QM posts something new or the work ends; otherwise it is posted on its own under
+the conversation's persona and deleted at the same points.
+The card's title is **Still working:**
 followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
 step is used instead. Background jobs and watches show their own purpose. The card's details
 line is an "Open in QM" link to the exact web conversation with normal authorization,
 followed by the elapsed time after the first minute ("Open in QM · 2m"); without a
 configured web URL, it is the state in plain text (for example "Working on it · 2m").
-Quiet ambient turns, unthreaded DMs and turns that finish within thirty seconds do not create
-cards. Cards are visible to everyone in their thread; own status cards and edits are
-excluded from conversation history.
+Quiet ambient turns, unthreaded DMs and work that ends within fifteen seconds of QM's last
+message do not create cards. Cards are visible to everyone in their thread; cards standing alone, and
+edits that only add, change or remove a card, are excluded from conversation history.
 
 Waiting cards survive turns and restarts. Only this conversation's registered background
 jobs and enabled, unexpired process monitors count, not recurring crons or agent prose.

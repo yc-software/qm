@@ -336,6 +336,8 @@ export async function startSlackPlugin(
     rejectRateLimitedCalls: true,
   });
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
+  const statusCard = (channel: string, threadTs: string) =>
+    core.sessionStatus?.card(statusClient, statusAccount(), channel, threadTs);
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
     statusSync ??= Promise.all([
@@ -372,6 +374,7 @@ export async function startSlackPlugin(
     onSettled: () => {
       void reconcileStatus();
     },
+    card: statusCard,
     rateLimitNotice,
     readHistory,
     core,
@@ -469,6 +472,7 @@ export async function startSlackPlugin(
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
+    card: statusCard,
   });
 
   let auth: AuthTestResponse;
