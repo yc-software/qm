@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -425,6 +426,40 @@ test("a turn's credential token says whether it may act as its actor in a shared
   assert.equal(await actAsActor(channel(ask)), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "ambient", live: true } })), true);
   assert.equal(await actAsActor(channel(ask, { origin: { kind: "automation" } })), true);
+});
+
+test("a brokered git credential routes plain git through the broker with the command's token", async () => {
+  const { app, sandbox, serviceCreds, acl } = freshApp({
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com/",
+  });
+  await serviceCreds.setServiceCredential("org:default-org", {
+    slug: "code-git",
+    name: "Code",
+    secret: "synthetic",
+    host: "git.example.com",
+    allowedMethods: ["GET", "POST"],
+    allowedPathPrefixes: ["/team/code.git"],
+  });
+  await grantCred(acl, "org:default-org", "code-git");
+  let executed: Record<string, string> | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "git fetch") executed = handle.env;
+    return run(handle, command, opts);
+  };
+  const res = await app.turn(dm(`!execute ${JSON.stringify({ command: "git fetch", credentials: ["code-git"] })}`));
+  assert.equal(res.status, "ok");
+  const home = mkdtempSync(join(tmpdir(), "git-home-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { env: { PATH: process.env.PATH, HOME: home, ...executed }, encoding: "utf8" }).trim();
+  const broker = "https://core.example.com/v1/credentials/git/code-git/team/code.git";
+  assert.equal(git("ls-remote", "--get-url", "https://git.example.com/team/code"), broker);
+  assert.equal(git("ls-remote", "--get-url", "https://git.example.com/team/code.git"), broker);
+  assert.equal(
+    git("-c", "http.extraHeader=x-agent-capability: stale", "config", "--get-urlmatch", "http.extraHeader", broker),
+    `x-agent-capability: ${executed!.AGENT_CREDENTIAL_TOKEN}`,
+  );
 });
 
 for (const hours of [undefined, "72", "0", "none"]) {

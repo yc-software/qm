@@ -23,6 +23,8 @@ import type { CommandCredential } from "../../tools/primitives.ts";
 import { personalScope, type ScopeId } from "../../types.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import type { Tenant } from "../../tenants/context.ts";
+import { GIT_HTTP_BROKER_PREFIX } from "../../api/git-http-broker.ts";
+import { trimTrailingSlashes } from "../../util/text.ts";
 
 export interface CredentialCatalogTurn {
   tenant: Tenant;
@@ -305,10 +307,10 @@ export async function registerServiceCredentials(
   const available = records.filter(
     (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
   );
-  const brokerSlugs = available
-    .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
-    .map((record) => record.slug)
-    .sort();
+  const brokerRecords = available.filter(
+    (record) => record.delivery !== "env" && requestedHandles.includes(record.slug),
+  );
+  const brokerSlugs = brokerRecords.map((record) => record.slug).sort();
   let brokerToken: Promise<string> | undefined;
   const resolveBrokerToken = (): Promise<string> =>
     (brokerToken ??= (async () => {
@@ -369,7 +371,15 @@ export async function registerServiceCredentials(
         {
           handle: credential.slug,
           scratchOnly: false,
-          resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
+          resolve: async () => {
+            const token = await resolveBrokerToken();
+            return {
+              env: [
+                { key: "AGENT_CREDENTIAL_TOKEN", value: token },
+                ...brokerGitConfigEnv(deps.apiBaseUrl!, brokerRecords, token),
+              ],
+            };
+          },
         },
         `${credential.name}; proxy ${credential.host}`,
         undefined,
@@ -377,6 +387,33 @@ export async function registerServiceCredentials(
       );
     }
   }
+}
+
+function brokerGitConfigEnv(
+  apiBaseUrl: string,
+  records: readonly PublicServiceCredential[],
+  token: string,
+): Array<{ key: string; value: string; secret: boolean }> {
+  const broker = `${trimTrailingSlashes(apiBaseUrl)}${GIT_HTTP_BROKER_PREFIX}`;
+  const header = `x-agent-capability: ${token}`;
+  const entries: Array<[string, string]> = [
+    [`http.${broker}.extraHeader`, ""],
+    [`http.${broker}.extraHeader`, header],
+  ];
+  for (const record of records) {
+    for (const prefix of record.allowedPathPrefixes?.length ? record.allowedPathPrefixes : ["/"]) {
+      const rewrite = `url.${broker}${record.slug}${prefix}.insteadOf`;
+      entries.push([rewrite, `https://${record.host}${prefix}`]);
+      if (prefix.endsWith(".git")) entries.push([rewrite, `https://${record.host}${prefix.slice(0, -".git".length)}`]);
+    }
+  }
+  return [
+    { key: "GIT_CONFIG_COUNT", value: String(entries.length), secret: false },
+    ...entries.flatMap(([key, value], index) => [
+      { key: `GIT_CONFIG_KEY_${index}`, value: key, secret: false },
+      { key: `GIT_CONFIG_VALUE_${index}`, value, secret: value === header },
+    ]),
+  ];
 }
 
 export function registerBrokeredTools(catalog: CredentialCatalog): void {
