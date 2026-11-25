@@ -142,8 +142,6 @@ Refuses a turn before it starts when spend is over a cap. The two caps, pricing 
 
 ## Optional and per-deployment
 
-Nothing here differs by [deployment shape](../SPEC.md#deployment-shapes) in code; each shape is these settings and rows. What every deployment has is listed in [core and optional](../SPEC.md#core-and-optional).
-
 | What                              | Turned on by                                                                                                                                                                                 | Default    | When absent                                                                                                                                                 |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Default security posture          | `HARNESS_SECURITY_POSTURE`, or an org row in `security_postures`                                                                                                                             | `auto`     | Auto applies                                                                                                                                                |

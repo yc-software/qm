@@ -49,7 +49,6 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 | **Skill**                   | A named `SKILL.md` body plus optional text files, owned by a scope, with status `draft`, `reviewed`, `published` or `archived` and an HMAC signature.                                                | `src/skills/skill-store.ts`; table `skills`                                                                         |
 | **Skill pack, bundle**      | A git repository or MCP server skills are imported from, and the shared files of one pack.                                                                                                           | `src/skills/skill-pack-store.ts`, `skill-bundle-store.ts`; tables `skill_packs`, `skill_bundles`                    |
 | **Persona**                 | A scope `persona:<id>` with name, instructions and icon that a conversation wears. Roles: owner, write, read.                                                                                        | `src/personas/`; tables `personas`, `persona_access`, `persona_versions`; column `sessions.persona_id`              |
-| **Feature flag**            | A per-scope switch for one named feature; see [deployments](./deployments.md).                                                                                                                       | `src/feature-flags.ts`; table `feature_flags`                                                                       |
 | **Suggested activity**      | One of the prompts offered on the new-chat screen.                                                                                                                                                   | `src/suggestions/`; tables `suggested_activity_profiles`, `activity_seeds_configs`                                  |
 
 ## The parts
@@ -128,8 +127,6 @@ Ada works at Acme. In the web app she opens her direct conversation with the age
 `src/api/routes/surface.ts` holds the member and agent routes for memory (`/v1/memory/*`) and skills (`/v1/skills*`); `memory-access.ts` builds the disclosure view for a request; `memory-brain.ts`, `admin/memory.ts`, `admin/memory-registry.ts`, `personas.ts`, `skill-packs.ts` and `suggested-activities.ts` are named for what they serve. `context-policy.ts` reads and writes channel standing orders. `context.ts` is not prompt context: it pulls message history from a surface on request (see [surfaces](./surfaces.md)).
 
 ## Optional and per-deployment
-
-Nothing here is tied to a [deployment shape](../SPEC.md#deployment-shapes); each is an ordinary setting or row. See also [core and optional](../SPEC.md#core-and-optional).
 
 | What                                   | Turned on by                                                                                                          | Default                                       | When absent                                                                                                                   |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |

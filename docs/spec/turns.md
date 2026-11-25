@@ -154,8 +154,6 @@ Ada at Acme opens the web app, types "summarize this PDF" and attaches `q3.pdf`.
 
 ## Optional and per-deployment
 
-Nothing here depends on the [deployment shape](../SPEC.md#deployment-shapes) by name; each row is an ordinary setting. For what every deployment has, see [core and optional](../SPEC.md#core-and-optional).
-
 | What                                                                     | Turned on or set by                                                                                                                                               | Default                                                                | When absent or off                                                                                                                     |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Concurrent turns per process                                             | env `WORKERS`                                                                                                                                                     | 16                                                                     | —                                                                                                                                      |

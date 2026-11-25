@@ -140,7 +140,7 @@ Where other kinds of fire diverge:
 
 ## Optional and per-deployment
 
-Nothing here selects a deployment shape; a shape is the sum of these settings ([deployment shapes](../SPEC.md#deployment-shapes), [core and optional](../SPEC.md#core-and-optional)). Crons, webhooks and general loop machinery are wired in every deployment.
+Crons, webhooks and general loop machinery are wired in every deployment.
 
 | What                                                               | Turned on by                                                                                                                                                                                   | Default                                                   | When absent                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
