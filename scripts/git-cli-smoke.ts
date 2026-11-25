@@ -127,11 +127,15 @@ export async function main(): Promise<void> {
   } finally {
     await built.runtime.stop();
     if (process.env.GIT_CLI_SMOKE_DESTROY === "1" && process.env.SPRITES_TOKEN) {
-      const [{ SpritesClient }, { sandboxScopeName }] = await Promise.all([
-        import("@fly/sprites"),
-        import("../src/sandbox/exec-sandbox-base.ts"),
-      ]);
-      const name = sandboxScopeName(process.env.SPRITES_NAME_PREFIX ?? "qm", `personal:${actorId}`);
+      const [{ SpritesClient }, { sandboxScopeName }, { personalScope }, { bootTenant, inBootTenant }] =
+        await Promise.all([
+          import("@fly/sprites"),
+          import("../src/sandbox/exec-sandbox-base.ts"),
+          import("../src/types.ts"),
+          import("../src/tenants/boot.ts"),
+        ]);
+      const scope = inBootTenant(bootTenant(), () => personalScope(actorId));
+      const name = sandboxScopeName(process.env.SPRITES_NAME_PREFIX ?? "qm", scope);
       await new SpritesClient(process.env.SPRITES_TOKEN).deleteSprite(name).catch(() => {});
     }
   }
