@@ -26,6 +26,22 @@ class VaultError extends Error {
   }
 }
 
+function sanitizeKeySegment(name: string): string {
+  let out = "";
+  for (const ch of name) {
+    const code = ch.charCodeAt(0);
+    const ok =
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      ch === "." ||
+      ch === "_" ||
+      ch === "-";
+    out += ok ? ch : "-";
+  }
+  return out;
+}
+
 export function createVaultSecretStores(settings: VaultSettings, fetchImpl: typeof fetch = fetch): SecretStoreFactory {
   const auth = settings.auth;
   let session: { token: string; expiresAt: number } | undefined;
@@ -95,7 +111,7 @@ export function createVaultSecretStores(settings: VaultSettings, fetchImpl: type
     const encrypted = createEncryptedSecretStore(key);
     return {
       async put(name, value) {
-        const secretKey = `${name.replace(/[^A-Za-z0-9._-]/g, "-")}@${randomUUID()}`;
+        const secretKey = `${sanitizeKeySegment(name)}@${randomUUID()}`;
         await authorized("POST", secretPath("data", secretKey), { data: { value } });
         return VAULT_REF + secretKey;
       },

@@ -391,11 +391,17 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
 
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 function vaultEnv(env: NodeJS.ProcessEnv): Pick<Config, "vault"> {
   if (!env.VAULT_ADDR) return {};
   const method = env.VAULT_AUTH_METHOD || "token";
   const base = {
-    addr: env.VAULT_ADDR.replace(/\/+$/, ""),
+    addr: stripTrailingSlashes(env.VAULT_ADDR),
     kvMount: env.VAULT_KV_MOUNT || "secret",
     ...(env.VAULT_NAMESPACE ? { namespace: env.VAULT_NAMESPACE } : {}),
   };
