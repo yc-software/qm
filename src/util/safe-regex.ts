@@ -47,6 +47,11 @@ export function compileSafeRegex(pattern: string, flags = ""): RegExp {
     }
     if (ch === ")") {
       closed = groups.pop() ?? { quantified: false, alternation: false };
+      if (groups.length) {
+        const parent = groups[groups.length - 1]!;
+        parent.quantified ||= closed.quantified;
+        parent.alternation ||= closed.alternation;
+      }
       previousQuantifier = false;
       continue;
     }
