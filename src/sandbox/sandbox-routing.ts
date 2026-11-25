@@ -63,7 +63,7 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve", "local"]);
 
 function requireTenantSeparation(name: SandboxBackendName): void {
   if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;

@@ -13,7 +13,9 @@ import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
-import { shortHash } from "../util/crypto.ts";
+import { hashId, shortHash } from "../util/crypto.ts";
+import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
+import { boundTenant } from "../tenants/context.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -73,12 +75,18 @@ export async function computeSandboxImageFingerprint(repoRoot: string): Promise<
 }
 
 export const localContainerName = (scopeId: string): string => `qm-sbx-${localSlug(scopeId)}`;
-export const localVolumeName = (scopeId: string): string => `qm-home-${localSlug(scopeId)}`;
+const volumeForContainer = (name: string): string => name.replace("qm-sbx-", "qm-home-");
+export const localVolumeName = (scopeId: string): string => volumeForContainer(localContainerName(scopeId));
 export const localNetworkName = (containerName: string): string =>
   `qm-net-${containerName.replace(/^qm-(sbx|scratch)-/, "")}`;
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
+  const tenant = boundTenant();
+  const boot = bootTenant();
+  if (tenant === undefined && boot === undefined && tenancyBooted())
+    throw new Error("sandbox work needs a bound tenant");
+  if (tenant !== undefined && tenant !== boot) return hashId([tenant, id], 32);
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -97,7 +105,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
   const portByName = new Map<string, number>();
   const scopeByContainer = new Map<string, string>();
-  const scratchByKey = new Map<string, string>();
   const activeByContainer = new Map<string, number>();
 
   let preflightDone: Promise<string> | undefined;
@@ -283,9 +290,9 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   }
 
   async function ensureContainer(scope: string, memoryGb?: number): Promise<{ name: string; coldStart: boolean }> {
-    return provisionQueue(scope, async () => {
+    const name = localContainerName(scope);
+    return provisionQueue(name, async () => {
       const imageId = await preflight();
-      const name = localContainerName(scope);
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
       if (state && state.imageId === imageId) {
@@ -308,10 +315,9 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    return provisionQueue(`scratch:${key}`, async () => {
+    const name = localScratchName(key);
+    return provisionQueue(name, async () => {
       await preflight();
-      const name = localScratchName(key);
-      scratchByKey.set(key, name);
       const state = await containerState(name);
       if (state) {
         if (!state.running) await startContainer(name);
@@ -323,14 +329,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
     });
-  }
-
-  function teardownQueueKey(handle: SandboxHandle): string {
-    if (handle.scratch) {
-      for (const [k, name] of scratchByKey) if (name === handle.id) return `scratch:${k}`;
-      return handle.id;
-    }
-    return scopeByContainer.get(handle.id) ?? handle.id;
   }
 
   const profile: AgentComputerProfile = {
@@ -456,8 +454,8 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     exportFiles: execExport.exportFiles,
 
     async destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, async () => {
-        const name = localContainerName(scopeId);
+      const name = localContainerName(scopeId);
+      return provisionQueue(name, async () => {
         const network = localNetworkName(name);
         const remove = async (args: string[]) => {
           const result = await dexec(args);
@@ -478,7 +476,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     },
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      return provisionQueue(teardownQueueKey(handle), async () => {
+      return provisionQueue(handle.id, async () => {
         const remaining = (activeByContainer.get(handle.id) ?? 1) - 1;
         if (remaining > 0) {
           activeByContainer.set(handle.id, remaining);
@@ -487,7 +485,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         activeByContainer.delete(handle.id);
 
         if (handle.scratch) {
-          for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
           if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
           await disconnectCore(localNetworkName(handle.id));
@@ -506,11 +503,9 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
             swallowAs("local-sandbox: destroy network rm", undefined),
           );
-          const scope = scopeByContainer.get(handle.id);
-          if (scope)
-            await dexec(["volume", "rm", localVolumeName(scope)]).catch(
-              swallowAs("local-sandbox: destroy volume rm", undefined),
-            );
+          await dexec(["volume", "rm", volumeForContainer(handle.id)]).catch(
+            swallowAs("local-sandbox: destroy volume rm", undefined),
+          );
           scopeByContainer.delete(handle.id);
           portByName.delete(handle.id);
           return;
