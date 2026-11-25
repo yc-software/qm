@@ -951,7 +951,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
                 "qm.exec.stderr_bytes": Buffer.byteLength(ran.stderr),
               }),
             });
-                        const rawBytes = result.stdout.length + result.stderr.length;
+            const rawBytes = result.stdout.length + result.stderr.length;
             const maskStart = performance.now();
             const stdout = mask(result.stdout);
             const stderr = mask(result.stderr);
