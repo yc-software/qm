@@ -151,11 +151,24 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   async function containerState(
     name: string,
   ): Promise<{ running: boolean; imageId: string; rawSocketsDisabled: boolean } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}} {{json .HostConfig.CapDrop}}", name]);
+    const r = await dexec([
+      "inspect",
+      "-f",
+      "[{{json .State.Running}},{{json .Image}},{{json .HostConfig.CapDrop}}]",
+      name,
+    ]);
     if (r.code !== 0) return null;
-    const [running = "", imageId = "", droppedCapabilities = "null"] = r.stdout.trim().split(/\s+/);
-    const rawSocketsDisabled = ((JSON.parse(droppedCapabilities) ?? []) as string[]).includes("NET_RAW");
-    return { running: running === "true", imageId, rawSocketsDisabled };
+    try {
+      const [running, imageId, droppedCapabilities] = JSON.parse(r.stdout) as [boolean, string, string[] | null];
+      return { running, imageId, rawSocketsDisabled: droppedCapabilities?.includes("NET_RAW") ?? false };
+    } catch (cause) {
+      throw new Error(`docker inspect ${name} returned invalid container state: ${r.stdout}`, { cause });
+    }
+  }
+
+  async function removeDockerResource(args: string[]): Promise<void> {
+    const result = await dexec(args);
+    if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
   }
 
   async function resolvePort(name: string): Promise<number> {
@@ -221,7 +234,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     const state = await containerState(name);
     if (!state) throw new Error(`local sandbox container ${name} is gone`);
     if (!state.rawSocketsDisabled)
-      throw new Error(`local sandbox container ${name} must be provisioned again before use`);
+      throw new Error(`local sandbox container ${name} retains NET_RAW and must be provisioned again before use`);
     if (!state.running) await startContainer(name);
   }
 
@@ -314,7 +327,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
-      if (state) await dexec(["rm", "-f", name]);
+      if (state) await removeDockerResource(["rm", "-f", name]);
       const volume = localVolumeName(scope);
       const hadVolume = (await dexec(["volume", "inspect", volume])).code === 0;
       if (!hadVolume) {
@@ -338,7 +351,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
-      if (state) await dexec(["rm", "-f", name]);
+      if (state) await removeDockerResource(["rm", "-f", name]);
       await runContainer(name, undefined, false);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
@@ -471,18 +484,14 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       const name = localContainerName(scopeId);
       return provisionQueue(name, async () => {
         const network = localNetworkName(name);
-        const remove = async (args: string[]) => {
-          const result = await dexec(args);
-          if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
-        };
-        await remove(["rm", "-f", name]);
+        await removeDockerResource(["rm", "-f", name]);
         if (opts.coreContainer) {
           const result = await dexec(["network", "disconnect", "-f", network, opts.coreContainer]);
           if (result.code !== 0 && (await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(network))
             throw new Error(`docker network disconnect ${network}: ${result.stderr.trim()}`);
         }
-        await remove(["network", "rm", "-f", network]);
-        await remove(["volume", "rm", "-f", localVolumeName(scopeId)]);
+        await removeDockerResource(["network", "rm", "-f", network]);
+        await removeDockerResource(["volume", "rm", "-f", localVolumeName(scopeId)]);
         activeByContainer.delete(name);
         scopeByContainer.delete(name);
         portByName.delete(name);
