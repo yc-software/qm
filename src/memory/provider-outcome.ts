@@ -142,7 +142,7 @@ export function problemOf(group: ProblemGroup, operation: ProviderOperation): Me
       return {
         code: "memory_provider_unknown",
         provider,
-        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${refs}` : "the write"}${code ? reason : ` within ${ms}ms`}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
+        detail: `Memory provider ${provider} didn't confirm ${forget ? `that it forgot ${refs}` : "the write"}${reason}, so whether it ${forget ? "did" : "stored the facts"} is unknown; QM did not retry.`,
         fix: `Check ${provider}'s logs before ${forget ? `deleting ${it}` : "sending the facts"} again (${docs}).`,
       };
     case "failed":

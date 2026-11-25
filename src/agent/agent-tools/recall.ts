@@ -166,7 +166,7 @@ export function recallTools(kit: ToolKit) {
             const plural = notebook === 1 ? "" : "s";
             const notebookLine = !kept
               ? `Forgot ${notebook} fact${plural}.`
-              : `Kept ${notebook} notebook fact${plural} because a brain didn't confirm a ref in this delete; send the same delete again to finish.`;
+              : `Kept ${notebook} notebook fact${plural} because a brain didn't confirm a ref in this delete; send the notebook ids alone to forget them now, or the same delete again once the brain's problem is fixed.`;
             const refs = (state: string) =>
               outcomes.flatMap(({ outcome, ref }) => (outcome === state && ref ? [ref] : [])).join(", ");
             const lines = [

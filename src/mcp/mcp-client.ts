@@ -3,7 +3,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { boundedResponse } from "../util/bytes.ts";
@@ -266,9 +266,11 @@ export function createMcpClient(opts: {
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
+      const rpcCode = e instanceof McpError ? envelopeOf(e.data).code : undefined;
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        ...(rpcCode ? { code: rpcCode } : {}),
         ...(opened ? {} : { unsent: true }),
         cause: e,
       });
