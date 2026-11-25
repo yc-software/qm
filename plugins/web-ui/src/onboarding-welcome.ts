@@ -700,7 +700,7 @@ export class OnboardingWelcome extends LitElement {
       ${
         card || ["slack", "slack-account"].includes(this.widget)
           ? (card ?? nothing)
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
+          : html`<div class="welcome-beat welcome-apps" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
