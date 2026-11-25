@@ -10,7 +10,7 @@ protocol SpeechToTextProvider {
   func recognizeLive(
     request: SFSpeechAudioBufferRecognitionRequest,
     onResult: @escaping @Sendable (String?, Bool, String?) -> Void
-  ) throws -> SFSpeechRecognitionTask?
+  ) async throws -> SFSpeechRecognitionTask?
 }
 
 struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
@@ -27,7 +27,8 @@ struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
       throw QMError.message("Speech Recognition permission could not be checked. Please try again.")
     }
     try Task.checkCancellation()
-    _ = try onDeviceRecognizer()
+    // Creating a recognizer loads the on-device speech model, which can block for a while.
+    try await Task.detached(priority: .userInitiated) { _ = try onDeviceRecognizer() }.value
   }
 
   func transcribe(file: URL) async throws -> String {
@@ -38,13 +39,25 @@ struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
   func recognizeLive(
     request: SFSpeechAudioBufferRecognitionRequest,
     onResult: @escaping @Sendable (String?, Bool, String?) -> Void
-  ) throws -> SFSpeechRecognitionTask? {
-    let recognizer = try onDeviceRecognizer()
-    request.requiresOnDeviceRecognition = true
-    request.shouldReportPartialResults = true
-    request.addsPunctuation = true
-    return startSpeechRecognition(recognizer: recognizer, request: request, onResult: onResult)
+  ) async throws -> SFSpeechRecognitionTask? {
+    // Off the main thread for the same reason as `availability()`, so opening the panel
+    // never waits on the speech model.
+    let shared = DictationAudioRequest(request: request)
+    return try await Task.detached(priority: .userInitiated) {
+      let recognizer = try onDeviceRecognizer()
+      let request = shared.request
+      request.requiresOnDeviceRecognition = true
+      request.shouldReportPartialResults = true
+      request.addsPunctuation = true
+      return SpeechRecognitionTaskBox(
+        task: startSpeechRecognition(recognizer: recognizer, request: request, onResult: onResult))
+    }.value.task
   }
+}
+
+/// Hands a recognition task started off the main thread back to the main actor.
+private struct SpeechRecognitionTaskBox: @unchecked Sendable {
+  let task: SFSpeechRecognitionTask
 }
 
 private func onDeviceRecognizer() throws -> SFSpeechRecognizer {
@@ -242,9 +255,6 @@ final class NativeDictationModel {
   var canFinish: Bool { state == .recording || state == .ready }
   private let provider: any SpeechToTextProvider
   private let microphonePermission: @MainActor () async -> Bool
-  /// How long to wait after the panel starts opening before any microphone setup. Parts of
-  /// it still run on the main thread and stalled the opening animation.
-  private let openingDelay: Duration
   private var audioEngine: AVAudioEngine?
   private var audioFile: AVAudioFile?
   private var liveRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -257,13 +267,11 @@ final class NativeDictationModel {
 
   init(
     provider: any SpeechToTextProvider,
-    openingDelay: Duration = .zero,
     microphonePermission: @escaping @MainActor () async -> Bool = {
       await AVAudioApplication.requestRecordPermission()
     }
   ) {
     self.provider = provider
-    self.openingDelay = openingDelay
     self.microphonePermission = microphonePermission
   }
 
@@ -282,8 +290,6 @@ final class NativeDictationModel {
     revision = current
     operation = Task { [self] in
       do {
-        if openingDelay > .zero { try await Task.sleep(for: openingDelay) }
-        guard current == revision, !Task.isCancelled else { return }
         try await provider.availability()
         guard current == revision, !Task.isCancelled else { return }
         guard await microphonePermission() else {
@@ -294,12 +300,16 @@ final class NativeDictationModel {
           "qm-dictation-\(UUID().uuidString).caf")
         file = url
         let request = SFSpeechAudioBufferRecognitionRequest()
-        let liveTask = try provider.recognizeLive(request: request) {
+        let liveTask = try await provider.recognizeLive(request: request) {
           [weak self] text, isFinal, errorMessage in
           Task { @MainActor [weak self] in
             self?.receiveLiveResult(
               text: text, isFinal: isFinal, errorMessage: errorMessage, revision: current)
           }
+        }
+        guard current == revision, !Task.isCancelled else {
+          liveTask?.cancel()
+          return
         }
         liveRequest = request
         self.liveTask = liveTask

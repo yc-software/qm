@@ -46,8 +46,7 @@ struct ChatView: View {
     self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
-      initialValue: NativeDictationModel(
-        provider: OnDeviceSpeechToTextProvider(), openingDelay: .milliseconds(420)))
+      initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
     _suggestions = State(initialValue: NativeSuggestedActivitiesModel(client: model.client))
     self.initialSequence = initialSequence
     _targetSequence = State(initialValue: initialSequence)
@@ -155,9 +154,6 @@ struct ChatView: View {
             }
             // The open panel overflows upward from the closed bar's height.
             .frame(height: dictation.busy ? restingBarHeight : nil, alignment: .bottom)
-        }
-        .onChange(of: dictation.busy) { _, busy in
-          if busy { liftsTranscript = followsLatest }
         }
       }
     }
