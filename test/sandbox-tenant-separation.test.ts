@@ -5,7 +5,7 @@ import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createLocalSandbox } from "../src/sandbox/local-sandbox.ts";
 
 await bindBootTenant(async () => undefined);
@@ -35,6 +35,9 @@ test("on a deployment shared by tenants, backends that cannot keep tenants apart
     for (const name of ["sprites", "local"]) await router.run(handle(name), "true");
   });
   await assert.rejects(async () => router.run(handle("e2b"), "true"), /does not keep tenants apart/);
-  await assert.rejects(createLocalSandbox().provision("unbound"), /needs a bound tenant/);
+  await assert.rejects(
+    withoutTenant(() => createLocalSandbox().provision("unbound")),
+    /needs a bound tenant/,
+  );
   assert.deepEqual(ran, ["sprites", "local"]);
 });
