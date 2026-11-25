@@ -25,7 +25,7 @@ What each needs from a change:
 
 - **Package deployments** get `main` only when a release is cut by hand (the `Release` workflow) and the operator upgrades, so they cross many commits at once. They are often the smallest configuration that boots: web UI only, email sign-in from the built-in `auth` broker, one model provider key, one sandbox backend, local disk in place of S3.
 - **Platform-hosted deployments** get what the platform's template builds, which need not be a release: the `render` target builds the head of a Git branch on every `qm up`. A platform also fixes choices the operator cannot change, such as the one sandbox backend it allows.
-- **Source-built deployments** can ship any green commit of `main` within hours of its merge, so `main` is always someone's release candidate. Several core instances serve at once.
+- **Source-built deployments** build a commit of `main` their operator picks, released or not, so every commit on `main` must be fit to run, not only those that become a release. Several core instances serve at once.
 - **Multi-tenant deployments** hold many organizations in one database: a deployment is multi-tenant when `tenants` does not hold exactly one row. There, each organization's values come from `tenants.settings`, not from env; Slack accounts configured in env are ignored; only the sandbox backends that separate tenants may run; and `ORG_ID` is one value for the whole deployment, so it never identifies an organization. See [storage](./spec/storage.md).
 
 Changes that help one shape and break another:
