@@ -107,6 +107,7 @@ struct RootView: View {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
             listActions(identity)
+            if !keyboardUp { nav(plain: false, inList: true) }
           }
         }
       }
@@ -337,13 +338,18 @@ struct RootView: View {
     if !keyboardUp { nav(plain: false) }
   }
 
-  private func nav(plain: Bool) -> ShellNav {
-    let selected: ShellNavItem =
-      switch section {
-      case .more: .more
-      case .waiting: .conversations
-      case .home: selectedConversation?.localOnly == true ? .new : .conversations
-      }
+  private func nav(plain: Bool, inList: Bool = false) -> ShellNav {
+    let selected: ShellNavItem
+    if inList {
+      selected = .conversations
+    } else {
+      selected =
+        switch section {
+        case .more: .more
+        case .waiting: .conversations
+        case .home: selectedConversation?.localOnly == true ? .new : .conversations
+        }
+    }
     return ShellNav(selected: selected, waiting: waitingCount, plain: plain) { item in
       switch item {
       case .conversations: showingConversations = true
@@ -353,7 +359,9 @@ struct RootView: View {
         {
           open(conversation)
         }
-      case .more: section = .more
+      case .more:
+        section = .more
+        showingConversations = false
       }
     }
   }
@@ -672,7 +680,10 @@ struct ShellNav: View {
     // Match the composer bar's padding so the nav sits at the same height on every screen.
     .padding(.top, plain ? 0 : 10)
     .padding(.bottom, plain ? 0 : 12)
-    .background(plain ? Color.clear : QMTheme.paper)
+    .background {
+      // Blur what scrolls underneath; inside the composer bar there is already a background.
+      if !plain { Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom) }
+    }
   }
 
   private func item(
