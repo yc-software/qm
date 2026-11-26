@@ -12,6 +12,7 @@ import {
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
+import type { ClaimedRow } from "../tenants/claim.ts";
 
 export interface CreateWebhookInput extends CreateTriggerInput {
   title?: string;
@@ -35,6 +36,14 @@ export interface WebhookHistory {
   events: WebhookEvent[];
 }
 
+export interface WebhookFire {
+  fireKey: string;
+  webhookId: string;
+  deliveryId: string;
+  receivedAt: number;
+  payload: string;
+}
+
 export interface WebhookStore {
   recordEvent(id: string, event: WebhookEvent): Promise<void>;
   listEvents(id: string): Promise<WebhookEvent[]>;
@@ -45,9 +54,19 @@ export interface WebhookStore {
   setEnabled(id: string, enabled: boolean): Promise<void>;
   update(id: string, patch: WebhookPatch): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
+  beginFire(fire: WebhookFire): Promise<void>;
+  settleFire(fireKey: string): Promise<void>;
+  unsettledFires(): Promise<Omit<WebhookFire, "payload">[]>;
+  unsettledFire(fireKey: string): Promise<WebhookFire | null>;
+  getMany(ids: readonly string[]): Promise<Webhook[]>;
+  claimFireTenants(): Promise<ClaimedRow[]>;
 }
 
-export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
+export function createWebhookStore(
+  backing: DurableMap<Webhook>,
+  history: DurableMap<WebhookHistory>,
+  fires: DurableMap<WebhookFire>,
+): WebhookStore {
   const updateHistory = history.update.bind(history);
   return {
     async recordEvent(id, event) {
@@ -122,6 +141,12 @@ export function createWebhookStore(backing: DurableMap<Webhook>, history: Durabl
         ...(patch.action !== undefined ? { action: patch.action } : {}),
       });
     },
+    beginFire: (fire) => fires.put(fire.fireKey, fire),
+    settleFire: (fireKey) => fires.delete(fireKey),
+    unsettledFires: async () => (await fires.select({ omit: ["payload"] })).sort((a, b) => a.receivedAt - b.receivedAt),
+    unsettledFire: (fireKey) => fires.get(fireKey),
+    getMany: (ids) => backing.getMany(ids),
+    claimFireTenants: () => fires.claimTenants(),
     async recordFire(id, info) {
       await backing.merge(id, {
         lastFiredAt: info.at,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
+import { createWebhookStore, type WebhookFire, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Webhook, Cron } from "../src/triggers/types.ts";
 import {
@@ -449,7 +449,11 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
 test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const makeStore = () =>
-    createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
+    createWebhookStore(
+      factory.map<Webhook>("map_webhooks"),
+      factory.map<WebhookHistory>("map_webhook_history"),
+      factory.map<WebhookFire>("map_webhook_fires"),
+    );
   const a = makeStore();
   const b = makeStore();
   const webhook = await a.create({

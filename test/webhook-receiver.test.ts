@@ -1,5 +1,5 @@
 import type { TurnOrigin } from "../src/types.ts";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
@@ -8,7 +8,9 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testMap, testPgPool } from "./support/test-database.ts";
+import { createNoopAdvisoryLock, createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import type { PgPool } from "../src/persistence/pg-pool.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -16,9 +18,9 @@ const automationOrigin = (request?: { origin?: TurnOrigin }) =>
 const SECRET = "topsecret";
 let inFlight = 0;
 const tick = () => new Promise((r) => setImmediate(r));
-const flush = async () => {
+const flush = async (pending = 0) => {
   do await tick();
-  while (inFlight > 0);
+  while (inFlight > pending);
 };
 
 function tracked<T extends object>(target: T): T {
@@ -41,7 +43,7 @@ const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
 function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
-  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const webhooks = tracked(createWebhookStore(testMap(), testMap(), testMap()));
   const deliveries = tracked(createDeliveryStore());
   const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
@@ -51,6 +53,7 @@ function agent(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) 
   };
   const receiver = createWebhookReceiver({
     webhooks,
+    advisoryLock: createNoopAdvisoryLock(),
     deliveries,
     idempotency: tracked(createIdempotencyStore(testMap())),
     identity,
@@ -418,4 +421,130 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+const lockPools: PgPool[] = [];
+after(() => Promise.all(lockPools.map((pool) => pool.close())));
+const instanceLock = () => tracked(createPostgresAdvisoryLock(lockPools[lockPools.push(testPgPool()) - 1]!));
+
+function restartable() {
+  const webhooks = tracked(createWebhookStore(testMap(), testMap(), testMap()));
+  const deliveries = tracked(createDeliveryStore());
+  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
+  const idempotency = tracked(createIdempotencyStore(testMap()));
+  const calls: TurnRequest[] = [];
+  const boot = (result: () => TurnResult | Promise<TurnResult>) =>
+    createWebhookReceiver({
+      webhooks,
+      advisoryLock: instanceLock(),
+      deliveries,
+      idempotency,
+      identity,
+      run: async (req) => {
+        calls.push(req);
+        return result();
+      },
+    });
+  return { webhooks, deliveries, calls, boot };
+}
+
+const restartDest = { type: "slack" as const, target: "D1", audienceScopeId: scopeId("personal", "U1") };
+const createRestartHook = (webhooks: ReturnType<typeof restartable>["webhooks"]) =>
+  webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "watch the deploy",
+    verification: { scheme: "github", secret: SECRET },
+    destination: restartDest,
+  });
+
+test("a fire cut off by a restart posts no warning and is re-driven to deliver the resumed turn's reply once", async () => {
+  const { webhooks, deliveries, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  const before = boot(() => ({ status: "queued", runId: "r1" }));
+  assert.equal((await before.deliver(wh.id, githubReq("{}", "d-restart"))).status, 202);
+  await flush();
+  assert.equal((await deliveries.pending("slack")).length, 0);
+  assert.equal((await webhooks.unsettledFires()).length, 1);
+
+  const after = boot(() => ({ status: "ok", reply: "Shipped: the deploy is live" }));
+  await after.redrive(Date.now());
+  await flush();
+  assert.equal(calls.length, 1, "a fire younger than the re-drive window is left to its first attempt");
+
+  const later = Date.now() + 2 * 60_000;
+  await after.redrive(later);
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.idempotencyKey, calls[0]?.idempotencyKey);
+  assert.equal(calls[1]?.text, calls[0]?.text);
+  const pending = await deliveries.pending("slack");
+  assert.deepEqual(
+    pending.map((d) => d.text),
+    ["Shipped: the deploy is live"],
+  );
+  assert.equal((await webhooks.unsettledFires()).length, 0);
+
+  await after.redrive(later + 2 * 60_000);
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal((await deliveries.pending("slack")).length, 1);
+});
+
+test("a re-driven fire whose resumed turn fails still posts the warning", async () => {
+  const { webhooks, deliveries, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  await boot(() => ({ status: "queued", runId: "r1" })).deliver(wh.id, githubReq("{}", "d-fail"));
+  await flush();
+  await boot(() => ({ status: "failed", reason: "boom" })).redrive(Date.now() + 2 * 60_000);
+  await flush();
+  const pending = await deliveries.pending("slack");
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]?.text ?? "", /did not complete/i);
+});
+
+test("an unsettled fire whose webhook was disabled is dropped instead of re-driven", async () => {
+  const { webhooks, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  await boot(() => ({ status: "queued", runId: "r1" })).deliver(wh.id, githubReq("{}", "d-off"));
+  await flush();
+  await webhooks.setEnabled(wh.id, false);
+  const later = Date.now() + 2 * 60_000;
+  await boot(() => ({ status: "ok", reply: "x" })).redrive(later);
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal((await webhooks.unsettledFires()).length, 0);
+});
+
+test("a completed fire leaves nothing to re-drive", async () => {
+  const { webhooks, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  const receiver = boot(() => ({ status: "ok", reply: "done" }));
+  await receiver.deliver(wh.id, githubReq("{}", "d-done"));
+  await flush();
+  assert.equal((await webhooks.unsettledFires()).length, 0);
+  await receiver.redrive(Date.now() + 2 * 60_000);
+  await flush();
+  assert.equal(calls.length, 1);
+});
+
+test("a fire still running on another instance is not re-driven; one unfinished past a day is dropped with a recorded error", async (t) => {
+  const { webhooks, calls, boot } = restartable();
+  const wh = await createRestartHook(webhooks);
+  const live = Promise.withResolvers<TurnResult>();
+  t.after(() => live.resolve({ status: "queued", runId: "r1" }));
+  await boot(() => live.promise).deliver(wh.id, githubReq("{}", "d-live"));
+  while (calls.length === 0) await tick();
+  const busy = inFlight;
+  await boot(() => ({ status: "ok", reply: "x" })).redrive(Date.now() + 2 * 60_000);
+  await flush(busy);
+  assert.equal(calls.length, 1);
+  live.resolve({ status: "queued", runId: "r1" });
+  await flush();
+  await boot(() => ({ status: "ok", reply: "x" })).redrive(Date.now() + 25 * 60 * 60_000);
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.equal((await webhooks.unsettledFires()).length, 0);
+  assert.match((await webhooks.get(wh.id))?.lastError ?? "", /not re-driven because it stayed unfinished/);
 });

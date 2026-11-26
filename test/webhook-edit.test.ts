@@ -4,7 +4,7 @@ import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { testMap } from "./support/test-database.ts";
 import { personalScope } from "../src/types.ts";
 test("editing a webhook's action keeps its id (URL) and secret", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create({
     owner: "u:a",
     createdBy: "u:a",
@@ -21,7 +21,7 @@ test("editing a webhook's action keeps its id (URL) and secret", async () => {
 });
 
 test("a webhook's title is set on create, normalized, and renamed without touching its task", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create({
     owner: "u:a",
     createdBy: "u:a",

@@ -22,6 +22,7 @@ import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 import { claimThenBind, type ClaimedRow } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
+import { DEFAULT_FIRE_RUNNING_STALE_MS } from "../triggers/redrive.ts";
 
 export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
@@ -51,8 +52,6 @@ export interface CronPatch {
   forkedAt?: number;
   sharedFrom?: null;
 }
-
-export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
 
 export const STRANDED_FIRE_NOTE = "fire never completed — stranded by a restart or crash";
 

@@ -14,7 +14,7 @@ const base = {
 };
 
 test("create stores an enabled webhook with a generated id", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create(base);
   assert.ok(wh.id);
   assert.equal(wh.enabled, true);
@@ -23,7 +23,7 @@ test("create stores an enabled webhook with a generated id", async () => {
 });
 
 test("create rejects filters that could silently weaken or suppress the webhook", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   await assert.rejects(
     () => store.create({ ...base, filters: [{ path: "", in: ["opened"] }] }),
     /filter requires a path/,
@@ -39,14 +39,14 @@ test("create rejects filters that could silently weaken or suppress the webhook"
 });
 
 test("setEnabled disables a webhook", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create(base);
   await store.setEnabled(wh.id, false);
   assert.equal((await store.get(wh.id))?.enabled, false);
 });
 
 test("recordFire stamps last fire + delivery id, and sets/clears the error note", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create(base);
   await store.recordFire(wh.id, { at: 123, deliveryId: "d-9", error: "refused: nope" });
   assert.equal((await store.get(wh.id))?.lastFiredAt, 123);
@@ -57,7 +57,7 @@ test("recordFire stamps last fire + delivery id, and sets/clears the error note"
 });
 
 test("create dedups a byte-identical retry: same input inserts once and returns the same id", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const a = await store.create(base);
   const b = await store.create(base);
   assert.equal(b.id, a.id, "the retry returns the first record, not a new one");
@@ -65,7 +65,7 @@ test("create dedups a byte-identical retry: same input inserts once and returns 
 });
 
 test("create treats empty filters and absent filters as the same registration", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const a = await store.create({ ...base, filters: [] });
   const b = await store.create(base);
   assert.equal(b.id, a.id);
@@ -73,7 +73,7 @@ test("create treats empty filters and absent filters as the same registration", 
 });
 
 test("create does NOT dedup when any keyed field differs (distinct requests stay distinct)", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const a = await store.create(base);
   const diffAction = await store.create({ ...base, action: "do something else" });
   const diffVerification = await store.create({ ...base, verification: { scheme: "stripe", secret: "s" } });
@@ -85,7 +85,7 @@ test("create does NOT dedup when any keyed field differs (distinct requests stay
 });
 
 test("a duplicate create returns the existing record WITHOUT clobbering its fire state", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const a = await store.create(base);
   await store.recordFire(a.id, { at: 123, deliveryId: "d-9" });
   const b = await store.create(base);
@@ -97,14 +97,14 @@ test("a duplicate create returns the existing record WITHOUT clobbering its fire
 
 test("create dedup survives a 'restart': a fresh store over the same backing still matches", async () => {
   const backing = testMap<Webhook>();
-  const a = await createWebhookStore(backing, testMap()).create(base);
-  const b = await createWebhookStore(backing, testMap()).create(base);
+  const a = await createWebhookStore(backing, testMap(), testMap()).create(base);
+  const b = await createWebhookStore(backing, testMap(), testMap()).create(base);
   assert.equal(b.id, a.id, "the content-keyed id dedups across a process restart");
   assert.equal((await backing.all()).length, 1);
 });
 
 test("re-creating a byte-identical disabled webhook re-enables it", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const input = {
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -123,18 +123,18 @@ test("re-creating a byte-identical disabled webhook re-enables it", async () => 
 test("history survives reconstruction without entering webhook listings", async () => {
   const history = testMap<import("../src/webhooks/webhook-store.ts").WebhookHistory>();
   const backing = testMap<Webhook>();
-  const store = createWebhookStore(backing, history);
+  const store = createWebhookStore(backing, history, testMap());
   const wh = await store.create(base);
   const event = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, event);
-  const restored = createWebhookStore(backing, history);
+  const restored = createWebhookStore(backing, history, testMap());
   assert.deepEqual(await restored.listEvents(wh.id), [event]);
   assert.equal(JSON.stringify(await restored.list()).includes("hello"), false);
   assert.deepEqual(await restored.listEvents("unknown"), []);
 });
 
 test("history atomically retains the latest 50 and bounds payloads", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create(base);
   await Promise.all(
     Array.from({ length: 70 }, (_, i) =>
@@ -155,7 +155,7 @@ test("history atomically retains the latest 50 and bounds payloads", async () =>
 });
 
 test("a repeated receipt preserves the original payload and timestamp", async () => {
-  const store = createWebhookStore(testMap(), testMap());
+  const store = createWebhookStore(testMap(), testMap(), testMap());
   const wh = await store.create(base);
   const original = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, original);
