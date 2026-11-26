@@ -15,6 +15,7 @@ import {
   credentialHandle,
   askResolutionEvents,
   renderKeychainManifest,
+  unsharedMemberCredentials,
   fileCredentialEnvironment,
   KeychainError,
   type Keychain,
@@ -491,7 +492,14 @@ describe("connectors are grantable like any keychain record", () => {
     };
     const md = renderKeychainManifest(input);
     assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
-    assert.match(md, /^1 credential owned by people here isn't shared with this conversation;/m);
+    assert.match(
+      md,
+      /^1 credential owned by people here isn't shared with this conversation — `GET \/v1\/keychain\/unshared` lists them;/m,
+    );
+    assert.deepEqual(
+      unsharedMemberCredentials(input).map(({ owner, service, handle }) => ({ owner, service, handle })),
+      [{ owner: "Alex", service: "Google", handle: "connector:gmail.googleapis.com:default" }],
+    );
     connectorsByOwner.get("alex@x")![0]!.needsReconnect = true;
     assert.doesNotMatch(renderKeychainManifest(input), /shared with this conversation/);
   });
@@ -1020,7 +1028,7 @@ test("manifest: own credentials need no grant but require explicit execution req
       members: [{ id: "U1" }],
       entriesByOwner: new Map([["U1", entries]]),
     }),
-    /No credentials available\.\n3 credentials owned by people here aren't shared with this conversation; ask for access \(request-access skill\) rather than assuming one is missing\.$/,
+    /No credentials available\.\n3 credentials owned by people here aren't shared with this conversation — `GET \/v1\/keychain\/unshared` lists them; ask for access \(request-access skill\) rather than assuming one is missing\.$/,
     "own credentials without an execution handle are counted, not listed",
   );
 
@@ -1034,6 +1042,18 @@ test("manifest: own credentials need no grant but require explicit execution req
   });
   assert.doesNotMatch(other, /Alice|npm|github/);
   assert.match(other, /^3 credentials owned by people here aren't shared/m);
+  const listed = unsharedMemberCredentials({
+    members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
+    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+    scopeGrants: [],
+  });
+  assert.deepEqual(listed.map((c) => `${c.owner}/${c.service}`).sort(), [
+    "Alice/file-login",
+    "Alice/github",
+    "Alice/npm",
+  ]);
+  assert.ok(listed.every((c) => c.handle === `${c.service}:${c.credentialId}`));
+  assert.doesNotMatch(JSON.stringify(listed), /ghp_|npm_x|project-key/, "metadata only");
 
   const channel = renderKeychainManifest({
     scopeId: "channel:C1",
@@ -1084,6 +1104,8 @@ describe("/v1/keychain routes (capability-authed)", () => {
     await built.directory.replaceGroups([
       { groupId: "G_CONN", principalId: "alex@conn" },
       { groupId: "G_CONN", principalId: "carol@conn" },
+      { groupId: "G_UNSHARED", principalId: "A_UNSHARED" },
+      { groupId: "G_UNSHARED", principalId: "B_UNSHARED" },
     ]);
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -1164,6 +1186,57 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(claimed.status, "used");
     assert.ok(claimed.usedAt !== undefined);
     await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
+  });
+
+  it("GET /v1/keychain/unshared lists members' unshared credentials, metadata only", async () => {
+    const GROUP = scopeId("group", "G_UNSHARED");
+    const asc = await built.keychain!.save({
+      ownerId: "A_UNSHARED",
+      service: "app-store-connect",
+      secret: "asc-private-key",
+      envKey: "ASC_PRIVATE_KEY",
+      accountLabel: "Acme Apps",
+    });
+    await built.keychain!.save({
+      ownerId: "OUTSIDER_UNSHARED",
+      service: "npm",
+      secret: "npm_out",
+      envKey: "NPM_TOKEN",
+    });
+    const keychainMembers = [
+      { id: "A_UNSHARED", type: "internal" as const, displayName: "Alice" },
+      { id: "B_UNSHARED", type: "internal" as const, displayName: "Bob" },
+    ];
+    const unshared = async (cap: string) => {
+      const res = await get("/v1/keychain/unshared", cap);
+      assert.equal(res.status, 200);
+      const text = await res.text();
+      assert.doesNotMatch(text, /asc-private-key|npm_out/);
+      return (JSON.parse(text) as { credentials: unknown[] }).credentials;
+    };
+    const asB = await capFor("B_UNSHARED", GROUP, { keychainMembers });
+    assert.deepEqual(await unshared(asB), [
+      {
+        credentialId: asc.id,
+        ownerId: "A_UNSHARED",
+        owner: "Alice",
+        service: "app-store-connect",
+        accountLabel: "Acme Apps",
+        handle: credentialHandle(asc),
+      },
+    ]);
+    assert.deepEqual(
+      (await unshared(await capFor("A_UNSHARED", personalScope("A_UNSHARED")))).map((c: any) => c.credentialId),
+      [asc.id],
+      "own logins the turn may not use count as unshared",
+    );
+    assert.deepEqual(
+      await unshared(await capFor("A_UNSHARED", personalScope("A_UNSHARED"), { ownerConnections: true })),
+      [],
+      "own logins in your own conversation are already usable",
+    );
+    await grantHere(asc.id, "A_UNSHARED", GROUP, "standing", "upload builds");
+    assert.deepEqual(await unshared(asB), [], "a grant here shares it");
   });
 
   it("a participant's granted connector is materialized under the host env var", async () => {

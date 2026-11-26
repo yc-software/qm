@@ -588,7 +588,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); saving a service the user already has replaces that login / list participants' registered logins (metadata)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); saving a service the user already has replaces that login / list your own registered logins (metadata)",
+      },
+      {
+        method: "GET",
+        path: "/v1/keychain/unshared",
+        summary:
+          "list credentials owned by people in this conversation that aren't shared here (owner, service, accountLabel, credentialId; metadata only), to pick what to ask for",
       },
       {
         method: "POST|DELETE",

@@ -1,7 +1,9 @@
 import {
   connectorHandle,
   credentialHandle,
+  grantableCredential,
   KeychainError,
+  unsharedMemberCredentials,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -257,6 +259,35 @@ const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
 
 type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 
+const listUnshared = keychainRoute(async ({ res }, kc, capability) => {
+  const { actorId, scopeId } = capability;
+  const audience = capability.keychainMembers ?? [];
+  const members = [
+    ...(audience.some((p) => samePerson(p.id, actorId)) ? [] : [{ id: actorId }]),
+    ...audience.map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) })),
+  ];
+  const ids = members.map((m) => m.id);
+  const [entriesByOwner, connectorsByOwner, scopeGrants] = await Promise.all([
+    kc.listByOwners(ids),
+    kc.listConnectorsByOwners(ids),
+    kc.grantsForScope(scopeId, { includePersonGrants: capability.botActor !== true }),
+  ]);
+  const execution: Array<{ handle: string; ownerId: string; credentialId: string; description: string }> = [];
+  const usable = (handle: string, ownerId: string, credentialId: string) =>
+    execution.push({ handle, ownerId, credentialId, description: "" });
+  for (const { credential } of scopeGrants)
+    if (grantableCredential(credential)) usable(credentialHandle(credential), credential.ownerId, credential.id);
+  if (capability.ownerConnections) {
+    for (const credential of entriesByOwner.get(actorId) ?? [])
+      if (grantableCredential(credential)) usable(credentialHandle(credential), actorId, credential.id);
+    for (const c of connectorsByOwner.get(actorId) ?? [])
+      if (c.connected && !c.needsReconnect) usable(connectorHandle(c.host, c.accountType), actorId, c.credentialId);
+  }
+  return sendJson(res, 200, {
+    credentials: unsharedMemberCredentials({ members, entriesByOwner, connectorsByOwner, scopeGrants, execution }),
+  });
+});
+
 async function askableCredentials(
   kc: KeychainStore,
   ownerId: string,
@@ -469,6 +500,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: releaseWriter,
   },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
+  { method: "GET", path: "/v1/keychain/unshared", auth: "either", handle: listUnshared },
   {
     method: "GET",
     path: "/v1/keychain/overview",
