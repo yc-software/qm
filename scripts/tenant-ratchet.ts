@@ -64,7 +64,7 @@ function countTenantSites(): Record<Metric, Map<string, number>> {
   >;
   for (const source of program.getSourceFiles()) {
     const file = relative(ROOT, source.fileName);
-    if (source.isDeclarationFile || !/^(src|plugins)\//.test(file) || file.endsWith(".test.ts")) continue;
+    if (source.isDeclarationFile || !/^(src|plugins|common)\//.test(file) || file.endsWith(".test.ts")) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         const declaration = checker.getResolvedSignature(node)?.declaration;
