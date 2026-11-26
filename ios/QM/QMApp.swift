@@ -608,8 +608,8 @@ enum ShellNavItem {
 }
 
 struct ShellNav: View {
-  /// Height above the home indicator: 8 top + 40 item, sitting right on the indicator area.
-  static let height: CGFloat = 48
+  /// Room kept above the home indicator: a 52pt glass island plus a little air.
+  static let height: CGFloat = 60
 
   let selected: ShellNavItem
   let waiting: Int
@@ -618,20 +618,20 @@ struct ShellNav: View {
   let action: (ShellNavItem) -> Void
 
   var body: some View {
-    HStack(spacing: 24) {
+    // A floating Liquid Glass island; content scrolls freely behind it.
+    HStack(spacing: 2) {
       item(
         .conversations, icon: "line.3.horizontal", filled: "line.3.horizontal",
         label: "Conversations")
       item(.new, icon: "square.and.pencil", filled: "square.and.pencil", label: "New chat")
       item(.more, icon: "square.grid.2x2", filled: "square.grid.2x2.fill", label: "More")
     }
+    .padding(4)
+    .modifier(GlassPill(prominent: false))
+    .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
     .frame(maxWidth: .infinity)
-    // Match the composer bar's padding so the nav sits at the same height on every screen.
-    .padding(.top, plain ? 0 : 8)
-    .background {
-      // Blur what scrolls underneath; inside the composer bar there is already a background.
-      if !plain { Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom) }
-    }
+    .padding(.top, plain ? 0 : 6)
+    .padding(.bottom, plain ? 0 : 2)
   }
 
   private func item(
@@ -643,8 +643,8 @@ struct ShellNav: View {
       action(target)
     } label: {
       Image(systemName: isSelected ? filled : icon)
-        .font(.system(size: 20, weight: .medium))
-        .frame(width: 64, height: 40)
+        .font(.system(size: 19, weight: .medium))
+        .frame(width: 60, height: 44)
         .background {
           if isSelected { Capsule().fill(QMTheme.ink.opacity(0.1)) }
         }
