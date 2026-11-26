@@ -13,6 +13,18 @@ mock.module("../permissions.mjs", {
   },
 });
 
+let recording = false;
+mock.module("../meetings.mjs", {
+  namedExports: {
+    configureMeetings() {},
+    refreshMeetings: async () => {},
+    meetingMenu: () => [],
+
+    isRecording: () => recording,
+    quitRecording: async () => {},
+  },
+});
+
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test(
@@ -259,6 +271,10 @@ test(
       const ready = Promise.withResolvers();
       active.webContents.executeJavaScript = async (source) =>
         source.includes("qm:prepare-update") ? ready.promise : true;
+      recording = true;
+      assert.equal(await prepareUpdate(), false, "a meeting recording defers restart");
+      assert.equal(active.enabled, undefined, "a deferred recording leaves input alone");
+      recording = false;
       const preparing = prepareUpdate();
       assert.equal(active.enabled, false, "input is disabled before asking the renderer for readiness");
       ready.resolve(false);

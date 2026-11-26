@@ -127,6 +127,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["POST /api/dictation", "/v1/web/dictation"],
   ["GET /api/voice", "/v1/web/voice"],
   ["POST /api/voice/sessions", "/v1/web/voice/sessions"],
+  ["GET /api/meetings", "/v1/web/meetings"],
   ["GET /api/ui-canvas/:sessionId", "/v1/ui/canvases/:sessionId"],
   ["GET /api/ui-canvas/:sessionId/script.js", "/v1/ui/canvases/:sessionId/script.js"],
   ["POST /api/ui-canvas/observe/:callId", "/v1/ui/observe/:callId/result"],

@@ -6,6 +6,7 @@ import { callComputer, registerComputerRuntime, stopComputer } from "./runtime.m
 import { registerComputerPermissions, showComputerPermissions, focusComputerPermissions } from "./permissions.mjs";
 import { createLogin, loginCallback } from "./login.mjs";
 import { startUpdates } from "./updates.mjs";
+import { configureMeetings, isRecording, meetingMenu, quitRecording, refreshMeetings } from "./meetings.mjs";
 import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
@@ -149,7 +150,28 @@ async function finishBrowserSignIn(url) {
 
 const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "notifications"]);
 
+function instanceRequest(pathname, method, signal, type, body) {
+  const origin = new URL(target).origin;
+  return instanceSession(target).fetch(new URL(pathname, origin).href, {
+    method,
+    signal,
+    redirect: "error",
+    credentials: "include",
+    headers: { origin, "x-qm-client": "desktop", ...(type ? { "content-type": type } : {}) },
+    body: type === "application/json" ? JSON.stringify(body) : body,
+  });
+}
+
+function openSession(pathname) {
+  const url = new URL(pathname, target);
+  if (url.origin !== new URL(target).origin) return;
+  if (!mainWindow) return void showInstance(url.href);
+  mainWindow.show();
+  if (mainWindow.webContents.getURL() !== url.href) void mainWindow.loadURL(url.href);
+}
+
 async function showInstance(url) {
+  void refreshMeetings();
   pendingLogin?.controller.abort();
   pendingLogin = undefined;
   if (browserLoginUrl(url, new URL(url).origin)) url = loginDestination(url, url);
@@ -333,6 +355,7 @@ async function start() {
   };
   const checkForUpdates = startUpdates(
     async () => {
+      if (isRecording()) return false;
       for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(false);
       for (const page of workspaceWindows) {
         if (page.isDestroyed()) continue;
@@ -461,6 +484,7 @@ async function start() {
               }
             },
           },
+          ...meetingMenu(),
         ],
       },
       { role: "editMenu" },
@@ -497,6 +521,7 @@ async function start() {
       { role: "windowMenu" },
     ]),
   );
+  configureMeetings({ request: instanceRequest, openSession });
   app.on("activate", () => {
     if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
@@ -511,9 +536,12 @@ async function start() {
   else showSetup();
 }
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   quitting = true;
   stopComputer();
+  if (!isRecording()) return;
+  event.preventDefault();
+  void quitRecording().finally(() => app.quit());
 });
 app.on("window-all-closed", () => {
   stopComputer();

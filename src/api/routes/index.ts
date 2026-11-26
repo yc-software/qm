@@ -22,6 +22,7 @@ import { webTurnRoutes } from "./web-turns.ts";
 import { webEventRoutes } from "./web-events.ts";
 import { webMeRoutes } from "./web-me.ts";
 import { voiceRoutes } from "./voice.ts";
+import { meetingRoutes } from "./meetings.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
@@ -133,6 +134,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...webEventRoutes,
   ...webMeRoutes,
   ...voiceRoutes,
+  ...meetingRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
   ...keychainRoutes,

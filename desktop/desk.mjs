@@ -112,6 +112,68 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
   return result;
 }
 
+export function watchMicrophone(onApps, onFailure) {
+  const proc = spawn(binary, ["microphone"], { stdio: ["ignore", "pipe", "pipe"] });
+  let stopped = false;
+  let stderr = "";
+  proc.stderr.on("data", (chunk) => (stderr += chunk));
+  proc.on("error", (error) => onFailure(error.message));
+  proc.on("exit", (code, signal) => {
+    if (!stopped) onFailure(stderr.trim() || `desk microphone exited with ${code ?? signal}`);
+  });
+  createInterface({ input: proc.stdout }).on("line", (line) => {
+    try {
+      onApps(JSON.parse(line).apps);
+    } catch (error) {
+      onFailure(`Unreadable desk microphone line: ${error.message}`);
+    }
+  });
+  return () => {
+    stopped = true;
+    proc.kill("SIGTERM");
+  };
+}
+
+export function startWhisper(models) {
+  const proc = spawn(binary, ["whisper", ...models], { stdio: ["pipe", "pipe", "pipe"] });
+  const waiting = [];
+  let stderr = "";
+  let failure;
+  const end = (problem) => {
+    failure ??= problem;
+    for (const reply of waiting.splice(0)) reply.reject(new Error(failure));
+  };
+  proc.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-2000)));
+  proc.stdin.on("error", (error) => console.error("desk whisper input failed", error));
+  proc.on("error", (error) => end(error.message));
+  proc.on("exit", (code, signal) =>
+    end(`desk whisper exited with ${code ?? signal}${stderr.trim() ? `: ${stderr.trim()}` : ""}`),
+  );
+  createInterface({ input: proc.stdout }).on("line", (line) => {
+    const reply = waiting.shift();
+    try {
+      const { text, error } = JSON.parse(line);
+      if (error) reply?.reject(Object.assign(new Error(error), { segmentOnly: true }));
+      else reply?.resolve(text);
+    } catch (error) {
+      reply?.reject(new Error(`Unreadable desk whisper line: ${error.message}`));
+    }
+  });
+  return {
+    transcribe(pcm, prompt) {
+      if (failure) return Promise.reject(new Error(failure));
+      const reply = Promise.withResolvers();
+      waiting.push(reply);
+      proc.stdin.write(`${JSON.stringify({ pcm: Buffer.from(pcm).toString("base64"), prompt })}\n`);
+      return reply.promise;
+    },
+    stop: () => {
+      failure ??= "Transcription stopped";
+      proc.kill("SIGTERM");
+    },
+  };
+}
+
 export const desk = {
   request: (cmd, owner, deadline) => request(cmd.type === "act" ? { ...cmd, pace: paced } : cmd, owner, deadline),
   stop,

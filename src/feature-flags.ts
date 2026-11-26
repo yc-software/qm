@@ -32,6 +32,11 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Runs the selected people's web DMs the way Slack threads run: the agent speaks only by posting, delegates substantial work to subagents, and edits its latest message when a subagent or another conversation brings news instead of adding a message below it. Edited versions stay in the transcript. Applies from their next turn.",
   },
+  meeting_recorder: {
+    label: "Meeting recorder",
+    personalOnly: true,
+    hint: "Lets the selected people's QM desktop app record their meetings. Their Mac transcribes the microphone and computer audio itself, unless they choose OpenAI transcription in the app, which sends the audio to OpenAI and needs the instance's OpenAI key. When a recording stops, the transcript is saved to their Files and QM summarizes it in a new conversation. The desktop app ignores meetings while this is off.",
+  },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   team_scopes: { label: "Team scopes" },

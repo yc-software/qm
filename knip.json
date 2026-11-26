@@ -46,6 +46,8 @@
         "test/**/*.test.mjs",
         "runtime.js",
         "runtime-preload.cjs",
+        "recorder.js",
+        "recorder-preload.cjs",
         "permissions-preload.cjs",
         "test/**/*.electron.mjs"
       ]
