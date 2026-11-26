@@ -57,6 +57,7 @@ interface SlackApprovalContext {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  grantTool?: string;
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
   slackIdsByPrincipal?: ReadonlyMap<string, string>;
@@ -125,6 +126,7 @@ export function createApprovals(deps: {
         ...(approval.summary ? { summary: approval.summary } : {}),
         ...(approval.kind ? { kind: approval.kind } : {}),
         ...(approval.grantModes ? { grantModes: approval.grantModes } : {}),
+        ...(approval.grantTool ? { grantTool: approval.grantTool } : {}),
       });
     }
   }
@@ -231,6 +233,7 @@ export function createApprovals(deps: {
         turn: rebuilt.turn as SlackApprovalContext["turn"],
         ...(rebuilt.kind ? { kind: rebuilt.kind } : {}),
         ...(rebuilt.grantModes ? { grantModes: rebuilt.grantModes } : {}),
+        ...(rebuilt.grantTool ? { grantTool: rebuilt.grantTool } : {}),
         recovered: true,
       };
     }
@@ -328,6 +331,7 @@ export function createApprovals(deps: {
             ...(ctx.summary ? { summary: ctx.summary } : {}),
             ...(ctx.kind ? { kind: ctx.kind } : {}),
             ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
+            ...(ctx.grantTool ? { grantTool: ctx.grantTool } : {}),
             ...retained,
           },
         ]);
@@ -463,6 +467,7 @@ export function createApprovals(deps: {
           ...(ctx.summary ? { summary: ctx.summary } : {}),
           ...(ctx.kind ? { kind: ctx.kind } : {}),
           ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
+          ...(ctx.grantTool ? { grantTool: ctx.grantTool } : {}),
         },
       ]);
       await updateSlackMessage(

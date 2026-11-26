@@ -21,6 +21,7 @@ export interface PendingApproval {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  grantTool?: string;
   originUrl?: string;
 }
 
@@ -31,12 +32,21 @@ export interface CardButton {
   style?: "primary" | "danger";
 }
 
-export function approvalButtons(p: Pick<PendingApproval, "requestId" | "grantModes">, reviewable = true): CardButton[] {
+export function approvalButtons(
+  p: Pick<PendingApproval, "requestId" | "grantModes" | "grantTool">,
+  reviewable = true,
+): CardButton[] {
   const allow: CardButton[] = [
     { actionId: "hilo_allow_once", value: p.requestId, label: "Allow once", style: "primary" },
     ...(p.grantModes?.session === false
       ? []
-      : [{ actionId: "hilo_allow_session", value: p.requestId, label: "Allow session" }]),
+      : [
+          {
+            actionId: "hilo_allow_session",
+            value: p.requestId,
+            label: p.grantTool ? `Allow ${p.grantTool} for this conversation` : "Allow session",
+          },
+        ]),
     ...(p.grantModes?.always === false
       ? []
       : [{ actionId: "hilo_allow_always", value: p.requestId, label: "Allow always" }]),

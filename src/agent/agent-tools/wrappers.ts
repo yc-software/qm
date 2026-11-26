@@ -1,4 +1,9 @@
-import { approvalCardId, toolCallApprovalKey } from "../../core/approval-id.ts";
+import {
+  approvalCardId,
+  connectorToolGrantKey,
+  connectorToolName,
+  toolCallApprovalKey,
+} from "../../core/approval-id.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -177,7 +182,9 @@ export function withToolApprovalGate(
           true,
         );
       }
-      if (callKey ? !gate?.(approvalIdentity, callKey) : gate && !gate(approvalIdentity)) {
+      const grantTool = connectorToolName(approvalIdentity, params);
+      const grantKey = connectorToolGrantKey(approvalIdentity, grantTool);
+      if (callKey ? !gate?.(approvalIdentity, callKey, grantKey) : gate && !gate(approvalIdentity)) {
         const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
         if (ref.approvalUnavailable) {
           const summary = { tool: tool.name, ...(resourceAction ? { action: resourceAction } : {}), reason };
@@ -192,9 +199,11 @@ export function withToolApprovalGate(
                 kind: "approval",
                 approvalKey: callKey,
                 summary: commandLabel,
-                grantModes: { session: false, always: false },
+                grantModes: { session: isObj(params), always: false },
                 ...(label ? { purpose: label } : {}),
-                ...(isObj(params) ? { call: { tool: tool.name, input: params } } : {}),
+                ...(isObj(params)
+                  ? { call: { tool: tool.name, input: params }, toolGrant: { key: grantKey, tool: grantTool } }
+                  : {}),
               }
             : {
                 command: commandLabel,

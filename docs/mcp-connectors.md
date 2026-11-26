@@ -6,7 +6,8 @@ are refused, so an agent cannot change which tools it may call or which calls ne
 approval. Registration controls the outbound destination and the tools available to agents.
 
 `approval` decides which calls pause for a person's approval, bound to the exact
-arguments and good for one call: `annotations` (the default; tools annotated
+arguments and good for one call unless the person allows that tool for the conversation,
+which covers later calls to it there for 24 hours: `annotations` (the default; tools annotated
 `destructiveHint: true` and not `readOnlyHint: true`), `all`, or `none`. An update
 that omits `approval` keeps the current policy.
 

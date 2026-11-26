@@ -7,6 +7,7 @@ import {
   recoveredApprovalContext,
   createApprovalRegistry,
 } from "../src/slack/lib.ts";
+import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 
 test("approvalMessage builds Block Kit buttons for all approval choices", () => {
   const msg = approvalMessage([{ requestId: "req-1", command: "git push --force origin main", reason: "force push" }]);
@@ -21,6 +22,40 @@ test("approvalMessage builds Block Kit buttons for all approval choices", () => 
       ["Allow always", "hilo_allow_always", "req-1"],
       ["Deny", "hilo_deny", "req-1"],
     ],
+  );
+});
+
+test("a connector call's conversation button names the whole tool", () => {
+  const msg = approvalMessage([
+    {
+      requestId: "r",
+      command: "c",
+      reason: "r",
+      grantTool: "post_message",
+      grantModes: { session: true, always: false },
+    },
+  ]);
+  const actions = msg.blocks.find((b) => b.type === "actions") as any;
+  assert.deepEqual(
+    actions.elements.map((e: any) => e.text.text),
+    ["Allow once", "Allow post_message for this conversation", "Deny"],
+  );
+});
+
+test("a stored connector approval keeps its tool name on the way to the Slack card", async () => {
+  const record = {
+    requestId: "r",
+    command: "c",
+    reason: "r",
+    sessionId: "s",
+    grantModes: { session: true, always: false },
+  };
+  const app = { getApproval: async () => ({ ...record, grantTool: "post_message" }) };
+  const stored = await createSlackCoreClient({ app } as unknown as SlackCoreClientDeps).getApproval("r");
+  const actions = approvalMessage([{ ...stored!, reason: "r" }]).blocks.find((b) => b.type === "actions") as any;
+  assert.deepEqual(
+    actions.elements.map((e: any) => e.text.text),
+    ["Allow once", "Allow post_message for this conversation", "Deny"],
   );
 });
 

@@ -595,8 +595,8 @@ export function createTurnMethods(
         const session = await deps.sessions.get(record.sessionId);
         if (!session || !(await approvalVisibleToViewer(session, viewer, record))) return null;
       }
-      const { call: _call, ...view } = record;
-      return { requestId, ...view, ...executesOnApprove(record) };
+      const { call: _call, toolGrant, ...view } = record;
+      return { requestId, ...view, ...(toolGrant ? { grantTool: toolGrant.tool } : {}), ...executesOnApprove(record) };
     },
 
     async listSessionApprovals(sessionId, viewer) {

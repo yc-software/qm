@@ -476,6 +476,7 @@ export interface PendingApproval {
   kind?: "approval" | "input";
   executesOnApprove?: boolean;
   call?: ApprovedToolCallSpec;
+  grantTool?: string;
 }
 
 export interface ApprovedToolCallSpec {
@@ -502,6 +503,7 @@ export interface PendingApprovalRecord {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
+  toolGrant?: { key: string; tool: string };
   cardTo?: string;
 }
 
@@ -519,6 +521,7 @@ export interface CommandApprovalGrant {
   createdAt: number;
   sessionId?: string;
   approvalKey?: string;
+  expiresAt?: number;
 }
 
 export interface TurnRuntime {

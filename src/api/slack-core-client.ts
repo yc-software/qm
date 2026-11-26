@@ -310,6 +310,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.summary !== undefined ? { summary: record.summary } : {}),
         ...(record.summaryDetail !== undefined ? { summaryDetail: record.summaryDetail } : {}),
         ...(record.grantModes !== undefined ? { grantModes: record.grantModes } : {}),
+        ...(record.grantTool !== undefined ? { grantTool: record.grantTool } : {}),
         ...(record.kind !== undefined ? { kind: record.kind } : {}),
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };

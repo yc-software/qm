@@ -95,6 +95,10 @@ function approvalBody(a: PendingApproval): TemplateResult {
   ${reason ? html`<div class="ac-note">${reason.charAt(0).toUpperCase() + reason.slice(1)}.</div>` : nothing}`;
 }
 
+function sessionLabel(a: PendingApproval): string {
+  return a.grantTool ? `Allow ${a.grantTool} for this conversation` : "Allow for this session";
+}
+
 function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult | typeof nothing {
   const modes = (["session", "always"] as const).filter((m) => a.grantModes?.[m] !== false);
   if (!modes.length) return nothing;
@@ -106,7 +110,7 @@ function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult 
           ?disabled=${o.busy}
           @click=${() => o.decide({ requestId: a.requestId, approved: true, scope })}
         >
-          ${scope === "session" ? "Allow for this session" : "Always allow"}
+          ${scope === "always" ? "Always allow" : sessionLabel(a)}
         </button>`,
     )}
   </div>`;
@@ -268,6 +272,7 @@ export interface ApprovalRecord {
   purpose?: string;
   summary?: string;
   call?: { tool: string; input: Record<string, unknown> };
+  grantTool?: string;
 }
 
 const APPROVED_LABEL: Record<string, string> = {
@@ -288,6 +293,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
+  if (d.approved && d.scope === "session" && d.grantTool) verdict = `Approved ${d.grantTool} for this conversation`;
   const what = call || a.purpose ? approvalHeading(a, call) : d.command;
   let mark = X;
   if (d.approved) mark = Check;
