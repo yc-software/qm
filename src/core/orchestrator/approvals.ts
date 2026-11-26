@@ -51,19 +51,26 @@ export function newApprovalRecord(
 export function approvalView(requestId: string, record: PendingApprovalRecord): PendingApproval {
   return {
     requestId,
-    command: record.command,
+    command: redactedCommand(record.command),
     reason: record.reason ?? "requires approval",
     blocksInput: record.blocksInput !== false,
     ...(record.grantModes ? { grantModes: record.grantModes } : {}),
-    ...(record.matched ? { matched: record.matched } : {}),
+    ...(record.matched ? { matched: redactedCommand(record.matched) } : {}),
     ...(record.purpose ? { purpose: record.purpose } : {}),
-    ...(record.summary ? { summary: record.summary } : {}),
+    ...(record.summary ? { summary: redactedCommand(record.summary) } : {}),
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
     ...executesOnApprove(record),
     ...visibleCall(record),
   };
+}
+
+export function redactedCommand(command: string): string {
+  return redactCommandSecrets(command)
+    .split("\n")
+    .map((line) => line.split(" ").map(redactSecrets).join(" "))
+    .join("\n");
 }
 
 function redactedValue(value: unknown): unknown {
@@ -369,11 +376,11 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         approved: decided.approved,
         author,
         body: {
-          command: record.command,
+          command: redactedCommand(record.command),
           ...(record.purpose ? { purpose: record.purpose } : {}),
           ...(record.summary && record.call ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
-          ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
+          ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : visibleCall(record)),
         },
       }),
     ).catch(async (error: unknown) => {

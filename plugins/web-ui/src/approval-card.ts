@@ -8,6 +8,7 @@ import {
   approvalBatch,
   approvalCall,
   approvalHeading,
+  approvalName,
   argView,
   type ApprovalCall,
   type ArgField,
@@ -115,7 +116,9 @@ function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult 
 function footer(count: number, o: ApprovalCardOptions): TemplateResult | typeof nothing {
   if (o.docked) return nothing;
   return html`<div class="ac-actions">
-    <button type="button" class="ac-link" ?disabled=${o.busy} @click=${o.declineAll}>Decline</button>
+    <button type="button" class="ac-link" ?disabled=${o.busy} @click=${o.declineAll}>
+      ${count > 1 ? "Decline all" : "Decline"}
+    </button>
     <button type="button" class="ac-approve" ?disabled=${o.busy} @click=${o.approveAll}>
       ${count > 1 ? `Approve all ${count}` : "Approve"}
     </button>
@@ -134,9 +137,13 @@ function card(
     <header class="ac-head">
       <span class="ac-eyebrow">${eyebrow}</span>
       ${toolLine(tool)}
-      <button type="button" class="ac-dismiss" ?disabled=${o.busy} @click=${o.declineAll}>
-        ${n > 1 ? "Decline all" : "Decline"}
-      </button>
+      ${
+        o.docked
+          ? html`<button type="button" class="ac-dismiss" ?disabled=${o.busy} @click=${o.declineAll}>
+              ${n > 1 ? "Decline all" : "Decline"}
+            </button>`
+          : nothing
+      }
     </header>
     ${body} ${footer(n, o)}
   </section>`;
@@ -166,6 +173,7 @@ interface Row {
   approval: PendingApproval;
   heading: string;
   preview: string;
+  command: boolean;
   tool?: string;
 }
 
@@ -197,7 +205,7 @@ function rowView(row: Row, i: number, o: ApprovalCardOptions, titled: boolean): 
                 >`
               : nothing
           }
-          <span class="ac-preview" dir="auto">${row.preview}</span>
+          <span class="ac-preview ${row.command ? "ac-preview-command" : ""}" dir="auto">${row.preview}</span>
         </span>
       </summary>
       <div class="ac-item-body">${approvalBody(row.approval)}</div>
@@ -206,8 +214,8 @@ function rowView(row: Row, i: number, o: ApprovalCardOptions, titled: boolean): 
   </li>`;
 }
 
-function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
-  const titled = new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
+function rowsView(rows: Row[], batched: boolean, o: ApprovalCardOptions): TemplateResult {
+  const titled = !batched || new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
   return html`<ol class="ac-items">
     ${repeat(
       rows,
@@ -226,6 +234,7 @@ function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): Templa
       approval: a,
       heading: approvalHeading(a, call),
       preview: own || (call ? previewOf(argView(call.args)) : a.command),
+      command: !own && !call,
       ...(batch || !call ? {} : { tool: call.tool }),
     };
   });
@@ -236,7 +245,7 @@ function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): Templa
     "ac-batch",
     `${approvals.length} calls need your approval`,
     batch?.call ?? null,
-    html`${common ? html`<h3 class="ac-title" dir="auto">${common}</h3>` : nothing}${rowsView(rows, o)}`,
+    html`${common ? html`<h3 class="ac-title" dir="auto">${common}</h3>` : nothing}${rowsView(rows, !!batch, o)}`,
     approvals.length,
   );
 }
@@ -288,7 +297,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  const what = call || a.purpose ? approvalHeading(a, call) : d.command;
+  const what = approvalName(call);
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;

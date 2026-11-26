@@ -125,6 +125,10 @@ function toolWords(call: ApprovalCall): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+export function approvalName(call: ApprovalCall | null): string {
+  return call ? toolWords(call) : "a command";
+}
+
 export function approvalHeading(a: PendingApproval, call: ApprovalCall | null): string {
   const summary = a.summary?.trim();
   if (a.purpose?.trim()) return a.purpose.trim();

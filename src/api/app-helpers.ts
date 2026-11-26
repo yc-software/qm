@@ -2,7 +2,7 @@ import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
-import { executesOnApprove, visibleCall } from "../core/orchestrator/approvals.ts";
+import { approvalView } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -170,20 +170,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       if (await approvalRecordIsCurrent(record, session)) candidates.push({ key, record });
     }
     const visible = opts.viewer ? await approvalsVisibleToViewer(session, opts.viewer, candidates) : candidates;
-    return visible.map(({ key, record: r }) => ({
-      requestId: key,
-      command: r.command,
-      reason: r.reason ?? "requires approval",
-      ...(r.matched ? { matched: r.matched } : {}),
-      ...(r.purpose ? { purpose: r.purpose } : {}),
-      ...(r.summary ? { summary: r.summary } : {}),
-      ...(r.summaryDetail ? { summaryDetail: r.summaryDetail } : {}),
-      ...(r.grantModes ? { grantModes: r.grantModes } : {}),
-      blocksInput: r.blocksInput !== false,
-      ...(r.kind === "approval" ? { kind: r.kind } : {}),
-      ...executesOnApprove(r),
-      ...visibleCall(r),
-    }));
+    return visible.map(({ key, record }) => approvalView(key, record));
   }
 
   async function pendingApprovalResultForThread(

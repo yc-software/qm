@@ -14462,6 +14462,30 @@ button:disabled .qm-switch {
   overflow-y: auto;
   scrollbar-width: thin;
 }
+.composer-approval-panel:not(.docked, .composer-wrap > *) {
+  box-sizing: border-box;
+  width: min(var(--content-w), calc(100% - 32px));
+  margin: 0 auto 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background);
+  box-shadow:
+    0 2px 5px rgb(0 0 0 / 0.05),
+    0 8px 24px rgb(0 0 0 / 0.06);
+  scrollbar-width: thin;
+}
+.subagent-row > .composer-approval-panel {
+  flex-basis: 100%;
+  width: auto;
+  margin: 2px 0 8px;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+.custom-chat-shell:has(> .readonly-top) {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
 .composer-wrap.has-approval {
   box-shadow:
     0 2px 6px rgb(0 0 0 / 0.05),
@@ -14498,13 +14522,15 @@ button:disabled .qm-switch {
 }
 .ac-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 2px 10px;
   min-width: 0;
   min-height: 26px;
 }
 .ac-eyebrow {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 0.93em;
   font-weight: 500;
   color: var(--muted-foreground);
@@ -14777,6 +14803,10 @@ button:disabled .qm-switch {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--muted-foreground);
+}
+.ac-preview-command {
+  font-family: var(--font-mono);
+  font-size: 0.87em;
 }
 .ac-item summary > svg {
   flex: none;

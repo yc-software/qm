@@ -1766,15 +1766,16 @@ export function createChatSurface(
       content = html`
         <div class="custom-chat-shell">
           ${header}
-          ${
-            slackReply
-              ? nothing
-              : html`<div class="readonly-banner">
-                  This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
-                </div>`
-          }
-          ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
-          ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
+          <div class="readonly-top">
+            ${
+              slackReply
+                ? nothing
+                : html`<div class="readonly-banner">
+                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                  </div>`
+            }
+            ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
+          </div>
           <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
             <div class="message-stack">
@@ -1789,7 +1790,9 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent, { readOnly: true })} ${slackReply ?? nothing} ${scrollBottomButton()}
+            ${goalStrip(agent, { readOnly: true })}
+            ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing} ${slackReply ?? nothing}
+            ${scrollBottomButton()}
           </div>
         </div>
       `;
