@@ -165,7 +165,8 @@ struct ChatView: View {
     .toolbarBackground(QMTheme.paper, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
-    .navigationTitle(model.conversation.label)
+    // A blank chat has no title; the greeting says enough.
+    .navigationTitle(model.conversation.localOnly == true ? "" : model.conversation.label)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar { conversationToolbar }
     .navigationDestination(item: $openedConversation) { conversation in
