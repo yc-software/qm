@@ -26,7 +26,6 @@ import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-r
 import { cronIdOf, sessionOrigin } from "./session-store.ts";
 import { authoredUserTurn, TENANT } from "./items.ts";
 import {
-  GENERIC_CHAT_TENANT,
   SERVING_SLACK_TENANTS,
   SLACK_TENANTS,
   SLACK_BRIDGE_TENANT,
@@ -71,7 +70,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     TENANT_LOOKUPS,
     SLACK_TENANTS,
     SLACK_BRIDGE_TENANT,
-    GENERIC_CHAT_TENANT,
     SERVING_SLACK_TENANTS,
   ]);
   const { pool, q } = db;

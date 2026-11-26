@@ -9,8 +9,7 @@ import { errMessage } from "../util/errors.ts";
 type Db = Pick<PgPool, "q">;
 
 const TENANT_USAGE = `usage:
-  qm tenant create [--brand-name <name>] [--partner-chat-account <account>]
-                                                  create a tenant; reuse a bound account without changing settings
+  qm tenant create [--brand-name <name>]          create a tenant
   qm tenant list                                  list tenants
   qm tenant settings set <tenant> <key> <json>    set one setting (null removes it); keys: ${TENANT_SETTING_KEYS.join(", ")}
   qm tenant members add <tenant> <email> [--admin]
@@ -22,12 +21,9 @@ async function createTenant(db: Db, settings: TenantSettings = {}): Promise<stri
   const parsed = tenantSettingsSchema.safeParse(settings);
   if (!parsed.success)
     throw new TenantCommandError(`invalid settings: ${parsed.error.issues[0]?.message ?? "rejected"}`);
-  const rows = await db.q(
-    `INSERT INTO tenants (settings) VALUES ($1::jsonb)
-     ON CONFLICT ((settings->>'partnerChatAccount')) DO UPDATE SET settings = tenants.settings
-     RETURNING id::text AS id`,
-    [JSON.stringify(parsed.data)],
-  );
+  const rows = await db.q("INSERT INTO tenants (settings) VALUES ($1::jsonb) RETURNING id::text AS id", [
+    JSON.stringify(parsed.data),
+  ]);
   return rows[0]!.id as string;
 }
 
@@ -105,7 +101,6 @@ function parsedArgs(args: string[]) {
       allowPositionals: true,
       options: {
         "brand-name": { type: "string" },
-        "partner-chat-account": { type: "string" },
         admin: { type: "boolean" },
       },
     });
@@ -119,13 +114,7 @@ export async function runTenantCommand(db: Db, args: string[], print: (line: str
   const [command, sub, ...rest] = positionals;
   if (command === "create" && sub === undefined) {
     const brandName = values["brand-name"];
-    const partnerChatAccount = values["partner-chat-account"];
-    return print(
-      await createTenant(db, {
-        ...(brandName === undefined ? {} : { brandName }),
-        ...(partnerChatAccount === undefined ? {} : { partnerChatAccount }),
-      }),
-    );
+    return print(await createTenant(db, brandName === undefined ? {} : { brandName }));
   }
   if (command === "list" && sub === undefined) {
     for (const t of await listTenants(db)) print([t.id, t.createdAt, t.brandName ?? ""].join("\t"));

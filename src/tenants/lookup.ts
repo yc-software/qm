@@ -181,19 +181,6 @@ export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   ],
 };
 
-export const GENERIC_CHAT_TENANT: PgMigrationDefinition = {
-  id: "tenancy/lookups/0007-partner-chat",
-  statements: [
-    `SET LOCAL check_function_bodies = off`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS tenants_partner_chat_account ON tenants ((settings->>'partnerChatAccount'))`,
-    definer(
-      "qm_tenant_for_partner_chat",
-      "uuid",
-      `SELECT id FROM tenants WHERE settings->>'partnerChatAccount' = $1${servingTenant("id")}`,
-    ),
-  ],
-};
-
 export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
   externalOrgTenant(issuer: string, org: string): Promise<string | undefined>;

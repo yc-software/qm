@@ -293,16 +293,6 @@ test("a deployment's provisioner sets up each new workspace before anyone can us
   await signIn("g3");
   assert.equal(provision.state.calls.length, calls, "a provisioned workspace is not provisioned again");
   for (const subject of ["g1", "g2", "g3"]) assert.equal(await isAdmin(tenant, subject), true, subject);
-  await assert.rejects(
-    db.owner.q(`UPDATE tenants SET settings = settings || '{"partnerChatAccount":"5"}' WHERE id = $1`, [tenant]),
-    /differs from its external organization id/,
-  );
-  await db.owner.q(`UPDATE tenants SET settings = settings || '{"partnerChatAccount":"55"}' WHERE id = $1`, [tenant]);
-  await assert.rejects(
-    db.owner.q("UPDATE tenant_external_orgs SET org_id = '56' WHERE tenant = $1", [tenant]),
-    /differs from its external organization id/,
-  );
-  await db.owner.q(`UPDATE tenants SET settings = settings - 'partnerChatAccount' WHERE id = $1`, [tenant]);
   await db.owner.q(`UPDATE tenants SET settings = settings || '{"serving":false}' WHERE id = $1`, [tenant]);
   await assert.rejects(signIn("g4"), /HTTP 503/);
   assert.equal(provision.state.calls.length, calls, "a workspace an operator switched off is not switched back on");
