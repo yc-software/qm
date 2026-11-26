@@ -77,8 +77,6 @@ interface DockerCtx {
   signingSecret?: string;
   envFile?: string;
   sandboxEnv: Record<string, string>;
-  sandboxSecretKeys: Set<string>;
-  missingSandboxSecrets: string[];
   buildFrom: boolean;
   repoRoot?: string;
 }
@@ -362,9 +360,7 @@ function secretValues(ctx: DockerCtx, service: string): Record<string, string> {
     const fileValue = readEnvValue(ctx.envFile, secret.name);
     const value = deploymentSecretValue(secret.name, fileValue);
     if (value === undefined) continue;
-    for (const name of runtimeSecretNames(service, secret)) {
-      if (name !== `FLY_RESIDENT_ENV_${secret.name}`) out[name] = value;
-    }
+    for (const name of runtimeSecretNames(service, secret)) out[name] = value;
   }
   return out;
 }
@@ -417,14 +413,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     ...secretValues(ctx, service),
   };
   if (ctx.signingSecret) env.CORE_SIGNING_SECRET = ctx.signingSecret;
-  if (service === "core") {
-    env.DATABASE_URL = ctx.databaseUrl;
-    for (const key of ctx.sandboxSecretKeys) {
-      const value = out[key];
-      if (value !== undefined) env[key] = value;
-      else delete env[key];
-    }
-  }
+  if (service === "core") env.DATABASE_URL = ctx.databaseUrl;
   return env;
 }
 
@@ -432,10 +421,7 @@ function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
   const keys = new Set(Object.keys(secretValues(ctx, service)));
   const plugin = ctx.config.plugins.find((entry) => entry.name === service);
   if (ctx.signingSecret && plugin?.coreAccess !== false) keys.add("CORE_SIGNING_SECRET");
-  if (service === "core") {
-    keys.add("DATABASE_URL");
-    for (const key of ctx.sandboxSecretKeys) keys.add(key);
-  }
+  if (service === "core") keys.add("DATABASE_URL");
   return keys;
 }
 
@@ -597,20 +583,15 @@ function buildCtx(
     prefix,
     databaseUrl: "",
     sandboxEnv: {},
-    sandboxSecretKeys: new Set((config.sandbox?.secretEnv ?? []).map((name) => `FLY_RESIDENT_ENV_${name}`)),
-    missingSandboxSecrets: [],
     buildFrom: opts.buildFrom,
   };
   if (existsSync(envFile)) ctx.envFile = envFile;
   const signingSecret = deploymentSecretValue("CORE_SIGNING_SECRET", readEnvValue(ctx.envFile, "CORE_SIGNING_SECRET"));
   if (signingSecret) ctx.signingSecret = signingSecret;
-  const lookup = (name: string): string | undefined => deploymentSecretValue(name, readEnvValue(ctx.envFile, name));
-  const sb = sandboxCoreEnv(config, lookup);
   ctx.sandboxEnv = {
-    ...sb.env,
+    ...sandboxCoreEnv(config).env,
     ...(opts.localSandboxImage ? { LOCAL_SANDBOX_IMAGE: opts.localSandboxImage } : {}),
   };
-  ctx.missingSandboxSecrets = sb.missingSecrets;
   if (opts.buildFrom) ctx.repoRoot = resolveBuildRepoRoot(opts.buildFromPath, runnableServices(config.services));
   return ctx;
 }
@@ -664,9 +645,6 @@ export async function dockerUp(
   header(`qm up — ${config.orgId} (target: docker${opts.buildFrom ? ", build-from-source" : ""})`);
   if (opts.dryRun) note(bold("DRY RUN — no containers will be started.\n"));
   warnUnforwardedEnvKeys(ctx);
-  for (const name of ctx.missingSandboxSecrets) {
-    warn(`sandbox.secretEnv "${name}" has no value in .env or the environment — it won't be set in the sandbox.`);
-  }
   const missingRequired = missingRequiredOperatorSecrets(
     ctx.config,
     ctx.envFile ? readEnvFile(ctx.envFile) : new Map(),
