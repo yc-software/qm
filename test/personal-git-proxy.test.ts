@@ -6,6 +6,8 @@ import { finished } from "node:stream/promises";
 import { buildApp, signedConfig } from "./support/orchestrator-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
+import { testCore } from "./support/build-app.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { brokerGitHttp } from "../src/api/git-http-broker.ts";
@@ -57,6 +59,7 @@ async function call(path: string, claims: CapabilityClaims, deps: ServerDeps) {
     req,
     res,
     deps,
+    tenant: testTenant,
     url,
     pathname: url.pathname,
     method: "GET",
@@ -75,6 +78,7 @@ test("a personal GitHub handle reaches github.com through the git proxy for its 
   assert.deepEqual(claims.credentials, [github]);
   const fetched: Array<{ url: string; headers: Record<string, string> }> = [];
   const deps = {
+    ...testCore(),
     keychain: built.keychain,
     gitHttpFetch: async (url: string, init: { headers: Record<string, string> }) => {
       fetched.push({ url, headers: init.headers });
