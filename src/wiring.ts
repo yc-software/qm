@@ -552,6 +552,7 @@ function coreSettings(config: Config, sandbox: Sandbox, drain: DrainController) 
     capabilitySecret: config.capabilitySecret,
     capabilityTokenCompression: config.capabilityTokenCompression,
     portalIdentitySecret: config.portalIdentitySecret,
+    trustedOidcIssuer: config.trustedOidcAdminIssuer,
     requireSignedPortalIdentity: config.requireSignedPortalIdentity,
     brandingDefault: config.brandingDefault,
     companySubscriptionAuth: companySubscriptionAuth(config),
