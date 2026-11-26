@@ -5,6 +5,8 @@ struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
   var onShowConversations: (() -> Void)?
+  /// Drawn under the composer, e.g. the app's bottom nav; hidden while typing.
+  var accessory: AnyView?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
   @State private var dictation: NativeDictationModel
@@ -41,9 +43,11 @@ struct ChatView: View {
   @State private var composerFocused = false
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil,
+    accessory: AnyView? = nil
   ) {
     self.onShowConversations = onShowConversations
+    self.accessory = accessory
     _model = State(initialValue: model)
     _dictation = State(
       initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
@@ -260,7 +264,7 @@ struct ChatView: View {
     if let onShowConversations {
       ToolbarItem(placement: .topBarLeading) {
         Button(action: onShowConversations) {
-          Image(systemName: "line.2.horizontal")
+          Image(systemName: "line.3.horizontal")
         }
         .accessibilityLabel("Conversations")
       }
@@ -663,6 +667,9 @@ struct ChatView: View {
         .disabled(dictation.busy)
       }
       bottomControls(proxy)
+      if let accessory, !composerFocused, !dictation.busy {
+        accessory.padding(.top, 10)
+      }
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
     .frame(maxWidth: QMTheme.conversationWidth)

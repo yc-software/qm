@@ -312,7 +312,8 @@ struct RootView: View {
                 model: ChatModel(
                   conversation: conversation, client: client, user: identity.user,
                   knownSession: conversation.localOnly != true),
-                onShowConversations: { showingConversations = true })
+                onShowConversations: { showingConversations = true },
+                accessory: AnyView(ShellNav(section: $section, waiting: waitingCount, plain: true)))
             }
             .id(conversation.id)
             .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
@@ -322,14 +323,18 @@ struct RootView: View {
           }
         case .waiting:
           NavigationStack { waitingConversations.toolbar { menuToolbar } }
+            .safeAreaInset(edge: .bottom, spacing: 0) { shellNav }
         case .more:
           NavigationStack { MoreGrid(identity: identity, client: client).toolbar { menuToolbar } }
+            .safeAreaInset(edge: .bottom, spacing: 0) { shellNav }
         }
       }
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        if !keyboardUp { ShellNav(section: $section, waiting: waitingCount) }
-      }
     }
+  }
+
+  @ViewBuilder
+  private var shellNav: some View {
+    if !keyboardUp { ShellNav(section: $section, waiting: waitingCount) }
   }
 
   @ToolbarContentBuilder
@@ -338,7 +343,7 @@ struct RootView: View {
       Button {
         showingConversations = true
       } label: {
-        Image(systemName: "line.2.horizontal")
+        Image(systemName: "line.3.horizontal")
       }
       .accessibilityLabel("Conversations")
     }
@@ -626,6 +631,8 @@ enum ShellSection: Hashable {
 struct ShellNav: View {
   @Binding var section: ShellSection
   let waiting: Int
+  /// Inside the conversation's own bottom bar, which already has a background.
+  var plain = false
 
   var body: some View {
     HStack(spacing: 24) {
@@ -634,8 +641,8 @@ struct ShellNav: View {
       item(.more, icon: "square.grid.2x2", label: "More")
     }
     .frame(maxWidth: .infinity)
-    .padding(.top, 6)
-    .background(QMTheme.paper.ignoresSafeArea(edges: .bottom))
+    .padding(.top, plain ? 0 : 6)
+    .background(plain ? Color.clear : QMTheme.paper)
   }
 
   private func item(_ target: ShellSection, icon: String, label: String) -> some View {
