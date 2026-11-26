@@ -22,6 +22,7 @@ import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testSurfaces } from "./support/single-process.ts";
+import { toolCallApprovalKey } from "../src/core/approval-id.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -4839,7 +4840,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
-      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-message",
+      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool !== "find",
       callMcpTool: async (_name, args, approval) => {
         calls.push([args, approval]);
         return "ok";
@@ -4847,7 +4848,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
     },
     pendingApprovals: [],
     scopeLabel: personalScope("U1"),
-    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+    toolApprovalGate: (_tool, callKey, grantKey) => !callKey || approved.has(callKey) || approved.has(grantKey!),
   };
   const catalog = catalogTools(ref).find((t) => t.name === "records");
   const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
@@ -4865,6 +4866,13 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   await call(catalog, send);
   assert.equal(calls.length, 2, "the next identical call needs its own approval");
   assert.equal(ref.pendingApprovals!.length, 2);
+  assert.deepEqual(card.grantModes, { session: true, always: false });
+  approved.add(card.toolGrantKey!);
+  const other = { ...send, arguments: { to: "y" } };
+  await call(catalog, other);
+  assert.deepEqual(calls.at(-1), [other, toolCallApprovalKey("records", other)], "the tool grant covers new arguments");
+  await call(catalog, { ...send, tool: "delete-message" });
+  assert.equal(calls.length, 3, "but not another tool on the connector");
 });
 
 test("a failing approval check returns its error to the model and offers no card", async () => {

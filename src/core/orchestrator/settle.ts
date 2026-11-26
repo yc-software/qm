@@ -197,6 +197,7 @@ export async function selectTurnResult(turn: {
           approvalKey: pa.approvalKey,
           kind: pa.kind,
           call: pa.call,
+          toolGrantKey: pa.toolGrantKey,
         },
       ]);
     }

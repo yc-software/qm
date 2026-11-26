@@ -2541,8 +2541,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               : {}),
             ...(botRequester ? { approvalUnavailable: BOT_REQUESTER_APPROVAL_NOTE } : {}),
-            toolApprovalGate: (tool: string, callKey?: string) => {
-              if (callKey) return consumeApproval(callKey);
+            toolApprovalGate: (tool: string, callKey?: string, grantKey?: string) => {
+              if (callKey) return consumeApproval(callKey) || (grantKey !== undefined && consumeApproval(grantKey));
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
             },
             systemPrompt: `${promptSnapshot.frame}\n\n${promptSnapshot.body}`,

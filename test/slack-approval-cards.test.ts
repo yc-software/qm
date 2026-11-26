@@ -24,6 +24,24 @@ test("approvalMessage builds Block Kit buttons for all approval choices", () => 
   );
 });
 
+test("a connector call's conversation button names the whole tool", () => {
+  const params = { operation: "invoke", tool: "slack_api_write_as_user", arguments: {} };
+  const msg = approvalMessage([
+    {
+      requestId: "r",
+      command: `ycli ${JSON.stringify(params)}`,
+      summary: "ycli",
+      reason: "r",
+      grantModes: { session: true, always: false },
+    },
+  ]);
+  const actions = msg.blocks.find((b) => b.type === "actions") as any;
+  assert.deepEqual(
+    actions.elements.map((e: any) => e.text.text),
+    ["Allow once", "Allow slack_api_write_as_user for this conversation", "Deny"],
+  );
+});
+
 test("approvalMessage hides standing-grant buttons an admin has removed", () => {
   const msg = approvalMessage([
     { requestId: "req-1", command: "rm -rf build", reason: "cleanup", grantModes: { session: true, always: false } },

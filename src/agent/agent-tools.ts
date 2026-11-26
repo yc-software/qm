@@ -43,6 +43,7 @@ export interface ToolContextRef {
     summary?: string;
     grantModes?: { session: boolean; always: boolean };
     call?: ApprovedToolCallSpec;
+    toolGrantKey?: string;
   }>;
   pausedOnApproval?: boolean;
   approvalUnavailable?: string;
@@ -78,7 +79,7 @@ export interface ToolContextRef {
   governGoal?: GoalGovernor;
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
-  toolApprovalGate?: (tool: string, callKey?: string) => boolean;
+  toolApprovalGate?: (tool: string, callKey?: string, grantKey?: string) => boolean;
   approvedToolCalls?: Map<string, string>;
   stoppedCalls?: Set<string>;
 }

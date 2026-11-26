@@ -19,7 +19,7 @@ import { errMessage, reportFailure } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
-import { approvalCardId, approvedCallId } from "../approval-id.ts";
+import { approvalCardId, approvedCallId, connectorToolGrantLapsed, connectorToolName } from "../approval-id.ts";
 import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
 import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 
@@ -289,8 +289,10 @@ export async function createApprovalLedger(turn: {
   const { approvalGrantsFor, actor, session, resolution } = turn;
   const approvedCalls: ApprovedToolCall[] = [];
   const commandUses = new Map<string, number>();
+  const now = Date.now();
   for (const grant of await approvalGrantsFor(actor.id)) {
     if (grant.scope === "session" && grant.sessionId !== session.id) continue;
+    if (connectorToolGrantLapsed(grant, now)) continue;
     if (!resolution.approvalGrantModes[grant.scope]) continue;
     commandUses.set(grant.approvalKey ?? grant.command, Infinity);
   }
@@ -609,6 +611,7 @@ async function approveDecision(
   if (!(await recordApprovalDecision(approval.requestId, p, { approved: true, scope }, actor.id, call)))
     return alreadyDecided(approval.requestId);
   const useKey = p.approvalKey ?? p.command;
+  const toolGrantKey = scope === "session" && call ? p.toolGrantKey : undefined;
   if (p.screenedOutput && quarantineRelease) {
     setReleasedToolOutput(p.screenedOutput);
     audit({
@@ -622,15 +625,17 @@ async function approveDecision(
       }),
     });
   } else {
-    commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" ? 1 : Infinity));
+    commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" || toolGrantKey ? 1 : Infinity));
+    if (toolGrantKey) commandUses.set(toolGrantKey, Infinity);
   }
   if (scope === "session" || scope === "always") {
+    const approvalKey = toolGrantKey ?? p.approvalKey;
     const grant: CommandApprovalGrant = {
       actorId: actor.id,
-      command: p.command,
+      command: toolGrantKey ? connectorToolName(call!.tool, call!.input) : p.command,
       scope,
       createdAt: Date.now(),
-      ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
+      ...(approvalKey ? { approvalKey } : {}),
       ...(scope === "session" ? { sessionId: session.id } : {}),
     };
     await approvalGrants.put(approvalGrantId(grant), grant);

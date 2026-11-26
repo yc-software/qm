@@ -120,7 +120,7 @@ export interface AgentTurnInput {
   goalInbox?: import("./goal.ts").GoalInbox;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
-  toolApprovalGate?(tool: string, callKey?: string): boolean;
+  toolApprovalGate?(tool: string, callKey?: string, grantKey?: string): boolean;
   approvalUnavailable?: string;
   emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
@@ -178,6 +178,7 @@ export interface AgentTurnResult {
     approvalKey?: string;
     grantModes?: { session: boolean; always: boolean };
     call?: ApprovedToolCallSpec;
+    toolGrantKey?: string;
   }>;
   pausedOnApproval?: boolean;
   modelCalls?: number;

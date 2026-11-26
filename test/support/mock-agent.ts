@@ -8,7 +8,7 @@ import {
 } from "../../src/agent/agent.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
-import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
+import { connectorToolGrantKey, toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/agent/turn-support.ts";
@@ -182,6 +182,7 @@ export function createMockAgent(): Agent {
         grantModes?: { session: boolean; always: boolean };
         summary?: string;
         call?: { tool: string; input: Record<string, unknown> };
+        toolGrantKey?: string;
       }> = [];
       let pausedOnApproval = false;
       const gateTool = (tool: string): boolean => {
@@ -199,7 +200,8 @@ export function createMockAgent(): Agent {
       if (turn.approvedToolCalls?.length) {
         reply = "";
         for (const approved of turn.approvedToolCalls) {
-          const allowed = turn.toolApprovalGate?.(approved.tool, toolCallApprovalKey(approved.tool, approved.input));
+          const keys = [toolCallApprovalKey, connectorToolGrantKey].map((key) => key(approved.tool, approved.input));
+          const allowed = turn.toolApprovalGate?.(approved.tool, ...keys);
           await turn.emit({
             kind: "ToolCall",
             tool: approved.tool,
@@ -519,8 +521,9 @@ export function createMockAgent(): Agent {
         const noted = command0.startsWith("!declared-noted ");
         const args = JSON.parse(command0.slice(command0.indexOf(" ") + 1)) as Record<string, unknown>;
         const callKey = toolCallApprovalKey("example_send", args);
+        const toolGrantKey = connectorToolGrantKey("example_send", args);
         usedTool = true;
-        if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
+        if (turn.toolApprovalGate?.("example_send", callKey, toolGrantKey)) reply = `sent ${JSON.stringify(args)}`;
         else {
           collected.push({
             command: `example_send ${JSON.stringify(args)}`,
@@ -528,8 +531,9 @@ export function createMockAgent(): Agent {
             kind: "approval",
             approvalKey: callKey,
             summary: "example_send",
-            grantModes: { session: false, always: false },
+            grantModes: { session: true, always: false },
             call: { tool: "example_send", input: args },
+            toolGrantKey,
           });
           pausedOnApproval = !noted;
           reply = noted ? "waiting on the approval card" : "";

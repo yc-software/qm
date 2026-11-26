@@ -188,6 +188,10 @@ the tokens, core simply runs without Slack.
   approval (`pending_approval`) or _finished with a reply but skipped_ the gated command
   (collect-mode `ok` + `pendingApprovals`, what the real agent does) — in the latter case
   the buttons are posted alongside the reply. Clicking re-runs the turn with the command approved.
+- **Connector tools that ask per call offer a conversation grant.** Their card shows **Allow once**,
+  **Allow <tool> for this conversation**, and **Deny**. The conversation grant runs the held call and
+  lets later calls to that same connector tool (any arguments) skip the card in this conversation
+  for 24 hours; other tools and other conversations still ask.
 - **Hand-offs are plain DMs.** When channel work needs another member's own logins, files or
   memory, the agent follows the `hand-off` skill: in Open conversations it uses the requester's own
   access; otherwise it sends that person a DM through `POST /v1/reach` with the full request, and

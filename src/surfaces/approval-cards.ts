@@ -31,12 +31,29 @@ export interface CardButton {
   style?: "primary" | "danger";
 }
 
-export function approvalButtons(p: Pick<PendingApproval, "requestId" | "grantModes">, reviewable = true): CardButton[] {
+const BUTTON_TOOL_MAX = 44;
+
+function toolSessionLabel(tool: string): string {
+  const name = tool.length > BUTTON_TOOL_MAX ? `${tool.slice(0, BUTTON_TOOL_MAX - 1)}…` : tool;
+  return `Allow ${name} for this conversation`;
+}
+
+export function approvalButtons(
+  p: Pick<PendingApproval, "requestId" | "grantModes" | "command" | "summary" | "kind">,
+  reviewable = true,
+): CardButton[] {
+  const view = toolCallView(p);
   const allow: CardButton[] = [
     { actionId: "hilo_allow_once", value: p.requestId, label: "Allow once", style: "primary" },
     ...(p.grantModes?.session === false
       ? []
-      : [{ actionId: "hilo_allow_session", value: p.requestId, label: "Allow session" }]),
+      : [
+          {
+            actionId: "hilo_allow_session",
+            value: p.requestId,
+            label: view ? toolSessionLabel(view.tool ?? view.label) : "Allow session",
+          },
+        ]),
     ...(p.grantModes?.always === false
       ? []
       : [{ actionId: "hilo_allow_always", value: p.requestId, label: "Allow always" }]),

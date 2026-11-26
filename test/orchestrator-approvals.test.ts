@@ -9,7 +9,7 @@ import {
   BOT_REQUESTER_REFUSAL,
   undeliverableApprovalNote,
 } from "../src/core/approval-requester.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { withCommandRules } from "./support/command-rules.ts";
 import { isHidden, isUserItem } from "../src/sessions/items.ts";
 import { principalDestination } from "../src/reach/reach.ts";
@@ -568,6 +568,24 @@ test("a tool that declares approval runs once for the exact approved arguments",
   assert.ok(
     notes.some((item) => /declined this pending operation, so it did not run: example_send/.test(item.text ?? "")),
   );
+});
+
+test("a conversation grant on a connector call covers that tool, only here, for 24 hours", async (t) => {
+  const { app } = freshApp();
+  const send = (tool: string, to: string, extra: Partial<TurnRequest> = {}) =>
+    app.turn(dm(`!declared ${JSON.stringify({ operation: "invoke", tool, arguments: { to } })}`, extra));
+  const first = (await send("write", "a")).pendingApprovals![0]!;
+  assert.deepEqual(first.grantModes, { session: true, always: false });
+  const approval = { requestId: first.requestId, approved: true, scope: "session" as const };
+  assert.match((await send("write", "a", { approval })).reply ?? "", /"to":"a"/, "the held call runs");
+  assert.match((await send("write", "b")).reply ?? "", /"to":"b"/, "new arguments to that tool skip the card");
+  assert.equal((await send("read", "b")).status, "pending_approval", "another tool still asks");
+  const elsewhere = { conversation: { kind: "dm" as const, threadRef: "dm:U1:t2" } };
+  assert.equal((await send("write", "c", elsewhere)).status, "pending_approval", "another conversation still asks");
+  const realNow = Date.now;
+  t.after(() => (Date.now = realNow));
+  Date.now = () => realNow() + 24 * 60 * 60 * 1000;
+  assert.equal((await send("write", "d")).status, "pending_approval", "the grant lapses after 24 hours");
 });
 
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {

@@ -44,6 +44,20 @@ test("a chat draws its transcript before its approvals arrive, then shows the ca
   }
 });
 
+test("a connector call's card offers that whole tool for this conversation", async () => {
+  const call = { tool: "ycli", input: { operation: "invoke", tool: "slack_api_write_as_user", arguments: {} } };
+  const connector = { ...approval, call, grantModes: { session: true, always: false } };
+  const h = await harness({ path: "/s/sess-deep", items, approvals: () => [connector] });
+  try {
+    await h.boot();
+    await until(() => cards() > 0);
+    const scopes = document.querySelector(".ac-scopes")?.textContent?.trim();
+    assert.equal(scopes, "Allow slack_api_write_as_user for this conversation");
+  } finally {
+    await h.close();
+  }
+});
+
 test("a transcript refresh that fails while approvals load doesn't lose the card", async () => {
   const h = await harness({ path: "/s/sess-deep", holdApprovals: true, approvals: () => [approval] });
   try {
