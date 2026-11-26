@@ -1759,18 +1759,19 @@ export function createChatSurface(
       const approvals = readOnly.approvals();
       const chatSurface = chatSurfaceOf(roSession);
       const slackReply = readOnly.slackReply();
+      const slackUrl = sessionSlackUrl(roSession);
       let header: TemplateResult | typeof nothing = nothing;
       if (roSession.surface !== "slack")
         header = chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
           shown: 5,
           named: false,
         });
-      else if (ctx.pane) {
+      else if (ctx.pane && slackUrl) {
         const people = conversationParticipants(messages);
         setPaneHeaderExtra(
           roSession.id,
           people.map((person) => `${person.key}:${person.avatarUrl ?? ""}`).join(","),
-          html`${namedParticipants(people, 3)}${openInSurface(sessionSlackUrl(roSession), chatSurface?.label)}`,
+          html`${namedParticipants(people, 3)}${openInSurface(slackUrl, chatSurface?.label)}`,
         );
       } else
         header = chatHeader(
@@ -1780,7 +1781,7 @@ export function createChatSurface(
           null,
           messages,
           { shown: 3, named: true },
-          openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
+          openInSurface(slackUrl, chatSurface?.label),
         );
       content = html`
         <div class="custom-chat-shell">
