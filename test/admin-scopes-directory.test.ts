@@ -8,19 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { personalScope } from "../src/types.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-scopes-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    sessions: built.sessions,
-    config: built.config,
-    environments: built.environments,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

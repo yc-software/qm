@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { twoTenants } from "./support/two-tenants.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -40,17 +40,12 @@ function start(databaseUrl: string, extra: Parameters<typeof testConfig>[0] = {}
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),
     ...(enabled ? { portalIdentitySecret: identitySecret, requireSignedPortalIdentity: true } : {}),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
     ...(built.selfServe ? { selfServe: built.selfServe } : {}),
-    identity: built.identity,
-    auditLog: built.auditLog,
-    directory: built.directory,
-    runs: built.runs,
-    signals: built.signals,
     trustedOidcIssuer: issuer,
   });
   server.listen(0);

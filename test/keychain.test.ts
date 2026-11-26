@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
@@ -1086,16 +1086,10 @@ describe("/v1/keychain routes (capability-authed)", () => {
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
-      sessions: built.sessions,
       runs: liveRunStore(built.runs),
-      secretDrops: built.secretDrops,
-      signals: built.signals,
-      identity: built.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

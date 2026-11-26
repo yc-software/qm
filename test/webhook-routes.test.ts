@@ -11,7 +11,7 @@ import { createHmac } from "node:crypto";
 import { Webhook as StandardWebhook } from "standardwebhooks";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -26,9 +26,13 @@ function start(
   publicUrl?: string,
 ): { base: string; built: ReturnType<typeof buildApp>; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
-  const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
+  const deps = { ...testCore(built), ...(publicUrl ? { publicUrl } : {}) };
   const server = signingSecret
-    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
+    ? createServer(built.app, {
+        ...deps,
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+        signingSecret,
+      })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   return {

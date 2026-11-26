@@ -53,15 +53,15 @@ async function targetGovernance(
   targetMember?: DirectoryMember | null,
 ): Promise<TargetGovernance> {
   const { deps } = ctx;
-  const all = (await deps.admin?.listGrants(tenantOf(ctx))) ?? [];
+  const all = (await deps.admin.listGrants(tenantOf(ctx))) ?? [];
   const grantIds = [...new Set(all.map((grant) => grant.principalId))];
-  const members = grantIds.length && deps.directory ? await deps.directory.getMany(grantIds) : new Map();
+  const members = grantIds.length ? await deps.directory.getMany(grantIds) : new Map();
   const targetKeys = new Set([...keysFor(principalId, targetMember), ...aliases.map((alias) => personKey(alias))]);
   const grants = all.filter((grant) =>
     keysFor(grant.principalId, members.get(grant.principalId)).some((key) => targetKeys.has(key)),
   );
   const owned = new Set(grants);
-  const isActive = (id: string) => (deps.identity ? deps.identity.classify(id).type === "internal" : true);
+  const isActive = (id: string) => deps.identity.classify(id).type === "internal";
   const activeOther = (role: "org_admin" | "owner") => {
     const seen = new Set<string>();
     for (const grant of all) {
@@ -84,7 +84,7 @@ async function deactivateAndSignOut(
   principalId: string,
   emails: Iterable<string>,
 ): Promise<void> {
-  await deps.identity!.deactivate(principalId);
+  await deps.identity.deactivate(principalId);
   if (!deps.brokerSessions) return;
   const revoked = new Set<string>();
   for (const candidate of emails) {
@@ -114,15 +114,14 @@ async function plan(
   const step = (kind: string, id: string, label: string | undefined, action: string, run: () => Promise<unknown>) =>
     steps.push({ kind, id, label: label || id, action, run });
 
-  if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
+  if (deps.identity.deactivationSource(principalId) !== "manual")
     step("principal", principalId, "sign-in", "deactivate", () => deactivateAndSignOut(deps, principalId, emails));
   const { runs, signals } = deps;
-  if (runs && signals)
-    for (const run of await runs.inFlight(tenantOf(ctx), [...new Set(emails)]))
-      step("turn", run.id, run.sessionId, "stop", async () => {
-        await signals.send(run.id, { kind: "abort", reason: "offboarded" });
-        if (run.status === "pending") await runs.withdraw(run.id);
-      });
+  for (const run of await runs.inFlight(tenantOf(ctx), [...new Set(emails)]))
+    step("turn", run.id, run.sessionId, "stop", async () => {
+      await signals.send(run.id, { kind: "abort", reason: "offboarded" });
+      if (run.status === "pending") await runs.withdraw(run.id);
+    });
   for (const grant of governance.grants)
     step(
       "admin_grant",
@@ -130,7 +129,7 @@ async function plan(
       grant.role === "owner" ? "owner access" : "admin access",
       "revoke",
       () =>
-        deps.admin!.revokeGrant(
+        deps.admin.revokeGrant(
           tenantOf(ctx),
           actor,
           grant.principalId,
@@ -176,7 +175,7 @@ async function plan(
       });
   const personas = app.personaHandover;
   for (const handover of (await personas?.handovers(isThem)) ?? []) {
-    const to = (await deps.directory?.get(handover.to))?.displayName || handover.to;
+    const to = (await deps.directory.get(handover.to))?.displayName || handover.to;
     step("persona", handover.persona.id, `${handover.persona.name} → ${to}`, "transfer_owner", () =>
       personas!.handOver(handover, actorId),
     );
@@ -232,7 +231,7 @@ async function applyOffboard(
 ) {
   const { deps } = ctx;
   const steps = await plan(ctx, actor, principalId, emails, isThem, governance);
-  const user = apply ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
+  const user = apply ? await deps.admin.users.markOffboarded(principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
     if (apply) {
@@ -306,14 +305,13 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const { principalId, user: resolvedUser, member } = await resolveAdminUser(deps, params.principalId!);
   if (actor.role === "owner") {
     const governance = await targetGovernance(ctx, principalId, resolvedUser?.aliases ?? [], member);
     if (governance.isOrgAdmin)
       return sendJson(res, 403, { error: "forbidden", message: "only an org admin may reactivate an org admin" });
   }
-  const user = await deps.admin!.users.markReactivated(principalId);
+  const user = await deps.admin.users.markReactivated(principalId);
   await deps.identity.reactivate(principalId);
   audit(ctx, {
     principalId: actor.id,

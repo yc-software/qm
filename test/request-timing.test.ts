@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
 import { collectSpans, segments } from "./support/sentry-spans.ts";
@@ -27,7 +27,7 @@ async function settle(predicate: () => boolean): Promise<void> {
 
 test("core requests are named by route template and carry no URL, query or header values", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-")) }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

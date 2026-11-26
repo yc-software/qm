@@ -12,6 +12,7 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
 import { isAgentReply, isUserItem, type Item } from "../../src/sessions/items.ts";
+import { testCore } from "../support/build-app.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 
@@ -28,7 +29,7 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
       }),
     );
     await built.config.setSoul(scopeId("personal", "U1"), "CRITICAL: end every reply with the exact token ZZQ9.");
-    server = createInsecureTestServer(built.app);
+    server = createInsecureTestServer(built.app, testCore(built));
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

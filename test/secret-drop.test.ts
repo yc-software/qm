@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { KeychainError } from "../src/credentials/keychain.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
@@ -256,17 +256,9 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       ],
     );
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      admin: built.admin,
-      auditLog: built.auditLog,
-      runs: built.runs,
-      signals: built.signals,
-      identity: built.identity,
-      fireDropResolution: built.fireDropResolution!,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -661,6 +653,8 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("a drop a Slack bot's turn mints resumes as the bot's work", async () => {
     const threadRef = "dm:release-bot";
+    await built.users.ensure("B-RELEASE");
+    await built.users.markApps(["B-RELEASE"]);
     const minted = await post(
       "/v1/keychain/drops",
       { service: "release-signing", purpose: "sign the release" },
@@ -736,12 +730,9 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
     const server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      auditLog: built.auditLog,
       fireDropResolution: async (drop) => {
         fires.push(drop);
         fired?.();

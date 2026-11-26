@@ -12,6 +12,7 @@ import type { Principal, Session } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -22,7 +23,7 @@ async function withServer<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "paging-")) }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

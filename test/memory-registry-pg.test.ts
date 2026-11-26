@@ -26,7 +26,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { routedTo, startMcpTestServer, type McpTestServer } from "./support/mcp-test-server.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -398,14 +398,7 @@ test("a stored brain whose id an env provider took leaves the env provider servi
 });
 
 function serve(built: ReturnType<typeof buildApp>) {
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    memory: built.memory,
-    memoryRegistry: built.memoryRegistry,
-    runs: built.runs,
-    capabilitySecret: TEST_CAPABILITY_SECRET,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), capabilitySecret: TEST_CAPABILITY_SECRET });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const call = async (method: string, path: string, actor: string, body?: unknown, auth = "x-admin-actor") => {
@@ -522,10 +515,8 @@ test("an admin's agent can register and bind a brain but never carries its secre
     testConfig({ signingSecret: secret, capabilitySecret: secret, apiBaseUrl: "http://core.example.test" }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    auditLog: built.auditLog,
-    memoryRegistry: built.memoryRegistry,
     capabilitySecret: secret,
     signingSecret: secret,
     runs: liveRunStore(),
@@ -637,11 +628,8 @@ test("an agent reaches every registry route only where the registry may be shown
     [{ channelId: "C1", principalId: "admin-alice" }],
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-    memoryRegistry: built.memoryRegistry,
     runs: liveRunStore(),
     capabilitySecret: secret,
     signingSecret: secret,

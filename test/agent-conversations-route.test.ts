@@ -7,7 +7,7 @@ import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startSession } from "../src/api/start-session.ts";
@@ -58,12 +58,10 @@ describe("agent conversations self-API", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalUrl: "https://portal.example/",
-      sessions: built.sessions,
-      memory: built.memory,
-      config: built.config,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

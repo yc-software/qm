@@ -8,11 +8,10 @@ import type { FetchLike } from "../connectors/oauth.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { AddressFetch } from "../util/network.ts";
-import type { UserStore } from "../identity/user-store.ts";
 import type { ControlService } from "./control-service.ts";
 import type { SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
-export interface ServerDeps extends Partial<Omit<Core, "users">> {
+export interface ServerDeps extends Core {
   requestBodyDeadlineMs?: number;
   draining?: AbortSignal;
   composioFetch?: typeof fetch;
@@ -32,10 +31,8 @@ export interface ServerDeps extends Partial<Omit<Core, "users">> {
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;
-  oauthEnv?: NodeJS.ProcessEnv;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
   itemImageFetch?: AddressFetch;
   modelCredentialFetch?: typeof fetch;
-  users?: Pick<UserStore, "get" | "resolve" | "setDisplayName">;
 }

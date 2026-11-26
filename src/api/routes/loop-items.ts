@@ -380,9 +380,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
       if (current.proposal?.at !== item.proposal?.at) return draftChanged();
       item = current;
-      const slackClient = ctx.deps.loopSlackClient;
       const result = await adapter.act(
-        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+        { owner: loop.owner, actor: proposalAuthor, tokens, slackClient: ctx.deps.loopSlackClient },
         item,
         kind,
         args,

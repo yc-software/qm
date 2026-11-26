@@ -8,9 +8,16 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
+import {
+  PROVIDERS,
+  createSecretClientResolver,
+  setPublicOAuthClients,
+  withPublicOAuthClients,
+  type FetchLike,
+} from "../src/connectors/oauth.ts";
+import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
@@ -39,13 +46,10 @@ function start(
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     ...browserSessionDeps,
     signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthFlows: built.oauthFlows,
-    auditLog: built.auditLog,
-    oauthEnv: opts.oauthEnv ?? oauthEnv,
+    resolveClient: withPublicOAuthClients(createSecretClientResolver(createEnvSecretSource(opts.oauthEnv ?? oauthEnv))),
     oauthFetch: fetchImpl,
   });
   server.listen(0);

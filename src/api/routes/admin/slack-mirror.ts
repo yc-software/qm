@@ -8,7 +8,7 @@ const SLACK_MIRROR_PAGE_MAX = 400;
 const SLACK_MIRROR_PAGE_DEFAULT = 200;
 
 async function mirrorNames(deps: ApiCtx["deps"]) {
-  const members = deps.directory ? await deps.directory.list() : [];
+  const members = await deps.directory.list();
   const byId = new Map<string, string>();
   for (const m of members) {
     if (!m.displayName) continue;
@@ -106,7 +106,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
   if (id) {
     const judgment = await store.get(id);
     if (!judgment) return sendJson(res, 404, { error: "not_found" });
-    const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
+    const { workspaceUrl } = await deps.directory.meta();
     return sendJson(res, 200, { scopeId: scope, judgment, workspaceUrl });
   }
   const decision = (url.searchParams.get("decision") ?? "")
@@ -149,7 +149,7 @@ export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   if (id) {
     const pick = await store.get(id);
     if (!pick) return sendJson(res, 404, { error: "not_found" });
-    const workspaceUrl = deps.directory ? (await deps.directory.meta()).workspaceUrl : null;
+    const { workspaceUrl } = await deps.directory.meta();
     return sendJson(res, 200, { scopeId: scope, pick, workspaceUrl });
   }
   const outcome = (url.searchParams.get("outcome") ?? "")

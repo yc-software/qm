@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
@@ -24,14 +24,11 @@ const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
 const portalSession = { ...browserSessionDeps.portalSession };
 const core = createServer(built.app, {
+  ...testCore(built),
   ...browserSessionDeps,
   portalSession,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
-  webhookReceiver: built.webhookReceiver,
-  featureFlags: built.featureFlags,
-  loops: built.loops,
-  uiState: built.uiState,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;

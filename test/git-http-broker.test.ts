@@ -9,6 +9,8 @@ import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { personalScope } from "../src/types.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 function req(headers: Record<string, string>, body: string | Buffer = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;
@@ -57,6 +59,7 @@ function ctx(
     app: {} as BaseCtx["app"],
     deps,
     secret: "git-http-broker-test",
+    tenant: testTenant,
     auth: null,
     allowUnsignedSourceAuth: false,
     url,
@@ -76,6 +79,7 @@ function ctx(
 test("git HTTP broker streams a smart-HTTP request through the pinned service credential", async () => {
   let seen: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
   const deps: ServerDeps = {
+    ...testCore(),
     control: {} as ServerDeps["control"],
     serviceCreds: {
       getServiceCredentialSecret: async () => ({
@@ -124,6 +128,7 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
 test("git HTTP broker sends a credential's fixed headers over a caller's case variant", async () => {
   let seen: Record<string, string> | undefined;
   const deps: ServerDeps = {
+    ...testCore(),
     control: {} as ServerDeps["control"],
     serviceCreds: {
       getServiceCredentialSecret: async () => ({
@@ -156,6 +161,7 @@ test("git HTTP broker sends a credential's fixed headers over a caller's case va
 test("git HTTP broker refuses an env-delivery record like a missing credential", async () => {
   let fetched = false;
   const deps: ServerDeps = {
+    ...testCore(),
     control: {} as ServerDeps["control"],
     serviceCreds: {
       getServiceCredentialSecret: async () => ({
@@ -187,6 +193,7 @@ test("git HTTP broker refuses encoded parent traversal past the repo path", asyn
   ]) {
     let fetched = false;
     const deps: ServerDeps = {
+      ...testCore(),
       control: {} as ServerDeps["control"],
       serviceCreds: {
         getServiceCredentialSecret: async () => ({

@@ -10,7 +10,7 @@ import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
 import { type TurnRequest, personalScope } from "../src/types.ts";
 import {
@@ -35,14 +35,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
   const acl = wrapAcl?.(built.acl) ?? built.acl;
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    serviceCreds: built.serviceCreds,
-    acl,
-    credentialUsage: built.credentialUsage,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), acl });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -53,13 +46,9 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: Core; clo
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    config: built.config,
-    serviceCreds: built.serviceCreds,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    auditLog: built.auditLog,
     brokerFetch,
   });
   server.listen(0);
@@ -72,13 +61,9 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Core
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    config: built.config,
-    serviceCreds: built.serviceCreds,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    auditLog: built.auditLog,
     gitHttpFetch,
   });
   server.listen(0);

@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -80,6 +80,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       { groupId: "G-jrs", principalId: "U-sam1" },
     ]);
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });

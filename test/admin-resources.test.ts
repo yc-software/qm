@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { personalScope } from "../src/types.ts";
@@ -40,16 +40,7 @@ function start(withLayer = true): { base: string; built: Core; close: () => Prom
       ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
     }),
   );
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    sessions: built.sessions,
-    acl: built.acl,
-    serviceCreds: built.serviceCreds,
-    featureFlags: built.featureFlags,
-    channelPolicy: built.channelPolicy,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -213,6 +204,7 @@ test("branding governance validates, round-trips through surface-config, clears,
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
   const srv = start();
   try {
+    await srv.built.modelCredentials.set("openai", "test-openai-key", "admin");
     await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;

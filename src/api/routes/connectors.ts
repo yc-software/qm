@@ -7,12 +7,9 @@ import {
   openOAuthState,
   PROVIDERS,
   oauthProvider,
-  withPublicOAuthClients,
   sealOAuthState,
-  createSecretClientResolver,
   generateCodeVerifier,
   codeChallengeS256,
-  type OAuthClientResolver,
   type AccountType,
   type OAuthState,
   ACCOUNT_TYPES,
@@ -21,7 +18,6 @@ import {
 } from "../../connectors/oauth.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
-import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
@@ -51,20 +47,13 @@ async function resumeOAuthFlow(deps: ServerDeps, secret: string | undefined, par
   return openOAuthState(param, { secret: oauthStateSecret(deps, secret), maxAgeMs: OAUTH_STATE_MAX_AGE_MS });
 }
 
-export function resolverFor(deps: ServerDeps): OAuthClientResolver {
-  return (
-    deps.resolveClient ??
-    withPublicOAuthClients(createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined))
-  );
-}
-
 function parseAccountType(v: string | null | undefined): AccountType {
   return isAccountType(v) ? v : "default";
 }
 
 async function providerConfigured(deps: ServerDeps, provider: string): Promise<boolean> {
   try {
-    await resolverFor(deps)(provider, {});
+    await deps.resolveClient(provider, {});
     return true;
   } catch {
     return false;
@@ -185,7 +174,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
-    const client = await resolverFor(deps)(provider, { accountType });
+    const client = await deps.resolveClient(provider, { accountType });
     const { hosts, token } = await exchangeCode(provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
@@ -260,7 +249,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    const client = await resolverFor(deps)(rec.provider, { accountType: rec.accountType });
+    const client = await deps.resolveClient(rec.provider, { accountType: rec.accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(rec.redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -337,7 +326,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     });
   let client;
   try {
-    client = await resolverFor(deps)(provider, { accountType });
+    client = await deps.resolveClient(provider, { accountType });
   } catch (e) {
     return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
   }
@@ -426,7 +415,7 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
   try {
-    const client = await resolverFor(deps)(start.provider, { accountType });
+    const client = await deps.resolveClient(start.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",

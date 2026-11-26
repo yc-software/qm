@@ -33,6 +33,7 @@ import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createControlService } from "../src/api/control-service.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -80,6 +81,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const server = createServer(app, {
+    ...testCore(),
     sessions: signOff.sessions as never,
     approvals: testMap<PendingApprovalRecord>(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),

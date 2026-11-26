@@ -28,7 +28,7 @@ import {
   createIsCurrentSharedScopeMember,
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -412,7 +412,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   await configureCommandRules(built.config);
-  const server = createInsecureTestServer(built.app, {});
+  const server = createInsecureTestServer(built.app, testCore(built));
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
@@ -1072,7 +1072,7 @@ test("linking a just-created channel refreshes the surface directory and retries
 
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
-  const server = createInsecureTestServer(built.app, {});
+  const server = createInsecureTestServer(built.app, testCore(built));
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 

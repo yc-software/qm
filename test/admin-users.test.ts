@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { UserRecord } from "../src/identity/user-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -61,16 +61,7 @@ test("computeUsers lists exactly the roster with each user's activity and admin 
 function start(extra: Partial<ServerDeps> = {}) {
   const databaseUrl = testMigratedDatabaseUrl();
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")), databaseUrl }));
-  const server = createInsecureTestServer(built.app, {
-    ...extra,
-    admin: built.admin,
-    identity: built.identity,
-    sessions: built.sessions,
-    files: built.files,
-    directory: built.directory,
-    memory: built.memory,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), ...extra });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, databaseUrl, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -342,13 +333,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
       emailAuthPrincipals: ["new@example.com"],
     }),
   );
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    memory: built.memory,
-    auditLog: built.auditLog,
-    directory: built.directory,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

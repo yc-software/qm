@@ -17,6 +17,7 @@ import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { personalScope } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "app-token-gate-secret".repeat(2);
 
@@ -103,6 +104,7 @@ describe("a published app's broker token follows the app it was minted for, on e
       gitHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
     } as unknown as Partial<ServerDeps>;
     server = createServer(app, {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       ...deps,

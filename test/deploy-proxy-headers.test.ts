@@ -11,6 +11,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return {
@@ -30,6 +31,7 @@ test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authe
 
   const server = createInsecureTestServer(
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { cookie: "dpl_access=tok" } }),
+    testCore(),
   );
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -72,6 +74,7 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
       httpVersion: "2",
       proxyHeaders: { "X-aws-proxy-auth": "vm-token" },
     }),
+    testCore(),
   );
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -121,7 +124,10 @@ test("/d/ proxy retires a GOAWAY session even while an SSE stream is open", asyn
   upstream.on("session", (session) => sessions.push(session));
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }));
+  const server = createInsecureTestServer(
+    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
+    testCore(),
+  );
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -193,6 +199,7 @@ test("/d/ proxy retries a GOAWAY-refused GET once but never replays a POST body"
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
+    ...testCore(),
     deployDialTimeoutMs: 30,
   });
   server.listen(0);
@@ -258,7 +265,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
       },
     }),
   } as unknown as App;
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(app, testCore());
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -297,6 +304,7 @@ test("/d/ proxy never retries after an HTTP/2 timeout has committed a 504", asyn
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
+    ...testCore(),
     deployDialTimeoutMs: 30,
   });
   server.listen(0);
@@ -329,7 +337,10 @@ test("/d/ proxy resets the downstream response when an HTTP/2 body is truncated"
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }));
+  const server = createInsecureTestServer(
+    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
+    testCore(),
+  );
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
 
@@ -361,6 +372,7 @@ test("/d/ proxy returns 504 instead of hanging when the app accepts but never re
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
+    ...testCore(),
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -385,7 +397,7 @@ test("/d/ proxy sends no extra headers when the endpoint declares none", async (
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -421,6 +433,7 @@ test("admin app proxy bypasses app ACL after admin auth and audits the visit", a
   } as unknown as App;
   const SECRET = "admin-deploy-proxy-secret".repeat(3);
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: createAdminService(testAdminGrantStore(), { users: testUsers() }),
     signingSecret: SECRET,
@@ -480,7 +493,7 @@ test("/d/ proxy forwards the client's content-type and body with an explicit con
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -518,7 +531,7 @@ test("/d/ proxy buffers a chunked client body into an explicit content-length up
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -566,6 +579,7 @@ test("/d/ proxy forwards client cookies but scrubs the dpl_access gate token, an
 
   const server = createInsecureTestServer(
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { "X-aws-proxy-auth": "vm-token" } }),
+    testCore(),
   );
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -598,7 +612,7 @@ test("/d/ proxy strips headers the client names in its own Connection header (dy
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -641,7 +655,7 @@ test("/d/ proxy strips fixed and Connection-named hop-by-hop response headers", 
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -671,7 +685,7 @@ test("/d/ proxy scrubs the dpl_access gate cookie even with stray whitespace aro
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

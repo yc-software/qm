@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -657,15 +657,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
       keychainApprovals: approvals,
-      deliveries: built.deliveries,
-      admin: built.admin,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
       runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));

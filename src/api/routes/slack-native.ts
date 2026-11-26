@@ -5,12 +5,11 @@ import { ErrorCode, type WebAPIPlatformError, type AuthTestResponse } from "@sla
 import { slackWebClient } from "../../slack/web-client.ts";
 import { personIds, samePerson } from "../../directory/person.ts";
 import { ACCOUNT_TYPES } from "../../connectors/oauth.ts";
-import { resolverFor } from "./connectors.ts";
 import type { ApiCtx } from "./route.ts";
 
 export async function nativeSlackConfigured(ctx: ApiCtx): Promise<boolean> {
   try {
-    await resolverFor(ctx.deps)("slack", {});
+    await ctx.deps.resolveClient("slack", {});
     return Boolean(ctx.deps.connectorTokens);
   } catch {
     return false;

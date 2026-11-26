@@ -17,6 +17,31 @@ afterEach(async (t) => {
 });
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
 
+export function testCore(core = {} as Core): Core {
+  return {
+    ...core,
+    signingSecret: undefined,
+    capabilitySecret: undefined,
+    portalIdentitySecret: undefined,
+    requireSignedPortalIdentity: undefined,
+    spendExportToken: undefined,
+    deploymentControlSecret: undefined,
+    deploymentLiveSmoke: undefined,
+    portalUrl: undefined,
+    publicUrl: undefined,
+    apiBaseUrl: undefined,
+    brandingDefault: undefined,
+    companySubscriptionAuth: undefined,
+    emailAuthPrincipals: undefined,
+    emailAuthDomain: undefined,
+    slackAllowFrom: undefined,
+    deployGateSecret: undefined,
+    deployAppsSessionSecret: undefined,
+    deployAppsLoginUrl: undefined,
+    deployAppsLoginPath: undefined,
+  };
+}
+
 export function stopAtEnd(app: Core): Core {
   const [owner, ...others] = runningTests.values();
   (owner && !others.length ? owner : built).push(app);

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeActor, scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
@@ -245,7 +245,7 @@ test("a persona's page lists its skills and the crons from conversations with it
   const notes = { name: "notes", description: "d", body: "b" };
   await built.app.createOwnedSkill({ principalId: BOB, homeScope: scopeId("personal", BOB), ...notes });
   await built.app.createOwnedSkill({ principalId: ALICE, homeScope: scopeId("persona", ada.id), ...notes });
-  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -389,7 +389,7 @@ test("the versions API pages who and when, with content on request", async () =>
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "one" }));
   for (const text of ["two", "three"]) ok(await personas.update(ALICE, ada.id, { instructions: text }));
-  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}/v1/personas/${ada.id}/versions`;
@@ -624,8 +624,9 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
   ok(await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", ALICE), role: "owner" }]));
+  await built.modelCredentials.set("openai", "test-openai-key", ALICE);
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
+    ...testCore(built),
     capabilitySecret: TEST_CAPABILITY_SECRET,
     runs: liveRunStore(),
   });

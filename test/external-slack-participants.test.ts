@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -103,13 +103,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    acl: built.acl,
-    serviceCreds: built.serviceCreds,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };

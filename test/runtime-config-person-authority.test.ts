@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { liveRunBinding, liveRunStore } from "./support/live-run.ts";
@@ -25,8 +25,8 @@ function start(): { base: string; built: Core; close: () => Promise<void> } {
     }),
   );
   const server = createInsecureTestServer(built.app, {
+    ...testCore(built),
     capabilitySecret: SECRET,
-    config: built.config,
     runs: liveRunStore(),
   });
   server.listen(0);
