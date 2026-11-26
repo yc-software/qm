@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -12,16 +12,6 @@ const entitledScopes = entitledScopesFor(false);
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
-  await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
-  await p.end();
-});
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");

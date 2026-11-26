@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
@@ -12,15 +12,6 @@ import {
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
-  await p.end();
-});
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {
   await exerciseDeliveryStore(createPostgresDeliveryStore(URL!));

@@ -15,7 +15,7 @@ import {
   tenantSettingsSchema,
 } from "../src/tenants/settings.ts";
 import { appUrlOf } from "../src/deploy/deploy-store.ts";
-import { appHostLabel, appLabelLimitError, appNameFromLabel } from "../src/tenants/app-handle.ts";
+import { appHandleSchema, appHostLabel, appLabelLimitError, appNameFromLabel } from "../src/tenants/app-handle.ts";
 import { scopeId } from "../src/types.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
@@ -90,6 +90,31 @@ describe("tenant settings and operator commands", () => {
   after(async () => {
     stopLoad?.();
     await db?.close();
+  });
+
+  it("the schema's handle check agrees with appHandleSchema", async () => {
+    const candidates = [
+      "auth",
+      "slack",
+      "mt",
+      "www",
+      "api",
+      "docs",
+      "apps",
+      "admin",
+      "a",
+      "ab",
+      "a".repeat(61),
+      "a".repeat(62),
+      "a-b",
+      "Ab",
+    ];
+    for (const handle of candidates) {
+      const [row] = await db.owner.q("SELECT qm_tenant_handle(jsonb_build_object('handle', $1::text)) AS handle", [
+        handle,
+      ]);
+      assert.equal(row!.handle === handle, appHandleSchema.safeParse(handle).success, handle);
+    }
   });
 
   it("reads each bound tenant's own brand name and gateway key under the app login", async () => {

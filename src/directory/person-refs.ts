@@ -7,7 +7,7 @@ export interface PrincipalLinkResolver {
   claim(key: string, userId: string): void;
 }
 
-export const USER_ID_NAMESPACE = "8f0b6a52-3c1e-5d7a-9b4e-2f6c1d8a7e30";
+const USER_ID_NAMESPACE = "8f0b6a52-3c1e-5d7a-9b4e-2f6c1d8a7e30";
 
 let links: PrincipalLinkResolver | null = null;
 

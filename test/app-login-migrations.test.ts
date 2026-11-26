@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, migrateDatabase } from "../src/persistence/pg-pool.ts";
 import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
@@ -27,26 +26,23 @@ test("a migrated database already has every configured store's tables", { skip }
   }
 });
 
-for (const access of ["app", "ledger-owner", "bootstrap"]) {
-  test(`pending migrations with ${access} authority`, { skip }, async () => {
-    const databaseUrl = appUrl(access === "bootstrap" ? testBareDatabaseUrl() : testMigratedDatabaseUrl());
-    const app = createPgPool(databaseUrl);
+for (const access of ["app", "bootstrap"]) {
+  test(`migrating a bare database with ${access} authority`, { skip }, async () => {
+    const databaseUrl = appUrl(testBareDatabaseUrl());
     const owner = createPgPool(ownerUrl(databaseUrl).toString());
     try {
-      if (access !== "app") await owner.q("GRANT CREATE ON SCHEMA public TO qm_app");
-      if (access === "ledger-owner") await owner.q("ALTER TABLE qm_schema_migrations OWNER TO qm_app");
-      const read = createPostgresMap<{ v: number }>(app, "unmigrated_probe").get("x");
-      if (access === "app")
-        await assert.rejects(
-          read,
-          /misconfiguration: migration durable-map\/unmigrated_probe\/0001 has not been applied/,
-        );
-      else assert.equal(await read, null);
-      assert.deepEqual(await owner.q("SELECT to_regclass('unmigrated_probe') AS t"), [
-        { t: access === "app" ? null : "unmigrated_probe" },
+      if (access === "bootstrap") {
+        const database = (await owner.q("SELECT current_database() AS d"))[0]!.d as string;
+        await owner.q(`GRANT CREATE ON DATABASE "${database}" TO qm_app`);
+        await owner.q("GRANT CREATE ON SCHEMA public TO qm_app");
+      }
+      const migrated = migrateDatabase(databaseUrl);
+      if (access === "app") await assert.rejects(migrated, /misconfiguration: migration schema has not been applied/);
+      else await migrated;
+      assert.deepEqual(await owner.q("SELECT to_regclass('tenants') AS t"), [
+        { t: access === "app" ? null : "tenants" },
       ]);
     } finally {
-      await app.close();
       await owner.close();
     }
   });

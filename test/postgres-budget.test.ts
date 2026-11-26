@@ -2,17 +2,13 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
+let URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres budget tests";
 
-beforeEach(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS budget_spend CASCADE");
-  await p.end();
+beforeEach(() => {
+  if (URL) URL = testDatabaseUrl();
 });
 
 test(

@@ -15,7 +15,7 @@ import {
 } from "../src/sandbox/render-sandbox.ts";
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createFakeRender } from "./support/fake-render.ts";
-import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { testMap, testAdvisoryLock, createTestMapTables } from "./support/test-database.ts";
 import { personalScope } from "../src/types.ts";
 
 function setup(t: TestContext) {
@@ -324,6 +324,7 @@ test(
     const first = createPostgresMapFactory(process.env.DATABASE_URL!);
     const second = createPostgresMapFactory(process.env.DATABASE_URL!);
     const table = `render_scratch_test_${randomUUID().replaceAll("-", "")}`;
+    await createTestMapTables(process.env.DATABASE_URL!, { [table]: [] });
     const initial = first.map<StoredRenderScratch>(table);
     const recovered = second.map<StoredRenderScratch>(table);
     fake.failTerminate(new Error("termination refused"));
@@ -333,10 +334,6 @@ test(
       await assert.rejects(owner.teardown(handle, { destroy: true }), /termination refused/);
       await first.pool.close();
       assert.equal((await recovered.get(handle.id))?.cleanupPending, true);
-      const applied = await second.pool.q("SELECT id FROM qm_schema_migrations WHERE id=$1", [
-        `durable-map/${table}/0001`,
-      ]);
-      assert.equal(applied.length, 1);
       fake.failTerminate();
       assert.deepEqual(await make(recovered, createPostgresAdvisoryLock(second.pool)).reapDeepIdle!(0), { reaped: 1 });
       assert.equal(fake.sandboxes.get(handle.providerSandboxId!)?.status, "terminated");
@@ -344,7 +341,6 @@ test(
     } finally {
       await second.pool.q(`DROP TABLE IF EXISTS ${table}`);
       await second.pool.q("DELETE FROM durable_map_versions WHERE tbl=$1", [table]);
-      await second.pool.q("DELETE FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
       await Promise.all([first.pool.close(), second.pool.close()]);
     }
   },

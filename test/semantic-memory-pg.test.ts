@@ -5,7 +5,6 @@ import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
 import { personalScope } from "../src/types.ts";
 
@@ -323,55 +322,4 @@ test("unindexed facts never crowd indexed matches out of the candidate pool", { 
     [facts[0]!.id, facts[11]!.id],
   );
   assert.ok(Math.abs(strict[1]!.score - 0.2) < 1e-9);
-});
-
-test("vectors stored before the sketch column are backfilled and ranked", { skip: !url }, async (t) => {
-  const admin = new pg.Client({ connectionString: url! });
-  await admin.connect();
-  const name = `memory_sketch_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE DATABASE ${name}`);
-  const fresh = new URL(url!);
-  fresh.pathname = `/${name}`;
-  await seedTestTenant(fresh.toString());
-  const client = new pg.Client({ connectionString: fresh.toString() });
-  const index = createPostgresVectorStore(fresh.toString());
-  t.after(async () => {
-    await index.close();
-    await client.end();
-    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await admin.end();
-  });
-  const scope = personalScope("legacy-vectors");
-  const base = createPostgresMemoryService(fresh.toString());
-  await base.capture(
-    scope,
-    Array.from({ length: 12 }, (_, i) => `legacy fact ${i}`),
-    1000,
-  );
-  const facts = await base.facts!(scope);
-  const target = facts.at(-1)!;
-  await client.connect();
-  await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-  await client.query(`CREATE TABLE memory_fact_vectors (
-    scope_id TEXT NOT NULL,
-    model TEXT NOT NULL,
-    fact_id BIGINT NOT NULL,
-    fact_hash TEXT NOT NULL,
-    dimensions INTEGER NOT NULL CHECK (dimensions BETWEEN 1 AND 16000),
-    embedding vector NOT NULL,
-    PRIMARY KEY (scope_id, model, fact_id),
-    CHECK (vector_dims(embedding) = dimensions)
-  )`);
-  await client.query(
-    `INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
-     SELECT scope_id, 'legacy-model', id, text_hash, 3,
-       CASE WHEN id = $2 THEN '[1,-0.1,-0.1]' ELSE '[0.5,1,1]' END::vector
-     FROM memory_facts WHERE scope_id = $1`,
-    [scope, target.id],
-  );
-  const rows = await index.search({ scope, model: "legacy-model", vector: [1, 0, 0], ids: ids(facts), limit: 1 });
-  assert.deepEqual(
-    rows.map((row) => row.factId),
-    [target.id],
-  );
 });

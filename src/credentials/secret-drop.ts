@@ -38,14 +38,6 @@ export interface SecretDropStore {
   siblings(rec: SecretDropRecord, now?: number): Promise<SecretDropRecord[]>;
 }
 
-export const LOGIN_TICKET_SWEEP = {
-  id: "durable-map/secret_drops/0002-delete-login-tickets",
-  statements: [
-    "CREATE TABLE IF NOT EXISTS secret_drops (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-    "DELETE FROM secret_drops WHERE json ->> 'kind' = 'login'",
-  ],
-};
-
 export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export function createSecretDropStore(

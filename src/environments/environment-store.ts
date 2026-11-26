@@ -1,7 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 export interface Environment {
   id: string;
@@ -65,41 +64,7 @@ export function createPostgresEnvironmentStore(
   opts: { now?: () => number } = {},
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
-  const { q } = createPgPool(connectionString, [
-    {
-      id: "environments/store/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS environments(
-        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT, owner_actor_id TEXT,
-        created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
-      )`,
-        `CREATE TABLE IF NOT EXISTS environment_attachments(
-        scope_id TEXT PRIMARY KEY,
-        environment_id TEXT NOT NULL REFERENCES environments(id),
-        attached_by TEXT NOT NULL, attached_at BIGINT NOT NULL
-      )`,
-        `CREATE INDEX IF NOT EXISTS environment_attachments_by_env
-        ON environment_attachments(environment_id)`,
-      ],
-    },
-    ...tenantTables(
-      "environments/store/0002-tenants",
-      [
-        { table: "environments", primaryKey: "id" },
-        { table: "environment_attachments", primaryKey: "scope_id" },
-      ],
-      {
-        references: [
-          {
-            table: "environment_attachments",
-            name: "environment_attachments_environment_id_fkey",
-            columns: "environment_id",
-            references: "environments(tenant_id, id)",
-          },
-        ],
-      },
-    ),
-  ]);
+  const { q } = createPgPool(connectionString);
   return {
     async create(input): Promise<Environment> {
       const ts = now();

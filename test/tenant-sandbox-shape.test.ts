@@ -18,7 +18,7 @@ import { withTenant } from "../src/tenants/context.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN } from "./support/fake-sprites.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
+import { testAdvisoryLock, createTestMapTables } from "./support/test-database.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
 
 const scope = scopeId("personal", "shared@example.com");
@@ -55,6 +55,7 @@ describeTwoTenants("per-tenant sandbox shape", (db) => {
   test("the same scope reaches a different sprite per tenant, each with its own credential", async () => {
     const [a, b] = db.tenants;
     const fake = installFakeSprites();
+    await createTestMapTables(db.ownerDatabaseUrl, { sprites_shape_init: [] });
     try {
       const sandbox = createSpritesSandbox({
         initializationStore: createPostgresMapFactory(db.ownerDatabaseUrl).map<StoredSprite>("sprites_shape_init"),

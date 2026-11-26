@@ -1,9 +1,8 @@
-import { createPgPool, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { rowToGrant } from "../../src/acl/postgres-grant-store.ts";
 import type { Grant } from "../../src/types.ts";
 
 export async function allGrants(url: string): Promise<Grant[]> {
-  await migrateRegisteredPgSchemas(url);
   const pg = createPgPool(url);
   const rows = await pg
     .q(
