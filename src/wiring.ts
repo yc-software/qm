@@ -178,7 +178,7 @@ import {
   type AppDraft,
 } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { appCredentialSlugs } from "./deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -2005,11 +2005,15 @@ export function buildApp(
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
-            const credentials = await appCredentialSlugs(
-              ambientTenant(),
+            const tenant = ambientTenant();
+            const credentials = appCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
-              orgScope,
-              acl,
+              await appCredentialGrants(publishedApp, {
+                tenant,
+                orgScope,
+                acl,
+                teams,
+              }),
             );
             return {
               VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),
