@@ -44,7 +44,7 @@ function loadCustomEmoji(): Promise<void> {
   return customLoad;
 }
 
-function customUrl(name: string): string | null {
+export function customEmojiUrl(name: string): string | null {
   if (!customEmoji) void loadCustomEmoji();
   return customEmoji?.[name] ?? null;
 }
@@ -53,7 +53,7 @@ export function projectIconTpl(value: ProjectIcon | undefined, size = 16): Templ
   if (!value) return null;
   const style = `--project-icon-size:${size}px`;
   if (value.kind !== "emoji") {
-    const url = value.kind === "image" ? value.url : customUrl(value.name);
+    const url = value.kind === "image" ? value.url : customEmojiUrl(value.name);
     return html`<span class="project-icon" style=${style} aria-hidden="true"
       >${url ? html`<img src=${url} alt="" draggable="false" />` : nothing}</span
     >`;

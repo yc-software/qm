@@ -305,11 +305,11 @@ function drawPersonasPage(): void {
   const rows = notice ? [html`<div class="action-notice" role="alert">${notice}</div>`] : [];
   if (visible.length)
     rows.push(
-      html`<div class="bot-grid">
+      html`<div class=${listLayout() ? "bot-list" : "bot-grid"}>
         ${repeat(
           visible,
           ({ persona }) => persona.id,
-          ({ persona, status }) => botCard(persona, status),
+          ({ persona, status }) => (listLayout() ? botRow(persona, status) : botCard(persona, status)),
         )}
       </div>`,
     );
@@ -387,6 +387,45 @@ function noteTpl(note: NonNullable<BotStatus["note"]>): TemplateResult {
   return html`<blockquote class="bot-note" dir="auto">
     <span class="bot-note-text">${note.text}</span>
   </blockquote>`;
+}
+
+// Trial layout: /bots?layout=list renders the roster as rows instead of cards.
+const rowsLayout = new URLSearchParams(location.search).get("layout") === "list";
+
+function listLayout(): boolean {
+  return rowsLayout;
+}
+
+function botRow(persona: PersonaView, status: BotStatus): TemplateResult {
+  return html`
+    <article class="bot-card bot-row" data-state=${status.state} style=${botTintStyle(persona)}>
+      <button
+        class="bot-card-open"
+        type="button"
+        aria-label=${`Open ${persona.name}`}
+        @click=${() => void openPersona(persona.id, "", { push: true })}
+      ></button>
+      ${botAvatarTpl(persona, 44, status.state)}
+      <div class="bot-row-main">
+        <div class="bot-row-name">
+          <span class="bot-card-name" dir="auto">${persona.name}</span>
+          ${persona.role === "owner" ? nothing : html`<span class="bot-card-role">${ROLE_LABELS[persona.role]}</span>`}
+        </div>
+        <p class="bot-row-description" dir="auto">${persona.description}</p>
+      </div>
+      <div class="bot-row-side">
+        ${botStatusTpl(statusTextOf(status), status.state)} ${status.note ? noteTpl(status.note) : nothing}
+      </div>
+      <button
+        class="btn bot-card-chat"
+        type="button"
+        ?disabled=${busyId !== null}
+        @click=${() => void chatWithPersona(persona)}
+      >
+        ${icon(MessageSquare, 14)}<span>Chat</span>
+      </button>
+    </article>
+  `;
 }
 
 function botCard(persona: PersonaView, status: BotStatus): TemplateResult {

@@ -1,7 +1,7 @@
 import { html, nothing, svg, type TemplateResult } from "lit";
 import type { CoreSession, ProjectIcon } from "./core-bridge";
 import { cronNextFire, formatCronDateTime } from "./cron-format";
-import { projectIconTpl } from "./project-icon";
+import { customEmojiUrl, projectIconTpl } from "./project-icon";
 import { activityOf } from "./session-list";
 import { relTime, sheenLabel, workingWave } from "./ui";
 
@@ -253,7 +253,8 @@ export function botAvatarTpl(
   size: number,
   state: BotState | null = null,
 ): TemplateResult {
-  const glyph = projectIconTpl(bot.icon ?? undefined, Math.round(size * 0.58));
+  const unresolved = bot.icon?.kind === "custom" && !customEmojiUrl(bot.icon.name);
+  const glyph = unresolved ? null : projectIconTpl(bot.icon ?? undefined, Math.round(size * 0.58));
   return html`<span
     class="bot-avatar"
     data-state=${state ?? "none"}
