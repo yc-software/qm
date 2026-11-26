@@ -50,12 +50,18 @@ export function foundingUserId(alias: string): string {
   return id;
 }
 
+export function knownUserId(id: string): string | undefined {
+  const key = foldPrincipalId(id);
+  const linked = key ? links?.userId(key) : undefined;
+  if (linked || !key) return linked;
+  if (isUuid(key)) return key.toLowerCase();
+  return links ? undefined : foundingUserId(key);
+}
+
 export function personUserId(id: string): string {
   const key = foldPrincipalId(id);
-  if (!key) return key;
-  const linked = links?.userId(key);
-  if (linked) return linked;
-  if (isUuid(key)) return key.toLowerCase();
+  const known = knownUserId(key);
+  if (known || !key) return known ?? key;
   const alias = links?.canonical(key) ?? key;
   const founded = foundingUserId(alias);
   links?.claim(alias, founded);

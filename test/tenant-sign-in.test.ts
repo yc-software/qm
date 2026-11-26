@@ -20,7 +20,9 @@ import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.t
 import { bindBootTenant } from "../src/tenants/boot.ts";
 import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const IDENTITY_SECRET = "tenant-sign-in-identity-secret".repeat(2);
@@ -285,6 +287,12 @@ test("on a shared host the directory, not the install allowlist, permits email s
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
     assert.equal(await allowed("carol@elsewhere.test"), true);
     assert.equal(await allowed("dan@elsewhere.test"), true);
+    installPrincipalLinks(createPrincipalLinkService(users, testAdvisoryLock()));
+    t.after(() => installPrincipalLinks(null));
+    const probe = { p: "stranger@elsewhere.test", t: alpha, exp: Date.now() + 60_000 };
+    const underAlpha = { "x-portal-identity": await mintPortalIdentity(probe, IDENTITY_SECRET) };
+    assert.equal((await srv.get(`/v1/auth/broker/email-allowed?email=${probe.p}`, underAlpha)).body.allowed, false);
+    await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(await allowed("stranger@elsewhere.test"), false);
     const canonical = "/v1/principals/carol%40elsewhere.test/canonical";
     assert.equal((await srv.get(canonical)).status, 401);
