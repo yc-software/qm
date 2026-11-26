@@ -4,6 +4,7 @@ import { appShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
+import { ensureSeededApp } from "../deploy/seeded-apps.ts";
 
 import type { Tenant } from "../tenants/context.ts";
 import type { App, AppDeps, ViewerApp } from "./app-types.ts";
@@ -40,6 +41,7 @@ export function createAppMethods(
   | "setAppEmbedAncestors"
   | "setAppPublic"
   | "setAppConnectors"
+  | "ensureSeededApp"
   | "maintainApps"
   | "publishDueLiveEdits"
   | "appLiveEdit"
@@ -196,6 +198,14 @@ export function createAppMethods(
     },
     setAppConnectors(idOrName, connectors, actor) {
       return deps.deploy.setAppConnectors(idOrName, connectors, actor);
+    },
+    ensureSeededApp(person, seed, opts) {
+      return ensureSeededApp(
+        { deploy: deps.deploy, lock: deps.advisoryLock, publicWebUrl: deps.publicWebUrl },
+        person,
+        seed,
+        opts,
+      );
     },
     maintainApps() {
       return deps.deploy.maintainApps();

@@ -13,6 +13,7 @@ import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { appRawRoutes, appRoutes } from "./apps.ts";
 import { appSharingRoutes } from "./app-sharing.ts";
+import { seededAppRoutes } from "./seeded-apps.ts";
 import { sharingRoutes } from "./sharing.ts";
 import { blobRoutes, browserUploadRoutes } from "./blobs.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
@@ -165,6 +166,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...inboxRoutes,
   ...appRoutes,
   ...appSharingRoutes,
+  ...seededAppRoutes,
   ...sharingRoutes,
   ...egressAuditRoutes,
   ...authBrokerRoutes,

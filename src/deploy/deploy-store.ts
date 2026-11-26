@@ -8,6 +8,7 @@ import { APP_TABLES, NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
 import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/app-handle.ts";
 import { msOf } from "../sessions/items.ts";
+import { samePerson } from "../directory/person.ts";
 import {
   createDeployGitStore,
   type DeployGitBlobRef,
@@ -121,6 +122,7 @@ export interface PublishedApp {
   alwaysOn?: boolean;
   embedAncestors?: string[];
   connectors?: string[];
+  seed?: string;
   public?: true;
   lastAccessAt?: number;
   appliedVersion?: number;
@@ -170,8 +172,10 @@ export interface DeployStore {
       name?: string;
       createdInScope?: ScopeId;
       alwaysOn?: boolean;
+      seed?: string;
     } & VersionInput,
   ): Promise<PublishedApp>;
+  findSeeded(createdBy: string, seed: string): Promise<PublishedApp | null>;
   addVersion(id: string, input: VersionInput): Promise<AppVersion>;
   addVersionFromCommit(id: string, commit: string): Promise<AppVersion | null>;
   get(id: string): Promise<PublishedApp | null>;
@@ -353,6 +357,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         ...(input.name ? { name: input.name } : {}),
         ...(input.createdInScope ? { createdInScope: input.createdInScope } : {}),
         ...(input.alwaysOn ? { alwaysOn: true } : {}),
+        ...(input.seed ? { seed: input.seed } : {}),
         currentVersion: 1,
         status: "stopped",
         endpoint: null,
@@ -410,6 +415,11 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       const d = access.findByName
         ? await access.findByName(name)
         : ((await backingMap.all()).find((x) => x.name === name) ?? null);
+      return d ? withAccess(d, await access.readOne(d.id)) : null;
+    },
+    async findSeeded(createdBy, seed) {
+      const mine = await backingMap.select({ where: { field: "createdBy", anyOfFold: [createdBy] } });
+      const d = mine.find((x) => x.seed === seed && samePerson(x.createdBy, createdBy));
       return d ? withAccess(d, await access.readOne(d.id)) : null;
     },
     claimTenants() {

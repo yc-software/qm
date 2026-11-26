@@ -40,6 +40,7 @@ COPY src ./src
 COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/frontmatter.ts cli/src/render-job-command.ts cli/src/render-source.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts cli/src/web-release.ts ./cli/src/
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
+COPY apps-seed ./apps-seed
 COPY plugins/onboarding ./plugins/onboarding
 COPY plugins/chassis ./plugins/chassis
 COPY plugins/auth/src ./plugins/auth/src

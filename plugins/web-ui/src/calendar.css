@@ -1,0 +1,49 @@
+.pane.calendar-page {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 20px;
+}
+.calendar-page > .pane-head {
+  flex: none;
+  max-width: none;
+  width: min(var(--content-wide-width), 100%);
+}
+.cal-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(var(--content-wide-width), 100%);
+  margin: 8px auto 0;
+}
+.cal-loader {
+  color: var(--muted-foreground);
+}
+.cal-notice {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cal-notice .btn {
+  margin-left: auto;
+  padding: 3px 10px;
+}
+.cal-app-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
+.cal-app-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--background);
+}
