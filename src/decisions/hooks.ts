@@ -119,7 +119,7 @@ export function createDecisionHooks(
         active = rules.filter((r) => !hasWildcardPersona(r));
       }
     }
-    const { results } = await runHook(turn.tenant, active, hook, state, backend, signal);
+    const results = await runHook(turn.tenant, active, hook, state, backend, signal);
     results.push(...failed);
     for (const result of results)
       audit.record(turn.tenant, {
