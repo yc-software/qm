@@ -475,7 +475,6 @@ export interface PendingApproval {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   executesOnApprove?: boolean;
-  tool?: string;
   call?: ApprovedToolCallSpec;
 }
 

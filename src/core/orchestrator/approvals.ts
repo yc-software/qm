@@ -60,7 +60,6 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
-    ...(record.tool ? { tool: record.tool } : {}),
     ...executesOnApprove(record),
     ...visibleCall(record),
   };

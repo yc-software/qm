@@ -1057,6 +1057,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (docked && approvals.length === 1) showReceipt(decision.approved ? "approved" : "declined", target);
       void resolve(decision);
     };
+    const decideAll = (approved: boolean): void =>
+      void (docked ? decideDocked(approvals, approved) : decideEach(approvals, approved, resolve));
     return html`<div class="composer-approval-panel ${placement}">
       ${approvalCard(approvals, {
         docked,
@@ -1064,14 +1066,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         typing: docked && !!composerState.draft.trim() && declinedByReply(approvals).length > 0,
         busy,
         decide,
-        approveAll: () => {
-          if (docked) showReceipt("approved", approvals);
-          void decideEach(approvals, true, resolve);
-        },
-        declineAll: () => {
-          if (docked) showReceipt("declined", approvals);
-          void decideEach(approvals, false, resolve);
-        },
+        approveAll: () => decideAll(true),
+        declineAll: () => decideAll(false),
       })}
     </div>`;
   }
@@ -1086,9 +1082,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : `${approveKey} to approve, or say what to change`;
   }
 
-  function decideDocked(approvals: PendingApproval[], approved: boolean): void {
+  function decideDocked(approvals: PendingApproval[], approved: boolean): Promise<void> {
     showReceipt(approved ? "approved" : "declined", approvals);
-    void decideEach(approvals, approved, ctx.chat.resolveCommandApproval);
+    return decideEach(approvals, approved, ctx.chat.resolveCommandApproval);
   }
 
   function declineOnSend(agent: Agent, approvals: PendingApproval[]): void {
@@ -1446,7 +1442,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const docked = e.key === "Escape" && !composerState.openMenu ? dockedApprovals(agent) : [];
     if (docked.length) {
       e.preventDefault();
-      return decideDocked(docked, false);
+      return void decideDocked(docked, false).then(focusComposerEnd);
     }
     if (e.key === "Tab" && !e.shiftKey && !composerState.draft && suggestedNext) {
       e.preventDefault();
@@ -1707,7 +1703,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const draft = composerState.draft.trim();
     const docked = dockedApprovals(agent);
     if (!draft && composerState.attachments.length === 0) {
-      if (docked.length && (!fromKey || flipSteer)) decideDocked(docked, true);
+      if (docked.length && (!fromKey || flipSteer)) void decideDocked(docked, true);
       return;
     }
     const declining = declinedByReply(docked);
