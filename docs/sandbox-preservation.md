@@ -1,7 +1,7 @@
 # Sandbox recovery
 
-See [prebuilt Modal images](modal-image.md) to prepare system dependencies and the
-connector SDK before creating user sandboxes.
+See [prebuilt Modal images](modal-image.md) to prepare system dependencies before
+creating user sandboxes.
 
 The agent runs in core. Sandbox home state is working state with a provider-specific recovery window. Publish code to git and deliverables to Files when they must remain durable and accessible independently of compute.
 

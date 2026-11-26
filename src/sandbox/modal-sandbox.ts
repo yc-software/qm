@@ -8,7 +8,6 @@ import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import {
@@ -94,7 +93,6 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   egressProxyUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
-  connectorSdk?: () => Promise<ConnectorSdkBundle>;
   layerToolFiles?: () => readonly LayerInstallFile[];
   fileChunkBytes?: number;
   rotationHoldMs?: number;
@@ -520,11 +518,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     withSession(name, (session) => session.writeFileBytes(absPath, data));
   const readAbsBytes = (name: string, absPath: string): Promise<Uint8Array | null> =>
     withSession(name, (session) => session.readFileBytes(absPath));
-  const installLayerTools = withConnectorSdk(
-    HOME_DIR,
-    createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
-    opts.connectorSdk,
-  );
+  const installLayerTools = createLayerToolInstaller(opts.layerToolFiles ?? (() => []));
 
   const execFileOps = createExecFileOps({
     label: "modal",

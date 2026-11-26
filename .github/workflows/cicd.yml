@@ -148,9 +148,6 @@ jobs:
       - name: Install
         if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
-      - name: Build connector SDK
-        if: needs.reuse.outputs.reusable != 'true'
-        run: npm run build:connector-sdk
       - name: Install Helm for chart tests
         if: needs.reuse.outputs.reusable != 'true'
         run: |
@@ -384,9 +381,6 @@ jobs:
       - name: Install
         if: needs.reuse.outputs.reusable != 'true'
         run: npm ci
-      - name: Build connector SDK
-        if: needs.reuse.outputs.reusable != 'true'
-        run: npm run build:connector-sdk
       - name: Model registry cross-process tests
         if: needs.reuse.outputs.reusable != 'true'
         env:

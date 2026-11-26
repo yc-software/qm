@@ -82,9 +82,6 @@
         "hljs-real-sql",
         "hljs-real-markdown"
       ]
-    },
-    "deploy/connector-sdk": {
-      "ignoreDependencies": ["@composio/core"]
     }
   }
 }
