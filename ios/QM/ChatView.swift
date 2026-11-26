@@ -124,6 +124,10 @@ struct ChatView: View {
     }
   }
 
+  private var navigationTitleText: String {
+    model.conversation.localOnly == true ? "" : model.conversation.label
+  }
+
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
@@ -166,7 +170,7 @@ struct ChatView: View {
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
     // A blank chat has no title; the greeting says enough.
-    .navigationTitle(model.conversation.localOnly == true ? "" : model.conversation.label)
+    .navigationTitle(navigationTitleText)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar { conversationToolbar }
     .navigationDestination(item: $openedConversation) { conversation in
