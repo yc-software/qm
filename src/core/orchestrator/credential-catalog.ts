@@ -7,7 +7,7 @@ import {
   connectorLine,
   credentialHandle,
   credentialLineText,
-  grantableCredential,
+  usableKeychainSources,
   isBackendCredential,
   liveConnector,
   type KeychainManifestInput,
@@ -189,8 +189,11 @@ export async function registerKeychainCredentials(
   } = catalog;
   if (external || strictReadOnly || !deps.keychain) return;
   const keychain = deps.keychain;
-  for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
-    if (!grantableCredential(credential)) continue;
+  const usable = usableKeychainSources(
+    await scopeKeychainGrants(),
+    ownCredentialsAllowed ? await keychain.listByOwner(actor.id) : [],
+  );
+  for (const { grant, credential, grantScope } of usable.grants) {
     addCredential(
       {
         handle: credentialHandle(credential),
@@ -210,30 +213,27 @@ export async function registerKeychainCredentials(
       credential.id,
     );
   }
-  if (ownCredentialsAllowed) {
-    for (const credential of await keychain.listByOwner(actor.id)) {
-      if (!grantableCredential(credential)) continue;
-      const gitBroker = personalGitRemote(credential) ? brokerToken : undefined;
-      addCredential(
-        {
-          handle: credentialHandle(credential),
-          ...(credential.kind === "file" ? { scratchOnly: true } : {}),
-          resolve: async () => {
-            await authorizeOwnerCredentials();
-            const resolved = resolvedCredential(
-              await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
-              true,
-            );
-            if (!gitBroker) return resolved;
-            return { ...resolved, env: [...resolved.env, { key: "AGENT_CREDENTIAL_TOKEN", value: await gitBroker() }] };
-          },
+  for (const credential of usable.own) {
+    const gitBroker = personalGitRemote(credential) ? brokerToken : undefined;
+    addCredential(
+      {
+        handle: credentialHandle(credential),
+        ...(credential.kind === "file" ? { scratchOnly: true } : {}),
+        resolve: async () => {
+          await authorizeOwnerCredentials();
+          const resolved = resolvedCredential(
+            await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
+            true,
+          );
+          if (!gitBroker) return resolved;
+          return { ...resolved, env: [...resolved.env, { key: "AGENT_CREDENTIAL_TOKEN", value: await gitBroker() }] };
         },
-        credential.service,
-        credential.id,
-        credential.ownerId,
-        credential.id,
-      );
-    }
+      },
+      credential.service,
+      credential.id,
+      credential.ownerId,
+      credential.id,
+    );
   }
 }
 

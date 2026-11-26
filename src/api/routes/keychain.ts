@@ -3,11 +3,11 @@ import {
   credentialHandle,
   connectorSummary,
   credentialSummary,
-  grantableCredential,
   KeychainError,
   liveConnector,
   turnScopeGrants,
   unsharedMemberCredentials,
+  usableKeychainSources,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -275,17 +275,22 @@ const listUnshared = keychainRoute(async ({ res }, kc, capability) => {
     kc.listConnectorsByOwners(ids),
     turnScopeGrants(kc, scopeId, capability.personaScope, capability.botActor === true),
   ]);
-  const execution: Array<{ handle: string; ownerId: string; credentialId: string; description: string }> = [];
-  const usable = (handle: string, ownerId: string, credentialId: string) =>
-    execution.push({ handle, ownerId, credentialId, description: "" });
-  for (const { credential } of scopeGrants)
-    if (grantableCredential(credential)) usable(credentialHandle(credential), credential.ownerId, credential.id);
-  if (capability.ownerConnections) {
-    for (const credential of entriesByOwner.get(actorId) ?? [])
-      if (grantableCredential(credential)) usable(credentialHandle(credential), actorId, credential.id);
-    for (const c of connectorsByOwner.get(actorId) ?? [])
-      if (liveConnector(c)) usable(connectorHandle(c.host, c.accountType), actorId, c.credentialId);
-  }
+  const own = capability.ownerConnections === true;
+  const usable = usableKeychainSources(scopeGrants, own ? (entriesByOwner.get(actorId) ?? []) : []);
+  const execution = [
+    ...[...usable.grants.map((row) => row.credential), ...usable.own].map((c) => ({
+      handle: credentialHandle(c),
+      ownerId: c.ownerId,
+      credentialId: c.id,
+      description: "",
+    })),
+    ...(own ? (connectorsByOwner.get(actorId) ?? []) : []).filter(liveConnector).map((c) => ({
+      handle: connectorHandle(c.host, c.accountType),
+      ownerId: actorId,
+      credentialId: c.credentialId,
+      description: "",
+    })),
+  ];
   return sendJson(res, 200, {
     credentials: unsharedMemberCredentials({ members, entriesByOwner, connectorsByOwner, scopeGrants, execution }),
   });

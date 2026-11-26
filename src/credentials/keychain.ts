@@ -1924,6 +1924,14 @@ export async function turnScopeGrants(
   return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
 }
 
+export const usableKeychainSources = <G extends { credential: KeychainCredentialMeta }>(
+  grants: G[],
+  own: KeychainCredentialMeta[],
+): { grants: G[]; own: KeychainCredentialMeta[] } => ({
+  grants: grants.filter((row) => grantableCredential(row.credential)),
+  own: own.filter(grantableCredential),
+});
+
 export const liveConnector = (c: Pick<ConnectorMeta, "connected" | "needsReconnect"> | undefined): boolean =>
   !!c?.connected && !c.needsReconnect;
 
