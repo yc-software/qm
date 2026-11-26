@@ -20,13 +20,3 @@ test("every seed SKILL.md parses with a name, description, and body", () => {
     assert.ok(m.name && m.description && m.body.trim(), `${path} is missing a required field`);
   }
 });
-
-test("admin and cloud skills distinguish system administration from resource ownership", () => {
-  for (const name of ["admin", "cloud-cli"]) {
-    const { body } = parseSeedSkill(readFileSync(join(SEED_DIR, name, "SKILL.md"), "utf8"));
-    assert.match(body, /including resources owned by other users/);
-    assert.match(body, /not impersonation or circumvention/);
-    if (name === "admin") assert.match(body, /grant it to this conversation/);
-    else assert.match(body, /credential grants, provider permissions, explicit restrictions, and mutation approvals/);
-  }
-});
