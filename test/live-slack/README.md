@@ -62,7 +62,7 @@ an **event pump** (`arga.ts:startEventPump`) that polls the twin's `/admin/event
 delivers each recorded event — signed, per-channel FIFO — to the instance's receiver. The
 pump also papers over two twin fidelity gaps: it stamps the missing `channel_type` and
 synthesizes the `app_mention` twin of a bot-mentioning `message` event (real Slack sends
-both; the plugin only dispatches channel mentions from `app_mention`).
+both; the plugin only dispatches channel mentions from `app_mention`). The twin is a stand-in, not real Slack: QA a Slack-facing change on a pool app in a real development Slack workspace ("## Run locally") before merge.
 
 Run locally (Free-tier keys cap the twin at 10 minutes — enough for `@smoke`):
 
