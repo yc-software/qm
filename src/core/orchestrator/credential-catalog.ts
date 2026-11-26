@@ -7,6 +7,7 @@ import {
   connectorLine,
   credentialHandle,
   credentialLineText,
+  grantableCredential,
   isBackendCredential,
   type KeychainManifestInput,
   type CredentialFile,
@@ -188,7 +189,7 @@ export async function registerKeychainCredentials(
   if (external || strictReadOnly || !deps.keychain) return;
   const keychain = deps.keychain;
   for (const { grant, credential, grantScope } of await scopeKeychainGrants()) {
-    if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+    if (!grantableCredential(credential)) continue;
     addCredential(
       {
         handle: credentialHandle(credential),
@@ -210,7 +211,7 @@ export async function registerKeychainCredentials(
   }
   if (ownCredentialsAllowed) {
     for (const credential of await keychain.listByOwner(actor.id)) {
-      if (credential.kind === "broker" || isBackendCredential(credential)) continue;
+      if (!grantableCredential(credential)) continue;
       const gitBroker = personalGitRemote(credential) ? brokerToken : undefined;
       addCredential(
         {

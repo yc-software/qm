@@ -480,7 +480,7 @@ describe("connectors are grantable like any keychain record", () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
     const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
-    const md = renderKeychainManifest({
+    const input: Parameters<typeof renderKeychainManifest>[0] = {
       scopeId: G1,
       conversationKind: "group",
       actorId: "carol@x",
@@ -488,8 +488,12 @@ describe("connectors are grantable like any keychain record", () => {
       entriesByOwner: new Map(),
       connectorsByOwner,
       scopeGrants: [],
-    });
+    };
+    const md = renderKeychainManifest(input);
     assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
+    assert.match(md, /^1 credential owned by people here isn't shared with this conversation;/m);
+    connectorsByOwner.get("alex@x")![0]!.needsReconnect = true;
+    assert.doesNotMatch(renderKeychainManifest(input), /shared with this conversation/);
   });
 });
 
@@ -982,6 +986,7 @@ test("manifest: own credentials need no grant but require explicit execution req
   const k = kc();
   await k.save(GH);
   await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
+  await k.save({ ownerId: "U1", service: "composio", secret: "project-key", envKey: "COMPOSIO_API_KEY" });
   await k.save({
     ownerId: "U1",
     service: "file-login",
@@ -1006,7 +1011,7 @@ test("manifest: own credentials need no grant but require explicit execution req
   assert.match(own, /`file-login:[a-f0-9]+` — file-login; files in \$HOME/);
   assert.match(own, /`npm:[a-f0-9]+` — npm; expired$/m);
   assert.doesNotMatch(own, /request-access|grant/);
-  assert.equal(
+  assert.match(
     renderKeychainManifest({
       scopeId: personalScope("U1"),
       conversationKind: "dm",
@@ -1015,15 +1020,8 @@ test("manifest: own credentials need no grant but require explicit execution req
       members: [{ id: "U1" }],
       entriesByOwner: new Map([["U1", entries]]),
     }),
-    renderKeychainManifest({
-      scopeId: personalScope("U1"),
-      conversationKind: "dm",
-      actorId: "U1",
-      scopeGrants: [],
-      members: [{ id: "U1" }],
-      entriesByOwner: new Map(),
-    }),
-    "own credentials without an execution handle are not listed",
+    /No credentials available\.\n3 credentials owned by people here aren't shared with this conversation; ask for access \(request-access skill\) rather than assuming one is missing\.$/,
+    "own credentials without an execution handle are counted, not listed",
   );
 
   const other = renderKeychainManifest({
@@ -1034,7 +1032,8 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.doesNotMatch(other, /Alice|npm|request-access/);
+  assert.doesNotMatch(other, /Alice|npm|github/);
+  assert.match(other, /^3 credentials owned by people here aren't shared/m);
 
   const channel = renderKeychainManifest({
     scopeId: "channel:C1",
@@ -1044,7 +1043,8 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.doesNotMatch(channel, /Alice|npm|request-access/);
+  assert.doesNotMatch(channel, /Alice|npm|github/);
+  assert.match(channel, /^3 credentials owned by people here aren't shared/m);
 });
 
 const SECRET = "keychain-route-secret".repeat(3);
@@ -1774,22 +1774,26 @@ test("granted connector keeps account and refresh semantics when owner is absent
     mode: "standing",
     purpose: "mail",
   });
-  const rendered = renderKeychainManifest(
-    {
-      scopeId: "channel:C1",
-      conversationKind: "channel",
-      actorId: "U_ACTOR",
-      members: [{ id: "U_ACTOR" }],
-      entriesByOwner: new Map(),
-      scopeGrants: [{ grant, credential }],
-      execution: [
-        { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
-      ],
-    },
-    1000,
-  );
+  const input: Parameters<typeof renderKeychainManifest>[0] = {
+    scopeId: "channel:C1",
+    conversationKind: "channel",
+    actorId: "U_ACTOR",
+    members: [{ id: "U_ACTOR" }],
+    entriesByOwner: new Map(),
+    scopeGrants: [{ grant, credential }],
+    execution: [
+      { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
+    ],
+  };
+  const rendered = renderKeychainManifest(input, 1000);
   assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
   assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
+  input.execution = [];
+  assert.doesNotMatch(
+    renderKeychainManifest(input, 1000),
+    /shared with this conversation/,
+    "non-members are not counted",
+  );
 });
 
 test("a connector whose refresh was rejected shows the provider's error, not just expired", () => {

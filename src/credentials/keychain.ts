@@ -1902,6 +1902,9 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
 
 const ORGANIZATION_OWNER_KEY = personKey("Organization");
 
+export const grantableCredential = (c: KeychainCredentialMeta): boolean =>
+  c.kind !== "broker" && !isBackendCredential(c);
+
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
   const groups = new Map<string, Set<string>>();
   const ownerNames = new Map<string, string>();
@@ -1939,10 +1942,16 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       if (!registered.has(service.toLowerCase()))
         add(member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
+  let unshared = 0;
   for (const [credentialId, { ownerId, line, connector }] of rows) {
     const shown = handles(credentialId);
     if (shown) add(ownerId, `- ${shown} — ${credentialLineText(line)}`);
     else if (connector && line.expired && !handleNames.has(connector)) add(ownerId, `- ${credentialLineText(line)}`);
+    else if (
+      input.members.some((member) => samePerson(member.id, ownerId)) &&
+      (connector ? !handleNames.has(connector) : grantableCredential(entries.get(credentialId)!))
+    )
+      unshared++;
   }
   for (const entry of execution)
     if (!entry.credentialId || !rows.has(entry.credentialId))
@@ -1956,6 +1965,10 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   );
   for (const owner of owners) lines.push(`### ${ownerNames.get(owner)}`, ...[...(groups.get(owner) ?? [])].sort());
   if (!owners.length) lines.push("No credentials available.");
+  if (unshared)
+    lines.push(
+      `${unshared} ${unshared === 1 ? "credential" : "credentials"} owned by people here ${unshared === 1 ? "isn't" : "aren't"} shared with this conversation; ask for access (request-access skill) rather than assuming one is missing.`,
+    );
   return lines.join("\n");
 }
 
