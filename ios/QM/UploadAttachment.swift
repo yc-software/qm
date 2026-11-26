@@ -318,6 +318,10 @@ struct AttachmentPicker: View {
   @State private var showingCamera = false
   @State private var photoSelection: [PhotosPickerItem] = []
 
+  /// Reaches past the 44pt frame into the composer's edge padding so a thumb that lands near
+  /// the plus still opens the menu; the right side stays clear of the model picker.
+  private static var tapArea: some Shape { Rectangle().inset(by: -14).offset(x: -8) }
+
   var body: some View {
     Menu {
       Button("Photo library", systemImage: "photo.on.rectangle") { showingPhotos = true }
@@ -335,8 +339,9 @@ struct AttachmentPicker: View {
         .frame(width: 32, height: 32)
         .background(QMTheme.ink.opacity(0.08), in: Circle())
         .frame(width: 44, height: 44)
-        .contentShape(Rectangle())
+        .contentShape(Self.tapArea)
     }
+    .contentShape(Self.tapArea)
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
     .photosPicker(
