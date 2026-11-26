@@ -21,6 +21,7 @@ const SITES = {
     "src/tenants/context.ts": ["currentTenant"],
   },
   ambientCaches: { "src/tenants/cache.ts": ["perTenant", "tenantListeners", "onTenantLoad"] },
+  bootReads: { "src/tenants/boot.ts": ["bootTenant"] },
 } satisfies Record<string, Record<string, string[]>>;
 
 type Metric = keyof typeof SITES;

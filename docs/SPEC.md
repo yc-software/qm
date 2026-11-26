@@ -12,7 +12,7 @@
 
 ## Deployment shapes
 
-QM has no single production, and no setting tells core which kind of deployment it is running in: a shape is only the sum of ordinary settings. Code reads those settings one at a time, with one exception: it must not ask how many tenants exist. A single-organization install is a deployment with one tenant. `bootTenant()` (`src/tenants/boot.ts`), which answers only when `tenants` holds exactly one row, is legacy and gets no new callers. Four shapes exist, and a change to `main` lands on all of them.
+QM has no single production, and no setting tells core which kind of deployment it is running in: a shape is only the sum of ordinary settings. Code reads those settings one at a time, with one exception: it must not ask how many tenants exist. A single-organization install is a deployment with one tenant. `bootTenant()` (`src/tenants/boot.ts`), which answers only when `tenants` holds exactly one row, is legacy and gets no new callers: CI's tenant ratchet lets their count only fall. Four shapes exist, and a change to `main` lands on all of them.
 
 | Shape               | Takes this repository as                                                                        | Runs on                                                                                     |
 | ------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |

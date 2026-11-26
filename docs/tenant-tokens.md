@@ -21,6 +21,7 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
   - `implicitQueries`: `PgPool.q`, `PgPool.query`, `withPgTransaction`, which take their tenant from the binding, and `PgPool.pool` and `PgPool.sessionPool`, which hand out raw connections with no tenant at all.
   - `ambientReads`: `boundTenant`, `currentTenant` and `ambientTenant`.
   - `ambientCaches`: `perTenant`, `tenantListeners` and `onTenantLoad`, which key state by the binding.
+  - `bootReads`: `bootTenant`, which answers only when the database holds exactly one tenant. It is legacy: a single-organization install is a deployment with one tenant, so nothing new may ask whether there is only one.
 
   CI fails when a count rises above `scripts/tenant-ratchet.json`, when one falls without the baseline being lowered, or when the baseline and the metrics disagree. `node scripts/tenant-ratchet.ts --update` only lowers the baseline; raising it is a deliberate edit to the JSON. `--list` prints the per-file breakdown. Only calls are counted: a function passed by reference, such as `{ q: pg.q }`, is not.
 
