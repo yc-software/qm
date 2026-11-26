@@ -16,7 +16,7 @@ import {
   Upload,
   type IconNode,
 } from "lucide";
-import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
+import { api, ApiError, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { formatBytes, relTime } from "./ui";
 import { browserRenderableImage } from "./media-layout";
@@ -469,30 +469,19 @@ export function openFileById(id: string): void {
   linkedFileId = id;
 }
 
-function attachmentName(disposition: string | null): string | null {
-  const encoded = disposition?.split("filename*=UTF-8''")[1];
-  return encoded ? decodeURIComponent(encoded) : null;
-}
-
 async function openLinkedFile(): Promise<void> {
   const id = linkedFileId;
   linkedFileId = null;
   if (!id) return;
-  const probe = fileContentUrl(id);
   try {
-    const response = await webFetch(probe, { headers: { range: "bytes=0-0" } });
-    void response.body?.cancel();
-    if (!response.ok)
-      throw new Error(
-        response.status === 404
-          ? "That file doesn't exist or you can't open it."
-          : `Couldn't open that file (${response.status}).`,
-      );
-    const name = attachmentName(response.headers.get("content-disposition")) ?? id;
-    const href = fileContentUrl(id, name);
-    if (!openFilePreview(name, href, response.headers.get("content-type") ?? undefined)) window.location.assign(href);
+    const file = await api<FileItem>(`/api/files/${encodeURIComponent(id)}`);
+    const href = fileContentUrl(file.id, file.name);
+    if (!openFilePreview(file.name, href, file.mimetype)) window.location.assign(href);
   } catch (e) {
-    filesNotice = errMessage(e, "Couldn't open that file.");
+    filesNotice =
+      e instanceof ApiError && e.status === 404
+        ? "That file doesn't exist or you can't open it."
+        : errMessage(e, "Couldn't open that file.");
     drawFiles();
   }
 }

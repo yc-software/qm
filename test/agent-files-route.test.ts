@@ -136,6 +136,13 @@ describe("agent files self-API", async () => {
     );
   });
 
+  it("describes a file only to someone who may open it", async () => {
+    const token = await capFor("U1");
+    const mine = (await (await get(`/v1/files/${mineId}`, token)).json()) as { name: string; mimetype: string };
+    assert.deepEqual([mine.name, mine.mimetype], ["mine.txt", "text/plain"]);
+    assert.equal((await get(`/v1/files/${theirsId}`, token)).status, 404);
+  });
+
   it("returns 404 for another principal's file content", async () => {
     const res = await get(`/v1/files/${theirsId}/content`, await capFor("U1"));
     assert.equal(res.status, 404);

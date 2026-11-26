@@ -437,6 +437,7 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "list files the asking person can reach across their contexts, split into owned and shared files, newest first; q=<text> matches file names, and limit and cursor page owned files",
       },
+      { method: "GET", path: "/v1/files/:id", summary: "a file's name, type and size" },
       {
         method: "GET",
         path: "/v1/files/:id/content",

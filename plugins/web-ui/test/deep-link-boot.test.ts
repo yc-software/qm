@@ -426,15 +426,12 @@ test("opening a title-only search hit opens the chat at its latest messages", as
 test("a file link opens that file in the viewer with its Markdown rendered", async () => {
   const h = await harness({
     path: "/files?file=doc1",
-    api: (path) =>
-      path.startsWith("/api/files/doc1/content")
-        ? new Response("# Housing index", {
-            headers: {
-              "content-type": "text/markdown; charset=utf-8",
-              "content-disposition": "inline; filename*=UTF-8''housing%20index.md",
-            },
-          })
-        : undefined,
+    api: (path) => {
+      if (path === "/api/files/doc1")
+        return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
+      if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
+      return undefined;
+    },
   });
   document.defaultView!.HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
