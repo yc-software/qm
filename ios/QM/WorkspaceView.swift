@@ -135,7 +135,7 @@ struct MoreGrid: View {
               Text(destination.title).font(.title3).foregroundStyle(QMTheme.ink)
               Spacer(minLength: 20)
               Image(systemName: destination.icon)
-                .font(.system(size: 24, weight: .medium))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Self.tints[destination.id] ?? QMTheme.ink)
             }
             .padding(18)
