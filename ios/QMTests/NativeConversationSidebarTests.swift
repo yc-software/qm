@@ -109,13 +109,12 @@ extension NativeConversationSidebarTests {
       id: "scope:group:project", title: "Project", icon: "folder", conversations: conversations)
     XCTAssertTrue(section.hasPreview)
     XCTAssertEqual(
-      section.preview(showAll: false, searching: false, selectedID: nil).map(\.id),
+      section.preview(showAll: false, selectedID: nil).map(\.id),
       Array(conversations.prefix(5)).map(\.id))
     XCTAssertEqual(
-      section.preview(showAll: false, searching: false, selectedID: "chat-8").map(\.id),
+      section.preview(showAll: false, selectedID: "chat-8").map(\.id),
       ["chat-1", "chat-2", "chat-3", "chat-4", "chat-5", "chat-8"])
-    XCTAssertEqual(section.preview(showAll: true, searching: false, selectedID: nil), conversations)
-    XCTAssertEqual(section.preview(showAll: false, searching: true, selectedID: nil), conversations)
+    XCTAssertEqual(section.preview(showAll: true, selectedID: nil), conversations)
     let pinned = NativeConversationSection(
       id: "pinned", title: "Pinned", icon: "pin", conversations: conversations)
     XCTAssertFalse(pinned.hasPreview)

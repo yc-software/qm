@@ -1,11 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// What the main screen shows under the nav: the open conversation or More.
-enum ShellSection: Hashable {
-  case home, more
-}
-
 /// Small icon-only nav under the main screen, in the style of the ChatGPT app.
 enum ShellNavItem {
   case conversations, new, more

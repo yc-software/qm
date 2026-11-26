@@ -18,7 +18,7 @@ struct RootView: View {
     case search, archived, setup
   }
 
-  @State private var section = ShellSection.home
+  @State private var showingMore = false
   @State private var keyboardUp = false
 
   @State private var homePath: [Page] = []
@@ -38,11 +38,11 @@ struct RootView: View {
   }
 
   private var visibleConversations: [Conversation] {
-    model.visibleConversations(search: "", webOnly: webOnly)
+    model.visibleConversations(webOnly: webOnly)
   }
 
   private var waitingCount: Int {
-    model.conversations.filter { $0.awaitingInput == true && $0.archived != true }.count
+    model.conversations.filter(ConversationFilter.waiting.includes).count
   }
 
   private var home: some View {
@@ -68,7 +68,7 @@ struct RootView: View {
                 .listRowSeparator(.hidden)
             }
             NativeConversationSections(
-              conversations: visibleConversations, contexts: contexts, search: "",
+              conversations: visibleConversations, contexts: contexts,
               selectedID: selectedConversation?.id, updatingIDs: model.updatingConversationIDs,
               onOpen: open, actions: conversationActions
             )
@@ -203,7 +203,7 @@ struct RootView: View {
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation, model: model)
     )
-    .task(id: webOnly) { await model.narrow(search: "", webOnly: webOnly) }
+    .task(id: webOnly) { await model.narrow(webOnly: webOnly) }
     .task(id: syncURL) {
       if syncURL != nil { await model.watchConversations() }
     }
@@ -222,7 +222,7 @@ struct RootView: View {
       #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     selectedConversation = conversation
     homePath = []
-    section = .home
+    showingMore = false
     showingConversations = false
   }
 
@@ -308,27 +308,22 @@ struct RootView: View {
   @ViewBuilder
   private var shell: some View {
     if let client = model.client, let identity = model.identity {
-      Group {
-        switch section {
-        case .home:
-          if let conversation = selectedConversation {
-            NavigationStack {
-              ChatView(
-                model: ChatModel(
-                  conversation: conversation, client: client, user: identity.user,
-                  knownSession: conversation.localOnly != true))
-            }
-            .modifier(navRoom)
-            .id(conversation.id)
-            .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
-          } else {
-            QMTheme.paper.ignoresSafeArea()
-              .task { selectedConversation = model.newConversation() }
-          }
-        case .more:
-          NavigationStack { MoreGrid(identity: identity, client: client) }
-            .modifier(navRoom)
+      if showingMore {
+        NavigationStack { MoreGrid(identity: identity, client: client) }
+          .modifier(navRoom)
+      } else if let conversation = selectedConversation {
+        NavigationStack {
+          ChatView(
+            model: ChatModel(
+              conversation: conversation, client: client, user: identity.user,
+              knownSession: conversation.localOnly != true))
         }
+        .modifier(navRoom)
+        .id(conversation.id)
+        .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
+      } else {
+        QMTheme.paper.ignoresSafeArea()
+          .task { selectedConversation = model.newConversation() }
       }
     }
   }
@@ -350,28 +345,21 @@ struct RootView: View {
   private var navRoom: NavRoom { NavRoom(height: showsNav ? ShellNav.height : 0) }
 
   private func nav(inList: Bool) -> ShellNav {
-    let selected: ShellNavItem
-    if inList {
-      selected = .conversations
-    } else {
-      selected =
-        switch section {
-        case .more: .more
-        case .home: selectedConversation?.localOnly == true ? .new : .conversations
-        }
-    }
+    let blank = !showingMore && selectedConversation?.localOnly == true
+    let selected: ShellNavItem =
+      inList ? .conversations : showingMore ? .more : blank ? .new : .conversations
     return ShellNav(selected: selected, waiting: waitingCount) { item in
       switch item {
       case .conversations: showingConversations = true
       case .new:
         // Already on a blank chat: just bring it back instead of doing nothing.
-        if section == .home, selectedConversation?.localOnly == true {
+        if blank {
           showingConversations = false
         } else if let conversation = model.newConversation() {
           open(conversation)
         }
       case .more:
-        section = .more
+        showingMore = true
         showingConversations = false
       }
     }

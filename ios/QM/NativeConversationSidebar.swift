@@ -12,8 +12,8 @@ struct NativeConversationSection: Identifiable {
       && conversations.first.map { ScopeKind(scopeId: $0.scopeId) != .personal } == true
   }
 
-  func preview(showAll: Bool, searching: Bool, selectedID: String?) -> [Conversation] {
-    guard hasPreview, !showAll, !searching else { return conversations }
+  func preview(showAll: Bool, selectedID: String?) -> [Conversation] {
+    guard hasPreview, !showAll else { return conversations }
     return conversations.enumerated().filter { $0.offset < 5 || $0.element.id == selectedID }.map(
       \.element)
   }
@@ -164,7 +164,6 @@ struct NativeGroupAvatars: View {
 struct NativeConversationSections<Actions: View>: View {
   let conversations: [Conversation]
   let contexts: [String: WorkspaceContext]
-  let search: String
   let selectedID: String?
   let updatingIDs: Set<String>
   let onOpen: (Conversation) -> Void
@@ -182,7 +181,7 @@ struct NativeConversationSections<Actions: View>: View {
   private func conversationSection(
     _ section: NativeConversationSection, contexts: [String: WorkspaceContext]
   ) -> some View {
-    let expanded = !search.isEmpty || !collapsedScopes.contains(section.id)
+    let expanded = !collapsedScopes.contains(section.id)
     Button {
       if !collapsedScopes.insert(section.id).inserted {
         collapsedScopes.remove(section.id)
@@ -209,14 +208,12 @@ struct NativeConversationSections<Actions: View>: View {
     )
     .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     .accessibilityHint("Show or hide conversations in this section")
-    .disabled(!search.isEmpty)
     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
     .listRowSeparator(.hidden)
     ForEach(
       expanded
         ? section.preview(
-          showAll: expandedFolderScopes.contains(section.id), searching: !search.isEmpty,
-          selectedID: selectedID) : []
+          showAll: expandedFolderScopes.contains(section.id), selectedID: selectedID) : []
     ) { conversation in
       Button {
         onOpen(conversation)
@@ -239,7 +236,7 @@ struct NativeConversationSections<Actions: View>: View {
         actions(conversation)
       }
     }
-    if expanded, search.isEmpty, section.hasPreview {
+    if expanded, section.hasPreview {
       Button(expandedFolderScopes.contains(section.id) ? "Show less" : "Show more") {
         if !expandedFolderScopes.insert(section.id).inserted {
           expandedFolderScopes.remove(section.id)
