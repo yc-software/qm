@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { serverDeps, type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -29,7 +29,7 @@ function dm(externalId: string, text: string, thread: string): TurnRequest {
 describe("agent conversations self-API", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let mineId: string;
   let theirsId: string;
 
@@ -354,7 +354,7 @@ test("bot work in a person's name sees only conversations bot work ran in; the p
   const built = buildApp(config, {
     agent: { ...mock, runTurn: (turn) => (turnTools.set(turn.session.threadRef, turn.tools), mock.runTurn(turn)) },
   });
-  const server = createServer(built.app, serverDeps(config, built)).listen(port, "127.0.0.1");
+  const server = createServer(built.app, built).listen(port, "127.0.0.1");
   t.after(() => server.close());
   await once(server, "listening");
   const web = async (thread: string, text: string, botActor?: true) =>

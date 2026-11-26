@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -162,7 +161,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   });
   await built.modelRegistry.upsert(definition, "admin");
   assert.ok(await loadTenant().then(() => resolveEmbeddingModel(definition.id)));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;

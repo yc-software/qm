@@ -52,7 +52,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   );
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   t.after(async () => {
     b.scheduler.stop();
     await b.runtime.stop();
@@ -294,7 +294,6 @@ test("external account DMs require admission under the current policy", async ()
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
   const { createServer } = await import("../src/api/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
-  const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
   await b.identity.refresh();
@@ -329,7 +328,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
   let forwarded = 0;
   const server = createServer(b.app, {
-    ...serverDeps(config, b),
+    ...b,
     brokerFetch: async () => {
       forwarded++;
       return { status: 200, contentType: "application/json", text: async () => '{"public":"ok"}' };

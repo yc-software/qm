@@ -10,7 +10,6 @@ import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Delivery } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -24,7 +23,7 @@ after(() => events.stop());
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     web: { events, me: { suggestedActivities: [] }, shell: { release: async () => undefined } as never },
     ...deps,

@@ -88,7 +88,6 @@ import {
   providerKeysPresent,
   type Config,
 } from "./config.ts";
-import type { ServerDeps } from "./api/deps.ts";
 import { enabledSandboxBackends, superserveGenerationKey } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
@@ -499,7 +498,7 @@ export function stopWithBackstop(
   );
 }
 
-export interface BuiltApp {
+export interface Core extends ReturnType<typeof coreSettings> {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   drain: DrainController;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -507,7 +506,7 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
+  deploymentLayerReady: () => Promise<unknown>;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -544,7 +543,8 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
-  genericChatEvents?: ServerDeps["genericChatEvents"];
+  genericChatEvents?: ReturnType<typeof createGenericChatInbound>["handle"];
+  baseModelDefault: string;
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
@@ -561,7 +561,7 @@ export interface BuiltApp {
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
   keychainApprovals?: KeychainApprovals;
-  approvals: ServerDeps["approvals"];
+  approvals: DurableMap<PendingApprovalRecord>;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
@@ -593,6 +593,53 @@ export interface BuiltApp {
   slackCore: SlackCoreClient;
 }
 
+function coreSettings(config: Config, sandbox: Sandbox, drain: DrainController) {
+  const smoke =
+    config.backgroundDeploymentId && config.backgroundWorkEnabled ? config.backgroundDeploymentId : undefined;
+  return {
+    externalSlackPolicies: config.externalSlackPolicies,
+    production: config.production,
+    deploymentControlSecret: smoke && config.deploymentControlSecret,
+    deploymentLiveSmoke: smoke
+      ? {
+          deploymentId: smoke,
+          superseded: () => !drain.canClaim(),
+          run: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+        }
+      : undefined,
+    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    spendExportToken: config.spendExportToken,
+    signingSecret: config.signingSecret,
+    capabilitySecret: config.capabilitySecret,
+    capabilityTokenCompression: config.capabilityTokenCompression,
+    portalIdentitySecret: config.portalIdentitySecret,
+    requireSignedPortalIdentity: config.requireSignedPortalIdentity,
+    providerKeys: providerKeysPresent(config),
+    brandingDefault: config.brandingDefault,
+    companySubscriptionAuth: companySubscriptionAuth(config),
+    slackEventsPort: config.slackEventsPort,
+    apiBaseUrl: config.apiBaseUrl,
+    publicUrl: config.publicUrl,
+    portalUrl: config.publicWebUrl,
+    emailAuthPrincipals: config.emailAuthPrincipals,
+    emailAuthDomain: config.emailAuthDomain,
+    slackAllowFrom: config.slack && (config.slack.allowFrom ?? []),
+    inviteMailer:
+      config.resendApiKey && config.emailFrom ? resendMailer(config.resendApiKey, config.emailFrom) : undefined,
+    deployDialTimeoutMs: config.deployDialTimeoutMs,
+    deployAppsDomain: config.awsDeploy.appsDomain,
+    deployGateSecret: config.awsDeploy.gateSecret,
+    deployAppsSessionSecret: config.deployAppsSessionSecret,
+    deployAppsLoginUrl: config.deployAppsLoginUrl,
+    deployAppsLoginPath: config.deployAppsLoginPath,
+    sandboxBackend: sandbox.profile.backend,
+    egressDeclaredEnforcement: sandbox.profile.egressEnforcement ?? "none",
+    egressEnforcement: effectiveEgressEnforcement(sandbox.profile, config),
+    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
+    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+  };
+}
+
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
 const CONFIGURED_MAPS = [
@@ -620,7 +667,7 @@ export function buildApp(
     agent?: Agent;
     canClaimRuns?: () => boolean;
   } = {},
-): BuiltApp {
+): Core {
   const admittedWork = createAdmittedWork();
   let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
@@ -3306,6 +3353,8 @@ export function buildApp(
     },
   };
   return {
+    ...coreSettings(config, sandbox, drain),
+    baseModelDefault: configuredModel(config) ?? fallback.modelId,
     app,
     runtimeFallback: fallback,
     checkReadiness: async (signal) => {
@@ -3315,9 +3364,7 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    get deploymentLayerReady() {
-      return deploymentLayerReady();
-    },
+    deploymentLayerReady,
     sessions,
     runs,
     signals: runSignals,
@@ -3410,141 +3457,5 @@ export function buildApp(
           })
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
     slackCore,
-  };
-}
-
-export function serverDeps(
-  config: Config,
-  built: BuiltApp,
-  slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
-  slackEnvBotToken?: string,
-): Omit<ServerDeps, "control"> {
-  const subscriptionAuth = companySubscriptionAuth(config);
-  return {
-    externalSlackPolicies: config.externalSlackPolicies,
-    modelGatewayTransport: built.modelGatewayTransport,
-    modelRoutes: built.modelRoutes,
-    production: config.production,
-    checkReadiness: built.checkReadiness,
-    ...(config.backgroundDeploymentId && config.backgroundWorkEnabled
-      ? {
-          deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: {
-            deploymentId: config.backgroundDeploymentId,
-            superseded: () => !built.drain.canClaim(),
-            run: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
-          },
-        }
-      : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
-    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-    replayDedupe: built.replayDedupe,
-    ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
-    config: built.config,
-    baseModelDefault: configuredModel(config) ?? built.runtimeFallback.modelId,
-    modelProviders: providerKeysPresent(config),
-    providerKeys: providerKeysPresent(config),
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
-    modelRegistry: built.modelRegistry,
-    modelVerifier: built.modelVerifier,
-    refreshModels: built.refreshModels,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    mcpServers: built.mcpServers,
-    mcpToolService: built.mcpToolService,
-    memoryRegistry: built.memoryRegistry,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
-    connectorTokens: built.connectorTokens,
-    slackInstallation: built.slackInstallation,
-    slackEnvironmentState,
-    ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
-    ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
-    resolveClient: built.resolveClient,
-    consentLinks: built.consentLinks,
-    oauthFlows: built.oauthFlows,
-    secretDrops: built.secretDrops,
-    ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
-    admin: built.admin,
-    ...(built.selfServe ? { selfServe: built.selfServe } : {}),
-    ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
-    ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
-    ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    budget: built.budget,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    featureFlags: built.featureFlags,
-    ...(built.decisions ? { decisions: built.decisions } : {}),
-    ...(built.teams ? { teams: built.teams } : {}),
-    egressAudit: built.egressAudit,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    crons: built.crons,
-    loops: built.loops,
-    deploymentLayer: built.deploymentLayerStore,
-    deployDialTimeoutMs: config.deployDialTimeoutMs,
-    ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-    ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
-    ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
-    ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-    ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
-    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
-    scheduler: built.scheduler,
-    webhookReceiver: built.webhookReceiver,
-    ...(built.genericChatEvents ? { genericChatEvents: built.genericChatEvents } : {}),
-    loopIngress: built.loopIngress,
-    identity: built.identity,
-    principalLinks: built.principalLinks,
-    slackAccounts: built.slackAccounts,
-    composioReturns: built.composioReturns,
-    ...(built.keychain ? { keychain: built.keychain } : {}),
-    serviceCreds: built.serviceCreds,
-    deliveries: built.deliveries,
-    ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
-    approvals: built.approvals,
-    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-    runs: built.runs,
-    signals: built.signals,
-    sessionStateBus: built.sessionStateBus,
-    files: built.files,
-    ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    memory: built.memory,
-    blobTransfer: built.blobTransfer,
-    sandboxBackend: built.sandbox.profile.backend,
-    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-      signingSecret: config.signingSecret,
-      apiBaseUrl: config.apiBaseUrl,
-    }),
-    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
-    sandbox: built.sandbox,
-    advisoryLock: built.advisoryLock,
-    ...(built.processes ? { processes: built.processes } : {}),
-    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
-    directory: built.directory,
-    ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
-    ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
-    channelPolicy: built.channelPolicy,
-    ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
-    uiState: built.uiState,
-    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
-    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
-    sessionShares: built.sessionShares,
-    sessionShareBytes: built.sessionShareBytes,
-    environments: built.environments,
-    sandboxResources: built.sandboxResources,
   };
 }
