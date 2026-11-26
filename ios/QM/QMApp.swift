@@ -107,7 +107,6 @@ struct RootView: View {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
             listActions(identity)
-            if !keyboardUp { nav(plain: false, inList: true) }
           }
         }
       }
@@ -136,6 +135,12 @@ struct RootView: View {
       home
     } detail: {
       shell
+    }
+    // One nav for the whole app, drawn above both the list and the main screen so it stays
+    // put while they slide underneath it.
+    .safeAreaPadding(.bottom, showsNav ? ShellNav.height : 0)
+    .overlay(alignment: .bottom) {
+      if showsNav { nav(plain: false, inList: showingConversations) }
     }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
       _ in keyboardUp = true
@@ -313,8 +318,7 @@ struct RootView: View {
                 model: ChatModel(
                   conversation: conversation, client: client, user: identity.user,
                   knownSession: conversation.localOnly != true),
-                onShowConversations: { showingConversations = true },
-                accessory: AnyView(nav(plain: true)))
+                onShowConversations: { showingConversations = true })
             }
             .id(conversation.id)
             .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
@@ -324,19 +328,14 @@ struct RootView: View {
           }
         case .waiting:
           NavigationStack { waitingConversations.toolbar { menuToolbar } }
-            .safeAreaInset(edge: .bottom, spacing: 0) { shellNav }
         case .more:
           NavigationStack { MoreGrid(identity: identity, client: client).toolbar { menuToolbar } }
-            .safeAreaInset(edge: .bottom, spacing: 0) { shellNav }
         }
       }
     }
   }
 
-  @ViewBuilder
-  private var shellNav: some View {
-    if !keyboardUp { nav(plain: false) }
-  }
+  private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
 
   private func nav(plain: Bool, inList: Bool = false) -> ShellNav {
     let selected: ShellNavItem
@@ -662,6 +661,9 @@ enum ShellNavItem {
 }
 
 struct ShellNav: View {
+  /// Height above the home indicator: 10 top + 40 item + 12 bottom.
+  static let height: CGFloat = 62
+
   let selected: ShellNavItem
   let waiting: Int
   /// Inside the conversation's own bottom bar, which already has a background and padding.
