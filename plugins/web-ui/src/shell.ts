@@ -217,7 +217,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
   if (view === "apps" && item) openAppById(item);
-  if (view === "files" && item) openFileById(item);
+  if (view === "files" && item && !resolveProjectScope(contextsState.list, item)) openFileById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
