@@ -560,24 +560,25 @@ struct ChatView: View {
           && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
         {
-          // A quiet greeting, ChatGPT-style: one serif line, no icon or subtitle.
-          Text("What shall we work on?")
-            .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
-            .foregroundStyle(QMTheme.ink)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 72)
-            .padding(.bottom, 12)
-          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-            let identity, !model.conversation.isShared
-          {
-            NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
-              guard model.draft.isEmpty else { return }
-              model.draft = activity.prompt
-              model.saveDraft()
-              composerFocused = true
+          // A quiet greeting, ChatGPT-style, centred in the space above the composer.
+          VStack(spacing: 20) {
+            Text("What shall we work on?")
+              .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
+              .foregroundStyle(QMTheme.ink)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: .infinity)
+            if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+              let identity, !model.conversation.isShared
+            {
+              NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
+                guard model.draft.isEmpty else { return }
+                model.draft = activity.prompt
+                model.saveDraft()
+                composerFocused = true
+              }
             }
           }
+          .containerRelativeFrame(.vertical, alignment: .center) { height, _ in height * 0.85 }
         }
         ForEach(sections) { section in
           VStack(alignment: .leading, spacing: 16) {
