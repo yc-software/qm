@@ -193,6 +193,19 @@ upstream issue or PR by number in private repository PRs, issues, comments, or c
 messages: GitHub cross-references can disclose their existence and titles upstream.
 Name upstream work in plain words instead.
 
+## Database
+
+- `db/schema.sql` is the single generated source of truth for the current Postgres schema
+  (never edit by hand); `db/vector.sql` is the optional pgvector schema applied on first use.
+- To change the schema or add a data migration, add `db/migrations/NNNN-what-it-does.sql`,
+  run `DATABASE_URL=... npm run db:schema` against Postgres 16 (or set `PG_DUMP` to a
+  Postgres 16 `pg_dump`), and commit both files. CI regenerates `db/schema.sql` and fails on
+  any diff.
+- Never edit a migration once merged; add a new one. A file containing only a single
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS` runs outside a transaction automatically; use
+  `SET LOCAL lock_timeout` when altering busy tables. See [`db/README.md`](./db/README.md)
+  for full details.
+
 ## Durable by default
 
 A recurring mistake: stashing state the system later relies on in process memory. The

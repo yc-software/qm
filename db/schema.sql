@@ -5438,3 +5438,4 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) F
 REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand text) FROM PUBLIC;
 
 INSERT INTO public.tenants DEFAULT VALUES;
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0001-mark-earlier-links', 'a6a108bdf7d224393a5fa175ff5416e14e22303e3d76503d8559ac96f145425f');
