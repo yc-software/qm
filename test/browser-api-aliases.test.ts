@@ -72,6 +72,8 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["POST", "/api/crons"],
     ["PUT", "/api/inbox"],
     ["DELETE", "/api/loops/1/grants/2"],
+    ["GET", "/api/files/upload-client"],
+    ["GET", "/api/files/uploads"],
     ["GET", "/v1/sessions"],
   ] as const)
     assert.equal(apiAlias(method, path), null, `${method} ${path}`);
