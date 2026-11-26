@@ -56,7 +56,6 @@ struct RootView: View {
       Group {
         if let identity = model.identity {
           QMList(background: QMTheme.sidebar) {
-            shortcutRows
             if webOnly {
               HStack {
                 Text("Web conversations").foregroundStyle(.secondary)
@@ -376,44 +375,6 @@ struct RootView: View {
       }
       .accessibilityLabel("Conversations")
     }
-  }
-
-  private var shortcutRows: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      shortcut("Home", icon: "house", to: .home)
-      shortcut("Waiting", icon: "tray", to: .waiting, count: waitingCount)
-      shortcut("More", icon: "square.grid.2x2", to: .more)
-    }
-    .padding(.top, 12).padding(.bottom, 12)
-    .listRowInsets(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 24))
-    .listRowSeparator(.hidden)
-    .listRowBackground(QMTheme.sidebar)
-  }
-
-  private func shortcut(
-    _ title: String, icon: String, to target: ShellSection, count: Int = 0
-  ) -> some View {
-    Button {
-      section = target
-      if target == .home, selectedConversation == nil {
-        selectedConversation = model.newConversation()
-      }
-      showingConversations = false
-    } label: {
-      HStack(spacing: 16) {
-        Image(systemName: icon).font(.system(size: 22, weight: .regular)).frame(width: 28)
-        Text(title).font(.title2.weight(.medium))
-        if count > 0 {
-          Text("\(count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(QMTheme.unread, in: Capsule())
-        }
-        Spacer(minLength: 0)
-      }
-      .frame(minHeight: 48)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
   }
 
   private func listActions(_ identity: Identity) -> some View {
