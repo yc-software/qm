@@ -24,10 +24,12 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 
+const SLACK_BUTTON_TEXT_MAX = 75;
+
 export function slackButton(b: CardButton): Record<string, unknown> {
   return {
     type: "button",
-    text: { type: "plain_text", text: clip(b.label, 75) },
+    text: { type: "plain_text", text: clip(b.label, SLACK_BUTTON_TEXT_MAX) },
     action_id: b.actionId,
     value: b.value,
     ...(b.style ? { style: b.style } : {}),
