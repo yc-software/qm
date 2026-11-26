@@ -19,5 +19,5 @@ data
 .env.local
 *.env.local
 plugins/**/.env*
-common/.env*
+common/**/.env*
 .claude
