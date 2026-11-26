@@ -555,12 +555,14 @@ struct ChatView: View {
           && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
         {
-          ContentUnavailableView {
-            Text("What shall we work on?")
-          } description: {
-            Text("Ask a question or hand off a task.")
-          }
-          .padding(.top, 60)
+          // A quiet greeting, ChatGPT-style: one serif line, no icon or subtitle.
+          Text("What shall we work on?")
+            .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
+            .foregroundStyle(QMTheme.ink)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 72)
+            .padding(.bottom, 12)
           if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
             let identity, !model.conversation.isShared
           {
@@ -1003,13 +1005,16 @@ struct ComposerSendLabel: View {
         NativeWave().foregroundStyle(QMTheme.paper)
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       } else {
-        Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold))
+        Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       }
     }
     .foregroundStyle(QMTheme.paper)
-    .frame(width: 44, height: 44)
+    .frame(width: 32, height: 32)
     .background(QMTheme.ink.opacity(enabled ? 1 : 0.25), in: Circle())
+    // Keep a full-size tap target around the smaller circle.
+    .frame(width: 44, height: 44)
+    .contentShape(Rectangle())
   }
 }
 

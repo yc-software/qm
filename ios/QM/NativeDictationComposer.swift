@@ -131,12 +131,14 @@ struct NativeDictationDiscardButton: View {
     Button {
       model.cancel()
     } label: {
+      // Matches the send button: a 32pt circle inside a 44pt tap target.
       Image(systemName: "xmark")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 14, weight: .bold))
         .foregroundStyle(QMTheme.ink)
-        .frame(width: 44, height: 44)
+        .frame(width: 32, height: 32)
         .background(QMTheme.ink.opacity(0.08), in: Circle())
-        .contentShape(Circle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Discard recording")
@@ -154,10 +156,12 @@ struct NativeDictationSendButton: View {
         model.retry()
       } label: {
         Image(systemName: "arrow.clockwise")
-          .font(.system(size: 17, weight: .semibold))
+          .font(.system(size: 14, weight: .bold))
           .foregroundStyle(QMTheme.paper)
-          .frame(width: 44, height: 44)
+          .frame(width: 32, height: 32)
           .background(QMTheme.ink, in: Circle())
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel(model.retryRecordsAgain ? "Record again" : "Retry transcription")

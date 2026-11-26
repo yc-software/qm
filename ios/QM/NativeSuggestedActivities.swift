@@ -58,35 +58,49 @@ struct NativeSuggestedActivities: View {
   var dismissible: Bool { identity.suggestedActivitiesGeneration == true }
 
   var body: some View {
-    VStack(spacing: 8) {
-      ForEach(model.activities(for: identity)) { activity in
+    // Plain rows split by hairlines, rather than stacked grey cards.
+    let activities = model.activities(for: identity)
+    VStack(spacing: 0) {
+      ForEach(activities) { activity in
         HStack(spacing: 0) {
           Button {
             select(activity)
           } label: {
-            HStack(spacing: 10) {
-              Text(activity.title).multilineTextAlignment(.leading)
-              Spacer()
-              Image(systemName: "arrow.up.left").font(.caption)
+            HStack(spacing: 12) {
+              Text(activity.title)
+                .foregroundStyle(QMTheme.ink.opacity(0.85))
+                .multilineTextAlignment(.leading)
+              Spacer(minLength: 8)
+              Image(systemName: "arrow.up.left")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.tertiary)
             }
-            .padding(14)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
           }
           if dismissible {
             Button {
               Task { await model.dismiss(activity) }
             } label: {
-              Image(systemName: "xmark").font(.caption).frame(width: 44, height: 44)
+              Image(systemName: "xmark").font(.caption2.weight(.medium))
+                .foregroundStyle(.tertiary)
+                .frame(width: 36, height: 44)
                 .contentShape(Rectangle())
             }
             .accessibilityLabel("Dismiss \(activity.title)")
             .disabled(model.dismissing != nil)
           }
         }
-        .font(.subheadline)
+        .font(.body)
         .buttonStyle(.plain)
-        .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(alignment: .bottom) {
+          if activity.id != activities.last?.id {
+            Rectangle().fill(QMTheme.border).frame(height: 0.5)
+          }
+        }
       }
     }
+    .padding(.horizontal, 4)
     .task(id: identity.user) { await model.generate(for: identity) }
   }
 }
