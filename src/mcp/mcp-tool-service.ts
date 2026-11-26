@@ -599,7 +599,7 @@ export function createMcpToolService(opts: {
           if (!apps.length) return [];
           let listed = new Set<string>();
           try {
-            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+            listed = new Set((await catalogTools(server, principalId)).flatMap((tool) => tool.name.split(".", 1)));
           } catch (e) {
             record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }
