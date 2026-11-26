@@ -71,9 +71,6 @@ struct NativeSuggestedActivities: View {
                 .foregroundStyle(QMTheme.ink.opacity(0.85))
                 .multilineTextAlignment(.leading)
               Spacer(minLength: 8)
-              Image(systemName: "arrow.up.left")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 14)
             .contentShape(Rectangle())
