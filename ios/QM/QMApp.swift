@@ -316,7 +316,6 @@ struct RootView: View {
                 model: ChatModel(
                   conversation: conversation, client: client, user: identity.user,
                   knownSession: conversation.localOnly != true),
-                onShowConversations: { showingConversations = true },
                 bottomInset: showsNav ? ShellNav.height : 0)
             }
             .id(conversation.id)
@@ -326,10 +325,10 @@ struct RootView: View {
               .task { selectedConversation = model.newConversation() }
           }
         case .waiting:
-          NavigationStack { waitingConversations.toolbar { menuToolbar }.modifier(navRoom) }
+          NavigationStack { waitingConversations.modifier(navRoom) }
         case .more:
           NavigationStack {
-            MoreGrid(identity: identity, client: client).toolbar { menuToolbar }.modifier(navRoom)
+            MoreGrid(identity: identity, client: client).modifier(navRoom)
           }
         }
       }
@@ -367,18 +366,6 @@ struct RootView: View {
         section = .more
         showingConversations = false
       }
-    }
-  }
-
-  @ToolbarContentBuilder
-  private var menuToolbar: some ToolbarContent {
-    ToolbarItem(placement: .topBarLeading) {
-      Button {
-        showingConversations = true
-      } label: {
-        Image(systemName: "line.3.horizontal")
-      }
-      .accessibilityLabel("Conversations")
     }
   }
 
