@@ -84,7 +84,7 @@ function redactedValue(value: unknown): unknown {
   return value;
 }
 
-export function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
+function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
   if (!record.call) return {};
   return { call: { tool: record.call.tool, input: redactedValue(record.call.input) as Record<string, unknown> } };
 }

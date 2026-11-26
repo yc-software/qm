@@ -154,6 +154,7 @@ function card(
           ? html`<button
               type="button"
               class="ac-dismiss"
+              aria-label=${n > 1 ? "Decline all" : "Decline"}
               aria-keyshortcuts="Escape"
               ?disabled=${o.busy}
               @click=${o.declineAll}
