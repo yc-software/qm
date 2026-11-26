@@ -8,6 +8,7 @@ import { startQm } from "../../src/start.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { personalScope } from "../../src/types.ts";
 import { bootTenant, inBootTenant } from "../../src/tenants/boot.ts";
+import { personalScope } from "../../src/types.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
 async function main(): Promise<void> {
