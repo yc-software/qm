@@ -19,7 +19,7 @@ import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-f
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { testConfigStore, testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { testCore } from "./support/build-app.ts";
@@ -99,6 +99,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   const server = createInsecureTestServer(app, {
     ...testCore(),
     featureFlags,
+    config: testConfigStore("acme"),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,

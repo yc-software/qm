@@ -24,13 +24,6 @@ const MAX_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.replayDedupe) {
-    return sendJson(res, 503, {
-      error: "not_configured",
-      message:
-        "single-use claims need the Postgres-backed replay store; set DATABASE_URL so a restart cannot resurrect a spent sign-in link",
-    });
-  }
   const b = isObj(body) ? body : {};
   const ids: unknown[] = Array.isArray(b.ids) ? b.ids : [];
   if (
@@ -71,7 +64,7 @@ async function rosterAdmits(ctx: ApiCtx, email: string, listed: boolean): Promis
   const tenant = ctx.tenant?.id;
   if (tenant && multitenant()) {
     if (listed || (await tenantAllowsEmail(email)) === true) return true;
-    return Boolean((await deps.directory?.tenantsForEmail?.(email))?.some(({ id }) => id === tenant));
+    return Boolean((await deps.directory.tenantsForEmail?.(email))?.some(({ id }) => id === tenant));
   }
   return (
     (tenant ? await tenantAllowsEmail(email) : undefined) ??
@@ -122,7 +115,7 @@ function requestedEmail(ctx: ApiCtx): string | null {
 async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const email = requestedEmail(ctx);
   if (!email) return;
-  const tenants = ctx.deps.directory?.tenantsForEmail;
+  const tenants = ctx.deps.directory.tenantsForEmail;
   if (ctx.tenant || !tenants) return sendJson(ctx.res, 200, await admission(ctx, email));
   for (const { id } of await tenants(email)) {
     const admitted = await inTenant(id, (tenant) => admission({ ...ctx, tenant }, email, true));
@@ -134,7 +127,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
 async function emailTenants(ctx: ApiCtx): Promise<void> {
   const email = requestedEmail(ctx);
   if (!email) return;
-  const tenants = ctx.deps.directory?.tenantsForEmail;
+  const tenants = ctx.deps.directory.tenantsForEmail;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(email) : [],
     shared: multitenant(),
@@ -144,7 +137,7 @@ async function emailTenants(ctx: ApiCtx): Promise<void> {
 async function principalTenants(ctx: ApiCtx): Promise<void> {
   const principal = (ctx.url.searchParams.get("principal") ?? "").trim();
   if (!principal) return sendJson(ctx.res, 400, { error: "bad_request", message: "principal required" });
-  const tenants = ctx.deps.directory?.tenantsForPrincipal;
+  const tenants = ctx.deps.directory.tenantsForPrincipal;
   return sendJson(ctx.res, 200, {
     tenants: tenants ? await tenants(principal) : [],
     shared: multitenant(),
@@ -154,7 +147,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
 
 async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
   const label = labelOfAppHost(host, ctx.deps.deployAppsDomain);
-  return label && !label.includes(".") ? ctx.deps.directory?.tenantForAppHost?.(label) : undefined;
+  return label && !label.includes(".") ? ctx.deps.directory.tenantForAppHost?.(label) : undefined;
 }
 
 async function hostTenant(ctx: ApiCtx): Promise<void> {
@@ -209,7 +202,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
     return void res.end();
   }
   const claims = await trustedAssertion(ctx, "trusted-entry-admin");
-  if (!claims || !deps.admin || !deps.replayDedupe) return;
+  if (!claims) return;
   const principalId = trustedSubjectPrincipal(claims.issuer, claims.subject);
   if (!(await activePrincipal(deps, principalId))) return sendJson(res, 403, { error: "inactive_principal" });
   if (!(await deps.replayDedupe.claim(`trusted-admin:${claims.jti}`, claims.exp)))
@@ -240,9 +233,7 @@ interface TrustedAssertion extends Record<string, unknown> {
 
 function trustedAssertionSecret(ctx: ApiCtx): string | undefined {
   const secret = ctx.deps.portalIdentitySecret;
-  return secret && secret.length >= 32 && secret !== ctx.secret && ctx.deps.admin && ctx.deps.replayDedupe
-    ? secret
-    : undefined;
+  return secret && secret.length >= 32 && secret !== ctx.secret ? secret : undefined;
 }
 
 async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAssertion | null> {
@@ -280,7 +271,7 @@ async function trustedAssertion(ctx: ApiCtx, purpose: string): Promise<TrustedAs
 async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
   const { deps, res } = ctx;
   const claims = await trustedAssertion(ctx, "trusted-self-serve");
-  if (!claims || !deps.admin || !deps.replayDedupe) return;
+  if (!claims) return;
   if (!deps.selfServe)
     return sendJson(res, 403, { error: "self_serve_failed", message: "self-serve workspaces are not available" });
   const org = externalOrgSchema.safeParse(claims.externalOrg);
@@ -290,12 +281,11 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
   if (!(await deps.replayDedupe.claim(`trusted-self-serve:${claims.jti}`, claims.exp)))
     return sendJson(res, 409, { error: "assertion_already_used" });
   try {
-    const admin = deps.admin;
     const { tenant, created } = await deps.selfServe.workspace(claims.issuer, claims.subject, org.data);
     await withTenant(tenant, async (bound) => {
       const by = { principalId: `trusted-oidc-self-serve:${claims.issuer}`, scopeLabel: orgScope() };
       if (created) audit({ deps, tenant: bound }, { ...by, action: "tenant.self_serve.create", resource: tenant });
-      const { grant, granted } = await admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
+      const { grant, granted } = await deps.admin.provisionSelfServe(bound, claims.issuer, claims.subject, email);
       const event = { principalId: grant.grantedBy!, scopeLabel: grant.scopeId };
       if (granted)
         audit(
@@ -313,8 +303,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
 
 async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   const { deps, res, body } = ctx;
-  if (!deps.portalIdentitySecret || !deps.replayDedupe || !deps.identity || !deps.portalUrl)
-    return sendJson(res, 503, { error: "not_configured" });
+  if (!deps.portalIdentitySecret || !deps.portalUrl) return sendJson(res, 503, { error: "not_configured" });
   const token = isObj(body) && typeof body.token === "string" ? body.token : "";
   const claims = token.length <= 4096 ? await verifySignedPayload(token, deps.portalIdentitySecret) : null;
   const now = Date.now();

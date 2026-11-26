@@ -521,7 +521,7 @@ export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   blobTransfer: BlobTransferStore;
   fileUploads?: DirectFileUploads;
   featureFlags: FeatureFlagStore;
-  decisions?: DecisionStore;
+  decisions: DecisionStore;
   replayDedupe: ReplayDedupe;
   selfServe?: SelfServe;
   brokerSessions?: BrokerSessionStore;
@@ -1584,7 +1584,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async (tenant, ids) => (await decisions?.providers(tenant, ids)) ?? [],
+        providers: (tenant, ids) => decisions.providers(tenant, ids),
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain

@@ -18,14 +18,14 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   const viewer = ctx.actor?.p ?? (isObj(body) && body.principalId);
   const audience = isObj(body) ? body.audience : undefined;
   if (audience !== "internal" && audience !== "external") return sendJson(res, 400, { error: "invalid_audience" });
-  await deps.identity?.refresh();
-  if (typeof viewer !== "string" || !deps.identity?.isInternal(deps.identity.classify(viewer)))
+  await deps.identity.refresh();
+  if (typeof viewer !== "string" || !deps.identity.isInternal(deps.identity.classify(viewer)))
     return sendJson(res, 403, { error: "forbidden" });
-  if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
   const source = await app.getSessionForViewer(params.id!, { actorId: viewer });
   if (!source) return sendJson(res, 404, { error: "not_found" });
-  const deliveries =
-    (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
+  const deliveries = await deps.deliveries.listBySourceSession(source.session.id, source.session.threadRef, {
+    limit: 10_000,
+  });
   if (deliveries.length >= 10_000) return sendJson(res, 413, { error: "share_too_large" });
   const deliveredAttachments = new Map<number, string[]>();
   for (const delivery of deliveries) {
@@ -105,14 +105,14 @@ async function createShare(ctx: ApiCtx): Promise<void> {
 
 async function openShare(ctx: ApiCtx, external: boolean): Promise<SessionShare | 403 | 404> {
   const { deps, app, params, url } = ctx;
-  const share = await deps.sessionShares?.get(params.token!);
+  const share = await deps.sessionShares.get(params.token!);
   if (!share || share.audience !== (external ? "external" : "internal")) return 404;
-  await deps.identity?.refresh();
+  await deps.identity.refresh();
   if (!external) {
     const viewer = ctx.actor?.p ?? url.searchParams.get("viewer");
-    if (!viewer || !deps.identity?.isInternal(deps.identity.classify(viewer))) return 403;
+    if (!viewer || !deps.identity.isInternal(deps.identity.classify(viewer))) return 403;
   }
-  if (!deps.identity?.isInternal(deps.identity.classify(share.createdBy))) return 404;
+  if (!deps.identity.isInternal(deps.identity.classify(share.createdBy))) return 404;
   if (!(await app.canViewSessionSnapshot(share.sessionId, share.createdBy))) return 404;
   return share;
 }
@@ -139,7 +139,7 @@ async function readShare(ctx: ApiCtx): Promise<void> {
   if (share === 404) return sendJson(res, 404, { error: "not_found" });
   if (params.fileId) {
     const file = share.files.find((file) => file.id === params.fileId);
-    const opened = file && (await ctx.deps.sessionShareBytes?.open(file.blobKey));
+    const opened = file && (await ctx.deps.sessionShareBytes.open(file.blobKey));
     if (!file || !opened) return sendJson(res, 404, { error: "not_found" });
     const inline = url.searchParams.get("inline") === "1" && /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype);
     res.writeHead(200, {

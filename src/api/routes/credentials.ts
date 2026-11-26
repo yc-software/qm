@@ -23,7 +23,7 @@ export function appBorrows(ctx: BaseCtx): (deployment: string, slug: string) => 
 
 async function brokerCredential(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, app } = ctx;
-  const audit: BrokerAudit = (event) => deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...event });
+  const audit: BrokerAudit = (event) => deps.auditLog.record(tenantOf(ctx), { at: Date.now(), ...event });
   if ((body as { connector?: unknown }).connector !== undefined) {
     if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
     const result = await brokerConnectorCall({
@@ -36,7 +36,6 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     });
     return sendJson(res, result.status, result.json);
   }
-  if (!deps.serviceCreds) return sendJson(res, 404, { error: "not_found" });
   const orgScope = makeScopeId("org", configOrgId());
   const result = await brokerCredentialCall({
     tenant: tenantOf(ctx),
@@ -46,7 +45,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     reader: deps.serviceCreds,
     appBorrows: appBorrows(ctx),
     fetchImpl: deps.brokerFetch ?? realBrokerFetch,
-    ...(deps.credentialUsage ? { usage: deps.credentialUsage } : {}),
+    usage: deps.credentialUsage,
     audit,
   });
   return sendJson(res, result.status, result.json);

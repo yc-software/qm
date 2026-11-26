@@ -30,13 +30,9 @@ export interface LoopServiceDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
-  fire?: LoopFireService;
-  crons?: CronStore;
+  fire: LoopFireService;
+  crons: CronStore;
   config: ScopedConfigStore;
-}
-
-export function loopDeps(ctx: ApiCtx): LoopServiceDeps | null {
-  return ctx.deps.loops ?? null;
 }
 
 interface ActingPrincipal {
@@ -46,7 +42,7 @@ interface ActingPrincipal {
 }
 
 export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
-  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+  return (await deps.featureFlags.enabled("inbox_loops", scopeId("personal", principalId))) === true;
 }
 
 export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
@@ -88,11 +84,7 @@ export async function requireSignOff(ctx: ApiCtx, summary: string, personMay = f
 export async function loadAdministrable(
   ctx: ApiCtx,
 ): Promise<{ deps: LoopServiceDeps; loop: Loop; acting: ActingPrincipal } | null> {
-  const deps = loopDeps(ctx);
-  if (!deps) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
-    return null;
-  }
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
   const loop = await deps.store.get(ctx.params.id ?? "");
@@ -199,8 +191,7 @@ function triageFromBody(value: unknown): LoopTriageConfig | null | undefined {
 }
 
 async function createLoop(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const b = isObj(ctx.body) ? ctx.body : {};
@@ -294,7 +285,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     return sendJson(ctx.res, 400, { error: "loop_create_failed", message: errMessage(e) });
   }
-  if (created && schedule && deps.crons) {
+  if (created && schedule) {
     let cronId: string | undefined;
     try {
       const cron = await deps.crons.create({
@@ -319,8 +310,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
 }
 
 async function listLoops(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
@@ -330,7 +320,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
 }
 
 async function triageAvailable(ctx: ApiCtx, loop: Loop): Promise<boolean> {
-  return (await ctx.deps.featureFlags?.enabled("loop_triage", scopeId("personal", loop.owner))) === true;
+  return (await ctx.deps.featureFlags.enabled("loop_triage", scopeId("personal", loop.owner))) === true;
 }
 
 async function getLoop(ctx: ApiCtx): Promise<void> {
@@ -485,7 +475,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
 }
 
 export async function syncLoopSchedule(deps: LoopServiceDeps, loop: Loop, state: LoopState): Promise<void> {
-  if (!loop.cronId || !deps.crons) return;
+  if (!loop.cronId) return;
   try {
     await deps.crons.setEnabled(loop.cronId, state === "enabled");
   } catch (e) {
@@ -514,7 +504,7 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire || !(await triageAvailable(ctx, loop)))
+  if (!(await triageAvailable(ctx, loop)))
     return sendJson(ctx.res, 404, { error: "not_found", message: "loop triage is not available" });
   const triage = triageFromBody(isObj(ctx.body) ? ctx.body.triage : undefined);
   if (!triage)
@@ -536,7 +526,6 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
   void deps.fire
     .fire(loop.id, fireKey)
@@ -549,7 +538,7 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
 }
 
 async function decideOutput(ctx: ApiCtx): Promise<void> {
-  const lock = loopDeps(ctx)?.lock;
+  const lock = ctx.deps.loops.lock;
   if (lock && !ctx.capability)
     return lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, () => decideOutputLocked(ctx));
   return decideOutputLocked(ctx);
@@ -561,7 +550,6 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!(await requireSignOff(ctx, `Decide a held output of loop "${loop.name}"`))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const b = isObj(ctx.body) ? ctx.body : {};
   const outputId = ctx.params.outputId ?? "";
   const note = typeof b.note === "string" && b.note.trim() ? b.note.trim() : undefined;

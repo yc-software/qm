@@ -15,6 +15,7 @@ import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 const cap: CapabilityClaims = {
   ...liveRunClaims("alice"),
@@ -47,6 +48,7 @@ async function fixture() {
   const replies: unknown[] = [];
   const audits: string[] = [];
   const deps: Partial<ServerDeps> = {
+    ...testCore(),
     keychain,
     serviceCreds: keychain,
     auditLog: {

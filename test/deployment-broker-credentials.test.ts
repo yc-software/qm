@@ -350,6 +350,7 @@ test("a deployment credential cannot back a decision provider", async () => {
       body,
       tenant,
       deps: {
+        ...testCore(),
         serviceCreds,
         decisions: {
           saveProvider: async (_tenant: unknown, provider: unknown) => void saved.push(provider),
