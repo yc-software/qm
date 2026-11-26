@@ -41,7 +41,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "invalid browser model request" });
   const account = capability.browserAccount;
   const personal =
-    account === "company" || !deps.userModelCredentials
+    account === "company"
       ? undefined
       : await loadPersonalModelAuth(deps.userModelCredentials, capability.actorId, account, capability.browserModel);
   if (account !== "company" && personal?.modelId !== capability.browserModel)

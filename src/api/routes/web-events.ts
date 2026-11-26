@@ -109,7 +109,7 @@ export function createWebEvents(
     const loop = await deps.loops.store.get(loopId);
     if (!loop) return null;
     const identity = deps.identity;
-    await identity?.refresh();
+    await identity.refresh();
     const candidates = [...clientsOf(tenant).keys()];
     const allowed = await Promise.all(
       candidates.map(

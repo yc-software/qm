@@ -165,10 +165,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
-    if (
-      !deps.replayDedupe ||
-      !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
-    ) {
+    if (!(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))) {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
@@ -220,7 +217,6 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
 
 async function consentRedeem(ctx: ApiCtx): Promise<void> {
   const { res, deps, secret, url } = ctx;
-  if (!deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
   const clicker = personKey(ctx.req.headers["x-consent-clicker"] as string | undefined);
   if (!clicker) return sendJson(res, 401, { error: "unauthorized", message: "sign in to complete this connection" });
   const linkId = decodeURIComponent(ctx.params.linkId ?? "");

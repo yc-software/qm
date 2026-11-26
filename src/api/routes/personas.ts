@@ -74,8 +74,7 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
-  const personaThreads =
-    (await ctx.deps.sessions.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
+  const personaThreads = await ctx.deps.sessions.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))]);
   return crons
     .filter(
       (c) =>

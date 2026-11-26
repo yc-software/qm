@@ -45,7 +45,6 @@ async function getStatus(ctx: ApiCtx): Promise<void> {
 async function setAccount(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const account = bodyObj(ctx).account;
   if (account !== "personal" && account !== "company") return sendJson(ctx.res, 400, { error: "bad_request" });
   if (account === "company" && (await ctx.deps.config.getIndividualModelAuthDurable())) {

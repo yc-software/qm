@@ -35,10 +35,6 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
-  if (!deps.sessions) {
-    sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
-    return null;
-  }
   if ((await deps.featureFlags.enabled("ui_canvas", scopeId("personal", cap.actorId))) !== true) {
     sendJson(res, 403, {
       error: "feature_disabled",
@@ -211,7 +207,6 @@ async function observeResult(ctx: ApiCtx): Promise<void> {
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (!principalId || !isObj(b.snapshot))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and snapshot required" });
-  if (!deps.signals) return sendJson(res, 404, { error: "not_found" });
   const pending = await deps.uiState.take(uiStateId(principalId, uiObserveKey(params.callId!)));
   const runId = isObj(pending?.value) && typeof pending.value.runId === "string" ? pending.value.runId : null;
   const run = runId ? await deps.runs.get(runId) : null;
