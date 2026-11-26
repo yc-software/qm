@@ -13,7 +13,8 @@ import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import { externalOrgSchema } from "../../tenants/self-serve.ts";
-import { personalScope } from "../../types.ts";
+import { scopeId } from "../../types.ts";
+import { knownUserId } from "../../directory/person-refs.ts";
 import { offboardTrustedSubject } from "./admin/offboard.ts";
 
 const NAMESPACE = "authbroker:";
@@ -92,8 +93,11 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
+  const userId = knownUserId(email);
   const grants =
-    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [personalScope(email)], kind: "deploy" })) ?? [];
+    (userId &&
+      (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [scopeId("personal", userId)], kind: "deploy" }))) ||
+    [];
   const publishedApps = await app.listApps();
   const granted = publishedApps.filter(
     (d) =>
