@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
@@ -59,6 +59,7 @@ describe("agent files self-API", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });

@@ -10,7 +10,7 @@ import { createServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { personalScope } from "../src/types.ts";
@@ -20,6 +20,7 @@ test("a surface can open an empty web conversation for the signed-in person, onl
   const sourceSecret = "spawn-source-secret-for-http-tests";
   const identitySecret = "spawn-identity-secret-for-http-tests";
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     capabilitySecret: "spawn-capability-secret-for-http-tests",

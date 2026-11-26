@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { twoTenants } from "./support/two-tenants.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
@@ -35,14 +35,12 @@ function start(enabled = true, databaseUrl?: string, role?: "org_admin" | "owner
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    identity: built.identity,
-    auditLog: built.auditLog,
   });
   server.listen(0);
   return {

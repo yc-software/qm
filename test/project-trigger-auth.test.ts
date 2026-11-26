@@ -12,7 +12,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -111,9 +111,9 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
 
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: built.scheduler,
   });
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

@@ -3,7 +3,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
@@ -73,6 +73,7 @@ before(async () => {
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
   server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     fileUploads: fake,
@@ -157,6 +158,7 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
   const full = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     fileUploads: {

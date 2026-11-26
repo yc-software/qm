@@ -547,7 +547,7 @@ async function peopleOf(deps: BaseCtx["deps"], rows: readonly { scopeId: ScopeId
     const parsed = parseScopeId(scopeId);
     if (parsed.kind === "personal" && parsed.ref) refs.add(parsed.ref);
   }
-  const users = (await deps.admin?.users.resolve([...refs])) ?? new Map();
+  const users = (await deps.admin.users.resolve([...refs])) ?? new Map();
   return (ref) => {
     const user = users.get(ref);
     return user ? { userId: user.id, principalId: user.principalId } : { userId: null, principalId: ref };
@@ -557,7 +557,6 @@ async function peopleOf(deps: BaseCtx["deps"], rows: readonly { scopeId: ScopeId
 export async function spendExport(ctx: BaseCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   if (!exportTokenAccepted(ctx, deps.spendExportToken)) return;
-  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const days = spendDays(url);
   if (typeof days === "string") return sendJson(res, 400, { error: "bad_request", message: days });
   const { from, to } = days;
@@ -674,7 +673,6 @@ export async function selfSpend(ctx: ApiCtx): Promise<void> {
   if (typeof days === "string") return bad(days);
   const bucket = spendBucket(url);
   if (!bucket) return bad('bucket must be "day" or "week"');
-  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
 
   const [contexts, crons, { rows, asOf }] = await Promise.all([
     app.listContexts(principalId),

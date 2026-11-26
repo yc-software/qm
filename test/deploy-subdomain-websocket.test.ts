@@ -20,6 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const HOST = "live.apps.example.com";
@@ -138,6 +139,7 @@ async function gateway(endpoint: DeployEndpoint) {
     name: "live",
   });
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,

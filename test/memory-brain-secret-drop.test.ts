@@ -24,7 +24,7 @@ import {
 import type { DropResolution } from "../src/triggers/keychain-ask.ts";
 import { scopeId, personalScope } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -64,13 +64,9 @@ async function setup(
     ),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    keychain: built.keychain,
-    secretDrops: built.secretDrops,
-    deliveries: built.deliveries,
-    auditLog: built.auditLog,
-    admin: built.admin,
     memoryRegistry: registry,
     runs: liveRunStore(),
     ...browserSessionDeps,

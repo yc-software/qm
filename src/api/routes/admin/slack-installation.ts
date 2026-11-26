@@ -31,7 +31,6 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   audit(ctx, {
     principalId: actor.id,
     action: "slack-installation.read",
@@ -93,7 +92,6 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const body = ctx.body as { botToken?: unknown; appToken?: unknown; signingSecret?: unknown; appId?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
   const appToken = typeof body.appToken === "string" ? body.appToken.trim() : "";
@@ -138,7 +136,6 @@ export async function deleteSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const deleteRemote =
     ctx.url.searchParams.get("deleteRemote") === "true" ||
     Boolean((ctx.body as { deleteRemote?: unknown } | undefined)?.deleteRemote === true);
@@ -156,10 +153,10 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  const managed = await ctx.deps.slackInstallation?.get();
+  const managed = await ctx.deps.slackInstallation.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
   if (!botToken) {
-    const cached = await ctx.deps.config?.getSlackEmojiCatalogDurable(scope);
+    const cached = await ctx.deps.config.getSlackEmojiCatalogDurable(scope);
     if (cached && Object.keys(cached.emoji).length) {
       return sendJson(ctx.res, 200, { emoji: cached.emoji, standard: standardEmoji() });
     }
@@ -258,7 +255,6 @@ export async function createSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const body = (ctx.body ?? {}) as {
     name?: unknown;
     description?: unknown;
@@ -294,7 +290,6 @@ export async function createSlackInstallation(ctx: ApiCtx): Promise<void> {
 }
 
 export async function slackOAuthCallback(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const slackErr = ctx.url.searchParams.get("error");
   const state = ctx.url.searchParams.get("state") ?? "";
   const dot = state.indexOf(".");
@@ -320,7 +315,6 @@ export async function getSlackConfigToken(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   return sendJson(ctx.res, 200, await ctx.deps.slackInstallation.configTokenStatus());
 }
 
@@ -328,7 +322,6 @@ export async function putSlackConfigToken(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   const body = (ctx.body ?? {}) as { accessToken?: unknown; refreshToken?: unknown };
   try {
     const status = await ctx.deps.slackInstallation.setConfigToken({
@@ -352,7 +345,6 @@ export async function deleteSlackConfigToken(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   await ctx.deps.slackInstallation.deleteConfigToken();
   audit(ctx, {
     principalId: actor.id,

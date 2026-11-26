@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, type Core } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { stopAtEnd, testCore } from "./support/build-app.ts";
 import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
@@ -35,14 +35,10 @@ function start(
   });
   const built = buildApp(appConfig, { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
+    ...testCore(built),
     modelCredentialFetch,
     ...(companySubscriptionAuth(appConfig) ? { companySubscriptionAuth: companySubscriptionAuth(appConfig) } : {}),
     providerKeys: providerKeysPresent(appConfig),
-    admin: built.admin,
-    auditLog: built.auditLog,
   });
   server.listen(0);
   return {

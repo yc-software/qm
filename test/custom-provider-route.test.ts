@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
@@ -29,14 +29,9 @@ function start(modelCredentialFetch?: typeof fetch): {
     modelCredentialFetch,
   });
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
+    ...testCore(built),
     modelCredentialFetch,
     providerKeys: { anthropic: true, openai: false, openrouter: false },
-    admin: built.admin,
-    auditLog: built.auditLog,
   });
   server.listen(0);
   return {

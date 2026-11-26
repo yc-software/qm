@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -46,13 +46,15 @@ describe("POST /v1/emoji", async () => {
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
     await directory.setWorkspace({ workspaceUrl: "https://acme.slack.com/", appIconUrl: null });
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       browserSessionStore: sessions,
       directory,
-      config: built.config,
     });
     bare = createServer(built.app, {
+      ...testCore(built),
+      browserSessionStore: undefined,
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });

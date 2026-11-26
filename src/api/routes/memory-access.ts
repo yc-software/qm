@@ -6,7 +6,6 @@ import type { ApiCtx } from "./route.ts";
 import { orgScope } from "./shared.ts";
 
 export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryService | undefined {
-  if (!ctx.deps.memory) return undefined;
   const id = ctx.capability?.actorId ?? ctx.actor?.p ?? sourcePrincipal;
   if (!id) return undefined;
   const actor: Principal = ctx.deps.identity?.classify(id) ?? { id, type: "internal" };

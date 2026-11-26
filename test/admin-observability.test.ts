@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { isAgentReply, isUserItem, type Item } from "../src/sessions/items.ts";
@@ -17,17 +17,7 @@ import { personalScope } from "../src/types.ts";
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
   const built = buildApp(config);
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    runs: built.runs,
-    files: built.files,
-    config: built.config,
-    deliveries: built.deliveries,
-    crons: built.crons,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r()).closeAllConnections()) };
@@ -1041,15 +1031,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     data: Buffer.from("%PDF-1.4 deck"),
     direction: "out",
   });
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    runs: built.runs,
-    files: built.files,
-    sandboxBackend: "sprites",
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), sandboxBackend: "sprites" });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -1111,15 +1093,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
     data: Buffer.from("a,b\n1,2"),
     direction: "out",
   });
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    runs: built.runs,
-    files: built.files,
-    sandboxBackend: "sprites",
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), sandboxBackend: "sprites" });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -1161,12 +1135,9 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-capability-")) }));
   const read = async (declared: "none" | "ip_port" | "domain", effective: "none" | "ip_port" | "domain") => {
     const server = createInsecureTestServer(built.app, {
-      admin: built.admin,
-      config: built.config,
-      auditLog: built.auditLog,
-      sandboxBackend: "sprites",
-      egressDeclaredEnforcement: declared,
-      egressEnforcement: effective,
+      ...testCore(built),
+      sandbox: { profile: { backend: "sprites", egressEnforcement: declared } } as never,
+      egressControlPlaneConfigured: declared === effective,
     });
     server.listen(0);
     try {
@@ -1216,11 +1187,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
 
 test("admin governance: base model round-trips per-scope, validates ids", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-model-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putModel = (scope: string, modelId: string, headers: Record<string, string>) =>
@@ -1285,11 +1252,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
 
 test("admin governance: browse step limit round-trips, validates, and is org-scoped", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsesteps-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const putSteps = (scope: string, steps: unknown, headers: Record<string, string>) =>
@@ -1335,11 +1298,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
 
 test("admin governance: compaction keep percent round-trips, validates, and is org-scoped", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-compactionkeep-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const put = (scope: string, percent: unknown, headers: Record<string, string>) =>
@@ -1365,11 +1324,7 @@ test("admin governance: compaction keep percent round-trips, validates, and is o
 
 test("admin governance: history budget round-trips, validates, and is org-scoped", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-historybudget-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const put = (scope: string, tokens: unknown, headers: Record<string, string>) =>
@@ -1395,11 +1350,7 @@ test("admin governance: history budget round-trips, validates, and is org-scoped
 
 test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const put = (scope: string, body: unknown, headers: Record<string, string> = ALICE) =>

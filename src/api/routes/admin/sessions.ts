@@ -30,12 +30,12 @@ const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
   const member = await app.directoryMember(principalId);
-  const user = await deps.users?.get(principalId).catch(() => null);
+  const user = await deps.users.get(principalId).catch(() => null);
   return personLabel(principalId, { displayName: member?.displayName, user });
 }
 
 async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId: string): Promise<string | null> {
-  const participantIds = new Set((await deps.sessions?.participantsOf(sessionId)) ?? []);
+  const participantIds = new Set((await deps.sessions.participantsOf(sessionId)) ?? []);
   if (participantIds.size !== 1) return null;
   return displayNameForPrincipal(app, deps, [...participantIds][0]!);
 }
@@ -74,7 +74,7 @@ async function deliveryProvenanceSidecars(
     else bySource.set(key, [d]);
   }
   const sources =
-    (await deps.sessions?.getMany({
+    (await deps.sessions.getMany({
       ids: [...bySource.values()].flatMap((group) => group[0]!.provenance!.sourceSessionId ?? []),
       threadRefs: [...bySource.values()].flatMap((group) =>
         group[0]!.provenance!.sourceSessionId ? [] : [group[0]!.provenance!.sourceThreadRef],
@@ -97,7 +97,7 @@ async function deliveryProvenanceSidecars(
       if (seq !== undefined) ranges.set(sourceSession.id, Math.min(ranges.get(sourceSession.id) ?? Infinity, seq));
     }
   const entries =
-    (await deps.sessions?.userItemSeqs([...ranges].map(([sessionId, sinceSeq]) => ({ sessionId, sinceSeq })))) ?? [];
+    (await deps.sessions.userItemSeqs([...ranges].map(([sessionId, sinceSeq]) => ({ sessionId, sinceSeq })))) ?? [];
   const perDelivery = allowed.flatMap(({ group, sourceSession }) =>
     group.map((d) => {
       const p = d.provenance!;
@@ -118,7 +118,7 @@ async function deliveryProvenanceSidecars(
   const turns = perDelivery.flatMap(({ sourceSession, turnSeqs }) =>
     [...turnSeqs].map((turnSeq) => ({ sessionId: sourceSession.id, turnSeq })),
   );
-  const requests = (await deps.sessions?.listLlmRequestsForTurns(turns)) ?? [];
+  const requests = (await deps.sessions.listLlmRequestsForTurns(turns)) ?? [];
   for (const { d, sourceSession, turnSeqs } of perDelivery) {
     const own = requests.filter(
       (r) => r.sessionId === sourceSession.id && r.turnSeq !== null && turnSeqs.has(r.turnSeq),
@@ -132,7 +132,7 @@ function requireAdminSession(ctx: ApiCtx, id: string) {
   return requireScopedResource(
     ctx,
     async () => {
-      const s = await ctx.deps.sessions?.get(id);
+      const s = await ctx.deps.sessions.get(id);
       return s?.ephemeral ? null : s;
     },
     (s) => s.scopeId,
@@ -250,10 +250,10 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<void> {
     if (turnParam === "orphan") opts = { orphans: true };
     else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
     if (!opts) return sendJson(res, 400, { error: "bad_request", message: 'turnSeq must be an integer or "orphan"' });
-    const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
+    const requests = (await deps.sessions.listLlmRequests(id, opts)) ?? [];
     return sendJson(res, 200, { session, requests });
   }
-  const requests = (await deps.sessions?.listLlmRequests(id, { omitRequest: true })) ?? [];
+  const requests = (await deps.sessions.listLlmRequests(id, { omitRequest: true })) ?? [];
   return sendJson(res, 200, { session, requests });
 }
 
@@ -341,7 +341,7 @@ export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
     scopeLabel: scope,
   });
   const orgWide = parseScopeId(scope).kind === "org";
-  const rows = (await deps.deliveries?.listShadow({ limit: 200 })) ?? [];
+  const rows = (await deps.deliveries.listShadow({ limit: 200 })) ?? [];
   const cronLookup = await cronOrigins(
     app,
     rows.map((d) => d.provenance?.fireKey ?? d.idempotencyKey),

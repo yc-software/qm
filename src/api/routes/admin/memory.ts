@@ -11,7 +11,6 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   audit(ctx, { principalId: actor.id, action: "memory.scopes.read", resource: "memory", scopeLabel: scope });
   const labels = await discoverScopes(app, deps, tenantOf(ctx));
   const meta = (await deps.memory.metadata?.()) ?? null;
@@ -24,7 +23,7 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
         bytes = m?.bytes ?? 0;
         updatedAt = m?.updatedAt;
       } else {
-        const content = await deps.memory!.read(id);
+        const content = await deps.memory.read(id);
         bytes = Buffer.byteLength(content);
       }
       return {

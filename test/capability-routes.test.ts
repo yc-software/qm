@@ -9,7 +9,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { scopeId, personalScope } from "../src/types.ts";
@@ -90,11 +90,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
-      config: built.config,
-      admin: built.admin,
       runs: liveRunStore(),
       sessions: signOff.sessions as never,
       approvals: testMap<PendingApprovalRecord>(),

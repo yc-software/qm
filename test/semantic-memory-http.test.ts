@@ -10,7 +10,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
@@ -131,10 +131,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     personalScope("U2"),
   ]);
   inputs.length = 0;
-  const server = createInsecureTestServer(built.app, {
-    memory: built.memory,
-    capabilitySecret: TEST_CAPABILITY_SECRET,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), capabilitySecret: TEST_CAPABILITY_SECRET });
   const base = await listen(server);
   t.after(() => close(server));
   const post = async (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -262,7 +259,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
   await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room, denied]);
   inputs.length = 0;
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   const base = await listen(server);
   t.after(() => close(server));
   const turn = async (text: string, thread: string) => {

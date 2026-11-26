@@ -22,6 +22,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -96,6 +97,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   await app.shareApp(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const featureFlags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
