@@ -350,9 +350,8 @@ struct RootView: View {
       Button {
         if let conversation = model.newConversation() { open(conversation) }
       } label: {
-        Label("New", systemImage: "plus").labelStyle(.titleAndIcon)
+        Image(systemName: "plus")
       }
-      .buttonStyle(.borderedProminent)
       .accessibilityLabel("New conversation")
     }
   }

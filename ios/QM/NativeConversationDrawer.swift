@@ -45,7 +45,6 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
-      .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
     }
     .background(QMTheme.paper.ignoresSafeArea())
     .modifier(DrawerSync(isOpen: $isOpen, motion: motion))
