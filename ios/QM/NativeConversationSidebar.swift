@@ -8,7 +8,7 @@ struct NativeConversationSection: Identifiable {
   var members: [WorkspaceContext.GroupMember] = []
 
   var hasPreview: Bool {
-    id != "pinned" && conversations.count > 5
+    id != "pinned" && id != "waiting" && conversations.count > 5
       && conversations.first.map { ScopeKind(scopeId: $0.scopeId) != .personal } == true
   }
 
@@ -22,12 +22,18 @@ struct NativeConversationSection: Identifiable {
     _ conversations: [Conversation], contexts: [String: WorkspaceContext]
   ) -> [Self] {
     var sections: [Self] = []
-    let pinned = conversations.filter { $0.pinned == true }
+    let waiting = conversations.filter { $0.awaitingInput == true }
+    if !waiting.isEmpty {
+      sections.append(
+        Self(id: "waiting", title: "Waiting on you", icon: "clock", conversations: waiting))
+    }
+    let rest = conversations.filter { $0.awaitingInput != true }
+    let pinned = rest.filter { $0.pinned == true }
     if !pinned.isEmpty {
       sections.append(Self(id: "pinned", title: "Pinned", icon: "pin", conversations: pinned))
     }
     var indices: [String: Int] = [:]
-    for conversation in conversations where conversation.pinned != true {
+    for conversation in rest where conversation.pinned != true {
       let scope = conversation.scopeId
       if let index = indices[scope] {
         sections[index].conversations.append(conversation)
@@ -220,7 +226,7 @@ struct NativeConversationSections<Actions: View>: View {
       } label: {
         NativeConversationRow(
           conversation: conversation,
-          showsContext: section.id == "pinned",
+          showsContext: section.id == "pinned" || section.id == "waiting",
           contextTitle: contexts[conversation.scopeId].flatMap {
             $0.isPersonal ? nil : $0.title
           },

@@ -41,6 +41,18 @@ final class NativeConversationSidebarTests: XCTestCase {
     XCTAssertTrue(NativeConversationSection.grouped([], contexts: [:]).isEmpty)
   }
 
+  func testConversationsWaitingOnYouLeadTheListOnce() {
+    var waiting = Conversation(id: "w", scopeId: "project:work", threadRef: "web:w")
+    waiting.awaitingInput = true
+    waiting.pinned = true
+    var pinned = Conversation(id: "p", scopeId: "project:work", threadRef: "web:p")
+    pinned.pinned = true
+    let other = Conversation(id: "o", scopeId: "project:work", threadRef: "web:o")
+    let sections = NativeConversationSection.grouped([other, pinned, waiting], contexts: [:])
+    XCTAssertEqual(sections.map(\.title), ["Waiting on you", "Pinned", "Project conversation"])
+    XCTAssertEqual(sections.map { $0.conversations.map(\.id) }, [["w"], ["p"], ["o"]])
+  }
+
   func testContextFailureRetriesWithoutLosingConversationsAndStopsPollingAfterSuccess() async throws
   {
     let configuration = URLSessionConfiguration.ephemeral
