@@ -1,14 +1,8 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Search, UserPlus, X } from "lucide";
-import { api, forkSession, type CoreContext } from "./core-bridge";
-import {
-  addMemberToProject,
-  contextsState,
-  ensureContexts,
-  projectFromResponse,
-  searchInternalPeople,
-} from "./contexts";
+import { forkSession, type CoreContext } from "./core-bridge";
+import { addMemberToProject, contextsState, ensureContexts, postProject, searchInternalPeople } from "./contexts";
 import { errMessage } from "../../chassis/src/errors";
 import { restoreDialogFocus } from "./dialog-focus";
 import { icon } from "./icons";
@@ -161,16 +155,13 @@ function openMembersDialog(
     error = "";
     draw();
     try {
-      const project = projectFromResponse(
-        await api("/api/projects", { method: "POST", body: JSON.stringify({ name: chat.title || "Shared chat" }) }),
-      );
-      if (!project) throw new Error("Core returned an invalid project");
+      const project = await postProject(chat.title || "Shared chat");
       for (const person of picked) await addMemberToProject(project.id, person.principalId);
       const forked = await forkSession(chat.sessionId, undefined, undefined, project.id);
-      close();
       const { openSession, refreshSessions } = await import("./sessions");
       void refreshSessions();
       await openSession(forked.session);
+      close();
     } catch (e) {
       error = errMessage(e, "Couldn't start the shared chat.");
       busy = false;

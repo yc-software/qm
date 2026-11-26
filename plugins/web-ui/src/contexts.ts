@@ -1207,6 +1207,12 @@ export function upsertProject(project: CoreProject): CoreContext {
   return next;
 }
 
+export async function postProject(name: string): Promise<CoreProject> {
+  const project = projectFromResponse(await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) }));
+  if (!project) throw new Error("Core returned an invalid project");
+  return project;
+}
+
 async function createProject(event: SubmitEvent): Promise<void> {
   event.preventDefault();
   if (contextsState.createSaving) return;
@@ -1222,9 +1228,8 @@ async function createProject(event: SubmitEvent): Promise<void> {
   contextsState.createSaving = true;
   drawContexts();
   try {
-    const project = projectFromResponse(await api("/api/projects", { method: "POST", body: JSON.stringify({ name }) }));
+    const project = await postProject(name);
     if (resetSeq !== contextsResetSeq) return;
-    if (!project) throw new Error("Core returned an invalid project");
     const loaded = contextsState.loaded;
     let context = upsertProject(project);
     if (!loaded) {
