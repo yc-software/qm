@@ -23,10 +23,10 @@ function connectProvider(raw: unknown): ModelProvider | null {
 
 export async function modelAuthStatus(deps: ApiCtx["deps"], principal: string) {
   const [required, connections, individualModelAuth, account] = await Promise.all([
-    deps.config?.getIndividualModelAuthDurable(),
-    deps.userModelCredentials?.connections(principal),
-    deps.config?.getIndividualModelAuthDurable(principal),
-    deps.config?.getModelAccountDurable(principal),
+    deps.config.getIndividualModelAuthDurable(),
+    deps.userModelCredentials.connections(principal),
+    deps.config.getIndividualModelAuthDurable(principal),
+    deps.config.getModelAccountDurable(principal),
   ]);
   return {
     individualModelAuth: individualModelAuth ?? false,
@@ -45,7 +45,6 @@ async function getStatus(ctx: ApiCtx): Promise<void> {
 async function setAccount(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.config || !ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const account = bodyObj(ctx).account;
   if (account !== "personal" && account !== "company") return sendJson(ctx.res, 400, { error: "bad_request" });
   if (account === "company" && (await ctx.deps.config.getIndividualModelAuthDurable())) {
@@ -77,7 +76,6 @@ async function setAccount(ctx: ApiCtx): Promise<void> {
 async function disconnect(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = connectProvider(bodyObj(ctx).provider);
   if (!provider) return sendJson(ctx.res, 400, { error: "bad_request", message: "provider must be claude or chatgpt" });
   await ctx.deps.userModelCredentials.delete(principal, provider);
@@ -93,7 +91,6 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
 async function putApiKey(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = bodyObj(ctx);
   const provider = connectProvider(body.provider);
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
@@ -128,7 +125,6 @@ async function chatgptStart(ctx: ApiCtx): Promise<void> {
 async function chatgptPoll(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = bodyObj(ctx);
   const deviceAuthId = typeof body.deviceAuthId === "string" ? body.deviceAuthId : "";
   if (!deviceAuthId) return sendJson(ctx.res, 400, { error: "bad_request" });
@@ -158,7 +154,6 @@ async function claudeStart(ctx: ApiCtx): Promise<void> {
 async function claudeComplete(ctx: ApiCtx): Promise<void> {
   const principal = caller(ctx);
   if (!principal) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if (!ctx.deps.userModelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = bodyObj(ctx);
   const code = typeof body.code === "string" ? body.code : "";
   const verifier = typeof body.verifier === "string" ? body.verifier : "";

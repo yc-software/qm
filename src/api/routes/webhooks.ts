@@ -45,10 +45,6 @@ export function redactWebhook(w: Webhook): Webhook {
 
 async function incomingWebhook(ctx: BaseCtx): Promise<void> {
   const { req, res, deps, params, url } = ctx;
-  if (!deps.webhookReceiver) {
-    req.resume();
-    return sendJson(res, 404, { error: "not_found" });
-  }
   const id = params.id!;
   let rawBody: string;
   try {

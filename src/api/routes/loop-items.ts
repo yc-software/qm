@@ -139,7 +139,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
   }
   const sessionId = ctx.capability.threadRef
-    ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
+    ? ((await ctx.deps.sessions.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {

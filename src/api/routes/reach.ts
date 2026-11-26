@@ -163,7 +163,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           createdInScope: capability.scopeId,
           seed: `reach:${randomUUID()}`,
           onError: (e) =>
-            deps.errors?.record(
+            deps.errors.record(
               tenantOf(ctx),
               {
                 category: "file_store",

@@ -11,7 +11,6 @@ async function claim(ctx: ApiCtx): Promise<void> {
   const user = ctx.actor?.p;
   if (!user) return sendJson(ctx.res, 401, { error: "unauthorized" });
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
-  if (!ctx.deps.uiState) return sendJson(ctx.res, 503, { error: "not_available" });
   const parsed = claimSchema.safeParse(ctx.body);
   if (!parsed.success)
     return sendJson(ctx.res, 400, { error: "bad_request", message: zodMessage("claim", parsed.error) });

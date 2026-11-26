@@ -8,7 +8,7 @@ import { orgScope } from "./shared.ts";
 export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryService | undefined {
   const id = ctx.capability?.actorId ?? ctx.actor?.p ?? sourcePrincipal;
   if (!id) return undefined;
-  const actor: Principal = ctx.deps.identity?.classify(id) ?? { id, type: "internal" };
+  const actor: Principal = ctx.deps.identity.classify(id) ?? { id, type: "internal" };
   const targetScope = ctx.capability?.scopeId ?? personalScope(id);
   const claimed = ctx.capability
     ? [...(ctx.capability.memory?.read ?? []), ctx.capability.memory?.write, ctx.capability.memory?.orgWrite].filter(

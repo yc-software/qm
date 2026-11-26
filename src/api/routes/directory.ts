@@ -12,7 +12,6 @@ const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" &&
 
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.deactivate(id);
@@ -22,7 +21,6 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
 
 async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.reactivate(id);
@@ -34,9 +32,9 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh();
+  await deps.identity.refresh();
   const canonicalId = canonicalPerson(id);
-  const user = await deps.users?.get(canonicalId);
+  const user = await deps.users.get(canonicalId);
   const label = personLabel(canonicalId, { user });
   return sendJson(res, 200, {
     principalId: id,
@@ -48,7 +46,6 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
 
 async function recordProfile(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.users) return sendJson(res, 404, { error: "not_found" });
   const b = isObj(ctx.body) ? ctx.body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const displayName = cleanDisplayName(b.displayName);

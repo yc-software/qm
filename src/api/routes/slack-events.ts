@@ -67,7 +67,7 @@ async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
 
 async function handleSlackAppEvents(ctx: BaseCtx): Promise<void> {
   const target = ctx.params.target?.trim();
-  if (!ctx.deps.slackInstallation || !target) {
+  if (!target) {
     sendJson(ctx.res, 404, { error: "not_found" });
     return;
   }
