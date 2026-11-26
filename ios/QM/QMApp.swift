@@ -92,7 +92,7 @@ struct RootView: View {
           .scrollContentBackground(.hidden)
           .background(QMTheme.sidebar)
           .refreshable { await model.refresh() }
-          .toolbar(.hidden, for: .navigationBar)
+          .toolbar { listToolbar(identity) }
         } else if model.client?.hasSession == true {
           workspaceConnection
         } else {
@@ -105,7 +105,6 @@ struct RootView: View {
         if let identity = model.identity {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
-            listActions(identity)
           }
         }
       }
@@ -298,8 +297,6 @@ struct RootView: View {
       Button("Sign out", role: .destructive) { confirmingSignOut = true }
     } label: {
       Image(systemName: "gearshape")
-        .font(.system(size: 20, weight: .medium))
-        .frame(width: 52, height: 48)
     }
     .accessibilityLabel("Account and settings")
   }
@@ -377,24 +374,18 @@ struct RootView: View {
     }
   }
 
-  private func listActions(_ identity: Identity) -> some View {
-    HStack {
-      Spacer()
-      HStack(spacing: 0) {
-        NavigationLink(value: Page.search) {
-          Image(systemName: "magnifyingglass")
-            .font(.system(size: 20, weight: .medium))
-            .frame(width: 52, height: 48)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Search")
-        accountMenu(identity)
+  // Search and settings live top-right so nothing floats over the bottom nav.
+  @ToolbarContentBuilder
+  private func listToolbar(_ identity: Identity) -> some ToolbarContent {
+    ToolbarItemGroup(placement: .topBarTrailing) {
+      NavigationLink(value: Page.search) {
+        Image(systemName: "magnifyingglass")
       }
-      .modifier(GlassPill(prominent: false))
+      .accessibilityLabel("Search")
+      accountMenu(identity)
     }
-    .padding(.horizontal, 20)
-    .padding(.bottom, 8)
   }
+
 
   @ViewBuilder
   private var loadMoreRow: some View {
