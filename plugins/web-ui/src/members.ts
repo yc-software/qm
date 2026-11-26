@@ -33,16 +33,15 @@ let contextsRequested = false;
 function chatRoom(scopeId: string | null, redraw: () => void): ChatRoom | null {
   const me = appState.me;
   if (!me) return null;
-  if (!scopeId || scopeId === me.personalScope) {
-    return { context: null, members: [{ principalId: me.user, displayName: me.displayName || me.user }] };
-  }
+  const self = { principalId: me.user, displayName: me.displayName || me.user };
+  if (!scopeId || scopeId === me.personalScope) return { context: null, members: [self] };
   const context = contextsState.list.find((c) => c.scopeId === scopeId);
   if (!context && !contextsRequested && !contextsState.loaded) {
     contextsRequested = true;
     void ensureContexts().then(redraw);
   }
   if (context?.project) return { context, members: context.project.members };
-  if (context?.groupMembers?.length) return { context, members: context.groupMembers };
+  if (context?.groupMembers?.length) return { context, members: [self, ...context.groupMembers] };
   return null;
 }
 
