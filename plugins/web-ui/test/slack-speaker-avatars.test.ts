@@ -125,14 +125,14 @@ test("a Slack channel transcript groups a speaker's run, shows who posted, and r
     assert.deepEqual(
       rows.map((row) => [
         Boolean(row.querySelector(":scope > .speaker-label")),
-        row.querySelector(".slack-wire-text")?.textContent?.trim(),
+        row.querySelector<HTMLElement & { content?: string }>(".slack-wire-text > qm-markdown")?.content,
         row.querySelector(":scope > .speaker-label > .brand-mark > img")?.getAttribute("src"),
         row.classList.contains("continued-row"),
       ]),
       [
         [true, "deploys broke", undefined, false],
         [true, "@qm DM me", undefined, false],
-        [false, "thanks!", undefined, true],
+        [false, "thanks\\!", undefined, true],
         [true, undefined, "https://avatars.slack-edge.com/app_72.png", false],
         [true, undefined, "https://x/ada.png", false],
         [true, "@qm go", undefined, false],

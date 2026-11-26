@@ -2173,7 +2173,7 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(displayText, slackSelf()) : markdown(displayText)}
+              ${isReadOnlySlackView() ? slackWireBubble(displayText) : markdown(displayText)}
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2466,10 +2466,6 @@ export function createChatSurface(
         referrerpolicy="no-referrer"
       ></iframe>
     </section>`;
-  }
-
-  function slackSelf(): string {
-    return (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
   }
 
   function isReadOnlySlackView(): boolean {

@@ -588,9 +588,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const personFireTurn =
         (!sessionTurn || delegatedOrigin !== undefined) &&
         isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
-      const speakerTurn =
-        (!sessionTurn && (humanTurn || authoredDetection)) ||
-        (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
+      const personSpoke = !sessionTurn && (humanTurn || authoredDetection);
+      const speakerTurn = personSpoke || (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
       const personAuthorityTurn = internalAudience && input.botActor !== true && (speakerTurn || personFireTurn);
       const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
       const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
@@ -2193,7 +2192,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 externalId: messageTs ?? entryTs ?? null,
                 body: {
                   ...(inboundIssues.length ? { environment: environmentNote(inboundIssuesNote(inboundIssues)) } : {}),
-                  ...(humanInput ? { speakerId: actor.id } : {}),
+                  ...(personSpoke ? { speakerId: actor.id } : {}),
                   ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                   ...(input.displayText?.trim() ? { display: input.displayText } : {}),
                   ...(recallOutcomes.length ? { memoryRecallOutcomes: recallOutcomes } : {}),
@@ -2348,7 +2347,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               Object.assign(body, swarmEntryProvenance);
               if (!steered) delete body.speakerId;
-              if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
+              if (personSpoke && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
               const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
               if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
                 body.name = actor.displayName.trim();

@@ -4740,6 +4740,26 @@ summary.stopped-head:focus-visible {
   border-radius: 0;
   background: none;
 }
+.slack-thread-chat .message-stack > .user-row > :is(.attachment-gallery, .slack-reactions, .send-failure) {
+  order: 1;
+}
+.slack-thread-chat .message-stack > .user-row > .attachment-gallery {
+  align-items: flex-start;
+  margin: 6px 0 0;
+}
+.slack-thread-chat .message-stack > .user-row > .attachment-gallery > * {
+  justify-content: flex-start;
+}
+.slack-thread-chat .message-stack > .user-row > .message-files .file-image {
+  width: auto;
+  border-radius: 8px;
+}
+.slack-thread-chat .message-stack > .user-row > .message-files .file-image > :is(img, video) {
+  width: auto;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
 .slack-thread-chat .message-stack > :is(.user-row, .assistant-row) :is(.user-bubble, .assistant-body) {
   color: color-mix(in srgb, var(--foreground) 86%, var(--muted-foreground));
   font-size: var(--slack-font-size);
@@ -10643,8 +10663,10 @@ h3.ambient-field-label {
   overflow-wrap: anywhere;
 }
 .slack-wire-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.slack-wire-text :is(p, li) {
+  white-space: pre-wrap;
 }
 .slack-mention.self {
   color: var(--foreground);
