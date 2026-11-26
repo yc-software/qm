@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
+import { ambientTenant } from "../src/tenants/context.ts";
 
 export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void> {
   const d = await store.enqueue({
@@ -233,6 +234,16 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
     "an expired claim re-surfaces (at-least-once)",
   );
   await store.ack(abandoned.id, 700);
+
+  const held = await store.enqueue({ destination: { type: "group", target: "C" }, text: "x", idempotencyKey: "ra" });
+  assert.equal((await store.claimPending("group", 50)).length, 1);
+  await store.retryAfter(ambientTenant(), held.id, 300);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(await store.claimPending("group", 60_000), [], "a row waiting out its retry delay is not claimed");
+  await new Promise((r) => setTimeout(r, 300));
+  const reclaimed = (await store.claimPending("group", 60_000)).map((d) => d.id);
+  assert.deepEqual(reclaimed, [held.id], "a row is claimable again once its retry delay passes");
+  await store.ack(held.id, 800);
 
   assert.deepEqual(
     [...(await store.existingKeys(["fire-1", "run:r-2", "fire-race-2", "never-enqueued"]))].sort(),

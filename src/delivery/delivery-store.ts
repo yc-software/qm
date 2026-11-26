@@ -53,6 +53,7 @@ export interface DeliveryStore {
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   claimDue(type: string, ttlMs: number): Promise<ClaimedDelivery[]>;
   undeliveredTenants(type: string): Promise<ClaimedRow[]>;
+  retryAfter(tenant: Tenant, id: string, delayMs: number): Promise<void>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number, messageTs?: string): Promise<void>;
   claimHead(
@@ -172,6 +173,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async undeliveredTenants(type) {
       return open(type).length ? [{ tenantId: tenantOf(), id: type }] : [];
+    },
+    async retryAfter(_tenant, id, delayMs) {
+      const d = deliveries.get(id);
+      if (d && d.deliveredAt === null && d.expiredAt === undefined) claimedUntil.set(id, Date.now() + delayMs);
     },
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
