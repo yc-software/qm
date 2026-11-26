@@ -9,6 +9,7 @@ import {
   credentialLineText,
   grantableCredential,
   isBackendCredential,
+  liveConnector,
   type KeychainManifestInput,
   type CredentialFile,
   type Keychain,
@@ -254,7 +255,7 @@ export async function registerConnectorCredentials(
                 credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
             )
           : await tokens.connectorTokenStatus(host, actor.id, accountType);
-        const healthy = status?.connected && !status.needsReconnect;
+        const healthy = liveConnector(status);
         const operatorFallback =
           accountType === undefined &&
           tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));

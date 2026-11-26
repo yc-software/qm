@@ -1,8 +1,11 @@
 import {
   connectorHandle,
   credentialHandle,
+  connectorSummary,
+  credentialSummary,
   grantableCredential,
   KeychainError,
+  liveConnector,
   unsharedMemberCredentials,
   renderAskNotice,
   type CredentialFieldInput,
@@ -26,7 +29,6 @@ import {
 } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
-import { connectorHostLabel } from "../../connectors/oauth.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
@@ -281,7 +283,7 @@ const listUnshared = keychainRoute(async ({ res }, kc, capability) => {
     for (const credential of entriesByOwner.get(actorId) ?? [])
       if (grantableCredential(credential)) usable(credentialHandle(credential), actorId, credential.id);
     for (const c of connectorsByOwner.get(actorId) ?? [])
-      if (c.connected && !c.needsReconnect) usable(connectorHandle(c.host, c.accountType), actorId, c.credentialId);
+      if (liveConnector(c)) usable(connectorHandle(c.host, c.accountType), actorId, c.credentialId);
   }
   return sendJson(res, 200, {
     credentials: unsharedMemberCredentials({ members, entriesByOwner, connectorsByOwner, scopeGrants, execution }),
@@ -294,19 +296,14 @@ async function askableCredentials(
 ): Promise<Array<{ credential: string; service: string; account?: string; handle: string }>> {
   const [entries, connectors] = await Promise.all([kc.listByOwners([ownerId]), kc.listConnectorsByOwners([ownerId])]);
   return [
-    ...(entries.get(ownerId) ?? []).map((c) => ({
-      credential: c.id,
-      service: c.service,
-      ...(c.accountLabel ? { account: c.accountLabel } : {}),
-      handle: credentialHandle(c),
-    })),
-    ...(connectors.get(ownerId) ?? []).map((c) => ({
-      credential: c.credentialId,
-      service: connectorHostLabel(c.host),
-      ...(c.accountType ? { account: c.accountType } : {}),
-      handle: connectorHandle(c.host, c.accountType),
-    })),
-  ];
+    ...(entries.get(ownerId) ?? []).map(credentialSummary),
+    ...(connectors.get(ownerId) ?? []).map(connectorSummary),
+  ].map(({ credentialId, service, accountLabel, handle }) => ({
+    credential: credentialId,
+    service,
+    ...(accountLabel ? { account: accountLabel } : {}),
+    handle,
+  }));
 }
 
 async function resolveAskTarget(

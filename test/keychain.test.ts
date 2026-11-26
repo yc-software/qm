@@ -1028,7 +1028,7 @@ test("manifest: own credentials need no grant but require explicit execution req
       members: [{ id: "U1" }],
       entriesByOwner: new Map([["U1", entries]]),
     }),
-    /No credentials available\.\n3 credentials owned by people here aren't shared with this conversation — `GET \/v1\/keychain\/unshared` lists them; ask for access \(request-access skill\) rather than assuming one is missing\.$/,
+    /No credentials available\.\n2 credentials owned by people here aren't shared with this conversation — `GET \/v1\/keychain\/unshared` lists them; ask for access \(request-access skill\) rather than assuming one is missing\.$/,
     "own credentials without an execution handle are counted, not listed",
   );
 
@@ -1041,17 +1041,17 @@ test("manifest: own credentials need no grant but require explicit execution req
     scopeGrants: [],
   });
   assert.doesNotMatch(other, /Alice|npm|github/);
-  assert.match(other, /^3 credentials owned by people here aren't shared/m);
+  assert.match(other, /^2 credentials owned by people here aren't shared/m);
   const listed = unsharedMemberCredentials({
     members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.deepEqual(listed.map((c) => `${c.owner}/${c.service}`).sort(), [
-    "Alice/file-login",
-    "Alice/github",
-    "Alice/npm",
-  ]);
+  assert.deepEqual(
+    listed.map((c) => `${c.owner}/${c.service}`).sort(),
+    ["Alice/file-login", "Alice/github"],
+    "expired and backend credentials are not askable",
+  );
   assert.ok(listed.every((c) => c.handle === `${c.service}:${c.credentialId}`));
   assert.doesNotMatch(JSON.stringify(listed), /ghp_|npm_x|project-key/, "metadata only");
 
@@ -1064,7 +1064,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     scopeGrants: [],
   });
   assert.doesNotMatch(channel, /Alice|npm|github/);
-  assert.match(channel, /^3 credentials owned by people here aren't shared/m);
+  assert.match(channel, /^2 credentials owned by people here aren't shared/m);
 });
 
 const SECRET = "keychain-route-secret".repeat(3);

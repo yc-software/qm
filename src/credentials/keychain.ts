@@ -1905,6 +1905,25 @@ const ORGANIZATION_OWNER_KEY = personKey("Organization");
 export const grantableCredential = (c: KeychainCredentialMeta): boolean =>
   c.kind !== "broker" && !isBackendCredential(c);
 
+export const liveConnector = (c: Pick<ConnectorMeta, "connected" | "needsReconnect"> | undefined): boolean =>
+  !!c?.connected && !c.needsReconnect;
+
+export const credentialSummary = (c: KeychainCredentialMeta): Omit<UnsharedCredential, "owner"> => ({
+  credentialId: c.id,
+  ownerId: c.ownerId,
+  service: c.service,
+  ...(c.accountLabel ? { accountLabel: c.accountLabel } : {}),
+  handle: credentialHandle(c),
+});
+
+export const connectorSummary = (c: ConnectorMeta): Omit<UnsharedCredential, "owner"> => ({
+  credentialId: c.credentialId,
+  ownerId: c.ownerId,
+  service: connectorHostLabel(c.host),
+  ...(c.accountType ? { accountLabel: c.accountType } : {}),
+  handle: connectorHandle(c.host, c.accountType),
+});
+
 interface UnsharedCredential {
   credentialId: string;
   ownerId: string;
@@ -1945,17 +1964,7 @@ function manifestRows(input: ManifestRowsInput, now: number) {
     rows.set(credential.id, {
       ownerId: credential.ownerId,
       line: credentialLine(credential, now),
-      ...(grantableCredential(credential)
-        ? {
-            unshared: {
-              credentialId: credential.id,
-              ownerId: credential.ownerId,
-              service: credential.service,
-              ...(credential.accountLabel ? { accountLabel: credential.accountLabel } : {}),
-              handle: credentialHandle(credential),
-            },
-          }
-        : {}),
+      ...(grantableCredential(credential) ? { unshared: credentialSummary(credential) } : {}),
     });
   for (const member of input.members)
     for (const connector of input.connectorsByOwner?.get(member.id) ?? []) {
@@ -1964,13 +1973,7 @@ function manifestRows(input: ManifestRowsInput, now: number) {
         ownerId: member.id,
         line: connectorLine(connector.host, connector.accountType, connector.needsReconnect, connector.refreshError),
         connector: handle,
-        unshared: {
-          credentialId: connector.credentialId,
-          ownerId: member.id,
-          service: connectorHostLabel(connector.host),
-          ...(connector.accountType ? { accountLabel: connector.accountType } : {}),
-          handle,
-        },
+        unshared: connectorSummary(connector),
       });
     }
   const classify = (credentialId: string, row: ManifestRow): "shown" | "expired" | "unshared" | "hidden" => {
@@ -1978,6 +1981,7 @@ function manifestRows(input: ManifestRowsInput, now: number) {
     if (row.connector && row.line.expired && !handleNames.has(row.connector)) return "expired";
     if (
       row.unshared &&
+      !row.line.expired &&
       input.members.some((member) => samePerson(member.id, row.ownerId)) &&
       !(row.connector && handleNames.has(row.connector))
     )
