@@ -1,4 +1,4 @@
-import { previewFile } from "./file-open.ts";
+import { openFilePreview, previewFile } from "./file-open.ts";
 import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -463,8 +463,43 @@ async function loadFiles(seq: number): Promise<void> {
   drawFiles();
 }
 
+let linkedFileId: string | null = null;
+
+export function openFileById(id: string): void {
+  linkedFileId = id;
+}
+
+function attachmentName(disposition: string | null): string | null {
+  const encoded = disposition?.split("filename*=UTF-8''")[1];
+  return encoded ? decodeURIComponent(encoded) : null;
+}
+
+async function openLinkedFile(): Promise<void> {
+  const id = linkedFileId;
+  linkedFileId = null;
+  if (!id) return;
+  const probe = fileContentUrl(id);
+  try {
+    const response = await webFetch(probe, { headers: { range: "bytes=0-0" } });
+    void response.body?.cancel();
+    if (!response.ok)
+      throw new Error(
+        response.status === 404
+          ? "That file doesn't exist or you can't open it."
+          : `Couldn't open that file (${response.status}).`,
+      );
+    const name = attachmentName(response.headers.get("content-disposition")) ?? id;
+    const href = fileContentUrl(id, name);
+    if (!openFilePreview(name, href, response.headers.get("content-type") ?? undefined)) window.location.assign(href);
+  } catch (e) {
+    filesNotice = errMessage(e, "Couldn't open that file.");
+    drawFiles();
+  }
+}
+
 export async function renderFiles(): Promise<void> {
   if (appState.currentView !== "files") return;
+  void openLinkedFile();
   if (scopedSession.active) {
     if (filesScope !== scopedSession.active.scopeId) {
       filesScope = scopedSession.active.scopeId;

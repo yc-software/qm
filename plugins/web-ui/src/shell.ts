@@ -107,7 +107,7 @@ import {
   routePersonasHistory,
 } from "./personas";
 import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
-import { renderFiles } from "./files";
+import { openFileById, renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
@@ -217,6 +217,7 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
   if (view === "apps" && item) openAppById(item);
+  if (view === "files" && item) openFileById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
