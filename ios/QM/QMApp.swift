@@ -19,7 +19,6 @@ struct RootView: View {
   }
 
   @State private var showingMore = false
-  @State private var keyboardUp = false
 
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
@@ -39,10 +38,6 @@ struct RootView: View {
 
   private var visibleConversations: [Conversation] {
     model.visibleConversations(webOnly: webOnly)
-  }
-
-  private var waitingCount: Int {
-    model.conversations.filter(ConversationFilter.waiting.includes).count
   }
 
   private var home: some View {
@@ -117,7 +112,7 @@ struct RootView: View {
       }
     }
     // On the stack, not its root, so pushed pages also stay clear of the nav.
-    .modifier(navRoom)
+    .modifier(NavRoom())
   }
 
   var body: some View {
@@ -129,42 +124,11 @@ struct RootView: View {
     } detail: {
       shell
     }
-    // One nav for the whole app, drawn above both the list and the main screen so it stays
-    // put while they slide underneath it. A TabView can't: its bar belongs to one tab's
-    // content, and the list here is a drawer layered over every section, not a tab.
-    .overlay(alignment: .bottom) {
-      if showsNav {
-        ShellNav(
-          showingConversations: $showingConversations, showingMore: showingMore,
-          blankChat: blankChat, waiting: waitingCount, onNew: newChat
-        ) {
-          showingMore = true
-          showingConversations = false
-        }
-        .transition(.opacity.combined(with: .offset(y: 24)))
-      }
-    }
-    // The launch loader sits above everything and fades away once the workspace arrives, so
-    // the app is revealed underneath it instead of cutting in.
-    .overlay {
-      if launching {
-        NativeDeepWaterLoading(label: "Loading your workspace")
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(QMTheme.paper.ignoresSafeArea())
-          .transition(
-            .opacity.combined(with: .scale(scale: 1.04)).animation(.smooth(duration: 0.7)))
-      }
-    }
-    // Hide and restore the nav in step with the keyboard, so the room it leaves (and anything
-    // centred in that room, like the new-chat greeting) glides instead of jumping.
-    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification))
-    {
-      note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = true }
-    }
-    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification))
-    {
-      note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = false }
-    }
+    .modifier(
+      ShellChrome(
+        model: model, showingConversations: $showingConversations, showingMore: $showingMore,
+        blankChat: blankChat, onNew: newChat)
+    )
     .environment(\.qmIdentity, model.identity)
     .environment(model)
     .alert(
@@ -211,9 +175,6 @@ struct RootView: View {
         listVisible: homePath.isEmpty, phase: phase, model: model)
     )
     .task(id: webOnly) { await model.narrow(webOnly: webOnly) }
-    .task(id: foregroundURL) {
-      if foregroundURL != nil, model.identity == nil { await model.restore() }
-    }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
         selectedConversation = nil
@@ -250,7 +211,7 @@ struct RootView: View {
       }
       .accessibilityIdentifier("workspaceConnectionError")
     } else {
-      // The launch loader itself is drawn above the whole app (see `launching`).
+      // The launch loader itself is drawn above the whole app (see `ShellChrome`).
       QMTheme.paper.ignoresSafeArea()
     }
   }
@@ -317,7 +278,7 @@ struct RootView: View {
     if let client = model.client, let identity = model.identity {
       if showingMore {
         NavigationStack { MoreGrid(identity: identity, client: client) }
-          .modifier(navRoom)
+          .modifier(NavRoom())
       } else if let conversation = selectedConversation {
         NavigationStack {
           ChatView(
@@ -325,7 +286,7 @@ struct RootView: View {
               conversation: conversation, client: client, user: identity.user,
               knownSession: conversation.localOnly != true))
         }
-        .environment(\.shellNavRoom, navRoom.height)
+        .modifier(NavRoom(composer: true))
         .id(conversation.id)
         .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
       } else {
@@ -334,19 +295,6 @@ struct RootView: View {
       }
     }
   }
-
-  /// Signed in and waiting for the workspace: the launch loader shows.
-  private var launching: Bool {
-    model.identity == nil && model.client?.hasSession == true && model.error == nil
-  }
-
-  /// The workspace to connect to whenever the app comes to the front. Launch opens on a
-  /// conversation rather than the list, so the list's own sync can't be what connects.
-  private var foregroundURL: URL? { phase == .active ? model.client?.baseURL : nil }
-
-  private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
-
-  private var navRoom: NavRoom { NavRoom(height: showsNav ? ShellNav.height : 0) }
 
   private var blankChat: Bool { !showingMore && selectedConversation?.localOnly == true }
 

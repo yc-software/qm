@@ -79,16 +79,91 @@ struct ShellNav: View {
 
 /// Keeps scrolling content clear of the bottom nav, which floats above every screen.
 struct NavRoom: ViewModifier {
-  let height: CGFloat
+  /// The main chat pads its own composer instead (see `shellNavRoom`).
+  var composer = false
+  @Environment(\.shellNavHeight) private var height
   func body(content: Content) -> some View {
-    content.safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: height) }
+    if composer {
+      content.environment(\.shellNavRoom, height)
+    } else {
+      content.safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: height) }
+    }
   }
 }
 
 extension EnvironmentValues {
+  /// Room the bottom nav takes right now: zero while it hides for the keyboard or signed out.
+  @Entry var shellNavHeight: CGFloat = 0
   /// Room the composer keeps under itself for the bottom nav. A safe-area inset on the
   /// conversation's NavigationStack doesn't reach the composer, so it pads itself instead.
   @Entry var shellNavRoom: CGFloat = 0
+}
+
+/// The app shell around the list and main screen: the bottom nav, the launch loader, keyboard
+/// tracking and restore-on-foreground, so RootView keeps to the conversation list.
+struct ShellChrome: ViewModifier {
+  let model: AppModel
+  @Binding var showingConversations: Bool
+  @Binding var showingMore: Bool
+  let blankChat: Bool
+  let onNew: () -> Void
+  @State private var keyboardUp = false
+  @Environment(\.scenePhase) private var phase
+
+  private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
+
+  /// Signed in and waiting for the workspace: the launch loader shows.
+  private var launching: Bool {
+    model.identity == nil && model.client?.hasSession == true && model.error == nil
+  }
+
+  /// The workspace to connect to whenever the app comes to the front. Launch opens on a
+  /// conversation rather than the list, so the list's own sync can't be what connects.
+  private var foregroundURL: URL? { phase == .active ? model.client?.baseURL : nil }
+
+  func body(content: Content) -> some View {
+    content
+      .environment(\.shellNavHeight, showsNav ? ShellNav.height : 0)
+      // One nav for the whole app, drawn above both the list and the main screen so it stays
+      // put while they slide underneath it. A TabView can't: its bar belongs to one tab's
+      // content, and the list here is a drawer layered over every section, not a tab.
+      .overlay(alignment: .bottom) {
+        if showsNav {
+          ShellNav(
+            showingConversations: $showingConversations, showingMore: showingMore,
+            blankChat: blankChat,
+            waiting: model.conversations.filter(ConversationFilter.waiting.includes).count,
+            onNew: onNew
+          ) {
+            showingMore = true
+            showingConversations = false
+          }
+          .transition(.opacity.combined(with: .offset(y: 24)))
+        }
+      }
+      // The launch loader sits above everything and fades away once the workspace arrives, so
+      // the app is revealed underneath it instead of cutting in.
+      .overlay {
+        if launching {
+          NativeDeepWaterLoading(label: "Loading your workspace")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(QMTheme.paper.ignoresSafeArea())
+            .transition(
+              .opacity.combined(with: .scale(scale: 1.04)).animation(.smooth(duration: 0.7)))
+        }
+      }
+      // Hide and restore the nav in step with the keyboard, so the room it leaves (and anything
+      // centred in that room, like the new-chat greeting) glides instead of jumping.
+      .onReceive(
+        NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
+      ) { note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = true } }
+      .onReceive(
+        NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+      ) { note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = false } }
+      .task(id: foregroundURL) {
+        if foregroundURL != nil, model.identity == nil { await model.restore() }
+      }
+  }
 }
 
 /// Shrinks on touch-down so a tap registers immediately.
