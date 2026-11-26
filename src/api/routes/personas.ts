@@ -75,7 +75,7 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
   const personaThreads =
-    (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
+    (await ctx.deps.sessions.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
   return crons
     .filter(
       (c) =>
@@ -232,7 +232,7 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   const viewed = await ctx.app.getSessionForViewer(sessionId, ctx.capability ?? { actorId: principalId }, {
     tailTurns: 1,
   });
-  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions?.get(sessionId) : null;
+  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions.get(sessionId) : null;
   if (stored && !sessionVisibleTo(ctx.capability!, stored))
     return sendJson(ctx.res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
   if (!viewed) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -248,10 +248,6 @@ async function authorizePersonaSlack(
 ): Promise<{ id: string; name: string; description: string } | null> {
   const personas = service(ctx);
   if (!personas) return null;
-  if (!ctx.deps.slackInstallation) {
-    sendJson(ctx.res, 404, { error: "not_configured" });
-    return null;
-  }
   const id = ctx.params.id!;
   const detail = await personas.detail(principalId, id);
   if (detail.status === "ok") {
@@ -270,7 +266,7 @@ async function getPersonaSlack(ctx: ApiCtx): Promise<void> {
   if (!principalId) return;
   const persona = await authorizePersonaSlack(ctx, principalId);
   if (!persona) return;
-  sendJson(ctx.res, 200, await ctx.deps.slackInstallation!.appStatus(persona.id, persona.name));
+  sendJson(ctx.res, 200, await ctx.deps.slackInstallation.appStatus(persona.id, persona.name));
 }
 
 async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
@@ -283,7 +279,7 @@ async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
   if (typeof body.refreshToken === "string" && body.refreshToken.trim()) configToken = body.refreshToken;
   else if (typeof body.configToken === "string") configToken = body.configToken;
   try {
-    const created = await ctx.deps.slackInstallation!.createApp({
+    const created = await ctx.deps.slackInstallation.createApp({
       personaId: persona.id,
       name: persona.name,
       description: persona.description,
@@ -314,7 +310,7 @@ async function putPersonaSlack(ctx: ApiCtx): Promise<void> {
   const signingSecret = typeof body.signingSecret === "string" ? body.signingSecret : "";
   const appId = typeof body.appId === "string" ? body.appId : undefined;
   try {
-    const status = await ctx.deps.slackInstallation!.attachHttpApp({
+    const status = await ctx.deps.slackInstallation.attachHttpApp({
       personaId: persona.id,
       botToken,
       signingSecret,
@@ -341,7 +337,7 @@ async function deletePersonaSlack(ctx: ApiCtx): Promise<void> {
   const deleteRemote =
     ctx.url.searchParams.get("deleteRemote") === "true" || (isObj(ctx.body) && ctx.body.deleteRemote === true);
   try {
-    await ctx.deps.slackInstallation!.deleteApp({
+    await ctx.deps.slackInstallation.deleteApp({
       personaId: persona.id,
       updatedBy: principalId,
       deleteRemote,
@@ -352,7 +348,7 @@ async function deletePersonaSlack(ctx: ApiCtx): Promise<void> {
       resource: "persona-slack",
       scopeLabel: scopeId("persona", persona.id),
     });
-    sendJson(ctx.res, 200, await ctx.deps.slackInstallation!.appStatus(persona.id, persona.name));
+    sendJson(ctx.res, 200, await ctx.deps.slackInstallation.appStatus(persona.id, persona.name));
   } catch (error) {
     sendJson(ctx.res, 400, { error: "slack_app_delete_failed", message: errMessage(error) });
   }

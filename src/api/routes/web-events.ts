@@ -106,7 +106,7 @@ export function createWebEvents(
   };
 
   const viewersOf = async (loopId: string, tenant: string | undefined): Promise<string[] | null> => {
-    const loop = await deps.loops?.store.get(loopId);
+    const loop = await deps.loops.store.get(loopId);
     if (!loop) return null;
     const identity = deps.identity;
     await identity?.refresh();

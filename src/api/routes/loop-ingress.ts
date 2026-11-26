@@ -61,10 +61,6 @@ async function change(ctx: ApiCtx) {
 }
 
 async function receive(ctx: BaseCtx) {
-  if (!ctx.deps.loopIngress) {
-    ctx.req.resume();
-    return sendJson(ctx.res, 404, { error: "not_found" });
-  }
   try {
     const rawBody = await readRawBody(ctx.req);
     const result = await ctx.deps.loopIngress.receive(ctx.params.id!, { headers: ctx.req.headers, rawBody });

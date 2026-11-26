@@ -240,10 +240,6 @@ async function brainTarget(
   actorId: string,
 ): Promise<SecretDropRecord["memoryBrain"] | null> {
   const { res, deps } = ctx;
-  if (!deps.memoryRegistry) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   const extra = Object.keys(b).filter((key) => key !== "memoryBrain" && key !== "purpose");
   if (extra.length) {
     sendJson(res, 400, {
@@ -278,7 +274,6 @@ async function brainDestination(
 ): Promise<BrainDestination | { status: 403 | 409; refused: string } | undefined> {
   const target = rec.memoryBrain;
   if (!target) return undefined;
-  if (!ctx.deps.memoryRegistry) return { status: 409, refused: "this core has no memory registry" };
   const record = readRegistry((await ctx.deps.memoryRegistry.current()).record);
   const brain = record.brains.find(({ id }) => id === target.id);
   if (!brain) return { status: 409, refused: `brain ${target.id} was removed after this link was made` };
@@ -348,7 +343,7 @@ async function saveBrainSecret(
 async function mintDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, secret } = ctx;
   const capability = personalCapability(ctx);
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, {
       error: "unauthorized",
@@ -357,7 +352,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   const capSecret = deps.capabilitySecret ?? secret;
   if (!capSecret)
     return sendJson(res, 500, { error: "misconfigured", message: "no capability secret to bind the drop link with" });
-  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+  if (await botWorkInPersonsName(ctx.deps.admin.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   const b = body as {
     service?: unknown;
@@ -476,7 +471,7 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params, req } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.keychain) return sendJson(res, 404, { error: "not_found" });
   const { secret, values } = body as { secret?: unknown; values?: unknown };
   const peeked = await deps.secretDrops.peek(params.id!);
   if (!peeked.ok) return sendJson(res, 404, { error: "not_found", message: dropGone(peeked.reason) });
@@ -556,7 +551,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     });
     if (mayShare && drop.audienceScopeId) {
       void (async () => {
-        const pending = (await deps.secretDrops!.siblings(drop).catch(() => [])).map((s) => s.service);
+        const pending = (await deps.secretDrops.siblings(drop).catch(() => [])).map((s) => s.service);
         await deps.fireDropResolution?.({
           id: params.id!,
           ownerId: drop.ownerId,

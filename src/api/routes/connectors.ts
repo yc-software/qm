@@ -153,8 +153,6 @@ async function connectorProviderStatus(
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const { deps, secret, url, res } = ctx;
   const provider = parseOAuthRoute(ctx.pathname)!.provider;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
@@ -208,7 +206,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
   const p = oauthProvider(provider);
-  if (!p || !deps.connectorTokens) return false;
+  if (!p) return false;
   for (const host of p.hosts) {
     for (const at of ACCOUNT_TYPES) {
       const st = await deps.connectorTokens
@@ -222,7 +220,7 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
 
 async function consentRedeem(ctx: ApiCtx): Promise<void> {
   const { res, deps, secret, url } = ctx;
-  if (!deps.consentLinks || !deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
   const clicker = personKey(ctx.req.headers["x-consent-clicker"] as string | undefined);
   if (!clicker) return sendJson(res, 401, { error: "unauthorized", message: "sign in to complete this connection" });
   const linkId = decodeURIComponent(ctx.params.linkId ?? "");
@@ -290,7 +288,6 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
 
 async function consentMint(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
   if (!requirePersonAuthority(ctx)) return;
@@ -406,8 +403,6 @@ async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
 
 async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
   const { res, deps, secret } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const provider = oauthProvider(start.provider);
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${start.provider}` });
@@ -460,8 +455,6 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
 
 async function oauthStatus(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const access = resolveSelfRead(ctx, {
     botMessage: "bot turns cannot read connector status",
     privateOnlyMessage: "connector status is only available in your own private conversation",
@@ -478,8 +471,6 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!requirePersonAuthority(ctx)) return;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
   let principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (capability) {
@@ -525,8 +516,6 @@ async function oauthRevoke(ctx: ApiCtx): Promise<void> {
 
 async function setToken(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
   const host = typeof b.host === "string" ? b.host : "";
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
@@ -590,7 +579,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
     let authError: unknown;
     for (const candidate of requestedAccountType ? [requestedAccountType] : ACCOUNT_TYPES) {
       try {
-        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
+        auth = await ctx.deps.connectorTokens.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
         if (auth) {
           accountType = candidate;
           break;
