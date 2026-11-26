@@ -114,7 +114,7 @@ const ACTIVE_PERSON = `JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.us
             AND u.kind = 'person' AND u.offboarded_at IS NULL`;
 
 const MEMBER_PERSON = `${ACTIVE_PERSON}
-            AND (u.first_seen_at IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
+            AND (u.source IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
               WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.alias_id <> u.primary_alias))`;
 
 const principalUserTenants = (id: string, person: string): PgMigrationDefinition => ({
