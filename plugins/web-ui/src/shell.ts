@@ -217,7 +217,6 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
 
 function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
   if (view === "apps" && item) openAppById(item);
-  if (view === "files" && item && !resolveProjectScope(contextsState.list, item)) openFileById(item);
   if (view === "crons" && item) openCronById(item);
   if (view === "webhooks" && item) openWebhookById(item);
   if (view === "skills" && item) openSkillById(item);
@@ -1338,6 +1337,8 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    const linkedFile = wanted === "files" ? params.get("file") : null;
+    if (linkedFile) openFileById(linkedFile);
     openViewAt(wanted as View, wantedItem, "push");
     return;
   }

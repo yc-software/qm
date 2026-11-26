@@ -288,7 +288,7 @@ export function workspaceTools(kit: ToolKit) {
     name: "write",
     label: "write",
     description:
-      "Write a workspace file; people can't open workspace paths. To show or share it, upload it with the helper from GET /v1/files/upload-client, link the `url` it returns, and share the returned ID to widen access.",
+      "Write a workspace file. To share it, upload it with the helper from GET /v1/files/upload-client, then share the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative path." }),
       data: Type.String({ description: "File contents." }),

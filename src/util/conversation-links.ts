@@ -18,5 +18,6 @@ export function conversationWebUrl(publicWebUrl: string | undefined, sessionId: 
 }
 
 export function fileWebUrl(publicWebUrl: string | undefined, fileId: string): string | undefined {
-  return webUiUrl(publicWebUrl, `/files/${encodeURIComponent(fileId)}`);
+  const files = webUiUrl(publicWebUrl, "/files");
+  return files && `${files}?file=${encodeURIComponent(fileId)}`;
 }

@@ -425,7 +425,7 @@ test("opening a title-only search hit opens the chat at its latest messages", as
 
 test("a file link opens that file in the viewer with its Markdown rendered", async () => {
   const h = await harness({
-    path: "/files/doc1",
+    path: "/files?file=doc1",
     api: (path) =>
       path.startsWith("/api/files/doc1/content")
         ? new Response("# Housing index", {

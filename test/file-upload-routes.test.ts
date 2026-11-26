@@ -201,5 +201,5 @@ test("an unrouted method gets a 404 pointing at the catalog, not a capability re
 test("completing an upload returns a web link that opens the file", async () => {
   const result = await call(`/v1/files/uploads/${upload.id}/complete`, await token("U1"), "POST", {});
   assert.equal(result.status, 200);
-  assert.equal(((await result.json()) as { url: string }).url, `https://qm.example/ui/files/${"f".repeat(32)}`);
+  assert.equal(((await result.json()) as { url: string }).url, `https://qm.example/ui/files?file=${"f".repeat(32)}`);
 });
