@@ -14,7 +14,7 @@ import {
 import { personalCredentialId, personalGitBasicCredential, personalGitRemote } from "../credentials/personal-git.ts";
 import { samePerson } from "../directory/person.ts";
 import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
-import { sendJson } from "./http.ts";
+import { clearBodyDeadline, sendJson } from "./http.ts";
 import { relayStream } from "../../plugins/chassis/src/http.ts";
 import { tenantOf, type BaseCtx } from "./routes/route.ts";
 import { appBorrows } from "./routes/credentials.ts";
@@ -214,6 +214,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
 
   const headers = brokerRequestHeaders(rec, callerHeaders(ctx));
 
+  if (method === "POST") clearBodyDeadline(ctx.req);
   let upstreamResp: GitHttpFetchResponse;
   try {
     upstreamResp = await (ctx.deps.gitHttpFetch ?? realGitHttpFetch)(upstream.toString(), {

@@ -5,6 +5,7 @@ import { Readable, PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { brokerGitHttp } from "../src/api/git-http-broker.ts";
+import { armBodyDeadline } from "../src/api/http.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
@@ -76,7 +77,7 @@ function ctx(
   };
 }
 
-test("git HTTP broker streams a smart-HTTP request through the pinned service credential", async () => {
+test("git HTTP broker streams a smart-HTTP request that outlasts the request-body deadline through the pinned service credential", async () => {
   let seen: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
   const deps: ServerDeps = {
     ...testCore(),
@@ -94,6 +95,7 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
       }),
     } as unknown as ServerDeps["serviceCreds"],
     gitHttpFetch: async (url, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const chunks: Buffer[] = [];
       if (init.body)
         for await (const chunk of init.body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
@@ -107,6 +109,7 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
   };
   const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, gzipSync("PACK"));
   c.req.headers["content-encoding"] = "gzip";
+  armBodyDeadline(c.req, 50);
   await brokerGitHttp(c);
 
   assert.equal(await text(c.res), "0000");

@@ -21,7 +21,7 @@ export function sendProblem(res: ServerResponse, status: number, problem: Record
 }
 
 const BODY_DEADLINE = Symbol.for("qm.bodyDeadline");
-type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void } };
+type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void; clear: () => void } };
 
 export function armBodyDeadline(req: IncomingMessage, ms: number): void {
   let timer: NodeJS.Timeout | undefined;
@@ -39,8 +39,12 @@ export function armBodyDeadline(req: IncomingMessage, ms: number): void {
   };
   req.once("end", clear);
   req.once("close", clear);
-  (req as DeadlineCarrier)[BODY_DEADLINE] = { rearm: arm };
+  (req as DeadlineCarrier)[BODY_DEADLINE] = { rearm: arm, clear };
   arm(ms);
+}
+
+export function clearBodyDeadline(req: IncomingMessage): void {
+  (req as DeadlineCarrier)[BODY_DEADLINE]?.clear();
 }
 
 export function extendBodyDeadline(req: IncomingMessage, ms: number): void {
