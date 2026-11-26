@@ -70,7 +70,6 @@ import {
 import type { Conversation } from "./conv-types";
 import {
   openSession,
-  sessionSlackUrl,
   openSessionInto,
   refreshSessions,
   sessionsReady,
@@ -81,8 +80,7 @@ import {
   workingMark,
   backgroundIcons,
 } from "./sessions";
-import { chatSurfaceOf, conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
-import { openInSurface } from "./slack-thread-view";
+import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
 import { onPaneHeaderExtrasChange, paneHeaderExtra, paneHeaderExtraKey } from "./pane-header-extras";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
 import {
@@ -1241,7 +1239,6 @@ class PaneTab implements ITabRenderer {
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
-    const slackSession = paneSession(panel)?.surface === "slack" ? paneSession(panel) : undefined;
     render(
       html`
         ${working ? workingMark() : nothing}
@@ -1271,14 +1268,7 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${
-          slackSession
-            ? html`${paneHeaderExtra(slackSession.id) ?? nothing}${openInSurface(
-                sessionSlackUrl(slackSession),
-                chatSurfaceOf(slackSession)?.label,
-              )}`
-            : sessionPersonaChip(paneSession(panel))
-        }
+        ${paneHeaderExtra(paneSession(panel)?.id) ?? sessionPersonaChip(paneSession(panel))}
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}

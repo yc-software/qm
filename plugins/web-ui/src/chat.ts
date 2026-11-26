@@ -1766,13 +1766,11 @@ export function createChatSurface(
           named: false,
         });
       else if (ctx.pane) {
-        const people = conversationParticipants(messages).slice(0, 3);
+        const people = conversationParticipants(messages);
         setPaneHeaderExtra(
           roSession.id,
           people.map((person) => `${person.key}:${person.avatarUrl ?? ""}`).join(","),
-          html`${participantStack(people, 3)}${
-            people.length ? html`<span class="chat-participant-names">${peopleNames(people, 3)}</span>` : nothing
-          }`,
+          html`${namedParticipants(people, 3)}${openInSurface(sessionSlackUrl(roSession), chatSurface?.label)}`,
         );
       } else
         header = chatHeader(
@@ -1989,6 +1987,12 @@ export function createChatSurface(
     return `${named.join(", ")}${people.length > shown ? ` +${people.length - shown}` : ""}`;
   }
 
+  function namedParticipants(people: Participant[], shown: number): TemplateResult {
+    return html`${participantStack(people.slice(0, shown), shown)}${
+      people.length ? html`<span class="chat-participant-names">${peopleNames(people, shown)}</span>` : nothing
+    }`;
+  }
+
   function chatHeader(
     title: string | TemplateResult,
     subtitle: string | null,
@@ -2003,8 +2007,7 @@ export function createChatSurface(
           <div class="chat-title" dir="auto">${title}</div>
           ${subtitle === null ? nothing : html`<div class="chat-subtitle">${subtitle}</div>`}
         </div>
-        ${participantStack(people.named ? participants.slice(0, people.shown) : participants, people.shown)}
-        ${people.named && participants.length ? html`<span class="chat-participant-names">${peopleNames(participants, people.shown)}</span>` : nothing}
+        ${people.named ? namedParticipants(participants, people.shown) : participantStack(participants, people.shown)}
         ${action}
       </header>
     `;
