@@ -1329,6 +1329,23 @@ async function searchProjectMembers(event: SubmitEvent, context: CoreContext): P
   await runMemberSearch(context, query);
 }
 
+export async function searchInternalPeople(query: string): Promise<DirectoryMatch[]> {
+  const response = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(query)}`);
+  return (response.matches ?? []).filter((match) => match.type === "internal");
+}
+
+export async function addMemberToProject(projectId: string, memberId: string): Promise<CoreProject> {
+  const project = projectFromResponse(
+    await api(`/api/projects/${encodeURIComponent(projectId)}/members`, {
+      method: "POST",
+      body: JSON.stringify({ memberId }),
+    }),
+  );
+  if (!project) throw new Error("Core returned an invalid project");
+  upsertProject(project);
+  return project;
+}
+
 async function runMemberSearch(context: CoreContext, query: string): Promise<void> {
   if (!context.project || contextsState.memberBusy) return;
   if (contextsState.memberProjectId !== context.project.id) return;
@@ -1337,9 +1354,9 @@ async function runMemberSearch(context: CoreContext, query: string): Promise<voi
   contextsState.memberSearching = true;
   drawContexts();
   try {
-    const response = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(query)}`);
+    const matches = await searchInternalPeople(query);
     if (searchSeq !== memberSearchSeq || contextsState.memberProjectId !== projectId) return;
-    contextsState.memberMatches = (response.matches ?? []).filter((match) => match.type === "internal");
+    contextsState.memberMatches = matches;
     contextsState.memberSearchedQuery = query;
   } catch (error) {
     if (searchSeq !== memberSearchSeq || contextsState.memberProjectId !== projectId) return;
@@ -1363,14 +1380,8 @@ async function addProjectMember(context: CoreContext, member: DirectoryMatch): P
   contextsState.memberError = "";
   drawContexts();
   try {
-    const response = await api(`/api/projects/${encodeURIComponent(context.project.id)}/members`, {
-      method: "POST",
-      body: JSON.stringify({ memberId: member.principalId }),
-    });
+    await addMemberToProject(context.project.id, member.principalId);
     if (resetSeq !== contextsResetSeq) return;
-    const project = projectFromResponse(response);
-    if (!project) throw new Error("Core returned an invalid project");
-    upsertProject(project);
     contextsState.memberQuery = "";
     contextsState.memberMatches = [];
     contextsState.memberSearchedQuery = "";

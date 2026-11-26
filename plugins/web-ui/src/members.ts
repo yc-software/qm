@@ -2,8 +2,15 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Search, UserPlus, X } from "lucide";
 import { api, forkSession, type CoreContext } from "./core-bridge";
-import { contextsState, ensureContexts, projectFromResponse, upsertProject } from "./contexts";
+import {
+  addMemberToProject,
+  contextsState,
+  ensureContexts,
+  projectFromResponse,
+  searchInternalPeople,
+} from "./contexts";
 import { errMessage } from "../../chassis/src/errors";
+import { restoreDialogFocus } from "./dialog-focus";
 import { icon } from "./icons";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
@@ -94,7 +101,7 @@ function openMembersDialog(
     clearTimeout(timer);
     dialog.close();
     dialog.remove();
-    if (opener?.isConnected) opener.focus();
+    restoreDialogFocus(opener, () => document.querySelector<HTMLElement>(".members-button"));
   };
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -115,9 +122,9 @@ function openMembersDialog(
     searching = true;
     draw();
     try {
-      const r = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(q)}`);
+      const found = await searchInternalPeople(q);
       if (seq !== searchSeq) return;
-      matches = (r.matches ?? []).filter((m) => m.type === "internal");
+      matches = found;
       error = "";
     } catch (e) {
       if (seq !== searchSeq) return;
@@ -134,23 +141,12 @@ function openMembersDialog(
     matches = [];
     searchSeq++;
   };
-  const addMember = async (projectId: string, person: DirectoryMatch) => {
-    const updated = projectFromResponse(
-      await api(`/api/projects/${encodeURIComponent(projectId)}/members`, {
-        method: "POST",
-        body: JSON.stringify({ memberId: person.principalId }),
-      }),
-    );
-    if (!updated) throw new Error("Core returned an invalid project");
-    upsertProject(updated);
-    return updated;
-  };
   const addToProject = async (projectId: string, person: DirectoryMatch) => {
     busy = true;
     error = "";
     draw();
     try {
-      await addMember(projectId, person);
+      await addMemberToProject(projectId, person.principalId);
       resetSearch();
       redraw();
     } catch (e) {
@@ -170,7 +166,7 @@ function openMembersDialog(
         await api("/api/projects", { method: "POST", body: JSON.stringify({ name: chat.title || "Shared chat" }) }),
       );
       if (!project) throw new Error("Core returned an invalid project");
-      for (const person of picked) await addMember(project.id, person);
+      for (const person of picked) await addMemberToProject(project.id, person.principalId);
       const forked = await forkSession(chat.sessionId, undefined, undefined, project.id);
       close();
       const { openSession, refreshSessions } = await import("./sessions");
@@ -188,7 +184,7 @@ function openMembersDialog(
     const project = room.context?.project;
     const addable = canAdd(room, chat.sessionId);
     const present = new Set([...room.members, ...picked].map((m) => m.principalId));
-    const fresh = matches.filter((m) => !present.has(m.principalId)).slice(0, 8);
+    const fresh = matches.filter((m) => !present.has(m.principalId));
     let sub = "Only you can see this chat.";
     if (project) sub = "Everyone here can see and join this project's chats.";
     else if (room.context) sub = "Members of this Slack conversation.";
@@ -227,7 +223,6 @@ function openMembersDialog(
                     aria-label="Add people"
                     placeholder="Search by name or handle"
                     autocomplete="off"
-                    maxlength="80"
                     .value=${live(query)}
                     ?disabled=${busy}
                     @input=${(event: Event) => {
