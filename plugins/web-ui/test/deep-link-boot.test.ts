@@ -441,9 +441,9 @@ test("a file link opens that file in the viewer with its Markdown rendered", asy
   };
   const booted = h.boot();
   try {
-    for (let i = 0; i < 1000 && !document.querySelector(".file-viewer h1"); i++)
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(document.querySelector(".file-viewer h1")?.textContent, "Housing index");
+    const shown = () => document.querySelector<HTMLElement & { content?: string }>(".file-viewer qm-markdown")?.content;
+    for (let i = 0; i < 1000 && !shown(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(shown(), "# Housing index");
     assert.equal(document.querySelector(".file-viewer-head strong")?.textContent, "housing index.md");
   } finally {
     h.releaseRemoteSplit();
