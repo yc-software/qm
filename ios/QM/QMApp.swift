@@ -325,7 +325,7 @@ struct RootView: View {
               conversation: conversation, client: client, user: identity.user,
               knownSession: conversation.localOnly != true))
         }
-        .modifier(navRoom)
+        .environment(\.shellNavRoom, navRoom.height)
         .id(conversation.id)
         .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
       } else {

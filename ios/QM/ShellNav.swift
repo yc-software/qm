@@ -85,6 +85,12 @@ struct NavRoom: ViewModifier {
   }
 }
 
+extension EnvironmentValues {
+  /// Room the composer keeps under itself for the bottom nav. A safe-area inset on the
+  /// conversation's NavigationStack doesn't reach the composer, so it pads itself instead.
+  @Entry var shellNavRoom: CGFloat = 0
+}
+
 /// Shrinks on touch-down so a tap registers immediately.
 private struct NavPressStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {

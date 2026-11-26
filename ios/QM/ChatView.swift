@@ -38,6 +38,7 @@ struct ChatView: View {
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
   @State private var composerFocused = false
+  @Environment(\.shellNavRoom) private var navRoom
 
   init(
     model: ChatModel, initialSequence: Int? = nil
@@ -665,6 +666,7 @@ struct ChatView: View {
       bottomControls(proxy)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
+    .padding(.bottom, navRoom)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
     // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the
