@@ -49,11 +49,16 @@ function customUrl(name: string): string | null {
   return customEmoji?.[name] ?? null;
 }
 
+export function projectIconUrl(value: ProjectIcon): string | null {
+  if (value.kind === "emoji") return null;
+  return value.kind === "image" ? value.url : customUrl(value.name);
+}
+
 export function projectIconTpl(value: ProjectIcon | undefined, size = 16): TemplateResult | null {
   if (!value) return null;
   const style = `--project-icon-size:${size}px`;
   if (value.kind !== "emoji") {
-    const url = value.kind === "image" ? value.url : customUrl(value.name);
+    const url = projectIconUrl(value);
     return html`<span class="project-icon" style=${style} aria-hidden="true"
       >${url ? html`<img src=${url} alt="" draggable="false" />` : nothing}</span
     >`;

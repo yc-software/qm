@@ -54,7 +54,7 @@ test("Slack chats offer the account link once the check finds no link, recheckin
       document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder"),
       "Reply in thread…",
     );
-    assert.equal(document.querySelector(".slack-where-leaf")!.textContent, "Slack discussion");
+    assert.match(document.querySelector(".split-pane-title")!.textContent!, /Slack discussion/);
   } finally {
     await h.close();
   }
