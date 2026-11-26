@@ -118,7 +118,7 @@ async function plan(
     step("principal", principalId, "sign-in", "deactivate", () => deactivateAndSignOut(deps, principalId, emails));
   const { runs, signals } = deps;
   if (runs && signals)
-    for (const run of await runs.inFlight([...new Set(emails)]))
+    for (const run of await runs.inFlight(tenantOf(ctx), [...new Set(emails)]))
       step("turn", run.id, run.sessionId, "stop", async () => {
         await signals.send(run.id, { kind: "abort", reason: "offboarded" });
         if (run.status === "pending") await runs.withdraw(run.id);
