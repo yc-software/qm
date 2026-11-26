@@ -2,8 +2,10 @@ import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
   desktopChallenge,
+  freshSignInFor,
   mintDesktopLogin,
   openDesktopLogin,
+  sealFreshSignIn,
 } from "./desktop-login.ts";
 import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
@@ -1185,7 +1187,10 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     });
     return void res.end();
   }
-  if (req.method === "GET") {
+  if (
+    req.method === "GET" &&
+    !freshSignInFor(readCookie(req.headers.cookie, "portal_fresh_sign_in"), tmpKey, `${url.pathname}${url.search}`)
+  ) {
     return sendHtml(
       res,
       200,
@@ -1199,14 +1204,11 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       }),
     );
   }
-  launchDesktop(res, mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state), state);
-}
-
-function launchDesktop(res: ServerResponse, code: string, state: string): void {
+  setSession(res, [clearCookie("portal_fresh_sign_in", "/auth/desktop", SECURE_COOKIES)]);
   const callback = new URL("qm-desktop://auth/callback");
-  callback.searchParams.set("code", code);
+  callback.searchParams.set("code", mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state));
   callback.searchParams.set("state", state);
-  sendHtml(
+  return sendHtml(
     res,
     200,
     cardPage({
@@ -1428,7 +1430,7 @@ function setAuthenticatedSession(
   appOnly = false,
   tenant?: string,
   domainWide = true,
-): SessionClaims {
+): void {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1448,7 +1450,6 @@ function setAuthenticatedSession(
     clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
-  return session;
 }
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
@@ -1580,22 +1581,16 @@ async function finishSignIn(
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
   }
   if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);
-  const session = setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
+  setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
   const location = sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN);
-  const desktop = new URL(location, PUBLIC_URL);
-  const challenge = desktop.searchParams.get("challenge") ?? "";
-  const state = desktop.searchParams.get("state") ?? "";
-  if (
-    freshAuth &&
-    !session.appOnly &&
-    SESSION_SECRET &&
-    SESSION_SECRET.trim().length >= 32 &&
-    desktop.origin === ORIGIN &&
-    desktop.pathname === "/auth/desktop" &&
-    desktopChallenge(challenge) &&
-    desktopChallenge(state)
-  )
-    return launchDesktop(res, mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state), state);
+  if (freshAuth && !principal.appOnly)
+    setSession(res, [
+      setCookie("portal_fresh_sign_in", sealFreshSignIn(location, tmpKey, TMP_TTL_S), {
+        path: "/auth/desktop",
+        maxAge: TMP_TTL_S,
+        secure: SECURE_COOKIES,
+      }),
+    ]);
   res.writeHead(302, { location, "cache-control": "no-store" });
   res.end();
 }

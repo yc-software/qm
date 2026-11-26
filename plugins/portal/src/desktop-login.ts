@@ -9,6 +9,15 @@ export function desktopChallenge(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);
 }
 
+export function sealFreshSignIn(returnTo: string, key: Buffer, ttl: number): string {
+  return seal({ k: "fresh-sign-in", returnTo, exp: Math.floor(Date.now() / 1000) + ttl }, key);
+}
+
+export function freshSignInFor(token: string | null, key: Buffer, returnTo: string): boolean {
+  const p = open(token, key);
+  return p?.k === "fresh-sign-in" && p.returnTo === returnTo && typeof p.exp === "number" && p.exp > Date.now() / 1000;
+}
+
 export function mintDesktopLogin(
   session: SessionClaims,
   secret: string,

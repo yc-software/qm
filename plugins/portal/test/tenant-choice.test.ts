@@ -250,14 +250,18 @@ test("an email in two tenants picks one on the chooser and signs in under it", a
 test("only a sign-in the identity provider just performed opens the app without the confirmation card", async () => {
   tenants = [{ id: alpha }];
   const desktop = `/auth/desktop?challenge=${"c".repeat(43)}&state=${"s".repeat(43)}`;
-  const fresh = await callback(desktop, 0);
-  assert.equal(fresh.status, 200);
-  assert.match(await fresh.text(), /href="qm-desktop:\/\/auth\/callback\?code=[^"]+&amp;state=s{43}"/);
-  assert.equal(sessionOf(fresh)?.t, alpha);
-  for (const reused of [await callback(desktop, 60), await callback(desktop)]) {
-    assert.equal(reused.status, 302);
-    assert.equal(reused.headers.get("location"), desktop);
-  }
+  const follow = async (signedIn: Response) => {
+    assert.equal(signedIn.status, 302);
+    assert.equal(signedIn.headers.get("location"), desktop);
+    const cookie = ["portal_session", "portal_fresh_sign_in"].map((name) => cookieFrom(signedIn, name)).filter(Boolean);
+    return (await fetch(`${base}${desktop}`, { headers: { cookie: cookie.join("; ") } })).text();
+  };
+  assert.match(
+    await follow(await callback(desktop, 0)),
+    /href="qm-desktop:\/\/auth\/callback\?code=[^"]+&amp;state=s{43}"/,
+  );
+  for (const reused of [await callback(desktop, 60), await callback(desktop)])
+    assert.match(await follow(reused), /<form method="post"/);
 });
 
 test("a tampered session tenant is refused", () => {
