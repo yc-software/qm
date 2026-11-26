@@ -730,6 +730,19 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   const c = { surface: "cron", origin: { kind: "automation" as const }, actor: { externalId: ALICE }, text: "hi" };
   const cron = await built.app.turn({ ...c, conversation: { kind: "dm", threadRef: "cron:1" }, personaId: bea.id });
   assert.equal(cron.persona?.id, bea.id);
+  const s = { surface: "slack", actor: { externalId: ALICE }, text: "hi", personaId: bea.id };
+  const surfaceOrigin = {
+    author: { id: "U_B", account: `persona:${bea.id}`, surface: "slack" as const },
+    workspace: "T1",
+    audience: "internal" as const,
+  };
+  const sp = await built.app.turn({ ...s, surfaceOrigin, conversation: { kind: "dm", threadRef: "dm:D_BEA" } });
+  assert.equal(sp.persona?.id, bea.id);
+  assert.equal((await built.sessions.get(sp.sessionId!))?.personaId, bea.id);
+  assert.equal(
+    (await built.app.turn({ ...s, conversation: { kind: "dm", threadRef: "dm:D_SPOOF" } })).persona,
+    undefined,
+  );
 });
 
 test("wildcard persona turn_start rule offers only personas the sender can use in that scope", async () => {

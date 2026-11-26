@@ -352,7 +352,9 @@ export function createTurnMethods(
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.cronScriptTrial && origin.kind === "automation" ? { cronScriptTrial: true } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
-        ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
+        ...(req.personaId &&
+        ((origin.kind === "automation" && req.surface === "cron") ||
+          (req.surface === "slack" && req.surfaceOrigin?.author.account === `persona:${req.personaId}`))
           ? { personaId: req.personaId }
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
