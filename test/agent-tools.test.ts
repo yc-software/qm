@@ -3075,6 +3075,7 @@ test("strict approval records carry the gated call's redacted arguments", async 
   await call(tool, { command: "env", api_key: "k3y-value", purpose: "Run test command" });
   const [a, b, c] = ref.pendingApprovals!;
   assert.equal(a?.command, b?.command);
+  assert.equal(a?.tool, "execute");
   assert.match(a?.summary ?? "", /ls \/tmp/);
   assert.match(b?.summary ?? "", /curl --token <redacted>/);
   assert.doesNotMatch(b?.summary ?? "", /s3cr3t-value/);

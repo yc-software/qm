@@ -201,6 +201,7 @@ export function withToolApprovalGate(
                 reason,
                 kind: "approval",
                 approvalKey: `tool:${approvalIdentity}`,
+                tool: tool.name,
                 ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
                 ...(label ? { purpose: label } : {}),
               },

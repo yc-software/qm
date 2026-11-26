@@ -297,6 +297,7 @@ export interface ApprovalRecord {
   declined?: string;
   purpose?: string;
   summary?: string;
+  tool?: string;
   call?: { tool: string; input: Record<string, unknown> };
 }
 
@@ -318,7 +319,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  const what = approvalName(call);
+  const what = approvalName(call?.tool ?? d.tool);
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;

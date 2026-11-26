@@ -475,6 +475,7 @@ export interface PendingApproval {
   blocksInput?: boolean;
   kind?: "approval" | "input";
   executesOnApprove?: boolean;
+  tool?: string;
   call?: ApprovedToolCallSpec;
 }
 
@@ -501,6 +502,7 @@ export interface PendingApprovalRecord {
   homeChannel?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  tool?: string;
   call?: ApprovedToolCallSpec;
   cardTo?: string;
 }

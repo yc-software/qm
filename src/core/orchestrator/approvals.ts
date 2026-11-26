@@ -60,6 +60,7 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
+    ...(record.tool ? { tool: record.tool } : {}),
     ...executesOnApprove(record),
     ...visibleCall(record),
   };
@@ -70,6 +71,7 @@ export function decisionBody(record: PendingApprovalRecord): Record<string, unkn
     command: maskSecretLiterals(record.command),
     ...(record.purpose ? { purpose: record.purpose } : {}),
     ...(record.summary && record.call ? { summary: maskSecretLiterals(record.summary) } : {}),
+    ...(record.tool ? { tool: record.tool } : {}),
     ...visibleCall(record),
   };
 }

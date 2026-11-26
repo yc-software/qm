@@ -26,11 +26,15 @@ test("an approval shown to a person masks literal tokens and nothing else", () =
   });
 });
 
-test("a decision keeps the call it decided, so approved and declined rows name the same tool", () => {
+test("a decision keeps the tool it decided, so approved and declined rows name it the same way", () => {
   const call = { tool: "slack_api_write_as_you", input: { method: "chat.postMessage", token } };
   assert.deepEqual(decisionBody({ sessionId: "s1", command: "slack_api_write_as_you {}", summary: call.tool, call }), {
     command: "slack_api_write_as_you {}",
     summary: call.tool,
     call: { tool: call.tool, input: { method: "chat.postMessage", token: "[redacted]" } },
+  });
+  assert.deepEqual(decisionBody({ sessionId: "s1", command: "files read", summary: '{"path":"a"}', tool: "files" }), {
+    command: "files read",
+    tool: "files",
   });
 });

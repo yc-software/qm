@@ -42,6 +42,7 @@ export interface ToolContextRef {
     approvalKey?: string;
     summary?: string;
     grantModes?: { session: boolean; always: boolean };
+    tool?: string;
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;
