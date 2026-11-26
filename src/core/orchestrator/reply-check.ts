@@ -81,6 +81,8 @@ interface AddressedReplyTurn<R extends AgentTurnResult> {
   ) => Promise<R>;
 }
 
+export const FIRE_UNPOSTED = "fire_unposted";
+
 export function liveFire(input: Pick<OrchestratorInput, "surfaceTools" | "origin">): boolean {
   return (
     input.surfaceTools === true &&
@@ -105,7 +107,7 @@ export function settleLiveFire(
     status: "failed",
     reply,
     reason: "the triggered run ended without posting or calling finish_silently",
-    errorCode: "fire_unposted",
+    errorCode: FIRE_UNPOSTED,
   };
 }
 

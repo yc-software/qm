@@ -1531,6 +1531,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           tenant,
           orgMemoryWritable,
           ephemeral,
+          surfaceName,
         });
         ({ rosterMembers, scopeAskList } = await addConversationBlocks({
           deps,

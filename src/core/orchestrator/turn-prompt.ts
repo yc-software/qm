@@ -44,6 +44,7 @@ export async function appendTurnGuidance(turn: {
   actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
   ephemeral?: boolean;
+  surfaceName: string;
 }): Promise<string> {
   const {
     deps,
@@ -128,12 +129,10 @@ export async function appendTurnGuidance(turn: {
     );
   }
   if (firedByPoll(input)) {
-    const live = liveFire(input) && input.origin.kind === "automation" ? input.origin.destination : undefined;
-    const tool = live && (deps.surfaces.get(live.type)?.kind ?? "slack");
     turnEvents.push(
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything." +
-        (tool
-          ? ` Only the \`${tool}\` tool's \`post\` action reaches its destination; your final text is private and is not delivered.`
+        (liveFire(input)
+          ? ` Only the \`${turn.surfaceName}\` tool's \`post\` action reaches its destination; your final text is private and is not delivered.`
           : ""),
     );
   }

@@ -1,3 +1,4 @@
+import { FIRE_UNPOSTED } from "../core/orchestrator/reply-check.ts";
 import type {
   DeliveryProvenance,
   Destination,
@@ -403,7 +404,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(heldForApproval ? { heldForApproval: true as const } : {}),
   };
 
-  if (isTriggerFailure(outcome) && errorCode !== "fire_unposted") await sendErrorNotice(userNote ?? note ?? status!);
+  if (isTriggerFailure(outcome) && errorCode !== FIRE_UNPOSTED) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }
