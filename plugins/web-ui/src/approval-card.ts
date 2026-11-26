@@ -96,8 +96,7 @@ function approvalBody(a: PendingApproval): TemplateResult {
 }
 
 function sessionLabel(a: PendingApproval): string {
-  const call = approvalCall(a);
-  return call ? `Allow ${call.tool} for this conversation` : "Allow for this session";
+  return a.grantTool ? `Allow ${a.grantTool} for this conversation` : "Allow for this session";
 }
 
 function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult | typeof nothing {
@@ -273,6 +272,7 @@ export interface ApprovalRecord {
   purpose?: string;
   summary?: string;
   call?: { tool: string; input: Record<string, unknown> };
+  grantTool?: string;
 }
 
 const APPROVED_LABEL: Record<string, string> = {
@@ -293,7 +293,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  if (d.approved && d.scope === "session" && call) verdict = `Approved ${call.tool} for this conversation`;
+  if (d.approved && d.scope === "session" && d.grantTool) verdict = `Approved ${d.grantTool} for this conversation`;
   const what = call || a.purpose ? approvalHeading(a, call) : d.command;
   let mark = X;
   if (d.approved) mark = Check;

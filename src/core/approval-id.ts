@@ -16,27 +16,12 @@ export function toolCallApprovalKey(tool: string, params: unknown): string {
   return `${TOOL_CALL_APPROVAL_PREFIX}${hashId([tool, canonicalJson(params ?? null)], 64)}`;
 }
 
-const CONNECTOR_TOOL_GRANT_PREFIX = "connector-tool:";
-const CONNECTOR_TOOL_GRANT_TTL_MS = 24 * 60 * 60 * 1000;
-
-function catalogInnerTool(params: unknown): string | undefined {
-  return isObj(params) && params.operation === "invoke" && typeof params.tool === "string" ? params.tool : undefined;
-}
-
 export function connectorToolName(tool: string, params: unknown): string {
-  return catalogInnerTool(params) ?? tool;
+  return isObj(params) && params.operation === "invoke" && typeof params.tool === "string" ? params.tool : tool;
 }
 
-export function connectorToolGrantKey(tool: string, params: unknown): string {
-  const inner = catalogInnerTool(params);
-  return `${CONNECTOR_TOOL_GRANT_PREFIX}${hashId(inner === undefined ? [tool] : [tool, inner], 64)}`;
-}
-
-export function connectorToolGrantLapsed(grant: { approvalKey?: string; createdAt: number }, now: number): boolean {
-  return (
-    grant.approvalKey?.startsWith(CONNECTOR_TOOL_GRANT_PREFIX) === true &&
-    now - grant.createdAt >= CONNECTOR_TOOL_GRANT_TTL_MS
-  );
+export function connectorToolGrantKey(tool: string, grantTool: string): string {
+  return `connector-tool:${hashId([tool, grantTool], 64)}`;
 }
 
 export function approvalCardId(callKey: string): string {

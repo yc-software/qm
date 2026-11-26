@@ -27,7 +27,7 @@ const COMMAND_SECTIONS_MAX = 6;
 export function slackButton(b: CardButton): Record<string, unknown> {
   return {
     type: "button",
-    text: { type: "plain_text", text: b.label },
+    text: { type: "plain_text", text: clip(b.label, 75) },
     action_id: b.actionId,
     value: b.value,
     ...(b.style ? { style: b.style } : {}),

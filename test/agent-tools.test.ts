@@ -4867,7 +4867,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   assert.equal(calls.length, 2, "the next identical call needs its own approval");
   assert.equal(ref.pendingApprovals!.length, 2);
   assert.deepEqual(card.grantModes, { session: true, always: false });
-  approved.add(card.toolGrantKey!);
+  approved.add(card.toolGrant!.key);
   const other = { ...send, arguments: { to: "y" } };
   await call(catalog, other);
   assert.deepEqual(calls.at(-1), [other, toolCallApprovalKey("records", other)], "the tool grant covers new arguments");

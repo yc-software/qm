@@ -25,20 +25,19 @@ test("approvalMessage builds Block Kit buttons for all approval choices", () => 
 });
 
 test("a connector call's conversation button names the whole tool", () => {
-  const params = { operation: "invoke", tool: "slack_api_write_as_user", arguments: {} };
   const msg = approvalMessage([
     {
       requestId: "r",
-      command: `ycli ${JSON.stringify(params)}`,
-      summary: "ycli",
+      command: "c",
       reason: "r",
+      grantTool: "post_message",
       grantModes: { session: true, always: false },
     },
   ]);
   const actions = msg.blocks.find((b) => b.type === "actions") as any;
   assert.deepEqual(
     actions.elements.map((e: any) => e.text.text),
-    ["Allow once", "Allow slack_api_write_as_user for this conversation", "Deny"],
+    ["Allow once", "Allow post_message for this conversation", "Deny"],
   );
 });
 

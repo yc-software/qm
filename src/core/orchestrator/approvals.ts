@@ -19,7 +19,7 @@ import { errMessage, reportFailure } from "../../util/errors.ts";
 import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
-import { approvalCardId, approvedCallId, connectorToolGrantLapsed, connectorToolName } from "../approval-id.ts";
+import { approvalCardId, approvedCallId } from "../approval-id.ts";
 import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
 import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 
@@ -48,6 +48,8 @@ export function newApprovalRecord(
   };
 }
 
+const TOOL_GRANT_LIFETIME_MS = 24 * 60 * 60_000;
+
 export function approvalView(requestId: string, record: PendingApprovalRecord): PendingApproval {
   return {
     requestId,
@@ -61,6 +63,7 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
+    ...(record.toolGrant ? { grantTool: record.toolGrant.tool } : {}),
     ...executesOnApprove(record),
     ...visibleCall(record),
   };
@@ -292,7 +295,7 @@ export async function createApprovalLedger(turn: {
   const now = Date.now();
   for (const grant of await approvalGrantsFor(actor.id)) {
     if (grant.scope === "session" && grant.sessionId !== session.id) continue;
-    if (connectorToolGrantLapsed(grant, now)) continue;
+    if (grant.expiresAt !== undefined && grant.expiresAt <= now) continue;
     if (!resolution.approvalGrantModes[grant.scope]) continue;
     commandUses.set(grant.approvalKey ?? grant.command, Infinity);
   }
@@ -375,6 +378,7 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
           ...(record.purpose ? { purpose: record.purpose } : {}),
           ...(record.summary && record.call ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
+          ...(decided.scope === "session" && record.toolGrant ? { grantTool: record.toolGrant.tool } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
       }),
@@ -611,7 +615,7 @@ async function approveDecision(
   if (!(await recordApprovalDecision(approval.requestId, p, { approved: true, scope }, actor.id, call)))
     return alreadyDecided(approval.requestId);
   const useKey = p.approvalKey ?? p.command;
-  const toolGrantKey = scope === "session" && call ? p.toolGrantKey : undefined;
+  const toolGrant = scope === "session" && call ? p.toolGrant : undefined;
   if (p.screenedOutput && quarantineRelease) {
     setReleasedToolOutput(p.screenedOutput);
     audit({
@@ -625,17 +629,19 @@ async function approveDecision(
       }),
     });
   } else {
-    commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" || toolGrantKey ? 1 : Infinity));
-    if (toolGrantKey) commandUses.set(toolGrantKey, Infinity);
+    commandUses.set(useKey, (commandUses.get(useKey) ?? 0) + (scope === "once" || toolGrant ? 1 : Infinity));
+    if (toolGrant) commandUses.set(toolGrant.key, Infinity);
   }
   if (scope === "session" || scope === "always") {
-    const approvalKey = toolGrantKey ?? p.approvalKey;
+    const approvalKey = toolGrant?.key ?? p.approvalKey;
+    const createdAt = Date.now();
     const grant: CommandApprovalGrant = {
       actorId: actor.id,
-      command: toolGrantKey ? connectorToolName(call!.tool, call!.input) : p.command,
+      command: toolGrant?.tool ?? p.command,
       scope,
-      createdAt: Date.now(),
+      createdAt,
       ...(approvalKey ? { approvalKey } : {}),
+      ...(toolGrant ? { expiresAt: createdAt + TOOL_GRANT_LIFETIME_MS } : {}),
       ...(scope === "session" ? { sessionId: session.id } : {}),
     };
     await approvalGrants.put(approvalGrantId(grant), grant);
