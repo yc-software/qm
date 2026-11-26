@@ -103,6 +103,7 @@ export interface CapabilityClaims {
   ownerConnections?: boolean;
   members?: Principal[];
   keychainMembers?: Principal[];
+  personaScope?: ScopeId;
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
@@ -198,6 +199,7 @@ export async function verifyCapabilityToken(
   if (claims.ownerConnections !== undefined && typeof claims.ownerConnections !== "boolean") return null;
   if (claims.credentials !== undefined && !Array.isArray(claims.credentials)) return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
+  if (claims.personaScope !== undefined && typeof claims.personaScope !== "string") return null;
   if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.internalAudience !== undefined && typeof claims.internalAudience !== "boolean") return null;
   if (claims.personAuthority !== undefined && typeof claims.personAuthority !== "boolean") return null;

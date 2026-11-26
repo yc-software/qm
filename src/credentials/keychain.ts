@@ -1905,6 +1905,25 @@ const ORGANIZATION_OWNER_KEY = personKey("Organization");
 export const grantableCredential = (c: KeychainCredentialMeta): boolean =>
   c.kind !== "broker" && !isBackendCredential(c);
 
+export async function turnScopeGrants(
+  keychain: Pick<Keychain, "grantsForScope">,
+  scopeId: ScopeId,
+  personaScope: ScopeId | undefined,
+  botActor: boolean,
+): Promise<Array<Awaited<ReturnType<Keychain["grantsForScope"]>>[number] & { grantScope: ScopeId }>> {
+  const scopes = personaScope ? [scopeId, personaScope] : [scopeId];
+  const rows = (
+    await Promise.all(
+      scopes.map(async (grantScope) =>
+        (
+          await keychain.grantsForScope(grantScope, { includePersonGrants: !botActor || grantScope === personaScope })
+        ).map((row) => ({ ...row, grantScope })),
+      ),
+    )
+  ).flat();
+  return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+}
+
 export const liveConnector = (c: Pick<ConnectorMeta, "connected" | "needsReconnect"> | undefined): boolean =>
   !!c?.connected && !c.needsReconnect;
 

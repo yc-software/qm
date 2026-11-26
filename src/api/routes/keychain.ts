@@ -6,6 +6,7 @@ import {
   grantableCredential,
   KeychainError,
   liveConnector,
+  turnScopeGrants,
   unsharedMemberCredentials,
   renderAskNotice,
   type CredentialFieldInput,
@@ -272,7 +273,7 @@ const listUnshared = keychainRoute(async ({ res }, kc, capability) => {
   const [entriesByOwner, connectorsByOwner, scopeGrants] = await Promise.all([
     kc.listByOwners(ids),
     kc.listConnectorsByOwners(ids),
-    kc.grantsForScope(scopeId, { includePersonGrants: capability.botActor !== true }),
+    turnScopeGrants(kc, scopeId, capability.personaScope, capability.botActor === true),
   ]);
   const execution: Array<{ handle: string; ownerId: string; credentialId: string; description: string }> = [];
   const usable = (handle: string, ownerId: string, credentialId: string) =>

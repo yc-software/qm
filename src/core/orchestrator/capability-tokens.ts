@@ -44,6 +44,7 @@ export interface CapabilityTurn {
   memoryAccess: TurnContext["memoryAccess"];
   baseRecallScopes: TurnContext["baseRecallScopes"];
   ownCredentialsAllowed: boolean;
+  personaScope?: ScopeId;
   turnTimezone: string | undefined;
   delivery: ReturnType<typeof deliveryCandidatesFor>;
   defaultDestination: CapabilityClaims["destination"];
@@ -193,6 +194,7 @@ async function mintControlPlaneTokens(
       ...(!external && conversation.kind !== "dm"
         ? { keychainMembers: conversation.audience.filter((p) => p.type === "internal") }
         : {}),
+      ...(turn.personaScope ? { personaScope: turn.personaScope } : {}),
       ...(memoryClaim ? { memory: memoryClaim } : {}),
       ...runBinding,
       sessionId: session.id,

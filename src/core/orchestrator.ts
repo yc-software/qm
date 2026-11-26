@@ -98,7 +98,7 @@ import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { firedByPoll } from "../triggers/run-trigger.ts";
-import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
+import { askResolutionEvents, turnScopeGrants, type KeychainAsk } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -874,21 +874,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
-      const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
-      const scopeKeychainGrants = async () => {
-        const rows = (
-          await Promise.all(
-            credentialScopes.map(async (grantScope) =>
-              (
-                (await deps.keychain?.grantsForScope(grantScope, {
-                  includePersonGrants: input.botActor !== true || grantScope === persona?.scope,
-                })) ?? []
-              ).map((row) => ({ ...row, grantScope })),
-            ),
-          )
-        ).flat();
-        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
-      };
+      const scopeKeychainGrants = async () =>
+        deps.keychain ? turnScopeGrants(deps.keychain, scopeId, persona?.scope, input.botActor === true) : [];
 
       const context = await resolveTurnContext({
         tenant,
@@ -1323,6 +1310,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         memoryAccess,
         baseRecallScopes,
         ownCredentialsAllowed,
+        ...(persona ? { personaScope: persona.scope } : {}),
         turnTimezone,
         delivery,
         defaultDestination,

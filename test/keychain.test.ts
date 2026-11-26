@@ -1235,6 +1235,14 @@ describe("/v1/keychain routes (capability-authed)", () => {
       [],
       "own logins in your own conversation are already usable",
     );
+    const PERSONA = scopeId("persona", "P_UNSHARED");
+    await grantHere(asc.id, "A_UNSHARED", PERSONA, "standing", "upload builds");
+    assert.deepEqual(
+      await unshared(await capFor("B_UNSHARED", GROUP, { keychainMembers, personaScope: PERSONA })),
+      [],
+      "a grant to the turn's persona shares it",
+    );
+    assert.equal((await unshared(asB)).length, 1);
     await grantHere(asc.id, "A_UNSHARED", GROUP, "standing", "upload builds");
     assert.deepEqual(await unshared(asB), [], "a grant here shares it");
   });
