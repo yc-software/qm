@@ -1,6 +1,5 @@
 import type { LlmTransportMeta } from "../sessions/session-store.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
-import { countTokens } from "../util/tokens.ts";
 import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
 
 const MAX_CAPTURED_PAYLOAD_CHARS = 2_000_000;
@@ -222,14 +221,6 @@ function estimatePayloadTokens(payload: Record<string, unknown>): number | undef
   } catch {
     return undefined;
   }
-}
-
-export function payloadTokensWithoutBinary(payload: unknown): number {
-  return countTokens(
-    JSON.stringify(payload, function (this: unknown, key, value) {
-      return isRecord(this) && binaryLeaf(this, key) !== undefined ? "" : value;
-    }),
-  );
 }
 
 export function guardOutputBudget(payload: unknown, model: unknown): OutputBudgetGuardResult {

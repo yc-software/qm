@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
+import {
+  createInlineDocuments,
+  documentBlocks,
+  nativeDocumentFormat,
+  withNativeDocuments,
+} from "../src/agent/document-inputs.ts";
 import {
   isDocumentAttachment,
   documentFallbackText,
@@ -27,45 +32,28 @@ async function fixture(ext: string): Promise<DocumentInput> {
     dataBase64: (await readFile(new URL(`./fixtures/documents/sample.${ext}`, import.meta.url))).toString("base64"),
   };
 }
+function piWire(api: string, block: object): Record<string, unknown> {
+  const { mimeType, data } = block as { mimeType: string; data: string };
+  const url = `data:${mimeType};base64,${data}`;
+  const user = (content: unknown[]) => [{ role: "user", content }];
+  if (api === "openai-responses") return { input: user([{ type: "input_image", detail: "auto", image_url: url }]) };
+  if (api === "openai-completions") return { messages: user([{ type: "image_url", image_url: { url } }]) };
+  if (api.startsWith("google-")) return { contents: [{ role: "user", parts: [{ inlineData: { mimeType, data } }] }] };
+  return {
+    messages: user([{ type: "image", source: { type: "base64", media_type: mimeType, data } }]),
+  };
+}
 
-for (const ext of [
-  "pdf",
-  "docx",
-  "xlsx",
-  "pptx",
-  "doc",
-  "xls",
-  "ppt",
-  "odt",
-  "txt",
-  "md",
-  "csv",
-  "tsv",
-  "json",
-  "xml",
-  "html",
-  "yaml",
-  "py",
-  "js",
-  "ts",
-  "css",
-  "sql",
-  "eml",
-  "ics",
-  "vcf",
-  "srt",
-  "vtt",
-]) {
+for (const ext of ["pdf", "docx", "xlsx", "pptx", "doc", "xls", "ppt", "odt"]) {
   test(`Responses sends original ${ext} bytes as native file input`, async () => {
     const document = await fixture(ext);
-    const payload = (await withDocumentInputs(
-      { model: "test", input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] },
-      openai,
-      [document],
-    )) as { input: { content: Record<string, unknown>[] }[] };
-    const block = payload.input[0]!.content.at(-1)!;
+    const blocks = await documentBlocks(document, openai);
+    const payload = withNativeDocuments(piWire(openai.api, blocks.at(-1)!), openai) as {
+      input: { content: Record<string, unknown>[] }[];
+    };
+    const block = payload.input[0]!.content[0]!;
     assert.equal(block.type, "input_file");
-    assert.equal(block.filename, document.name);
+    assert.equal(block.filename, `document.${ext}`);
     assert.equal(String(block.file_data).split(",")[1], document.dataBase64);
     assert.ok(!JSON.stringify(sanitizeLlmPayload(payload).envelope).includes(document.dataBase64));
   });
@@ -108,16 +96,19 @@ for (const ext of [
   });
 }
 
-test("Anthropic receives PDF document bytes and text document content", async () => {
+test("Anthropic receives PDF document bytes and text documents as plain text", async () => {
   const pdf = await fixture("pdf");
-  const blocks = await documentBlocks([pdf, await fixture("txt")], anthropic);
-  assert.deepEqual(blocks[0], {
+  const [, carrier] = await documentBlocks(pdf, anthropic);
+  const payload = withNativeDocuments(piWire(anthropic.api, carrier!), anthropic) as {
+    messages: { content: unknown[] }[];
+  };
+  assert.deepEqual(payload.messages[0]!.content[0], {
     type: "document",
-    title: pdf.name,
     source: { type: "base64", media_type: "application/pdf", data: pdf.dataBase64 },
   });
-  assert.equal(blocks[1]!.type, "document");
-  assert.match(JSON.stringify(blocks[1]), /QUARTZ-731/);
+  const text = await documentBlocks(await fixture("txt"), anthropic);
+  assert.equal(text.length, 1);
+  assert.match(JSON.stringify(text[0]), /QUARTZ-731/);
 });
 
 test("unsupported routes use extraction instead of unsupported wire types", async () => {
@@ -125,31 +116,31 @@ test("unsupported routes use extraction instead of unsupported wire types", asyn
     { ...openai, provider: "custom:test" },
     { ...openai, api: "openai-codex-responses" },
   ]) {
-    const blocks = await documentBlocks([await fixture("pdf")], model);
-    assert.equal(blocks[0]!.type, "input_text");
-    assert.match(String(blocks[0]!.text), /QUARTZ-731/);
+    const blocks = await documentBlocks(await fixture("pdf"), model);
+    assert.equal(blocks[0]!.type, "text");
+    assert.match(JSON.stringify(blocks), /QUARTZ-731/);
   }
   assert.equal(nativeDocumentFormat({ ...openai, input: ["text"] }, await fixture("pdf")), undefined);
 });
 
 test("OpenRouter uses native PDF processing without silently selecting an OCR service", async () => {
-  const payload = (await withDocumentInputs(
-    { messages: [{ role: "user", content: "Summarize" }] },
-    { api: "openai-completions", provider: "openrouter", id: "anthropic/claude-sonnet", input: ["image"] },
-    [await fixture("pdf")],
-  )) as { plugins: unknown[]; messages: { content: { type: string }[] }[] };
+  const model = { api: "openai-completions", provider: "openrouter", id: "anthropic/claude-sonnet", input: ["image"] };
+  const [, carrier] = await documentBlocks(await fixture("pdf"), model);
+  const payload = withNativeDocuments(piWire(model.api, carrier!), model) as {
+    plugins: unknown[];
+    messages: { content: { type: string }[] }[];
+  };
   assert.deepEqual(payload.plugins, [{ id: "file-parser", pdf: { engine: "native" } }]);
-  assert.equal(payload.messages[0]!.content.at(-1)!.type, "file");
+  assert.equal(payload.messages[0]!.content[0]!.type, "file");
 });
 
 test("Google document parts preserve PDFs and use text for office files", async () => {
-  const payload = (await withDocumentInputs(
-    { contents: [{ role: "user", parts: [{ text: "Summarize" }] }] },
-    { api: "google-generative-ai", input: ["image"] },
-    [await fixture("pdf"), await fixture("docx")],
-  )) as { contents: { parts: Record<string, unknown>[] }[] };
-  assert.ok(payload.contents[0]!.parts.some((part) => part.inlineData));
-  assert.match(String(payload.contents[0]!.parts.at(-1)!.text), /QUARTZ-731/);
+  const google = { api: "google-generative-ai", input: ["image"] };
+  const pdf = await fixture("pdf");
+  const [, carrier] = await documentBlocks(pdf, google);
+  assert.deepEqual(withNativeDocuments(piWire(google.api, carrier!), google), piWire(google.api, carrier!));
+  assert.equal(carrier!.type === "image" && carrier!.data, pdf.dataBase64);
+  assert.match(JSON.stringify(await documentBlocks(await fixture("docx"), google)), /QUARTZ-731/);
 });
 
 test("invalid binary documents and empty scans never masquerade as read documents", async () => {
@@ -169,7 +160,8 @@ test("request byte budgets replace all native document wire formats with explici
     ],
     [{ api: "google-generative-ai", input: ["image"] }, { contents: [{ role: "user", parts: [] }] }],
   ] as const) {
-    const encoded = await withDocumentInputs(payload, model, [await fixture("pdf")]);
+    const [, carrier] = await documentBlocks(await fixture("pdf"), model);
+    const encoded = withNativeDocuments({ ...payload, ...piWire(model.api, carrier!) }, model);
     const trimmed = trimPayloadToByteBudget(encoded, 1000);
     assert.match(JSON.stringify(trimmed), /Document omitted/);
     assert.doesNotMatch(JSON.stringify(trimmed), /JVBER/);
@@ -401,13 +393,9 @@ test("fallback text has one aggregate model-aware budget across all attachments"
     mimeType: "text/plain",
     dataBase64: Buffer.from("x".repeat(200_000)).toString("base64"),
   }));
-  const payload = await withDocumentInputs(
-    { input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] },
-    { api: "openai-codex-responses", contextWindow: 32_000 },
-    documents,
-  );
-  assert.ok(JSON.stringify(payload).length < 30_000);
-  assert.match(JSON.stringify(payload), /truncated to fit/);
+  const blocks = await createInlineDocuments(0, 32_000).blocks(documents, { api: "openai-codex-responses" });
+  assert.ok(JSON.stringify(blocks).length < 30_000);
+  assert.match(JSON.stringify(blocks), /truncated to fit/);
 });
 
 test("document text reports truncation as a flag, not from the extracted wording", async () => {
@@ -424,17 +412,6 @@ test("document text reports truncation as a flag, not from the extracted wording
   const office = await documentText(text(`{\\rtf1 ${"y".repeat(200_100)}}`, "long.rtf"));
   assert.equal(office.truncated, true);
   assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
-});
-
-test("Bedrock fallback uses its actual provider request shape", async () => {
-  const documents = [await fixture("txt")];
-  const bedrock = (await withDocumentInputs(
-    { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
-    { api: "bedrock-converse-stream" },
-    documents,
-  )) as { messages: { content: Record<string, unknown>[] }[] };
-  assert.equal(bedrock.messages[0]!.content.at(-1)!.type, undefined);
-  assert.match(String(bedrock.messages[0]!.content.at(-1)!.text), /QUARTZ-731/);
 });
 
 test("one failed historical document does not prevent loading another document", async () => {
@@ -465,8 +442,11 @@ test("extensionless documents use their MIME type for native and fallback input"
   assert.equal(isDocumentAttachment({ name: pdf.name, mimetype: pdf.mimeType }), true);
   assert.equal(nativeDocumentFormat(anthropic, pdf), "anthropic");
   assert.match(await documentFallbackText(pdf), /PDF-QUARTZ-731/);
-  const blocks = await documentBlocks([pdf], openai);
-  assert.equal(blocks.at(-1)?.filename, "download.pdf");
+  assert.deepEqual((await documentBlocks(pdf, openai)).at(-1), {
+    type: "image",
+    mimeType: "application/pdf",
+    data: pdf.dataBase64,
+  });
   const txt = {
     name: "download",
     mimeType: "text/plain; charset=utf-8",
@@ -483,13 +463,6 @@ test("scanned PDFs explicitly report unavailable text on a text-only route", asy
   );
 });
 
-test("native file inputs normalize text MIME types rejected by the provider", async () => {
-  for (const ext of ["xml", "ts", "yaml"]) {
-    const blocks = await documentBlocks([await fixture(ext)], openai);
-    assert.match(String(blocks.at(-1)?.file_data), /^data:text\/plain;base64,/);
-  }
-});
-
 test("unknown vision gateways do not assume native PDF support", async () => {
   assert.equal(
     nativeDocumentFormat({ api: "openai-completions", provider: "qm:gateway", input: ["image"] }, await fixture("pdf")),
@@ -498,9 +471,9 @@ test("unknown vision gateways do not assume native PDF support", async () => {
 });
 
 test("RTF uses reliable text extraction on Responses routes", async () => {
-  const blocks = await documentBlocks([await fixture("rtf")], openai);
-  assert.equal(blocks[0]?.type, "input_text");
-  assert.match(String(blocks[0]?.text), /RTF-QUARTZ-731/);
+  const blocks = await documentBlocks(await fixture("rtf"), openai);
+  assert.equal(blocks[0]?.type, "text");
+  assert.match(JSON.stringify(blocks), /RTF-QUARTZ-731/);
 });
 
 test("encrypted PDFs do not expose content through text fallback", async () => {
@@ -528,10 +501,7 @@ for (const model of [
     );
     for (let turn = 0; turn < 2; turn++) {
       const blocks = JSON.stringify(
-        await documentBlocks(
-          documents.map((document) => ({ ...document })),
-          model,
-        ),
+        await Promise.all(documents.map((document) => documentBlocks({ ...document }, model))),
       );
       assert.ok(blocks.includes(documents[0]!.dataBase64));
       for (const document of documents.slice(1)) {

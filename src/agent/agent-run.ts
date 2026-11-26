@@ -16,7 +16,12 @@ import {
   type BridgedTool,
   type SteerIntake,
 } from "./turn-support.ts";
-import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
+import {
+  createInlineDocuments,
+  withNativeDocuments,
+  type DocumentBlock,
+  type DocumentModel,
+} from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,6 +39,7 @@ import {
   type AssistantMessage,
   type Model,
   type ModelThinkingLevel,
+  type Message,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
@@ -82,7 +88,6 @@ import {
   recordedMessageTimestamps,
   seedPriorTurns,
   legacyAssistant,
-  type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
 import { estimateHistoryTokens } from "./context-compaction.ts";
@@ -120,7 +125,6 @@ import {
 } from "./pi-messages.ts";
 import {
   DOCUMENT_REJECTION_CODES,
-  documentsDroppedNote,
   FALLBACK_CODES,
   fallbackFailed,
   refusalFallbackNote,
@@ -183,32 +187,15 @@ function continueAssistantTurn(session: AgentSession): Promise<void> {
   return (session as unknown as { _runAgentPrompt(messages: readonly unknown[]): Promise<void> })._runAgentPrompt([]);
 }
 
-interface PiSeedTarget {
-  agent?: { state?: { messages?: unknown[] } };
-  sessionManager?: { appendMessage?: (message: unknown) => unknown };
-}
-
-export function toPiMessage(m: SeededMessage): PiReplayMessage {
+export function toPiMessage(m: SeededMessage): Message {
   return m.role === "assistant"
     ? legacyAssistant([{ type: "text", text: m.text }], Date.now())
     : { role: "user", content: [{ type: "text", text: m.text }], timestamp: Date.now() };
 }
 
-export function seedRawMessagesIntoSession(session: unknown, messages: readonly PiReplayMessage[]): void {
-  if (!messages.length) return;
-  const target = session as PiSeedTarget;
-  const liveMessages = target.agent?.state?.messages;
-  const appendMessage = target.sessionManager?.appendMessage?.bind(target.sessionManager);
-  for (const message of messages) {
-    if (Array.isArray(liveMessages)) liveMessages.push(message);
-    if (appendMessage) {
-      try {
-        appendMessage(message);
-      } catch (e) {
-        swallow("pi: replay message append", e);
-      }
-    }
-  }
+export function seedRawMessagesIntoSession(session: AgentSession, messages: readonly Message[]): void {
+  session.agent.state.messages = [...session.agent.state.messages, ...messages];
+  for (const message of messages) session.sessionManager.appendMessage(message);
 }
 
 const DOCUMENTS_DROPPED_RETRY_NOTE =
@@ -424,19 +411,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       throw err;
     }
 
-    if (reconstructed.length) {
-      try {
-        seedRawMessagesIntoSession(session, reconstructed);
-      } catch (err) {
-        console.error("[agent] failed to seed reconstructed history (continuing without it):", errMessage(err));
-      }
-    } else if (priorTurns?.length) {
-      try {
-        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns, []).map(toPiMessage));
-      } catch (err) {
-        console.error("[agent] failed to seed prior turns (continuing without them):", errMessage(err));
-      }
-    }
+    seedRawMessagesIntoSession(
+      session,
+      reconstructed.length ? reconstructed : seedPriorTurns(priorTurns ?? [], []).map(toPiMessage),
+    );
 
     session.agent.onPayload = async (payload, model) => {
       ref.modelCalls = (ref.modelCalls ?? 0) + 1;
@@ -448,13 +426,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
       applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
       const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
-      let finalPayload = await withDocumentInputs(
-        payload,
-        model as DocumentModel,
-        ref.documents ?? [],
-        ref.abortSignal,
-        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
-      );
+      let finalPayload = withNativeDocuments(payload, model as DocumentModel);
       const guarded = guardOutputBudget(finalPayload, model);
       if (guarded.kind === "raised") {
         console.error(
@@ -548,14 +520,24 @@ export function createAgent(opts?: AgentOptions): Agent {
           turn.onModelRequest?.();
           if (turn.park?.requested()) turn.park.now();
         };
-        turn.recordModelCall({
-          model: effectiveModel,
-          inputTokens:
-            entry.composedPromptTokens +
-            estimateHistoryTokens(turn.history) +
-            (continueTurn ? 0 : countTokens(modelPrompt)),
-          entryCount: turn.history.length,
-        });
+        const openingTokens =
+          entry.composedPromptTokens +
+          estimateHistoryTokens(turn.history) +
+          (continueTurn ? 0 : countTokens(modelPrompt));
+        turn.recordModelCall({ model: effectiveModel, inputTokens: openingTokens, entryCount: turn.history.length });
+        const currentModel = () => entry.agentSession.model as DocumentModel;
+        const inline = createInlineDocuments(openingTokens, currentModel().contextWindow, turn.cancel);
+        const openingDocuments = await inline.blocks(turn.documents ?? [], currentModel());
+        if (continueTurn)
+          inline.carry(
+            entry.agentSession.agent.state.messages.findLast(
+              (message) => message.role === "user" && message.timestamp === userEntry?.createdAt,
+            ),
+            openingDocuments,
+          );
+        const piContext = entry.agentSession.agent.transformContext;
+        entry.agentSession.agent.transformContext = async (messages, signal) =>
+          piContext ? piContext(inline.context(messages), signal) : inline.context(messages);
 
         const callUsage: Array<LlmCallUsage | null> = [];
         let thinkTail: Promise<unknown> = Promise.resolve();
@@ -563,7 +545,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         const toolAbort = new AbortController();
         let steerWake = new AbortController();
         entry.ref.steered = steerWake.signal;
-        const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        const pendingSteers: Array<SteerIntake & { prompt: string; documents: DocumentBlock[] }> = [];
         const unrecordedPrompts = new Set<string>();
         const retractedMessages = new Set<unknown>();
         const checked = { retry: [] as string[], prod: [] as string[] };
@@ -588,13 +570,16 @@ export function createAgent(opts?: AgentOptions): Agent {
           const role = (message as { role?: string }).role;
           if (role === "assistant") steps.assistant(message as AssistantMessage);
           else if (role === "toolResult") steps.toolResult(message as ToolResultMessage);
-          else if (role === "user" && !triggerSeen) triggerSeen = true;
-          else if (role === "user") {
+          else if (role === "user" && !triggerSeen) {
+            triggerSeen = true;
+            inline.carry(message as Message, openingDocuments);
+          } else if (role === "user") {
             steps.flush();
             const text = textFromContent((message as { content?: unknown }).content);
             if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            inline.carry(message as Message, steer?.documents ?? []);
             if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
               steerWake = new AbortController();
               entry.ref.steered = steerWake.signal;
@@ -680,6 +665,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
+                    const steeredDocuments = await inline.blocks(prepared?.documents ?? [], currentModel());
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const steer = {
                       text,
@@ -691,12 +677,11 @@ export function createAgent(opts?: AgentOptions): Agent {
                       speakerId: prepared?.speakerId,
                       authorName: prepared?.authorName,
                       withheld: prepared?.withheld,
+                      documents: steeredDocuments,
                       acknowledge,
                     };
                     pendingSteers.push(steer);
                     if (ts) steeredSeen.add(ts);
-                    if (prepared?.documents?.length)
-                      entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
                     entry.ref.silentRequested = false;
                     try {
                       await entry.agentSession.steer(
@@ -784,15 +769,14 @@ export function createAgent(opts?: AgentOptions): Agent {
         let documentRejection: ProviderTurnError | undefined;
         let documentRetried = false;
         const noteDocumentRejection = (message: unknown): void => {
-          if (documentRejection || !entry.ref.documents?.length) return;
+          if (documentRejection || !inline.count()) return;
           const failed = message as AssistantMessage | undefined;
           if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
           const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
           if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
           documentRejection = failure;
-          entry.ref.documentsStubbed = true;
           console.error(
-            `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+            `[pi] request with ${inline.count()} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
           );
         };
         const retryWithoutDocuments = async (): Promise<boolean> => {
@@ -804,6 +788,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
+          inline.stub();
           const outcome = await reprompt(DOCUMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")

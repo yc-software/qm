@@ -9,7 +9,6 @@ import type { TurnSession } from "./turn-session.ts";
 export function turnToolRef(dispatched: AgentTurnInput): TurnSession["ref"] {
   return {
     current: dispatched.tools,
-    documents: dispatched.documents,
     runtimeHandoff: undefined,
     runtimeMutationPending: false,
     runtimeInFlight: new Set(),

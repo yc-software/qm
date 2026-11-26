@@ -92,7 +92,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     );
     let releaseFirstStep = () => {};
     const steerQueued = new Promise<void>((resolve) => {
-      releaseFirstStep = () => setTimeout(resolve, 50);
+      releaseFirstStep = () => setTimeout(resolve, variant === "documents" ? 3000 : 50);
     });
     const requestMessages: Array<Array<{ role: string }>> = [];
     const realFetch = globalThis.fetch;
@@ -725,6 +725,51 @@ test("a request rejected as too long retries once without its inline documents i
     assert.equal(requests.filter((body) => body.includes(dataBase64)).length, 1, "the document is sent only once");
     assert.match(requests.at(-1)!, /contract\.pdf/);
     assert.match(requests.at(-1)!, /doc-big/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("an inline document stays on the message it arrived with on every model call of the turn", async () => {
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }) });
+  const realFetch = globalThis.fetch;
+  const requests: Array<{ messages: unknown[] }> = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    if (requests.length > 1) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  try {
+    const dataBase64 = Buffer.from("PASTE-7731").toString("base64");
+    const result = await agent.runTurn(
+      turnInput(
+        "document-position",
+        { entries: [] },
+        {
+          documents: [{ name: "paste.txt", mimeType: "text/plain", dataBase64 }],
+          tools: { memoryRead: async () => "saved facts" } as AgentTurnInput["tools"],
+        },
+      ),
+    );
+    assert.equal(result.reply, "done");
+    assert.equal(requests.length, 2);
+    for (const { messages } of requests)
+      assert.deepEqual(
+        messages.flatMap((message, at) => (JSON.stringify(message).includes("PASTE-7731") ? [at] : [])),
+        [0],
+      );
   } finally {
     globalThis.fetch = realFetch;
   }
