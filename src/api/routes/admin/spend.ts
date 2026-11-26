@@ -1,8 +1,9 @@
+import { samePerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
 import type { Cron } from "../../../triggers/types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, exportTokenAccepted, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, exportTokenAccepted, orgScope, resolveSelfRead } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { tenantOf, type ApiCtx, type BaseCtx } from "../route.ts";
 
@@ -505,6 +506,16 @@ function spendDays(url: URL): { from: number; to: number } | string {
   return { from, to };
 }
 
+function defaultSpendWindow(): { from: number; to: number } {
+  const to = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
+  return { from: to - DEFAULT_WINDOW_DAYS * DAY_MS, to };
+}
+
+function selfSpendDays(url: URL): { from: number; to: number } | string {
+  if (!url.searchParams.has("from") && !url.searchParams.has("to")) return defaultSpendWindow();
+  return spendDays(url);
+}
+
 async function loadSpendRows(
   sessions: SessionStore,
   range: { from: number; to: number },
@@ -597,8 +608,9 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   const breakdown = SPEND_BREAKDOWNS.find((value) => value === (url.searchParams.get("breakdown") ?? "entity"));
   if (!breakdown) return bad('breakdown must be "entity", "model" or "cron"');
 
+  const fallback = defaultSpendWindow();
   const toRaw = url.searchParams.get("to");
-  const to = toRaw === null ? Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS : parseBound(toRaw);
+  const to = toRaw === null ? fallback.to : parseBound(toRaw);
   if (to === null) return bad("to must be a YYYY-MM-DD date (UTC) or epoch milliseconds");
   const fromRaw = url.searchParams.get("from");
   const from = fromRaw === null ? to - DEFAULT_WINDOW_DAYS * DAY_MS : parseBound(fromRaw);
@@ -614,14 +626,23 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     tenantOf(ctx),
     rows.map((r) => r.scopeId),
   );
+  const fullAdmin = actor.role === "org_admin";
   const crons =
     format === "csv" && breakdown !== "cron" ? new Map<string, SpendCronInfo>() : await cronInfoLookup(app, rows);
+  const visibleCron = (cronId: string): SpendCronInfo | null => {
+    const info = crons.get(cronId) ?? null;
+    if (!info || fullAdmin) return info;
+    const parsed = parseScopeId(info.ownerScopeId);
+    if (parsed.kind === "org") return info;
+    if (parsed.kind === "personal" && samePerson(parsed.ref, actor.id)) return info;
+    return null;
+  };
   const report = summarizeSpend(rows, {
     from,
     to,
     bucket,
     label: (id) => labels.get(id) ?? "",
-    cron: (cronId) => crons.get(cronId) ?? null,
+    cron: visibleCron,
     person: await peopleOf(deps, rows),
   });
   if (format === "json")
@@ -643,9 +664,13 @@ export async function spend(ctx: ApiCtx): Promise<void> {
 export async function selfSpend(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
-  const principalId = url.searchParams.get("principalId");
-  if (!principalId) return bad("principalId required");
-  const days = spendDays(url);
+  const access = resolveSelfRead(ctx, { botMessage: "bot turns cannot read spend" });
+  if (!access) return;
+  const { principalId, inOwnPrivate, roomScope } = access;
+  if (!inOwnPrivate && !roomScope) {
+    return sendJson(res, 403, { error: "forbidden", message: "personal spend cannot be read outside your own DM" });
+  }
+  const days = selfSpendDays(url);
   if (typeof days === "string") return bad(days);
   const bucket = spendBucket(url);
   if (!bucket) return bad('bucket must be "day" or "week"');
@@ -656,25 +681,38 @@ export async function selfSpend(ctx: ApiCtx): Promise<void> {
     app.listCronsForViewer(principalId),
     loadSpendRows(deps.sessions, days),
   ]);
-  const person = await peopleOf(deps, [...rows, { scopeId: personalScope(principalId) }]);
+  const person = await peopleOf(deps, [
+    ...rows,
+    { scopeId: personalScope(principalId) },
+    ...(roomScope ? [{ scopeId: roomScope }] : []),
+  ]);
   const me = resolveScope(personalScope(principalId), person).key;
   const shared = new Map(
     contexts.flatMap((context) =>
       context.kind === "personal" ? [] : [[context.scopeId, context.name ?? ""] as const],
     ),
   );
-  const info = new Map([...crons.owned, ...crons.visible].map((cron) => [cron.id, cronInfo(cron)]));
+  const targetScope = roomScope ?? me;
+  const scopedCrons = [...crons.owned, ...crons.visible].filter(
+    (cron) => inOwnPrivate || (shared.has(targetScope) && cron.ownerScopeId === targetScope),
+  );
+  const info = new Map(scopedCrons.map((cron) => [cron.id, cronInfo(cron)]));
   const owned = new Set(crons.owned.map((cron) => cron.id));
+  const roomVisible = shared.has(targetScope) ? [targetScope] : [];
   const visible = new Set(
-    [...new Set(rows.map((row) => row.scopeId))].filter((id) => shared.has(id) || resolveScope(id, person).key === me),
+    inOwnPrivate
+      ? [...new Set(rows.map((row) => row.scopeId))].filter(
+          (id) => shared.has(id) || resolveScope(id, person).key === me,
+        )
+      : roomVisible,
   );
   const report = summarizeSpend(
     rows.filter((row) => visible.has(row.scopeId)),
     { ...days, bucket, label: (id) => shared.get(id) ?? "", cron: (id) => info.get(id) ?? null, person },
   );
-  audit(ctx, { principalId, action: "spend.self.read", resource: "spend", scopeLabel: me });
+  audit(ctx, { principalId, action: "spend.self.read", resource: "spend", scopeLabel: targetScope });
   return sendJson(res, 200, {
-    scopeId: me,
+    scopeId: targetScope,
     ...report,
     crons: report.crons.map((cron) => ({ ...cron, owned: owned.has(cron.cronId) })),
     ...(asOf === undefined ? {} : { asOf }),

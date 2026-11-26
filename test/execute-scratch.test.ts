@@ -11,7 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { NewItem } from "../src/sessions/items.ts";
@@ -145,8 +145,8 @@ async function freshApp(extra: Partial<Config> = {}) {
     ...extra,
   });
   const built = buildApp(config);
-  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "scoped");
-  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  const computer = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", "scoped");
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), computer.id);
   return built;
 }
 

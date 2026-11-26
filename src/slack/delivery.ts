@@ -4,6 +4,10 @@ import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import type { WornPersona } from "../types.ts";
 import { emojiNameOf } from "./emoji-map.ts";
+import { blocksWithContext, escapeSlackText } from "./mrkdwn.ts";
+import { projectScopeId } from "../projects/project-store.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
+import type { CachedMessage, ReadMessagesOpts } from "../surface-cache/types.ts";
 
 export interface SlackReplyArgs {
   channel: string;
@@ -54,6 +58,57 @@ export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
   };
 }
 
+export function originContext(opts: {
+  persona?: WornPersona;
+  project?: { id: string; name: string };
+  webUiPublicUrl?: string;
+  source?: { page: "crons" | "webhooks"; id: string; title?: string };
+}): Record<string, unknown> | undefined {
+  const base = trimTrailingSlashes(opts.webUiPublicUrl?.trim() ?? "");
+  const linked = (name: string, path: string): string => {
+    const label = escapeSlackText(name);
+    return base ? `<${base}/${path}|${label}>` : label;
+  };
+  const origin = [
+    ...(opts.persona
+      ? [linked(opts.persona.name.trim() || "Persona", `personas/${encodeURIComponent(opts.persona.id)}`)]
+      : []),
+    ...(opts.project
+      ? [
+          linked(
+            opts.project.name.trim() || "Project",
+            `contexts?scope=${encodeURIComponent(projectScopeId(opts.project.id))}`,
+          ),
+        ]
+      : []),
+  ];
+  const parts = origin.length ? [`Answered as ${origin.join(" in ")}`] : [];
+  if (base && opts.source) {
+    const title = escapeSlackText(opts.source.title?.trim() || (opts.source.page === "crons" ? "Cron" : "Webhook"));
+    parts.push(`${title} · <${base}/${opts.source.page}/${encodeURIComponent(opts.source.id)}|Settings>`);
+  }
+  return parts.length ? { type: "mrkdwn", text: parts.join(" · "), verbatim: true } : undefined;
+}
+
+export type SurfaceMessageReader = (container: string, opts: ReadMessagesOpts) => Promise<CachedMessage[]>;
+
+export async function personaContinues(
+  read: SurfaceMessageReader | undefined,
+  at: { channel: string; threadTs?: string; before?: string },
+  persona: WornPersona | undefined,
+): Promise<boolean> {
+  if (!read || !persona) return false;
+  const own = { self: true, limit: 1, noFallback: true, ...(at.before ? { before: at.before } : {}) };
+  const previous = async (): Promise<CachedMessage | undefined> => {
+    const [reply] = await read(at.channel, { ...own, sub: at.threadTs ?? null });
+    if (reply || !at.threadTs) return reply;
+    return (await read(at.channel, { ...own, at: at.threadTs }))[0];
+  };
+  const last = await previous().catch(swallowAs("slack: previous persona lookup", undefined));
+  const name = botIdentityArgs(persona).username;
+  return name !== undefined && last?.authorName === name;
+}
+
 export function slackReplyArgs(
   channel: string,
   text: string,
@@ -73,11 +128,36 @@ export function slackReplyArgs(
 export function scopeSurfaceUrl(webUiPublicUrl: string | undefined, scopeId: string): string | undefined {
   const base = trimTrailingSlashes((webUiPublicUrl ?? "").trim());
   if (!base || !scopeId) return undefined;
-  const personal = /^personal:([^@]+)@/.exec(scopeId);
-  if (personal?.[1] && /^[a-z0-9._-]+$/i.test(personal[1])) return `${base}/projects/${personal[1].toLowerCase()}`;
+  const person = parseScopeId(scopeId as ScopeId);
+  const local = person.kind === "personal" && person.ref.includes("@") ? person.ref.split("@")[0]! : "";
+  if (local && /^[a-z0-9._-]+$/i.test(local)) return `${base}/projects/${local.toLowerCase()}`;
   const shared = /^(channel|group):(.+)$/.exec(scopeId);
   if (shared?.[1] && shared[2]) return `${base}/projects/${shared[1]}/${encodeURIComponent(shared[2])}`;
   return `${base}/contexts?scope=${encodeURIComponent(scopeId)}`;
+}
+
+export function slackPersonaReplyArgs(
+  channel: string,
+  text: string,
+  replyThreadTs: string | undefined,
+  opts?: {
+    threadOnly?: boolean;
+    unfurlLinks?: boolean;
+    persona?: WornPersona;
+    webUiPublicUrl?: string;
+    footer?: Array<Record<string, unknown>>;
+    hideOrigin?: boolean;
+  },
+): PostMessageArgs {
+  const origin =
+    opts?.persona && !opts.hideOrigin
+      ? originContext({ persona: opts.persona, webUiPublicUrl: opts.webUiPublicUrl })
+      : undefined;
+  const footer = [...(opts?.footer ?? []), ...(origin ? [origin] : [])];
+  return {
+    ...slackReplyArgs(channel, text, replyThreadTs, opts),
+    ...(footer.length ? { blocks: blocksWithContext(text, footer) } : {}),
+  };
 }
 
 export function channelSurfaceUrl(webUiPublicUrl: string | undefined, channelId: string): string | undefined {
@@ -513,27 +593,42 @@ function splitPostKey(idempotencyKey: string, partIndex: number): string {
   return partIndex === 0 ? idempotencyKey : `${idempotencyKey}#p${partIndex + 1}`;
 }
 
-export async function postWithVerify(
-  client: PostVerifyClient,
-  args: PostMessageArgs,
-  idempotencyKey: string,
-  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
-): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+export function batchPostMessageArgs(args: PostMessageArgs): PostMessageArgs[] {
   const fullText = typeof args.text === "string" ? args.text : "";
-  const batches: PostMessageArgs[] = [];
   if (Array.isArray(args.blocks) && args.blocks.length > 50) {
+    const batches: PostMessageArgs[] = [];
     for (let offset = 0; offset < args.blocks.length; offset += 50) {
       const blocks = args.blocks.slice(offset, offset + 50);
       const text = blocks
         .filter((block) => block.type === "section" && typeof block.text?.text === "string")
         .map((block) => block.text.text)
         .join("\n");
-      batches.push({ ...args, blocks, text });
+      batches.push({
+        ...args,
+        blocks,
+        text: text.length > SLACK_TEXT_LIMIT - 1_000 ? safeClip(text, SLACK_TEXT_LIMIT - 1_000) : text,
+      });
     }
-  } else if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
-    batches.push(...safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text })));
+    return batches;
   }
-  if (batches.length) {
+  if (!args.blocks && fullText.length > SLACK_POST_SPLIT_LIMIT) {
+    return safeChunks(fullText, SLACK_POST_SPLIT_LIMIT).map((text) => ({ ...args, text }));
+  }
+  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
+    return [{ ...args, text: safeClip(fullText, SLACK_TEXT_LIMIT - 1_000) }];
+  }
+  return [args];
+}
+
+export async function postWithVerify(
+  client: PostVerifyClient,
+  args: PostMessageArgs,
+  idempotencyKey: string,
+  opts?: { attempts?: number; verifyFirst?: boolean; verifyOldest?: string; verifyBestEffort?: boolean },
+): Promise<{ ts: string | undefined; channel: string; reused?: boolean; parts?: PostedPart[] }> {
+  const batched = batchPostMessageArgs(args);
+  if (batched.length > 1) {
+    const batches = batched;
     const parts: PostedPart[] = [];
     for (const [i, batch] of batches.entries()) {
       const text = batch.text ?? "";
@@ -557,9 +652,7 @@ export async function postWithVerify(
       parts,
     };
   }
-  if (args.blocks && fullText.length > SLACK_TEXT_LIMIT - 1_000) {
-    args.text = safeClip(fullText, SLACK_TEXT_LIMIT - 1_000);
-  }
+  args = batched[0]!;
   const maxAttempts = opts?.attempts ?? 3;
   const verifyOldest = opts?.verifyOldest ?? String((Date.now() - 5_000) / 1000);
   args.metadata = deliveryMetadata(idempotencyKey);

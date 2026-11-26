@@ -16,13 +16,20 @@ test("a new person sees their company's seeded activities, only apps they connec
       slack: [idea("s1", "💬", "Summarize the channels I missed")],
     },
   };
-  const me = { displayName: "Maya Lin", welcome, suggestedActivitiesGeneration: true };
+  const me = {
+    displayName: "Maya Lin",
+    companyName: "Harbor Line",
+    teammate: "Omar Haddad",
+    welcome,
+    suggestedActivitiesGeneration: true,
+  };
   const h = await harness({
     path: "/",
     listSessions: [],
     connectionReturn: true,
     api: (path) => {
-      if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], ...me });
+      if (path === "/me")
+        return Response.json({ user: "tester", personalScope: "personal:tester", org: "test", permissions: [], ...me });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },
   });
@@ -64,6 +71,10 @@ test("a new person sees their company's seeded activities, only apps they connec
     const about = document.querySelector("qm-welcome-about")!.textContent!.replace(/\s+/g, " ");
     for (const shown of ["What is this?", "@qm make me a CRM", "A virtual employee in Slack", "Agent swarms"])
       assert.ok(about.includes(shown), shown);
+    const scenes = () => document.querySelector("qm-welcome-about .W-figs")!.textContent!.replace(/\s+/g, " ");
+    for (const shown of ["Maya", "Omar", "Harbor Line /", "claims.harborline.apps"])
+      assert.ok(scenes().includes(shown), shown);
+    assert.doesNotMatch(scenes(), /Tidewater|tidewater|\bDev\b/);
     assert.equal(rows().length, 0);
     link("Back to welcome").click();
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -102,7 +113,14 @@ test("/onboard shows the welcome to a person who already has conversations, with
     path: "/onboard",
     listSessions: [{ ...SESSION, createdAt: 1 }],
     api: (path) => {
-      if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], welcome });
+      if (path === "/me")
+        return Response.json({
+          user: "tester",
+          personalScope: "personal:tester",
+          org: "test",
+          permissions: [],
+          welcome,
+        });
       if (path === "/api/composio/slack") return Response.json({ connected: true, workspaceInstalled: true });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },

@@ -99,22 +99,7 @@ test("a command approval's plain-English summary survives onto the timeline item
   assert.ok(items[0].kind === "tool" && items[0].row.pending?.reason === "recursive delete");
 });
 
-test("an approval whose tool_call isn't in the loaded activity lands at the end", () => {
-  const work: WorkBlock = {
-    status: "complete",
-    activity: [
-      { item: item("ToolCall", { seq: 1, createdAt: 1, tool: "execute", body: { command: "ls" } }) },
-      { item: item("ToolResult", { seq: 2, createdAt: 2, tool: "execute", body: { code: 0 } }) },
-    ],
-    pendingApprovals: [{ requestId: "r9", command: "deploy prod", reason: "ship it" }],
-  };
-  const items = buildTimeline(work);
-  assert.equal(items.length, 2, "the tool row plus a trailing fallback approval");
-  assert.equal(items[1].kind, "approval");
-  assert.ok(items[1].kind === "approval" && items[1].approval.requestId === "r9");
-});
-
-test("two distinct paused commands each get their own approval marker", () => {
+test("consecutive paused commands fold into one waiting row with a count", () => {
   const work: WorkBlock = {
     status: "complete",
     activity: [
@@ -143,9 +128,8 @@ test("two distinct paused commands each get their own approval marker", () => {
     ],
   };
   const items = buildTimeline(work);
-  assert.equal(items.length, 2, "two tool rows, each carrying its own marker — none left over at the end");
-  assert.ok(items[0].kind === "tool" && items[0].row.pending?.requestId === "ra");
-  assert.ok(items[1].kind === "tool" && items[1].row.pending?.requestId === "rb");
+  assert.equal(items.length, 1);
+  assert.ok(items[0].kind === "tool" && items[0].row.pending?.requestId === "ra" && items[0].row.waiting === 2);
 });
 
 test("on a finished turn, retried identical orphan calls fold into one row with a count", () => {

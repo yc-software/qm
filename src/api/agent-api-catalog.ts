@@ -1,5 +1,6 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { livePersonCapability, personAtKeyboard } from "./artifact-share.ts";
+import { selfReadAudience } from "../auth/self-read-audience.ts";
+import { carriesPersonAuthority } from "./artifact-share.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 
 interface AgentApiRoute {
@@ -11,6 +12,7 @@ interface AgentApiRoute {
 interface AgentApiView {
   claims: CapabilityClaims;
   isAdmin: boolean;
+  role?: string;
   swarmsEnabled: boolean;
   personasEnabled: boolean;
 }
@@ -39,7 +41,7 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "POST",
         path: "/v1/composio/authorize",
-        summary: "{toolkit} creates a personal consent link on a human-started turn",
+        summary: "{toolkit} creates a personal consent link",
       },
       {
         method: "POST",
@@ -56,7 +58,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/composio/disconnect",
         summary:
-          "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
+          "{accountId} permanently removes one of your own connections after the person approves the card it raises; use when asked to remove or reset one, or to retire the old account after a reconnect",
       },
       {
         method: "GET",
@@ -110,7 +112,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/personas/:id/access",
         summary:
-          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon; each pins one persona at most (owner, on a turn you sent)",
+          "{access:[{scopeId,role:'owner'|'write'|'read',pinned?}]} replaces who holds which role (owner; at least one owner stays). channel: and group: holders get read only. pinned:true on a channel: or group: entry pins the persona there, so every conversation there wears it and posts under its name and icon, and one whose members are all from the organization saves memory to its notebook, which every conversation using it reads; each pins one persona at most (owner, on a turn you sent)",
       },
       {
         method: "POST",
@@ -124,6 +126,51 @@ const FAMILIES: AgentApiFamily[] = [
       },
       { method: "DELETE", path: "/v1/personas/:id", summary: "deletes it and detaches its credentials (owner)" },
       {
+        method: "GET",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "dedicated Slack app status (org admin or persona owner): unconnected|pending_install|connected, hasOrgConfigToken, publicUrlConfigured, manifestCreateUrl, oauthAuthorizeUrl",
+      },
+      {
+        method: "POST",
+        path: "/v1/personas/:id/slack/create",
+        summary:
+          "{configToken?,refreshToken?,orgDeploy?} creates a dedicated HTTP-Events Slack app via Slack's App Manifest API (uses saved org config token if omitted) and returns oauthAuthorizeUrl for one-click install (org admin or persona owner)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/personas/:id/slack",
+        summary:
+          "{botToken,signingSecret,appId?} attaches an existing Slack app to this persona (org admin or persona owner)",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/personas/:id/slack",
+        summary: "{deleteRemote?} disconnects the persona's Slack app (org admin or persona owner)",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/slack-installation/create",
+        summary:
+          "org admin: {name?,description?,configToken?,refreshToken?,orgDeploy?} creates the base org Slack app via Slack App Manifest API",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: check whether a workspace Slack App Configuration Token is saved",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/slack-config-token",
+        summary:
+          "org admin: {refreshToken?,accessToken?} saves and auto-rotates the workspace Slack App Configuration Token from https://api.slack.com/apps",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/slack-config-token",
+        summary: "org admin: removes the saved workspace Slack App Configuration Token",
+      },
+      {
         method: "PUT",
         path: "/v1/sessions/:id/persona",
         summary:
@@ -134,7 +181,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Start a swarm only when the person explicitly asks for a swarm; a large or parallelizable task is not a request for one, so do that work yourself or with subagents. Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead (only in a swarm a person starts; a swarm a Slack bot starts never takes one, from the bot or from a person spawning into it, and always uses its own board). Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
+      "Start a swarm only when the person explicitly asks for a swarm; a large or parallelizable task is not a request for one, so do that work yourself or with subagents. Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Each notification queues a turn for the worker it reaches. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead (only in a swarm a person starts; a swarm a Slack bot starts never takes one, from the bot or from a person spawning into it, and always uses its own board). Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
     routes: [
       {
         method: "GET",
@@ -335,7 +382,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/autopilot",
         summary:
-          "toggle every ship action between review and auto — body {enabled}; enabling requires a live human and creates standing grants, while disabling is allowed for agents and revokes every active grant",
+          "toggle every ship action between review and auto — body {enabled}; enabling raises an approval card to the person and creates standing grants, while disabling is allowed for agents and revokes every active grant",
       },
     ],
   },
@@ -361,13 +408,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/conversations",
         summary:
-          "list the asking person's own conversations (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
+          "list the asking person's own conversations/sessions (id, title, archived, pinned, unread, lastActivityAt) — the same list their web sidebar shows",
       },
       {
         method: "GET",
         path: "/v1/conversations/:id?tailTurns=20",
         summary:
-          "read the bounded transcript of one of the asking person's conversations; defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a conversation they cannot see",
+          "read the bounded transcript (including reasoning, tool calls, and results) of one of the asking person's conversations or an accessible automation fire session (by session id from a delivery note or cron runs); defaults to the last 20 turns and supports older paging with tailTurns and beforeSeq; returns 404 for a session they cannot see",
       },
     ],
   },
@@ -513,7 +560,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => personAtKeyboard(v.claims),
+    when: (v) => carriesPersonAuthority(v.claims),
     routes: [
       {
         method: "GET|PUT|DELETE",
@@ -541,13 +588,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/credentials",
         summary:
-          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); replacing a login the user already saved needs their own running turn or a loginTicket / list participants' registered logins (metadata)",
-      },
-      {
-        method: "POST",
-        path: "/v1/keychain/login-tickets",
-        summary:
-          "{service} from the user's own running turn: a one-time loginTicket that lets the save finishing this sign-in replace their existing login once, after the turn ends (the interactive-login skill does this)",
+          "register a login to the user's keychain (secret, files[], or a multi-input fields[] of [{envKey,value,secret?}]); saving a service the user already has replaces that login / list participants' registered logins (metadata)",
       },
       {
         method: "POST|DELETE",
@@ -573,7 +614,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (body {memoryBrain, purpose}, for an org admin, org owner for org brains, or the brain's own member) a memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -616,6 +657,12 @@ const FAMILIES: AgentApiFamily[] = [
     guidance:
       "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale. The skills tool's save and edit actions make the POST and PUT calls for you.",
     routes: [
+      {
+        method: "GET",
+        path: "/v1/skills",
+        summary:
+          "list visible and manageable archived skills (metadata + ids; in a shared room, that room and org only)",
+      },
       {
         method: "POST",
         path: "/v1/skills",
@@ -676,6 +723,46 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    when: (v) => {
+      if (v.claims.botActor === true) return false;
+      const audience = selfReadAudience(v.claims, v.claims.actorId);
+      return audience.inOwnPrivate || audience.roomScope !== undefined;
+    },
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/spend",
+        summary:
+          "usage and spend report (?from=YYYY-MM-DD&to=YYYY-MM-DD&bucket=day|week, default 30d UTC, max 93d; own scope + shared rooms in DM/cron, room only in shared rooms)",
+      },
+    ],
+  },
+  {
+    when: (v) => v.claims.botActor !== true,
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/contexts",
+        summary: "list accessible contexts (scopeId, name; current room only in shared rooms)",
+      },
+      {
+        method: "GET",
+        path: "/v1/directory/channels",
+        summary: "list your channels (optional ?q= filter; excludes other private channels in shared rooms)",
+      },
+    ],
+  },
+  {
+    when: (v) => v.claims.botActor !== true && selfReadAudience(v.claims, v.claims.actorId).inOwnPrivate,
+    routes: [
+      {
+        method: "GET",
+        path: "/v1/connectors/oauth/status",
+        summary: "direct OAuth connector status (connected, needsReconnect, configured hosts)",
+      },
+    ],
+  },
+  {
     routes: [
       {
         method: "GET",
@@ -698,9 +785,86 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    when: (v) => v.isAdmin && livePersonCapability(v.claims),
+    when: (v) => v.role === "owner" && carriesPersonAuthority(v.claims),
     guidance:
-      "Admin plane: you act AS this org admin — authorized per call under their own standing (a cron, webhook or loop fire carries its owner's authority just as a typed turn does), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
+      "Admin plane (org owner): you act AS this org owner — authorized per call under their standing, audited under their name; confirm before any mutation. You can inspect and configure org-wide settings, models, connectors, org memory, the org memory-brain registry, spend, retention, and the user roster/external invites. Reading other people's private content (sessions, transcripts, personal memory, member-owned memory brains, files, logs, keychain, sandboxes, impersonation) requires org_admin. Admin-role changes and teammate invitations are portal-only.",
+    routes: [
+      { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
+      { method: "GET", path: "/v1/admin/resources", summary: "list configurable org resources" },
+      {
+        method: "GET",
+        path: "/v1/admin/scopes/:orgScopeId",
+        summary: "org scope resolved config: command policy, SOUL, egress, flags, connectors, service credentials",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/scopes/:orgScopeId/:resource",
+        summary:
+          "govern the org scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime",
+      },
+      {
+        method: "GET|POST|PATCH|DELETE",
+        path: "/v1/admin/memory?scope=:orgScopeId",
+        summary: "read or update org-wide notebook facts ({facts:[text]}, {facts:[{id,text}]}, {ids})",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/memory-registry",
+        summary: "org-level memory brains, their bindings, and the memberBrains switch (DM or effective Open sharing)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/brains/:id",
+        summary:
+          "read or configure an org memory brain without clientSecret or moving url (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "GET|PUT",
+        path: "/v1/admin/memory-registry/bindings/:id",
+        summary:
+          "read or configure a binding for an org memory brain (DM or effective Open sharing; deletes are portal-only)",
+      },
+      {
+        method: "PUT",
+        path: "/v1/admin/memory-registry/member-brains",
+        summary:
+          "turn members' own memory brains on or off for the whole org ({enabled}); off stops every one at once (DM or effective Open sharing)",
+      },
+      { method: "GET", path: "/v1/admin/spend", summary: "org-wide spend summary" },
+      { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
+      { method: "GET", path: "/v1/admin/users", summary: "org roster and external users" },
+      {
+        method: "POST",
+        path: "/v1/admin/external-users",
+        summary: "invite an outside collaborator by email ({email, expiresAt}); role changes are portal-only",
+      },
+      {
+        method: "DELETE",
+        path: "/v1/admin/external-users/:email",
+        summary: "revoke an external member's access",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/offboard",
+        summary:
+          "revoke a member's access and sign them out without inspecting or handing over private items ({apply?:true}; cannot remove an org_admin or the last owner; DM or effective Open sharing)",
+      },
+      {
+        method: "POST",
+        path: "/v1/admin/users/:principalId/reactivate",
+        summary: "turn a deactivated member's sign-in back on (cannot manage an org_admin)",
+      },
+      {
+        method: "GET",
+        path: "/v1/admin/directory?q=",
+        summary: "resolve a name or principal id to org-directory candidates",
+      },
+    ],
+  },
+  {
+    when: (v) => v.isAdmin && v.role !== "owner" && carriesPersonAuthority(v.claims),
+    guidance:
+      "Admin plane: you act AS this org admin — authorized per call under their own standing (every turn carries its owner's authority, typed or fired), audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the admin (organization, personal, and conversation restrictions all apply); configuration mutations raise an approval card to the admin, and approving it runs that exact change; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
     routes: [
       { method: "GET", path: "/v1/admin/whoami", summary: "this user's admin status" },
       {
@@ -783,12 +947,18 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/admin/keychain",
         summary: "person-owned keychain metadata, grants, and asks (DM or effective Open sharing)",
       },
+      {
+        method: "POST",
+        path: "/v1/admin/keychain/grants",
+        summary:
+          "grant any person's keychain credential to a scope so admin work can use it — {credentialId, purpose, scope? (default: this conversation)}; audited",
+      },
     ],
   },
 ];
 
 const WHOAMI_FOR_ALL: AgentApiFamily = {
-  when: (v) => !(v.isAdmin && livePersonCapability(v.claims)),
+  when: (v) => !(v.isAdmin && carriesPersonAuthority(v.claims)),
   routes: [
     { method: "GET", path: "/v1/admin/whoami", summary: "this user's org capabilities: {permissions, isAdmin, role?}" },
   ],
@@ -811,6 +981,7 @@ export function renderAgentApis(
   const view: AgentApiView = {
     claims,
     isAdmin: admin.isAdmin,
+    ...(admin.role ? { role: admin.role } : {}),
     swarmsEnabled: features.swarmsEnabled,
     personasEnabled: features.personasEnabled,
   };

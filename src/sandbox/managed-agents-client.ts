@@ -82,6 +82,7 @@ export class ManagedAgentsHitlRejectedError extends Error {
 interface ManagedAgentsCreateOpts {
   name: string;
   egressAllow?: readonly string[];
+  template?: string;
 }
 
 export interface ManagedAgentsClient {
@@ -707,7 +708,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
     async create(createOpts): Promise<ManagedAgentsSession> {
       const manifest = managedAgentsManifest({
         name: createOpts.name,
-        template,
+        template: createOpts.template ?? template,
         ...(opts.agent ? { agent: opts.agent } : {}),
         ...(opts.sizeSlug ? { sizeSlug: opts.sizeSlug } : {}),
         ...(opts.idleTimeoutSec ? { idleTimeoutSec: opts.idleTimeoutSec } : {}),

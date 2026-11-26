@@ -100,6 +100,36 @@ final class NativeDictationTests: XCTestCase {
   }
 
   @MainActor
+  func testRetryAfterHearingNothingListensAgain() async {
+    let provider = DictationPermissionProvider()
+    let model = NativeDictationModel(provider: provider, microphonePermission: { false })
+    model.state = .recording
+    model.receiveLiveResult(
+      text: nil, isFinal: false, errorMessage: "No speech detected", revision: model.revision)
+    XCTAssertEqual(model.state, .retry)
+    XCTAssertTrue(model.retryRecordsAgain)
+    model.retry()
+    XCTAssertEqual(model.state, .preparing)
+    XCTAssertNil(model.error)
+    XCTAssertEqual(model.liveText, "")
+    await waitUntil { model.state == .idle }
+    XCTAssertEqual(model.permissionError, .microphoneDenied)
+  }
+
+  @MainActor
+  func testRetryAfterHearingWordsKeepsTheRecording() {
+    let model = NativeDictationModel(provider: DictationPermissionProvider())
+    model.state = .recording
+    model.receiveLiveResult(
+      text: "Keep these words", isFinal: false, errorMessage: nil, revision: model.revision)
+    model.receiveLiveResult(
+      text: nil, isFinal: false, errorMessage: "Recognition service stopped",
+      revision: model.revision)
+    XCTAssertFalse(model.retryRecordsAgain)
+    model.cancel()
+  }
+
+  @MainActor
   func testFinalResultStopsRecordingWithoutCompletingTheDraft() {
     let model = NativeDictationModel(provider: DictationPermissionProvider())
     model.state = .recording

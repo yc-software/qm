@@ -36,7 +36,7 @@ export const outboundSandboxSchema = Type.Optional(
 export const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
 
 export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
-  const recorder = createRecorder(ref);
+  const recorder = createRecorder(ref, opts?.surfacePrompt?.transcript === true);
   const { recordResult } = recorder;
   const approvalUnavailableResult = (callId: string, summary: Record<string, unknown>, reason: string) =>
     recordResult(
@@ -126,7 +126,12 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
             true,
           );
         }
-        return actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
+        try {
+          return await actions[String(params.action)]!.execute(callId, params, signal, onUpdate, ctx);
+        } catch (e) {
+          if (e instanceof NeedsApproval) return blockOnApproval(callId, e, undefined, { tool: name });
+          throw e;
+        }
       },
     });
   }

@@ -15,6 +15,7 @@ import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -24,7 +25,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
   let built: BuiltApp;
 
   const cap = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
+    { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + CAPABILITY_TTL_MS },
     SECRET,
   );
 
@@ -197,7 +198,7 @@ describe("a deployment without the Slack surface (the directory store is never p
   let built: BuiltApp;
 
   const cap = await mintCapabilityToken(
-    { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
+    { actorId: "dana@acme.com", scopeId: personalScope("dana@acme.com"), exp: Date.now() + CAPABILITY_TTL_MS },
     SECRET,
   );
 
@@ -216,7 +217,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
+    const session = await built.sessions.getOrCreateByThread("web:1", "dm", personalScope("rex@acme.com"));
     await built.sessions.addParticipant(session.id, "rex@acme.com");
   });
 
@@ -253,7 +254,7 @@ describe("a deployment without the Slack surface (the directory store is never p
 
   it("lists a signed-in person under the name stored at sign-in, and finds them by it", async () => {
     const oidc = "oidc:issuer:ruth";
-    const session = await built.sessions.getOrCreateByThread("web:2", "dm", `personal:${oidc}`);
+    const session = await built.sessions.getOrCreateByThread("web:2", "dm", personalScope(oidc));
     await built.sessions.addParticipant(session.id, oidc);
     await built.users.setDisplayName(oidc, "Ruth Founder");
     const res = await get(`/v1/directory/resolve?q=${encodeURIComponent("ruth f")}`);

@@ -1,3 +1,4 @@
+import type { Tenant } from "../tenants/context.ts";
 import type { PrincipalType } from "../types.ts";
 
 export interface DirectoryMember {
@@ -69,6 +70,7 @@ export interface DirectoryStore {
     partial?: boolean,
   ): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
+  teammateName(tenant: Tenant, principalId: string): Promise<string | null>;
   listChannels(): Promise<DirectoryChannel[]>;
   getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;
@@ -101,9 +103,7 @@ export interface DirectoryStore {
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
   setAppHandle?(handle: string): Promise<"ok" | "taken" | "app_taken">;
-  tenantForAppHandle?(handle: string): Promise<string | undefined>;
   tenantForAppHost?(label: string): Promise<string | undefined>;
-  trustedClientFor?(tenant: string): Promise<{ clientId: string; clientSecret: string } | undefined>;
 }
 
 export const MAX_CANDIDATES = 10;

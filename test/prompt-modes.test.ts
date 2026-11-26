@@ -300,10 +300,7 @@ test("session search guidance follows the callable surface", async () => {
             : {}),
         }),
       );
-      assert.equal(
-        prompt.includes("`sessions` search for other accessible conversations"),
-        surface === "web" && !destination,
-      );
+      assert.equal(prompt.includes("`sessions` search for other accessible conversations"), true);
     }
   }
 });

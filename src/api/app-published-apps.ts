@@ -11,6 +11,7 @@ import { appView } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { appSubdomainUrlOf, type PublishedApp } from "../deploy/deploy-store.ts";
+import { personalScope } from "../types.ts";
 
 export function createAppMethods(
   deps: AppDeps,
@@ -57,9 +58,10 @@ export function createAppMethods(
   const { effectiveAppPermission, principalCanReadApp, principalGitPermission, appPermissions } = h;
   async function forCaller(
     d: PublishedApp,
-    caller: Pick<CapabilityClaims, "actorId" | "botActor">,
+    caller: Pick<CapabilityClaims, "actorId" | "botActor" | "ephemeral">,
     permission: "read" | "write" | null,
   ): Promise<"read" | "write" | null> {
+    if (permission === "write" && caller.ephemeral) return "read";
     if (permission !== "write" || caller.botActor !== true) return permission;
     return (await deps.deploy.canManageApp(d.id, caller)) ? "write" : "read";
   }
@@ -97,7 +99,7 @@ export function createAppMethods(
     async inviteToApp(idOrName, rawEmail, actor, opts) {
       const email = rawEmail.trim().toLowerCase();
       if (!validEmail(email)) throw new Error("a valid email address is required");
-      const grantee = await appShareScope(`personal:${email}`, "read");
+      const grantee = await appShareScope(personalScope(email), "read");
       const publishedApp = await deps.deploy.getApp(idOrName);
       if (!publishedApp) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       await deps.deploy.assertAppOwner(publishedApp, actor);

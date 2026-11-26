@@ -6,12 +6,45 @@ import { reportFailure } from "../../util/errors.ts";
 import { activePrincipal } from "./shared.ts";
 import type { ApiCtx } from "./route.ts";
 
+const MAX_SLACK_FILES = 10;
+const BLOB_ID = /^[0-9a-f]{32}$/;
+
+function slackFiles(raw: unknown): { name: string; blobId: string }[] | null {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_SLACK_FILES) return null;
+  const files = raw.map((f: { name?: unknown; blobId?: unknown }) =>
+    typeof f?.name === "string" && f.name && typeof f.blobId === "string" && BLOB_ID.test(f.blobId)
+      ? { name: f.name.slice(0, 255), blobId: f.blobId }
+      : null,
+  );
+  return files.every(Boolean) ? (files as { name: string; blobId: string }[]) : null;
+}
+
+type SlackCall = (method: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
+
+async function sharedTs(connection: { call: unknown }, fileId: string, channel: string): Promise<string | undefined> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const info = await (connection.call as SlackCall)("files.info", { file: fileId });
+    const shares = (info?.file as { shares?: Record<string, Record<string, { ts?: string }[]>> } | undefined)?.shares;
+    const ts = shares?.public?.[channel]?.[0]?.ts ?? shares?.private?.[channel]?.[0]?.ts;
+    if (ts) return ts;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return undefined;
+}
+
 export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   if (!ctx.actor || ctx.actor.imp || ctx.capability)
     return sendJson(ctx.res, 403, { error: "browser_identity_required" });
   ctx.res.setHeader("Cache-Control", "no-store");
   if (!(await activePrincipal(ctx.deps, ctx.actor.p))) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const body = ctx.body as { sessionId?: unknown; text?: unknown; clientMessageId?: unknown } | null;
+  const body = ctx.body as {
+    sessionId?: unknown;
+    text?: unknown;
+    clientMessageId?: unknown;
+    attachments?: unknown;
+  } | null;
+  const files = slackFiles(body?.attachments);
   if (typeof body?.sessionId !== "string") return sendJson(ctx.res, 400, { error: "invalid_session" });
   const source = await ctx.app.getSessionForViewer(body.sessionId, { actorId: ctx.actor.p });
   if (!source) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -21,7 +54,8 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   if (
     send &&
     (typeof body.text !== "string" ||
-      !body.text.trim() ||
+      !files ||
+      (!body.text.trim() && !files.length) ||
       body.text.length > 4000 ||
       typeof body.clientMessageId !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.clientMessageId))
@@ -56,6 +90,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   };
   let attemptedSend = false;
   const replyVia = async (connection: {
+    native?: boolean;
     user?: string;
     workspace?: string;
     call: (
@@ -76,6 +111,45 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
         error: "slack_access_denied",
         message: "Your Slack account cannot access this conversation. Check its Slack permissions.",
       });
+    }
+    if (files?.length) {
+      if (!connection.native)
+        return sendJson(ctx.res, 409, {
+          error: "slack_files_unsupported",
+          message: "Reconnect Slack to attach files.",
+        });
+      const uploads = [];
+      for (const file of files) {
+        const blob = await ctx.deps.blobTransfer?.open(file.blobId);
+        if (!blob) return sendJson(ctx.res, 400, { error: "invalid_attachment" });
+        const bytes = Buffer.concat(await blob.stream.toArray());
+        const slot = (await connection.call("files.getUploadURLExternal", {
+          filename: file.name,
+          length: bytes.length,
+        })) as { ok?: boolean; error?: string; upload_url?: string; file_id?: string } | undefined;
+        if (slot?.error === "missing_scope")
+          return sendJson(ctx.res, 409, { error: "slack_files_scope", message: "Reconnect Slack to attach files." });
+        if (!slot?.ok || !slot.upload_url || !slot.file_id) throw new Error(slot?.error ?? "Slack upload slot failed");
+        const put = await fetch(slot.upload_url, { method: "POST", body: bytes });
+        if (!put.ok) throw new Error(`Slack upload failed: HTTP ${put.status}`);
+        uploads.push({ id: slot.file_id, title: file.name });
+      }
+      attemptedSend = true;
+      const done = await connection.call("files.completeUploadExternal", {
+        files: JSON.stringify(uploads),
+        channel_id: target.container,
+        ...(target.root ? { thread_ts: target.root } : {}),
+        ...((body.text as string).trim() ? { initial_comment: body.text } : {}),
+      });
+      if (!done?.ok) throw new Error(done?.error ?? "Slack rejected file share");
+      const ts = await sharedTs(connection, uploads[0]!.id, target.container);
+      if (!ts)
+        reportFailure(
+          "slack reply: file share timestamp",
+          new Error(`files.info showed no share of ${uploads[0]!.id} in ${target.container}`),
+          `session=${body.sessionId}`,
+        );
+      return recordReply(ts, connection.user ?? ctx.actor!.p);
     }
     attemptedSend = true;
     const result = await connection.call("chat.postMessage", {
@@ -103,7 +177,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   };
   try {
     const native = await nativeSlackConnection(ctx);
-    if (native) return await replyVia(native);
+    if (native) return await replyVia({ ...native, native: true });
     const hasComposioLink = await hasSlackAccount(ctx);
     if (!hasComposioLink && (await nativeSlackConfigured(ctx)))
       return sendJson(ctx.res, send ? 409 : 200, {

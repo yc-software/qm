@@ -18,7 +18,7 @@ import {
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { securityScreenPayloads } from "../../security/security-posture.ts";
 import type { CommandApprovalGrant } from "../../types.ts";
-import { isVisionAttachment, type materializeInbound, safeAttachmentName, withheldName } from "../attachments.ts";
+import { attachmentMetadata, isVisionAttachment, type materializeInbound, withheldName } from "../attachments.ts";
 import { wordsToScreen } from "./intake.ts";
 import {
   documentText,
@@ -312,14 +312,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
   const attachmentPromptData: Array<{ source: string; content: string }> = [];
   if (screenInbound) {
     for (const attachment of screened.attachments) {
-      attachmentPromptData.push({
-        source: "attachment-metadata",
-        content: JSON.stringify({
-          name: safeAttachmentName(attachment.name),
-          mimetype: attachment.mimetype,
-          author: attachment.author,
-        }),
-      });
+      attachmentPromptData.push({ source: "attachment-metadata", content: attachmentMetadata(attachment) });
       if (
         isVisionAttachment(attachment) ||
         !isScreenableTextAttachment(attachment.mimetype) ||
@@ -500,7 +493,7 @@ export function createSkillScreen(turn: SkillScreenTurn) {
   } = turn;
   const carriedSkillScreens = new Map<string, Promise<boolean>>();
   const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
+    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { attributes: countSkills });
     const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
     const allowed: SkillResolution[] = [];
     for (const entry of resolved) {
@@ -692,7 +685,7 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
 
 export function createInboundFileScreen(turn: Parameters<typeof createDocumentScreen>[0]) {
   const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
-  return (requestText: string): Parameters<typeof materializeInbound>[6] =>
+  return (requestText: string): Parameters<typeof materializeInbound>[3] =>
     securityPolicy.screening === "off"
       ? undefined
       : async ({ content, name, mimetype }) => {

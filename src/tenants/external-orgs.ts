@@ -50,3 +50,76 @@ export const TENANT_EXTERNAL_ORGS: PgMigrationDefinition = {
     `REVOKE ALL ON FUNCTION qm_self_serve_tenant(text, text, text), qm_self_serve_provisioned(uuid, text) FROM PUBLIC`,
   ],
 };
+
+const accountDiffers = `CREATE OR REPLACE FUNCTION qm_external_org_account_differs(tenant uuid)
+  RETURNS boolean LANGUAGE sql STABLE
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id
+    WHERE t.id = $1 AND t.settings ? 'partnerChatAccount' AND t.settings->>'partnerChatAccount' IS DISTINCT FROM o.org_id)
+  $f$`;
+
+const accountCheck = `CREATE OR REPLACE FUNCTION qm_external_org_account_check()
+  RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  DECLARE bound uuid;
+  BEGIN
+    IF TG_TABLE_NAME = 'tenants' THEN
+      bound := NEW.id;
+    ELSE
+      bound := NEW.tenant;
+    END IF;
+    IF qm_external_org_account_differs(bound) THEN
+      RAISE EXCEPTION 'tenant %% partnerChatAccount differs from its external organization id', bound USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+  END $f$`;
+
+const existingAccounts = `DO $account$ DECLARE differing text;
+  BEGIN
+    SELECT string_agg(tenant::text, ', ') INTO differing FROM tenant_external_orgs WHERE qm_external_org_account_differs(tenant);
+    IF differing IS NOT NULL THEN
+      RAISE EXCEPTION 'tenants % have a partnerChatAccount that differs from their external organization id; set it to the org id or remove it, then rerun migrations', differing USING ERRCODE = 'check_violation';
+    END IF;
+  END $account$`;
+
+const accountTrigger = (name: string, table: string, events: string) =>
+  `CREATE CONSTRAINT TRIGGER ${name} AFTER ${events} ON ${table}
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION qm_external_org_account_check()`;
+
+export const TENANT_EXTERNAL_ORG_ACCOUNT: PgMigrationDefinition = {
+  id: "0000-tenancy/workspace-company-id",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $account$ BEGIN EXECUTE format($sql$${accountDiffers}$sql$, current_schema()); END $account$`,
+    `DO $account$ BEGIN EXECUTE format($sql$${accountCheck}$sql$, current_schema()); END $account$`,
+    `REVOKE ALL ON FUNCTION qm_external_org_account_differs(uuid), qm_external_org_account_check() FROM PUBLIC`,
+    `DROP TRIGGER IF EXISTS tenants_external_org_account ON tenants`,
+    accountTrigger("tenants_external_org_account", "tenants", "INSERT OR UPDATE OF settings"),
+    `DROP TRIGGER IF EXISTS tenant_external_orgs_account ON tenant_external_orgs`,
+    accountTrigger("tenant_external_orgs_account", "tenant_external_orgs", "INSERT OR UPDATE"),
+    existingAccounts,
+  ],
+};
+
+const orgTenant = `CREATE OR REPLACE FUNCTION qm_tenant_for_external_org(issuer text, org text)
+  RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT o.tenant FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.org_id = $2 AND o.tenant IN (SELECT qm_serving_tenants())
+  $f$`;
+
+const boundOrg = `CREATE OR REPLACE FUNCTION qm_bound_external_org(issuer text)
+  RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = %1$I, pg_temp AS $f$
+  SELECT o.org_id FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.tenant = nullif(current_setting('qm.tenant_id', true), '')::uuid
+  $f$`;
+
+export const TENANT_EXTERNAL_ORG_LOOKUPS: PgMigrationDefinition = {
+  id: "0000-tenancy/external-orgs-lookups",
+  statements: [
+    `SET LOCAL check_function_bodies = off`,
+    `DO $lookup$ BEGIN EXECUTE format($sql$${orgTenant}$sql$, current_schema()); END $lookup$`,
+    `DO $lookup$ BEGIN EXECUTE format($sql$${boundOrg}$sql$, current_schema()); END $lookup$`,
+  ],
+};

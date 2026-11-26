@@ -107,7 +107,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
-    appState.me = { user: "owner", org: "test" };
+    appState.me = { user: "owner", personalScope: "personal:owner", org: "test" };
     appState.currentView = "chats";
     sessionsState.list = [row];
     const host = document.querySelector<HTMLElement>("#main")!;
@@ -124,16 +124,16 @@ test("worker transcripts allow approvals without enabling the composer", async (
     }) as Conversation;
     const chat = conv;
     chat.mountReadOnly(row, itemsToMessages(items, transcriptModel()));
-    await until(() => !!host.querySelector(".approval-btn"));
+    await until(() => !!host.querySelector(".ac-card"));
     assert.equal(host.querySelector("textarea"), null);
-    const before = host.querySelectorAll(".approval-btn").length;
+    const before = host.querySelectorAll(".ac-item").length;
     await resolveApproval({ requestId: credential.requestId, approved: true, scope: "once" });
     chat.revealEntry(9999);
-    assert.ok(host.querySelectorAll(".approval-btn").length < before);
+    assert.ok(host.querySelectorAll(".ac-item").length < before);
     assert.equal(host.textContent?.includes("credential access"), false);
-    assert.equal(host.textContent?.includes("requires approval"), true);
+    assert.equal(host.textContent?.includes("Requires approval"), true);
     const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-      (b) => b.textContent?.trim() === "Allow once",
+      (b) => b.textContent?.trim() === "Approve",
     )!;
     button.click();
     button.click();
@@ -141,7 +141,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
     decision.resolve(Response.json({ runId: "r1" }, { status: 202 }));
     pending = [];
     continuation.resolve(Response.json({ status: "done", result: { status: "ok", reply: "approved worker result" } }));
-    await until(() => !host.querySelector(".approval-btn"));
+    await until(() => !host.querySelector(".ac-card"));
     assert.equal(host.querySelector("textarea"), null);
     assert.equal(
       requests.some((r) => r.path === "/api/turn"),

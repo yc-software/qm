@@ -12,6 +12,7 @@ import { orgId } from "../src/config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { personalScope } from "../src/types.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -26,7 +27,7 @@ const cap: CapabilityClaims = {
   ...liveRunClaims("alice"),
   sessionId: "test-session",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
   exp: Date.now() + 60_000,
 };
@@ -181,29 +182,12 @@ test("the agent cannot choose the endpoint, identity or media type, and only rea
   }
 });
 
-test("uploads need the current run's agent capability", async () => {
-  for (const options of [
-    { capability: undefined, actor: "alice" },
-    { actor: "alice" },
-    { capability: { ...cap, runLeaseToken: "stale" } },
-  ]) {
+test("uploads need an agent capability", async () => {
+  for (const options of [{ capability: undefined, actor: "alice" }, { actor: "alice" }]) {
     const f = await fixture();
     assert.equal((await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") }, options)).status, 403);
     assert.equal(f.calls.length, 0);
   }
-});
-
-test("ending the run during account lookup prevents the upload", async () => {
-  const f = await fixture();
-  const original = f.deps.composioFetch!;
-  f.deps.composioFetch = async (...args) => {
-    const response = await original(...args);
-    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-    return response;
-  };
-  f.replies.push(xAccount);
-  assert.equal((await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") })).status, 403);
-  assert.equal(f.calls.length, 1);
 });
 
 test("an X refusal stops the upload and points the agent at reconnecting", async () => {
@@ -230,21 +214,6 @@ test("JPEG and WebP images are typed from their bytes", async () => {
     assert.equal(result.data.mediaType, mediaType);
     assert.equal((f.calls[1]!.body!.body as { media_type: string }).media_type, mediaType);
   }
-});
-
-test("ending the run partway through stops sending segments", async () => {
-  const f = await fixture();
-  const original = f.deps.composioFetch!;
-  f.deps.composioFetch = async (...args) => {
-    const response = await original(...args);
-    if (f.calls.length === 2) f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
-    return response;
-  };
-  f.replies.push(xAccount, proxied({ data: { id: "1004" } }));
-  const result = await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") });
-  assert.equal(result.status, 403);
-  assert.equal(result.data.error, "inactive_run");
-  assert.equal(f.calls.length, 2);
 });
 
 test("provider details are masked before they reach the agent", async () => {

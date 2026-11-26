@@ -10,13 +10,15 @@ In Isolated posture, agent inventory and operations stay in the current owning s
 
 ## Agent actions
 
-| Action              | Parameters                                                        |
-| ------------------- | ----------------------------------------------------------------- |
-| `list`              | `purpose`; returns providers, capabilities, resources and default |
-| `create`            | `backend`, optional `name`, `purpose`; creates a blank resource   |
-| `set_default`       | `sandbox_id` or null, `purpose`; changes routing                  |
-| `status`, `restart` | optional `sandbox_id`, `purpose`                                  |
-| `retire`            | `sandbox_id`, `purpose`                                           |
+| Action              | Parameters                                                               |
+| ------------------- | ------------------------------------------------------------------------ |
+| `list`              | `purpose`; returns providers, capabilities, resources and default        |
+| `create`            | `backend`, optional `name`, `image`, `purpose`; creates a blank resource |
+| `set_default`       | `sandbox_id` or null, `purpose`; changes routing                         |
+| `status`, `restart` | optional `sandbox_id`, `purpose`                                         |
+| `retire`            | `sandbox_id`, `purpose`                                                  |
+
+`SANDBOX_IMAGES` names machine images an agent may choose at `create`, as JSON mapping each name to one reference per provider, written in that provider's own image setting format: `{"dev":{"e2b":"<E2B template>","modal":"im-...","porter":"<registry ref>"}}`. Every provider except Sprites can take one; Render references must be digest-pinned like `RENDER_SANDBOX_IMAGE`, and each gets its own base snapshot. `list` shows which names each provider offers, and the tool offers `image` only when some are configured. The computer's record keeps the name, and every fresh machine for it, including a replacement after loss or a restart, boots that name's current reference; a restore from the computer's own snapshot keeps the snapshot. Creating with a name the provider lacks fails and says where the name is available. Without `image`, a computer boots the provider's default. Private registry images need the pull access each provider already supports for its default image; for Modal, an `im-` ID built with `npm run build:modal-image` avoids registry credentials at boot.
 
 A turn that runs as a Slack bot's work can list, use, watch or retire a computer outside a swarm only when that bot created it and no person's turn has used it. The first time a person's turn uses a computer, or a person's swarm takes it as its forum, its record is marked for good, so the bot loses it from then on. A computer a person's turn creates, including a subagent's own computer and a background job's computer, is marked when it is made, even if its first open fails. The process reaper then stops the background jobs the bot already started there and marks them reaped, on its next sweep (`PROCESS_REAPER_INTERVAL_MS`, 30 seconds by default). A stop that fails, or that a restart interrupts, is retried on the sweep after. The same rule stops a bot's jobs on a swarm's computers once the bot loses the swarm. Computers from earlier releases carry no mark until a person's turn uses them again, except computers the admin API created, which are marked on upgrade, and the forums of people's swarms, which a migration marks once at startup, as [Swarms](swarms.md) describes. Some bot work runs as a shared system actor rather than as the bot: a proactive channel wake that a bot's message prompted runs as the organization's ambient actor, and a bot-marked cron that runs as its channel runs as that channel's actor. Such work uses none of that actor's computers outside a swarm and changes none of its crons, loops, webhooks, monitor watches, deployments or shared artifacts. A swarm's board and worker computers follow the swarm's own rule in [Swarms](swarms.md). [Persistent subagent sessions](persistent-subagent-sessions.md) lists the turns that run as bot work.
 
@@ -36,12 +38,15 @@ is the ordinary per-turn one: same image, the turn's environment and capability 
 Files and skills, but none of the shared workspace's files. Only that
 turn's commands run there. The result tells the model the command moved. Brokered org
 service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
-computer. Personal conversations stage credentials on their own computer. The owner's other
-runs, scheduled and unattended ones included, use that same computer, so any of the owner's
-runs can change the programs and staging files a live credential command uses.
+computer. In the acting person's own personal conversation, only a command that names a
+saved file login moves to the turn's scratch computer, because a file login is the one kind
+of credential that saves back. Token and environment credentials stay on the person's own
+computer with its workspace. The owner's other runs, scheduled ones included,
+use that same computer, so any of them can change the programs such a command runs.
 
-A background job in a shared conversation that names such a credential starts on its own
-job computer: a sandbox record marked job-only, created on the conversation's provider. It
+A background job in a shared conversation that names such a credential, or in any
+conversation one that names a saved file login, starts on its own job computer: a sandbox
+record marked job-only, created on the conversation's provider. It
 is not listed in the sandbox inventory, cannot be targeted with `sandbox_id` by execute,
 files, apps or skills, cannot be made a default, and refuses `send_input`. Only the job's
 own controls reach it: poll, stop, watch, the reaper and the web output pane, including
@@ -54,9 +59,9 @@ job writes to its home outlives the computer. A provider that cannot retire comp
 jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
-`watch`, and `unwatch`. A job that a person's live turn started with a saved file login
-saves that login's changes as live when it exits, so it takes `send_input` and `stop` only
-from a person's live turn; a scheduled run, a bot's turn and other unattended runs are refused.
+`watch`, and `unwatch`. A job that names a saved file login runs on a job computer, so it
+takes no `send_input`. When it saves that login's changes on exit, a bot's turn cannot stop
+it.
 Process IDs retain their durable saved target even after the scope default changes. Watches retain their durable monitor registration and wake this
 conversation with output or exit. Provider loss or expiry can still interrupt a process.
 

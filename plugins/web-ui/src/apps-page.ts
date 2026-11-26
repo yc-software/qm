@@ -1,7 +1,7 @@
 import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
-import { Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
+import { AppWindow, Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
@@ -32,7 +32,9 @@ import {
   type AppView,
 } from "./app-view";
 import { tip } from "./tooltip";
+import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { deepLinkPath, UI_BASE } from "./deep-link";
+import { scopePerson } from "./scope-labels";
 
 const APP_TABS: Array<{ value: AppTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -65,6 +67,15 @@ let archiveCandidate: AppView | null = null;
 let restoreArchiveFocus = false;
 let appToast: { app: AppView; text: string; undo?: boolean } | null = null;
 let appRefreshSeq = 0;
+const APPS_LAYOUT_KEY = "qm.apps.layout";
+let appsLayout: ListLayout = readListLayout(APPS_LAYOUT_KEY);
+
+function setAppsLayout(layout: ListLayout): void {
+  if (appsLayout === layout) return;
+  appsLayout = layout;
+  saveListLayout(APPS_LAYOUT_KEY, layout);
+  drawAppsPage();
+}
 
 function statusLabel(d: AppView): string {
   if (
@@ -102,17 +113,16 @@ function permissionBadge(d: AppView): TemplateResult {
 }
 
 function ownerLabel(d: AppView): string {
-  const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Owned by you";
+  if (d.ownerScopeId === appState.me?.personalScope) return "Owned by you";
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `Owned by ${d.ownerName ?? friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
+    return `Owned by ${d.ownerName ?? friendlyPrincipal(scopePerson(d.ownerScopeId))}`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
   return "Shared context";
 }
 
 function appTabs(): TemplateResult {
   const inContext = appList.filter((d) => appInScope(d, appScope));
-  const viewer = appState.me?.user;
+  const viewer = appState.me;
   const counts = Object.fromEntries(
     APP_TABS.map((tab) => [tab.value, inContext.filter((d) => appTab(d, viewer) === tab.value).length]),
   ) as Record<AppTab, number>;
@@ -135,6 +145,58 @@ function appTabs(): TemplateResult {
           </button>
         `,
       )}
+    </div>
+  `;
+}
+
+function appThumb(d: AppView): TemplateResult {
+  return html`<span class="app-card-screen" aria-hidden="true">
+    <span class="app-card-fallback">${icon(AppWindow, 20)}</span>
+    ${
+      d.thumbnailUrl
+        ? html`<img
+            src=${d.thumbnailUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            @error=${(e: Event) => (e.currentTarget as HTMLElement).remove()}
+          />`
+        : nothing
+    }
+  </span>`;
+}
+
+function appCard(d: AppView): TemplateResult {
+  const running = d.status === "running";
+  const thumb = html`<span class="app-card-thumb">${appThumb(d)}</span>`;
+  return html`
+    <div class="file-card app-card ${d.status === "archived" ? "unavailable" : ""}">
+      ${
+        running && d.webUrl
+          ? html`<a
+              class="app-card-link"
+              href=${d.webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label=${`Open ${appTitle(d)}`}
+              >${thumb}</a
+            >`
+          : thumb
+      }
+      <div class="app-card-body">
+        <span class="list-row-title" dir="auto" title=${appTitle(d)}>${appTitle(d)}</span>
+        <div class="app-card-meta">
+          <span class="app-status ${statusClass(d)}"><span></span>${statusLabel(d)}</span>
+          <button
+            class="btn app-manage"
+            type="button"
+            aria-label=${`Manage ${appTitle(d)}`}
+            @click=${() => void openApp(d)}
+          >
+            Manage
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -175,6 +237,11 @@ function appRow(d: AppView): TemplateResult {
   `;
 }
 
+function appRows(rows: AppView[]): TemplateResult[] {
+  if (appsLayout === "grid") return [html`<div class="file-grid app-grid">${rows.map(appCard)}</div>`];
+  return rows.map(appRow);
+}
+
 function drawAppsPage(): void {
   if (appState.currentView !== "apps" || !appState.mainEl) return;
   activeApp = null;
@@ -183,7 +250,7 @@ function drawAppsPage(): void {
     appsPageHost.className = "pane apps-page";
     appState.mainEl.replaceChildren(appsPageHost);
   }
-  const viewer = appState.me?.user;
+  const viewer = appState.me;
   const rows = filterApps(appList, {
     tab: selectedAppTab,
     scope: appScope,
@@ -203,7 +270,7 @@ function drawAppsPage(): void {
         ...(appNotices.list
           ? [html`<div class="status app-list-notice" role="status" aria-live="polite">${appNotices.list}</div>`]
           : []),
-        ...(rows.length ? rows.map(appRow) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
+        ...(rows.length ? appRows(rows) : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
   const scoped = Boolean(scopedSession.active);
@@ -213,6 +280,7 @@ function drawAppsPage(): void {
       ${scopedViewTopbar("apps", drawAppsPage)}
       ${listPageTpl({
         title: "Apps",
+        controls: appList.length ? listLayoutSelect(appsLayout, setAppsLayout) : undefined,
         search: {
           value: appQuery,
           placeholder: "Search apps",
@@ -295,7 +363,7 @@ function drawAppDetail(d: AppView, loading = false): void {
           <div>
             <span>${ownerLabel(d)}</span>
             ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="app-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
-            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
+            ${d.createdBy && !d.ownedByCreator ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
           ${d.canShare ? shareButton({ type: "deploy", id: d.id, title: appTitle(d), owner: d.ownerScopeId! }) : permissionBadge(d)}
         </div>
@@ -762,11 +830,11 @@ async function restoreApp(d: AppView): Promise<void> {
     appList = appListAfterRestoreRefresh(appList, restored, refreshResult);
     const destination = currentAppActionView(d.id);
     if (destination === "target") {
-      selectedAppTab = appTab(restored, appState.me?.user);
+      selectedAppTab = appTab(restored, appState.me);
       activeApp = restored;
       await openApp(restored);
     } else if (destination === "list") {
-      selectedAppTab = appTab(restored, appState.me?.user);
+      selectedAppTab = appTab(restored, appState.me);
       activeApp = null;
       drawAppsPage();
     } else {

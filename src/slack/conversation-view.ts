@@ -8,12 +8,13 @@ import {
   type RecentMessage,
   type SlackFile,
   MAX_RECENT_MESSAGES,
+  botIdentityArgs,
   decodeSlackEntities,
   recentWindow,
 } from "./lib.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
-import { type SlackHistoryMessage } from "./payloads.ts";
+import { slackBotName, slackCustomBotName, type SlackHistoryMessage } from "./payloads.ts";
 import { slackMessageContent } from "./message-content.ts";
 import { isBotAuthored, isOwnSlackMessage, slackFileName } from "./message-gating.ts";
 import { mentionedUserIds } from "./mrkdwn.ts";
@@ -59,7 +60,7 @@ export interface ConversationSerializer {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView }>;
+  ): Promise<{ view: ConversationView; threadFiles?: SlackFile[] }>;
   recentMessageWindow: number;
 }
 
@@ -86,8 +87,8 @@ export function createConversationSerializer(deps: {
 
   function messageAuthorName(m: SlackHistoryMessage, people: SlackPeople, botNameById: Map<string, string>): string {
     if (m.user && people.principals.has(m.user)) return people.names.get(m.user) ?? m.user;
-    if (m.bot_profile?.name) return String(m.bot_profile.name);
-    if (m.username) return String(m.username);
+    const botName = slackBotName(m);
+    if (botName) return botName;
     if (m.user) return people.names.get(m.user) ?? m.user;
     if (m.bot_id) return botNameById.get(m.bot_id) ?? "someone";
     return "someone";
@@ -142,21 +143,39 @@ export function createConversationSerializer(deps: {
     await resolveMissingPeople(client, kept, people, botNameById);
     return kept.map((m) => {
       const content = slackMessageContent(m);
+      const self = isSelfMessage(m);
       const principalId = m.user ? people.principals.get(m.user) : undefined;
       return {
         ts: m.ts,
-        name: messageAuthorName(m, people, botNameById),
+        name: self
+          ? (slackCustomBotName(m, botIdentityArgs().username) ?? "")
+          : messageAuthorName(m, people, botNameById),
         ...(m.user || m.bot_id ? { authorId: String(m.user || m.bot_id) } : {}),
         ...(principalId ? { principalId } : {}),
         text: decodeSlackEntities(content.text.trim()),
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
         ...(isBotAuthored(m) ? { isBot: true } : {}),
-        ...(isSelfMessage(m) ? { isSelf: true } : {}),
+        ...(self ? { isSelf: true } : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
         ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
       };
     });
+  }
+
+  function unansweredThreadFiles(
+    raw: SlackHistoryMessage[],
+    inc: { threadTs?: string; ts: string; userId?: string },
+  ): SlackFile[] {
+    if (!inc.threadTs) return [];
+    const thread = raw
+      .filter(isConversationMessage)
+      .filter((m) => m.ts < inc.ts && (m.ts === inc.threadTs || String(m.thread_ts ?? "") === inc.threadTs))
+      .sort((a, b) => a.ts.localeCompare(b.ts));
+    return thread
+      .slice(thread.findLastIndex(isSelfMessage) + 1)
+      .filter((m) => m.ts === inc.threadTs || (inc.userId && m.user === inc.userId))
+      .flatMap((m) => slackMessageContent(m).files.map((f) => (f.user || !m.user ? f : { ...f, user: m.user })));
   }
 
   async function serializeSlackConversation(
@@ -176,7 +195,7 @@ export function createConversationSerializer(deps: {
       kind?: SlackConversationKind;
       slackIdsByPrincipal?: ReadonlyMap<string, string>;
     },
-  ): Promise<{ view: ConversationView }> {
+  ): Promise<{ view: ConversationView; threadFiles?: SlackFile[] }> {
     const empty: ConversationView = {
       channel: { kind: ctx.kind ?? inc.kind },
       messages: [],
@@ -230,7 +249,8 @@ export function createConversationSerializer(deps: {
       nameById: people.names,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };
-    return { view };
+    const threadFiles = unansweredThreadFiles(raw, inc);
+    return { view, ...(threadFiles.length ? { threadFiles } : {}) };
   }
 
   return { shapeRecentMessages, serializeSlackConversation, recentMessageWindow: RECENT_MESSAGE_WINDOW };

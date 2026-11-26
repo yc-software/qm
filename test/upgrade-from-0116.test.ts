@@ -129,6 +129,10 @@ for (const [fixture, baseline] of [
         await withDatabase(admin, async (url, db) => {
           await load(db, fixture);
           const before = await rowCounts(db);
+          const builtins = await db.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM skills WHERE json ->> 'createdBy' LIKE 'system:%' AND json ->> 'status' = 'published'",
+          );
+          before.set("public.skills", before.get("public.skills")! - builtins.rows[0]!.n);
           if (!baseline) {
             const closed = await db.query<{ n: number }>(
               "SELECT count(*)::int AS n FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL",

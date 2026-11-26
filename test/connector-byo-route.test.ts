@@ -33,6 +33,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             token: "test-token",
             appId: "A123",
             store: built.slackInstallation,
+            fetchImpl: async () => new Response("", { status: 404 }),
           }),
         }
       : {}),
@@ -71,11 +72,10 @@ const putConnector = (base: string, b: object) =>
 test("the slack-installation createUrl adopts the live branding label", async () => {
   const srv = start();
   try {
-    const nameFrom = async (): Promise<string> => {
-      const r = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
-        createUrl: string;
-      };
-      const manifest = JSON.parse(new URL(r.createUrl).searchParams.get("manifest_json") ?? "{}") as {
+    const nameFrom = async (query = ""): Promise<string> => {
+      const response = await fetch(`${srv.base}/v1/admin/slack-installation${query}`, { headers: ADMIN });
+      const { createUrl } = (await response.json()) as { createUrl: string };
+      const manifest = JSON.parse(new URL(createUrl).searchParams.get("manifest_json") ?? "{}") as {
         display_information?: { name?: string };
       };
       return manifest.display_information?.name ?? "";
@@ -91,6 +91,8 @@ test("the slack-installation createUrl adopts the live branding label", async ()
       ).status,
       200,
     );
+    assert.equal(await nameFrom("?name=%20my%2Bbot%20"), "my+bot");
+    assert.equal(await nameFrom("?name=%20"), "straylight");
     assert.equal(await nameFrom(), "straylight");
   } finally {
     await srv.close();

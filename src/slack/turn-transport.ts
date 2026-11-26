@@ -1,14 +1,16 @@
 import type { SurfaceTransport } from "../surfaces/turn-driver.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { attachmentList, logAttachmentFailure } from "../surfaces/attachments.ts";
 import {
   type PostMessageArgs,
-  SLACK_POST_SPLIT_LIMIT,
-  blocksWithContext,
+  type SurfaceMessageReader,
+  batchPostMessageArgs,
   botIdentityArgs,
+  personaContinues,
   plainContext,
   postWithVerify,
   resolveReactionTargets,
-  safeChunks,
+  slackPersonaReplyArgs,
   slackReplyArgs,
   toSlackMrkdwn,
   uploadAttachments,
@@ -16,6 +18,7 @@ import {
 } from "./lib.ts";
 import { applyAndLogReactions, cleanAgentReplyForSlack, updateSlackMessage } from "./messaging.ts";
 import { escapeSlackText } from "./mrkdwn.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 const noticeBlocks = (text: string): Array<Record<string, unknown>> => [
   { type: "context", elements: [{ type: "mrkdwn", text }] },
@@ -30,26 +33,35 @@ export function createSlackTurnTransport(at: {
   triggerTs: string;
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
-  onEngaged?: (runId: string, channel: string, threadTs?: string, emoji?: Promise<string>) => void;
+  webUiPublicUrl?: string;
+  readSurfaceMessages?: SurfaceMessageReader;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
+  card?: (channel: string, threadTs: string) => Pick<SlackStatusCard, "posted"> | undefined;
 }): SurfaceTransport {
   const { client, channel, threadTs } = at;
   const notices = new Set<string>();
 
   const post: SurfaceTransport["post"] = async (msg, opts = {}) => {
-    let blocks: Array<Record<string, unknown>> | undefined;
-    if (opts.notice) blocks = noticeBlocks(msg);
-    else if (opts.note) blocks = blocksWithContext(msg, [plainContext(opts.note)]);
-    const replyArgs = (text: string, withBlocks: boolean): Record<string, unknown> => ({
-      ...slackReplyArgs(channel, text, threadTs, { threadOnly: at.kind === "channel", unfurlLinks: false }),
-      ...(withBlocks && blocks ? { blocks } : {}),
-    });
-    if (opts.idempotencyKey)
-      return (await postWithVerify(client, replyArgs(msg, true) as PostMessageArgs, opts.idempotencyKey)).ts;
-    const parts = blocks ? [msg] : safeChunks(msg, SLACK_POST_SPLIT_LIMIT);
+    const baseOpts = { threadOnly: at.kind === "channel", unfurlLinks: false, persona: opts.persona };
+    const args: PostMessageArgs = opts.notice
+      ? { ...slackReplyArgs(channel, msg, threadTs, baseOpts), blocks: noticeBlocks(msg) }
+      : slackPersonaReplyArgs(channel, msg, threadTs, {
+          ...baseOpts,
+          webUiPublicUrl: at.webUiPublicUrl,
+          ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
+          hideOrigin: await personaContinues(at.readSurfaceMessages, { channel, threadTs }, opts.persona),
+        });
+    if (opts.idempotencyKey) {
+      const posted = await postWithVerify(client, args, opts.idempotencyKey);
+      const blocks = args.blocks as Record<string, unknown>[] | undefined;
+      if (opts.runId && threadTs && posted.ts && !posted.parts)
+        void at.card?.(channel, threadTs)?.posted({ text: msg, ...(blocks ? { blocks } : {}) }, posted.ts, opts.runId);
+      return posted.ts;
+    }
     let firstTs: string | undefined;
-    for (const [i, part] of parts.entries()) {
-      const ts = (await client.chat.postMessage(replyArgs(part, parts.length === 1))).ts as string | undefined;
+    for (const [i, batch] of batchPostMessageArgs(args).entries()) {
+      const ts = (await client.chat.postMessage(batch)).ts as string | undefined;
       if (i === 0) firstTs = ts;
     }
     if (opts.notice && firstTs) notices.add(firstTs);
@@ -85,14 +97,18 @@ export function createSlackTurnTransport(at: {
     },
     async typing(on, run) {
       if (!on) at.onSettled?.();
-      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs, run.emoji());
+      else if (run && threadTs) at.onEngaged?.(run.runId, channel, threadTs);
     },
     async upload(attachments) {
       try {
         await uploadAttachments(client, channel, threadTs, attachments, at.blobs);
         return {};
       } catch (err) {
-        console.error("[slack-plugin] file upload failed:", errMessage(err));
+        logAttachmentFailure(
+          "upload failed",
+          { surface: "slack-plugin", chat: channel },
+          `files=${attachmentList(attachments)} reason=${errMessage(err)}`,
+        );
         return { failureNote: uploadFailureNote(err) };
       }
     },

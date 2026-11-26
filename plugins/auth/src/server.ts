@@ -187,7 +187,7 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
 
   const signInUrl = ((): string | undefined => {
     try {
-      return new URL("/auth/login", cfg.redirectUri).toString();
+      return new URL("/auth/login?provider=primary", cfg.redirectUri).toString();
     } catch {
       return undefined;
     }
@@ -292,7 +292,11 @@ export function createAuthHandler(deps: AuthDeps): (req: IncomingMessage, res: S
       res.writeHead(302, noStore({ location: destination.toString() }));
       return void res.end();
     }
-    if (!mailer && !passwords && !deps.trustedSignInLabel) return emailUnavailable(res);
+    if (!mailer && !passwords) {
+      if (!deps.trustedSignInLabel) return emailUnavailable(res);
+      res.writeHead(302, noStore({ location: "/auth/trusted/login" }));
+      return void res.end();
+    }
     const sealed = await signer.sealRequest(parsed.request, cfg.requestTtlS, now());
     return sendHtml(res, 200, signInForm(sealed.token));
   }

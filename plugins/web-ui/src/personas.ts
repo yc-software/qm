@@ -26,9 +26,11 @@ import { ensureContexts, personalScopeId, scopeGlyph, scopeTitle } from "./conte
 import { openSession, renderList, replacePendingSession, startNewChat } from "./sessions";
 import { newChatDraftKey, saveDraft } from "./drafts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
-import { switchView } from "./shell";
+import { renderSidebarTop, switchView } from "./shell";
 import { openProjectIconPicker, projectIconTpl } from "./project-icon";
-import { contextModelSection, loadContextModel } from "./context-model";
+import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
+import { loadPersonaSlack, personaSlackSection, resetPersonaSlack } from "./persona-slack";
+import { can } from "./shell-state";
 import { rememberThreadPick } from "./composer";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { avatarTpl, menuSelect } from "./ui";
@@ -104,6 +106,7 @@ function groupPersonasByRole(
 
 function setPersonaList(list: PersonaView[]): void {
   personasState.list = list;
+  renderSidebarTop();
   renderList();
 }
 
@@ -171,7 +174,7 @@ export async function loadPersonas(): Promise<void> {
       notice = "";
       return;
     }
-    notice = errMessage(e, "Couldn't load personas.");
+    notice = errMessage(e, "Couldn't load bots.");
   }
 }
 
@@ -201,6 +204,7 @@ function drawPersonasPage(): void {
   viewSeq++;
   syncPersonaUrl(null);
   resetPicker();
+  resetContextModel();
   if (!pageHost || pageHost.parentElement !== appState.mainEl) {
     pageHost = document.createElement("div");
     pageHost.className = "pane personas-page";
@@ -210,19 +214,19 @@ function drawPersonasPage(): void {
   const visible = personasState.list.filter(
     (persona) => !term || `${persona.name} ${persona.description}`.toLowerCase().includes(term),
   );
-  let empty = "No personas yet. Create one to give QM a reusable role you can chat with anywhere.";
-  if (loading && !personasState.list.length) empty = "Loading personas…";
-  else if (!personasState.enabled) empty = "Personas aren't turned on for you.";
-  else if (term && personasState.list.length) empty = "No personas match your search.";
+  let empty = "No bots yet. Create one to give QM a reusable role you can chat with anywhere.";
+  if (loading && !personasState.list.length) empty = "Loading bots…";
+  else if (!personasState.enabled) empty = "Bots aren't turned on for you.";
+  else if (term && personasState.list.length) empty = "No bots match your search.";
   render(
     listPageTpl({
-      title: "Personas",
+      title: "Bots",
       ...(personasState.enabled
         ? {
-            action: { label: "New persona", onClick: showNewPersonaForm },
+            action: { label: "New bot", onClick: showNewPersonaForm },
             search: {
               value: query,
-              placeholder: "Search personas",
+              placeholder: "Search bots",
               onInput: (value: string) => {
                 query = value;
                 drawPersonasPage();
@@ -251,7 +255,7 @@ function personaActions(persona: PersonaView, opts: { edit: boolean }): Template
   return html`
     ${rowAction("Chat", MessageSquare, () => void chatWithPersona(persona))}
     ${rowAction("Fork", GitFork, () => forkPersona(persona))}
-    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id)) : nothing}
+    ${opts.edit && canEditPersona(persona.role) ? rowAction("Edit", Pencil, () => void openPersona(persona.id, "", { push: true })) : nothing}
     ${canSharePersona(persona.role) ? rowAction("Share", Share2, () => void openGranteePicker(persona.id, "people")) : nothing}
   `;
 }
@@ -263,7 +267,7 @@ function personaRow(persona: PersonaView): TemplateResult {
         class="persona-row-main"
         type="button"
         aria-label=${`Open ${persona.name}`}
-        @click=${() => void openPersona(persona.id)}
+        @click=${() => void openPersona(persona.id, "", { push: true })}
       >
         <span class="persona-icon">${personaIconTpl(persona.icon, 18)}</span>
         <span class="persona-row-text">
@@ -294,7 +298,7 @@ async function busy(persona: PersonaView, work: () => Promise<void>, fallback: s
 
 async function startPersonaChat(personaId: string): Promise<CoreSession> {
   await ensureContexts();
-  const scopeId = personalScopeId() ?? `personal:${appState.me?.user ?? ""}`;
+  const scopeId = personalScopeId() ?? appState.me?.personalScope ?? "";
   const { session } = await api<{ session: CoreSession }>("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ scopeId }),
@@ -320,7 +324,7 @@ function chatWithPersona(persona: PersonaView): Promise<void> {
 }
 
 function forkPersona(persona: PersonaView): void {
-  saveDraft(newChatDraftKey(appState.me?.user), `Fork the ${persona.name} persona for me.`);
+  saveDraft(newChatDraftKey(appState.me?.user), `Fork the ${persona.name} bot for me.`);
   switchView("chats");
   startNewChat();
 }
@@ -349,25 +353,27 @@ export function routePersonasHistory(personaId: string | null): void {
   else drawPersonasPage();
 }
 
-function syncPersonaUrl(personaId: string | null): void {
+function syncPersonaUrl(personaId: string | null, push = false): void {
   if (appState.currentView !== "personas") return;
   const next = deepLinkPath(UI_BASE, "personas", null, null, personaId);
-  if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
 }
 
 async function fetchPersona(id: string): Promise<PersonaDetail> {
   return (await api<{ persona: PersonaDetail }>(`/api/personas/${encodeURIComponent(id)}`)).persona;
 }
 
-async function openPersona(id: string, flash = ""): Promise<void> {
+async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
     if (seq !== viewSeq || appState.currentView !== "personas") return;
-    showPersonaDetail(persona, flash);
+    showPersonaDetail(persona, flash, opts.push);
   } catch (e) {
     if (seq !== viewSeq) return;
-    notice = errMessage(e, "Couldn't open that persona.");
+    notice = errMessage(e, "Couldn't open that bot.");
     drawPersonasPage();
   }
 }
@@ -383,7 +389,7 @@ function granteeLabel(scopeId: string): string {
   return scopeId;
 }
 
-const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
+const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === appState.me?.personalScope;
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
@@ -395,8 +401,8 @@ const LAST_OWNER = "The only owner. Make someone else an owner before changing t
 
 function flagOffNote(grant: PersonaGrant): string {
   return grant.scopeId.startsWith("personal:")
-    ? "Can't use personas until an admin turns on the Personas feature flag for them in Admin → Customize → Feature flags."
-    : "Personas is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
+    ? "Can't use bots until an admin turns on the Bots feature flag for them in Admin → Customize → Feature flags."
+    : "Bots is off for the organization, so only people with the flag on can use this. An admin can turn it on for everyone in Admin → Customize → Feature flags.";
 }
 
 function accessRowTpl(persona: PersonaDetail, grant: PersonaGrant, lastOwner: boolean): TemplateResult {
@@ -487,7 +493,7 @@ function skillsSection(persona: PersonaDetail): TemplateResult {
       ${rowAction(
         "Ask QM",
         Sparkles,
-        () => void chatWithPrompt(persona, `Write a skill for the ${persona.name} persona that `),
+        () => void chatWithPrompt(persona, `Write a skill for the ${persona.name} bot that `),
       )}`
     : nothing;
   const body = persona.skills?.length
@@ -584,7 +590,7 @@ function channelsSection(persona: PersonaDetail): TemplateResult {
     "Channels and groups",
     owner ? rowAction("Add channel", Plus, () => void openGranteePicker(persona.id, "channels")) : nothing,
     html`${list}${flagNote}${granteePickerTpl(persona, "channels")}`,
-    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon.`,
+    `People in these channels and groups can ask QM to use ${persona.name} in a thread there; they can't edit ${persona.name}. Pin it in one to make every conversation there ${persona.name}; in Slack it posts under its name and icon. Pinned channels and groups share one memory: what QM remembers in one, it recalls wherever ${persona.name} is used.`,
   );
 }
 
@@ -849,7 +855,7 @@ async function openGranteePicker(personaId: string, kind: PickerKind): Promise<v
   picker = { personaId, kind, query: "", people: [], channels: [], searching: false, searched: false, error: "" };
   const shown = appState.mainEl?.firstElementChild;
   if (shown instanceof HTMLElement && shown.dataset.persona === personaId) redrawDetail();
-  else await openPersona(personaId);
+  else await openPersona(personaId, "", { push: true });
   focusPicker();
 }
 
@@ -883,7 +889,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
   const current = picker;
   if (current?.personaId !== persona.id || current.kind !== kind || !canSharePersona(persona.role)) return nothing;
   const granted = new Set(persona.access.map((grant) => grant.scopeId));
-  const people = current.people.filter((person) => !granted.has(`personal:${person.principalId}`));
+  const people = current.people.filter((person) => !granted.has(person.scopeId));
   const channels = current.channels.filter((channel) => !granted.has(channel.scopeId));
   const orgScope = `org:${appState.me?.org ?? ""}`;
   const saving = busyId !== null;
@@ -931,11 +937,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
     </div>
     ${
       kind === "people"
-        ? peopleResults(
-            people,
-            saving,
-            (person) => void addGrantee(persona, `personal:${person.principalId}`, person.displayName),
-          )
+        ? peopleResults(people, saving, (person) => void addGrantee(persona, person.scopeId, person.displayName))
         : html`<div class="project-member-results">
             ${channels.map(
               (channel) =>
@@ -1004,7 +1006,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
       setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
       await openPersona(saved.persona.id, persona ? "Saved." : "");
     } catch (err) {
-      state.error = errMessage(err, "Couldn't save this persona.");
+      state.error = errMessage(err, "Couldn't save this bot.");
       state.saving = false;
       redraw();
     }
@@ -1020,7 +1022,7 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
         return null;
       },
     });
-  const submitLabel = persona ? "Save" : "Create persona";
+  const submitLabel = persona ? "Save" : "Create bot";
   return html`
     <form class="resource-form persona-form" @submit=${submit}>
       <div class="persona-form-identity">
@@ -1058,12 +1060,14 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
 function showNewPersonaForm(): void {
   const host = paneHost();
   if (!host) return;
+  resetContextModel();
+  resetPersonaSlack();
   const state: FormState = { icon: null, iconChanged: false, error: "", saving: false };
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
-        ${listBackLink("Personas", backToList)}
-        <h2>New persona</h2>
+        ${listBackLink("Bots", backToList)}
+        <h2>New bot</h2>
         ${personaFormTpl(null, state, draw)}
       </div>`,
       host,
@@ -1072,17 +1076,18 @@ function showNewPersonaForm(): void {
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
-function showPersonaDetail(persona: PersonaDetail, flash: string): void {
+function showPersonaDetail(persona: PersonaDetail, flash: string, push = false): void {
   const host = paneHost(persona.id);
   if (!host) return;
-  syncPersonaUrl(persona.id);
+  syncPersonaUrl(persona.id, push);
   actionError = "";
   const state: FormState = { icon: persona.icon ?? null, iconChanged: false, error: "", saving: false };
   const editable = canEditPersona(persona.role);
+  const canManageSlack = persona.role === "owner" || can("admin") || can("owner");
   const draw = () =>
     render(
       html`<div class="resource-detail persona-detail">
-        ${listBackLink("Personas", backToList)}
+        ${listBackLink("Bots", backToList)}
         <div class="resource-heading">
           <h2 class="persona-heading">
             <span class="persona-icon">${personaIconTpl(persona.icon, 22)}</span><span dir="auto">${persona.name}</span>
@@ -1112,6 +1117,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
               `
         }
         ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
+        ${canManageSlack ? personaSlackSection(persona.id, draw) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
@@ -1119,6 +1125,9 @@ function showPersonaDetail(persona: PersonaDetail, flash: string): void {
   redrawDetail = draw;
   draw();
   if (editable) void loadContextModel(`persona:${persona.id}`, draw);
+  else resetContextModel();
+  if (canManageSlack) void loadPersonaSlack(persona.id, draw);
+  else resetPersonaSlack();
 }
 
 async function deletePersona(persona: PersonaView): Promise<void> {
@@ -1136,7 +1145,7 @@ async function deletePersona(persona: PersonaView): Promise<void> {
 }
 
 export function personaName(personaId: string): string {
-  return personasState.list.find((p) => p.id === personaId)?.name ?? "Persona";
+  return personasState.list.find((p) => p.id === personaId)?.name ?? "Bot";
 }
 
 export function sessionPersonaChip(
@@ -1151,7 +1160,7 @@ export function sessionPersonaChip(
       class="session-persona-open"
       type="button"
       aria-label=${`View ${name}`}
-      ${tip(`Chatting as ${name}. Open persona`)}
+      ${tip(`Chatting as ${name}. Open bot`)}
       @pointerdown=${(e: Event) => e.stopPropagation()}
       @click=${(e: Event) => {
         e.stopPropagation();

@@ -496,6 +496,7 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     for (const m of skillMounts(ctx)) args.push("-v", m);
     if (localSandboxActive(ctx.config)) {
       const socket = hostDockerSocket();
+      args.push("--sysctl", "net.ipv4.ip_forward=0");
       args.push("-v", `${socket.path}:/var/run/docker.sock`);
       if (socket.gid) args.push("--group-add", socket.gid);
     }

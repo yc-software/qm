@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -142,7 +143,7 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
     });
     const shared = maps(pgA);
     const other = maps(pgB);
-    await shared.defaults.put("personal:cleared", { sandboxId: null });
+    await shared.defaults.put(personalScope("cleared"), { sandboxId: null });
     const entered = Promise.withResolvers<void>();
     let calls = 0;
     const first = upgradeLegacySandboxes({
@@ -160,19 +161,19 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
       lock: createPostgresAdvisoryLock(pgB, { pollMs: 10 }),
       legacyScopes: async () => {
         calls++;
-        return ["personal:late"];
+        return [personalScope("late")];
       },
     });
-    await shared.defaults.put("personal:old", { sandboxId: "newer" });
-    release.resolve(["personal:old", "personal:cleared", "personal:adopted"]);
+    await shared.defaults.put(personalScope("old"), { sandboxId: "newer" });
+    release.resolve([personalScope("old"), personalScope("cleared"), personalScope("adopted")]);
     await Promise.all([first, second]);
     assert.equal(calls, 1);
-    assert.deepEqual(await shared.defaults.get("personal:old"), { sandboxId: "newer" });
-    assert.equal(await shared.defaults.get("personal:late"), null);
-    assert.deepEqual(await other.defaults.get("personal:cleared"), { sandboxId: null });
-    const adopted = await other.defaults.get("personal:adopted");
+    assert.deepEqual(await shared.defaults.get(personalScope("old")), { sandboxId: "newer" });
+    assert.equal(await shared.defaults.get(personalScope("late")), null);
+    assert.deepEqual(await other.defaults.get(personalScope("cleared")), { sandboxId: null });
+    const adopted = await other.defaults.get(personalScope("adopted"));
     assert.ok(adopted?.sandboxId);
-    assert.equal((await other.records.get(adopted.sandboxId))?.backingScopeId, "personal:adopted");
+    assert.equal((await other.records.get(adopted.sandboxId))?.backingScopeId, personalScope("adopted"));
     await upgradeLegacySandboxes({
       ...other,
       lock: createPostgresAdvisoryLock(pgB),

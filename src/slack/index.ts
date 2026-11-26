@@ -281,7 +281,14 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
+  const approvals = createApprovals({
+    core,
+    flow,
+    directory,
+    threads,
+    externalAccess: !!cfg.externalAccess,
+    ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
+  });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   registerDeployAccessActions(app, { core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
@@ -329,6 +336,8 @@ export async function startSlackPlugin(
     rejectRateLimitedCalls: true,
   });
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
+  const statusCard = (channel: string, threadTs: string) =>
+    core.sessionStatus?.card(statusClient, statusAccount(), channel, threadTs);
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
     statusSync ??= Promise.all([
@@ -350,11 +359,13 @@ export async function startSlackPlugin(
   const statusSweep = createSweeper(reconcileStatus, 5_000, { label: "slack session status", immediate: true });
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
+    ...(cfg.personaId ? { personaId: cfg.personaId } : {}),
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
-    onEngaged: (runId, channel, threadTs, emoji) => {
+    continuePrivate: (runId, task) =>
+      continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
+    onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
-        ?.start(statusClient, statusAccount(), runId, channel, threadTs, emoji)
+        ?.start(statusClient, statusAccount(), runId, channel, threadTs)
         .catch(swallowAs("slack: session status start", undefined))
         .finally(() => {
           void reconcileStatus();
@@ -363,6 +374,7 @@ export async function startSlackPlugin(
     onSettled: () => {
       void reconcileStatus();
     },
+    card: statusCard,
     rateLimitNotice,
     readHistory,
     core,
@@ -380,6 +392,7 @@ export async function startSlackPlugin(
     ...(devIntrospection ? { markEvent: () => devIntrospection.markEvent() } : {}),
     botToken: BOT_TOKEN,
     ...(TRUSTED_FILE_HOST ? { trustedFileHost: TRUSTED_FILE_HOST } : {}),
+    ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
     ensureHeader,
   });
   approvals.registerActions(app);
@@ -452,12 +465,14 @@ export async function startSlackPlugin(
       const account = slackAccountClients().get(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
     },
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
+    continuePrivate: (runId, task) =>
+      continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
     core,
     flow,
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
+    card: statusCard,
   });
 
   let auth: AuthTestResponse;

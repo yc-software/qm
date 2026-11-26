@@ -13,6 +13,7 @@ import { assertLateJoinerScopes, assertLeanListing } from "./support/participant
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
@@ -22,11 +23,15 @@ test("participantScopes counts sessions whose content predates the participant",
   await assertLateJoinerScopes(createPostgresSessionStore(testDatabaseUrl()), "mem");
 });
 
-test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag", async () => {
+test("GET /v1/sessions rows carry no spawn metadata or entry flag", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "lean-list-")) }));
-  const child = await built.sessions.getOrCreateByThread("subagent:root:2", "dm", "personal:U1", undefined, "web", [
-    { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
-  ]);
+  const child = await built.sessions.getOrCreateByThread(
+    "subagent:root:2",
+    "dm",
+    personalScope("U1"),
+    undefined,
+    "web",
+  );
   await built.sessions.setSpawnMeta(child.id, {
     surface: "web",
     conversation: { kind: "dm", threadRef: "web:U1:root", audience: [] },
@@ -43,7 +48,7 @@ test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag"
     const row = body.sessions.find((session) => session.id === child.id);
     assert.ok(row);
     assert.equal(row.title, "Research task");
-    for (const field of ["spawnMeta", "clientTools", "hasEntries"]) assert.equal(field in row, false, field);
+    for (const field of ["spawnMeta", "hasEntries"]) assert.equal(field in row, false, field);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await built.runtime.stop();

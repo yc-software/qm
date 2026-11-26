@@ -5,6 +5,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
+import { claudeSubscriptionHeaders } from "../src/model/claude-subscription.ts";
 
 const SUBSCRIPTION_TOKEN = "sk-ant-oat01-personal-e2e";
 
@@ -93,6 +94,7 @@ async function assertSubscriptionTurn(built: ReturnType<typeof buildApp>, seen: 
     assert.equal(call.headers.get("authorization"), `Bearer ${token}`);
     assert.equal(call.headers.get("x-api-key"), null, "no API key header rides along");
     assert.match(call.headers.get("anthropic-beta") ?? "", /oauth-2025-04-20/);
+    assert.equal(call.headers.get("user-agent"), claudeSubscriptionHeaders(token)?.["user-agent"]);
     assert.match(JSON.stringify(call.body.system), /You are Claude Code/);
   }
   const session = await built.sessions.getByThread(finished.sessionId);

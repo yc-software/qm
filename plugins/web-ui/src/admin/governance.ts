@@ -621,10 +621,10 @@ function review(key: string, body: Record<string, any>) {
     const open = body.posture === "open";
     return reviewChange({
       title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
-      subtitle: "This applies to future live human turns in the selected scope.",
+      subtitle: "This applies to future turns in the selected scope.",
       facts,
       warning: open
-        ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
+        ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, or another person's resources. Organization, personal, and room policy must all allow it."
         : "Cross-context resources will again require explicit shares or grants.",
       confirmLabel: open ? "Enable Open" : "Use Isolated",
       danger: open,
@@ -705,7 +705,7 @@ export async function mount(next: AdminPage) {
   const token = ++generation;
   if (scope !== loadedScope) failure = "";
   draw();
-  if (!orgScope() && !labels)
+  if (!orgScope() && !labels && page.fullAdmin)
     void page.api("GET", "/api/scopes").then((r) => {
       if (!r.ok) return;
       labels = Object.fromEntries((r.data.scopes || []).map((row: any) => [row.scopeId, row.label || ""]));

@@ -2,10 +2,11 @@ import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { isObj, livePersonTurn } from "./shared.ts";
-import { scopeId } from "../../types.ts";
+import { isObj, requirePersonAuthority } from "./shared.ts";
+import { scopeId, scopeLabel } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { isArtifactType, personAtKeyboard, type ArtifactType } from "../artifact-share.ts";
+import { isArtifactType, type ArtifactType } from "../artifact-share.ts";
+import { actionApproved, routeSignOff } from "../action-approval.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
@@ -14,7 +15,6 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   external_sharing_disabled: 403,
   public_links_unavailable: 409,
   unknown_connector: 400,
-  human_consent_required: 403,
 };
 
 export const SHARE_ERROR_STATUS: Record<string, number> = {
@@ -23,6 +23,7 @@ export const SHARE_ERROR_STATUS: Record<string, number> = {
   recipient_not_found: 404,
   ambiguous_recipient: 409,
   share_failed: 400,
+  approval_required: 202,
 };
 
 export function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
@@ -35,14 +36,21 @@ function claimsOf(ctx: ApiCtx): CapabilityClaims | null {
   if (ctx.capability) return ctx.capability;
   const person = ctx.actor;
   return person
-    ? { actorId: person.p, scopeId: scopeId("personal", person.p), exp: person.exp, liveActor: true }
+    ? {
+        actorId: person.p,
+        scopeId: scopeId("personal", person.p),
+        exp: person.exp,
+        internalAudience: true,
+        personAuthority: true,
+      }
     : null;
 }
 
 async function shareView(ctx: ApiCtx, type: ArtifactType, id: string, claims: CapabilityClaims) {
   const r = await ctx.deps.control.shareAccess(type, id, claims, tenantOf(ctx));
   if (!r.ok) return r;
-  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access };
+  const labels = Object.fromEntries([r.owner, ...r.access.map((g) => g.scope)].map((s) => [s, scopeLabel(s)]));
+  const view = { ok: true as const, owner: r.owner, offers: r.offers, grantees: r.access, labels };
   if (type !== "deploy") return view;
   const externalSharing = await externalAppSharingAllowed(ctx.deps.featureFlags, r.owner);
   return { ...view, public: (await ctx.app.getApp(r.id))?.public === true && externalSharing, externalSharing };
@@ -72,7 +80,7 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
     });
   if (!isArtifactType(params.type!)) return sendJson(res, 404, { error: "not_found" });
   const type = params.type;
-  if (type === "deploy" && !livePersonTurn(ctx)) return;
+  if (type === "deploy" && !requirePersonAuthority(ctx)) return;
   const b = (isObj(body) ? body : {}) as Record<string, unknown>;
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
@@ -86,15 +94,13 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
         error: "bad_request",
         message: "public access and person/scope access must be changed separately",
       });
+    const { signOff, held } = routeSignOff(ctx);
     try {
-      await app.setAppPublic(params.id!, b.public, {
-        createdBy: claims.actorId,
-        botActor: claims.botActor,
-        personAtKeyboard: !ctx.capability || personAtKeyboard(ctx.capability),
-      });
+      await app.setAppPublic(params.id!, b.public, { createdBy: claims.actorId, botActor: claims.botActor, signOff });
     } catch (e) {
       return sendShareFailure(res, e);
     }
+    if (held()) return;
     return sendView(ctx, await shareView(ctx, type, params.id!, claims));
   }
   for (const field of ["scope", "recipient", "email"] as const)
@@ -114,7 +120,9 @@ export async function changeShares(ctx: ApiCtx): Promise<void> {
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
     claims,
+    ({ summary }) => actionApproved(ctx, { summary }),
   );
+  if (res.writableEnded) return;
   if (!r.ok)
     return sendJson(res, SHARE_ERROR_STATUS[r.code] ?? 400, {
       error: r.code,

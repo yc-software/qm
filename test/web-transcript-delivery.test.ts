@@ -15,9 +15,10 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { personalScope } from "../src/types.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
-const SCOPE = "personal:alice@example.com" as ScopeId;
+const SCOPE = personalScope("alice@example.com") as ScopeId;
 
 const cronProvenance = (over: Partial<DeliveryProvenance> = {}): DeliveryProvenance => ({
   trigger: "cron",
@@ -26,6 +27,7 @@ const cronProvenance = (over: Partial<DeliveryProvenance> = {}): DeliveryProvena
   sourceScopeId: SCOPE,
   sourceThreadRef: "agent:main:cron:c1",
   sourceSessionId: "cron-session",
+  sourceId: "c1",
   ...over,
 });
 
@@ -74,7 +76,7 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
         variant: null,
         text: "Reminder: standup in 10 minutes",
         turnId: drained[0]!.id,
-        body: { via: "cron" },
+        body: { via: "cron", sourceId: "c1" },
       },
     ],
   );
@@ -82,6 +84,50 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
   assert.equal(messages.at(-1)!.role, "user");
   assert.match(JSON.stringify(messages), /<message from=\\"agent\\" via=\\"cron\\">Reminder: standup in 10 minutes/);
   assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
+});
+
+test("a delivered post records the source's title and the id of the cron or webhook that sent it", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions);
+
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "digest",
+    idempotencyKey: "agent:main:cron:c1:150",
+    provenance: cronProvenance({ fireKey: "agent:main:cron:c1:150", sourceTitle: " Gmail unread digest " }),
+  });
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "hook fired",
+    idempotencyKey: "webhook:w1:1",
+    provenance: cronProvenance({
+      trigger: "webhook",
+      surface: "webhook",
+      fireKey: "webhook:w1:1",
+      sourceThreadRef: "webhook:w1:1",
+      sourceId: "w1",
+    }),
+  });
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "monitor fired",
+    idempotencyKey: "monitor:m1:1",
+    provenance: cronProvenance({
+      trigger: "monitor",
+      surface: "monitor",
+      fireKey: "monitor:m1:1",
+      sourceThreadRef: "monitor:m1",
+      sourceId: undefined,
+    }),
+  });
+  await deliveries.pending("web");
+
+  const bodies = (await sessions.getItems(session.id)).map((e) => [e.text, e.body]);
+  assert.deepEqual(bodies.sort(), [
+    ["digest", { via: "cron", sourceTitle: "Gmail unread digest", sourceId: "c1" }],
+    ["hook fired", { via: "webhook", sourceId: "w1" }],
+    ["monitor fired", { via: "monitor" }],
+  ]);
 });
 
 test("the recorded entry renders through the transcript source", async () => {

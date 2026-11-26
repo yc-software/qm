@@ -31,6 +31,7 @@ export interface ConvHost {
   onDensityChange(handler: () => void): void;
   ensureDeliveryStream(): void;
   inbox?: { context(): AssistantSidebarContext };
+  composerOnly?: boolean;
   onState?(state: PaneState): void;
   onExpand?(): void;
 }
@@ -46,6 +47,7 @@ interface ChatState {
   normalStreamFn: Agent["streamFn"] | null;
   host: HTMLElement | null;
   threadRef: string | null;
+  ephemeral: boolean;
   sessionId: string | null;
   scopeId: string | null;
   contextName: string | null;
@@ -55,6 +57,7 @@ interface ChatState {
   rememberedContextName: string | null;
   pendingSend: string | null;
   resolvingApprovals: Set<string>;
+  declineApprovalsOnSend: boolean;
   transcriptAnchorSeq: number | null;
   earlierCount: number;
   loadingEarlier: boolean;
@@ -77,6 +80,7 @@ export interface ChatSurface {
   currentTurnOptions(): TurnOptions;
   turnRuntime(): TurnRuntime | null;
   newChat(context?: { scopeId: string; name: string | null }, threadRef?: string): string;
+  newTemporaryChat(): string;
   teardown(): void;
   resetChatState(): void;
   mountContinuable(
@@ -107,8 +111,7 @@ export interface ChatSurface {
   setTurnRuntime(runtime: TurnRuntime | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
-  resolveCommandApproval(decision: ApprovalDecision): void;
-  approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
+  resolveCommandApproval(decision: ApprovalDecision): Promise<void>;
   notePendingSessionOnSend(): void;
   syncPaneState(): void;
   onDelivery(threadRef: string): void;
@@ -121,6 +124,7 @@ export interface ChatSurface {
   mountReadOnlyPage(s: CoreSession, page: import("./core-bridge").TranscriptPage): void;
   transcriptAnchor(): number | null;
   resumeIfIdle(): void;
+  catchUp(): void;
   redraw(): void;
   dispose(): void;
 }
@@ -141,7 +145,11 @@ interface ComposerState {
 export type SteeringRun = QueuedRun & { attachments?: Attachment[] };
 
 export interface ComposerSurface {
-  composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
+  composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve?: (decision: ApprovalDecision) => void | Promise<void>,
+    docked?: boolean,
+  ): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;

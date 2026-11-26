@@ -22,6 +22,15 @@ struct ChatView: View {
   @State private var openedConversation: Conversation?
   @State private var startingSideChat = false
   @State private var followsLatest = true
+  // The bottom bar's height with the dictation panel closed, and how far the open panel
+  // rises above it. While dictating, the transcript's inset stays at the closed height and
+  // the transcript is lifted instead, so it moves on the panel's own spring.
+  @State private var restingBarHeight: CGFloat = 0
+  @State private var dictationLift: CGFloat = 0
+  // The last open panel's lift, so the next open can start moving the text on the tap
+  // instead of a layout pass later. The first open uses a typical panel height.
+  @State private var expectedDictationLift: CGFloat = 160
+  @State private var liftsTranscript = false
   @State private var previewingAttachment: UploadAttachment?
   @State private var stopping = false
   @State private var retryingHistory = false
@@ -29,7 +38,7 @@ struct ChatView: View {
   @State private var approvalSubmission: (id: String, approved: Bool)?
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
 
   init(
     model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
@@ -124,8 +133,27 @@ struct ChatView: View {
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        // Changing the inset re-anchors the transcript in one step while the panel springs
+        // open, which clipped the last message for a beat. Lifting it is drawn, not laid
+        // out, so it tracks the panel frame for frame.
+        .offset(y: liftsTranscript ? -dictationLift : 0)
+        .animation(reduceMotion ? nil : liftMotion, value: dictationLift)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
+            .fixedSize(horizontal: false, vertical: dictation.busy)
+            .onGeometryChange(for: CGFloat.self) {
+              $0.size.height
+            } action: { height in
+              if dictation.busy {
+                dictationLift = max(0, height - restingBarHeight)
+                expectedDictationLift = dictationLift
+              } else {
+                restingBarHeight = height
+                dictationLift = 0
+              }
+            }
+            // The open panel overflows upward from the closed bar's height.
+            .frame(height: dictation.busy ? restingBarHeight : nil, alignment: .bottom)
         }
       }
     }
@@ -174,13 +202,6 @@ struct ChatView: View {
         return
       }
       if expanded { composerFocused = false }
-    }
-    .onChange(of: dictation.completedText) { _, text in
-      if let text {
-        model.draft = NativeDictationModel.appending(text, to: model.draft)
-        model.saveDraft()
-        composerFocused = true
-      }
     }
     .background {
       DrawerOpenWatcher {
@@ -501,6 +522,8 @@ struct ChatView: View {
     let visible = inheritedExpanded ? inherited + current : current
     let sections = NativeChatTranscriptSection.grouped(
       visible, activeRunID: model.activeRunID, status: model.workStatus)
+    let slack =
+      model.conversation.surface == "slack" ? NativeSlackThreadLayout(messages) : nil
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
@@ -565,7 +588,7 @@ struct ChatView: View {
                 },
                 onInspect: { followsLatest = false })
             } else if let item = section.items.first {
-              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable, slack: slack)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -595,7 +618,8 @@ struct ChatView: View {
   }
 
   @ViewBuilder private func timelineRow(
-    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>
+    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>,
+    slack: NativeSlackThreadLayout?
   ) -> some View {
     switch item.content {
     case .message(let message):
@@ -607,7 +631,14 @@ struct ChatView: View {
           ? { Task { await fork(from: message.id) } } : nil,
         onAskAbout: !model.conversation.isSubagent && model.conversation.localOnly != true
           ? { message in Task { await askAbout(message) } } : nil,
-        forking: forkingMessageID == message.id, streaming: item.streaming
+        forking: forkingMessageID == message.id, streaming: item.streaming,
+        slack: slack.flatMap { slack in
+          NativeSlackThreadLayout.shows(message)
+            ? NativeSlackRowStyle(
+              continued: slack.continued.contains(message.id),
+              appIconURL: identity?.slackAppIconUrl.flatMap(URL.init(string:)))
+            : nil
+        }
       )
       .accessibilityIdentifier(item.streaming ? "streamingResponse" : "message-\(item.id)")
     case .work, .reasoning:
@@ -770,6 +801,20 @@ struct ChatView: View {
         .id(model.conversation.id)
       }
     }
+    // The composer grows into the dictation panel on one spring applied to the whole bar, so
+    // the chrome, the rows above it that hide while dictating, and the buttons all move in
+    // one transaction; animating only the composer let the bar snap and the buttons jump.
+    // Closing settles without bounce.
+    .animation(reduceMotion ? nil : barSpring, value: dictation.busy)
+  }
+
+  private var barSpring: Animation {
+    .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0)
+  }
+
+  /// The text leads the panel up so the last lines are never under it, and trails it down.
+  private var liftMotion: Animation {
+    dictation.busy ? .smooth(duration: 0.26) : .smooth(duration: 0.5)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -782,34 +827,63 @@ struct ChatView: View {
 
   private func composer(_ proxy: ScrollViewProxy) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      if dictation.busy {
-        NativeDictationComposer(model: dictation)
-      } else {
-        composerTextField
-        if let error = dictation.error {
-          NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
-            .padding(.horizontal, 8)
+      // Only the content above the button row swaps; bottom-aligned so the outgoing view
+      // stays on the row while the chrome resizes.
+      ZStack(alignment: .bottom) {
+        if dictation.busy {
+          NativeDictationComposer(model: dictation)
+            .transition(
+              .asymmetric(
+                insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
+        } else {
+          VStack(alignment: .leading, spacing: 6) {
+            composerTextField
+            if let error = dictation.error {
+              NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
+                .padding(.horizontal, 8)
+            }
+            if model.uploading, let uploadingName = model.uploadingName {
+              NativeChatUploadStatus(filename: uploadingName)
+                .padding(.horizontal, 8)
+            }
+          }
+          .transition(.opacity)
         }
-        if model.uploading, let uploadingName = model.uploadingName {
-          NativeChatUploadStatus(filename: uploadingName)
-            .padding(.horizontal, 8)
-        }
-        HStack(spacing: 6) {
+      }
+      // One button row for both states, so the plus becomes ✕ and send stays send in exactly
+      // the same spots instead of two rows crossfading while the chrome resizes.
+      HStack(spacing: 6) {
+        if dictation.busy {
+          NativeDictationDiscardButton(model: dictation)
+            .transition(.opacity)
+        } else {
           AttachmentPicker(
             uploading: model.uploading, error: $model.error, onSelect: model.addAttachments
-          ).disabled(model.sending)
-          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact { modelSelector }
-          Spacer(minLength: 0)
+          )
+          .disabled(model.sending)
+          .transition(.opacity)
+          if !dynamicTypeSize.isAccessibilitySize || verticalSizeClass == .compact {
+            modelSelector.transition(.opacity)
+          }
+        }
+        Spacer(minLength: 0)
+        if dictation.busy {
+          NativeDictationSendButton(model: dictation)
+            .transition(.opacity)
+        } else {
           Button {
             composerFocused = false
+            liftsTranscript = followsLatest
+            dictationLift = expectedDictationLift
             dictation.start()
           } label: {
             Image(systemName: "mic")
-              .font(.system(size: 21)).frame(width: 44, height: 44)
+              .font(.system(size: 18)).frame(width: 44, height: 44)
               .foregroundStyle(QMTheme.ink)
           }
           .accessibilityLabel("Dictate message")
           .disabled(model.sending)
+          .transition(.opacity)
           if model.activeRunID != nil,
             model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             model.attachments.isEmpty
@@ -823,8 +897,10 @@ struct ChatView: View {
                 .foregroundStyle(QMTheme.paper)
                 .frame(width: 44, height: 44)
                 .background(QMTheme.ink, in: Circle())
-            }.accessibilityLabel(stopping ? "Stopping response" : "Stop response")
-              .disabled(stopping)
+            }
+            .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
+            .disabled(stopping)
+            .transition(.opacity)
           } else {
             Button {
               send(proxy)
@@ -834,27 +910,50 @@ struct ChatView: View {
             }
             .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
             .disabled(!canSend)
+            .transition(.opacity)
           }
         }
-        if dynamicTypeSize.isAccessibilitySize && verticalSizeClass != .compact { modelSelector }
+      }
+      if !dictation.busy, dynamicTypeSize.isAccessibilitySize, verticalSizeClass != .compact {
+        modelSelector
       }
     }
     .padding(8)
+    // Behind the content but above the composer fill, so the glow tints the panel from its
+    // edges inward without covering the text.
+    .background {
+      if dictation.busy { NativeDictationGlow(model: dictation) }
+    }
     .composerChrome()
+    // A soft tap as the panel opens, matching the drawer's haptic.
+    .sensoryFeedback(trigger: dictation.busy) { _, open in
+      open ? .impact(flexibility: .soft, intensity: 0.7) : nil
+    }
+    // Dictated text joins the draft; the send button also sends it, while tapping the
+    // transcript leaves it in the field to edit.
+    .onChange(of: dictation.completedText) { _, text in
+      guard let text else { return }
+      model.draft = NativeDictationModel.appending(text, to: model.draft)
+      model.saveDraft()
+      if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
+    }
   }
 
   private var composerTextField: some View {
-    TextField(
-      model.activeRunID == nil ? "Message QM" : "Queue a message", text: $model.draft,
-      axis: .vertical
+    let placeholder = model.activeRunID == nil ? "Message QM" : "Queue a message"
+    return ComposerField(
+      text: $model.draft, focused: $composerFocused, placeholder: placeholder,
+      maxLines: verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8,
+      onPasteImages: model.addAttachments
     )
-    .lineLimit(
-      1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
-    )
+    .overlay(alignment: .topLeading) {
+      if model.draft.isEmpty {
+        Text(placeholder).foregroundStyle(Color(uiColor: .placeholderText))
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+    }
     .padding(.horizontal, 8).padding(.top, 8)
-    .focused($composerFocused)
     .disabled(model.sending)
-    .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {
@@ -862,21 +961,16 @@ struct ChatView: View {
       showingRuntime = true
     } label: {
       HStack(spacing: 5) {
+        if let configuration = model.runtimeConfiguration, let runtime = model.effectiveRuntime {
+          ModelLogo(provider: ModelBrand.provider(runtime.modelId, configuration), size: 20)
+        }
         Text(model.runtimeLabel).lineLimit(1)
         Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
       }
       .font(.footnote.weight(.medium))
       .padding(.horizontal, 8).frame(minHeight: 44)
     }
-    .popover(isPresented: $showingRuntime, arrowEdge: .bottom) {
-      NavigationStack {
-        RuntimeControlsView(
-          client: model.client, scopeID: model.conversation.scopeId, showsCancel: true,
-          selected: model.runtimeSelection, onSelect: model.selectRuntime)
-      }
-      .frame(width: 340, height: 390)
-      .presentationCompactAdaptation(.popover)
-    }
+    .modelPicker(isPresented: $showingRuntime, model: model)
     .accessibilityLabel("Model and effort: \(model.runtimeLabel)")
     .accessibilityValue(model.runtimeDetail ?? "Workspace default")
     .disabled(model.sending)

@@ -99,13 +99,12 @@ async function fixture(t: TestContext) {
               files: {
                 files: materialized.files,
                 save: (updated: CredentialFile[]) =>
-                  keychain.updateFiles({ ...materialized, writeback: true, live: true }, updated),
+                  keychain.updateFiles({ ...materialized, writeback: true }, updated),
                 source: {
                   credentialId: materialized.credentialId,
                   ownerId: owner,
                   service: "aws",
                   writeback: true,
-                  live: true,
                 },
               },
             };
@@ -232,7 +231,7 @@ const savedFiles = async (f: Awaited<ReturnType<typeof fixture>>) => {
 const startCommand = async (f: Awaited<ReturnType<typeof fixture>>) => {
   const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (m.kind !== "file") throw new Error("Expected files");
-  return { ...m, writeback: true, live: true };
+  return { ...m, writeback: true };
 };
 
 test("a conflict with no readable expiry keeps the first save and leaves grants alone", async (t) => {
@@ -376,10 +375,10 @@ test("refreshes made through a use grant never change the owner's saved login", 
 test("an execution sweeps only stale credential directories", async (t) => {
   const f = await fixture(t);
   const stale = await prepareExecutionFiles(f.sandbox, f.handle, [
-    { files: files("stale"), save: async () => ({ overruled: [], withheld: [] }) },
+    { files: files("stale"), save: async () => ({ overruled: [] }) },
   ]);
   const live = await prepareExecutionFiles(f.sandbox, f.handle, [
-    { files: files("live"), save: async () => ({ overruled: [], withheld: [] }) },
+    { files: files("live"), save: async () => ({ overruled: [] }) },
   ]);
   const staleDir = stale.env.HOME!.replace(/\/home$/, "");
   await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
@@ -600,7 +599,7 @@ test("a background job that changed nothing leaves other commands' saves alone",
   assert.equal(await savedValue(f), "saved-meanwhile");
 });
 
-test("an unattended command saves only token cache refreshes and says why it kept each other change", async (t) => {
+test("a command saves a whole re-login, new files included", async (t) => {
   const f = await fixture(t);
   const m = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (m.kind !== "file") throw new Error("Expected files");
@@ -612,11 +611,8 @@ test("an unattended command saves only token cache refreshes and says why it kep
     .execute('printf new > "$HOME/.aws/config"; printf changed > "$HOME/.aws/sso/cache/session.json"', {
       credentials: ["aws"],
     });
-  assert.match(
-    result.stderr,
-    /could not save its changes to \.aws\/config \(a new file\), \.aws\/sso\/cache\/session\.json \(unreadable\)/,
-  );
-  assert.equal(await savedValue(f), "original");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(await savedFiles(f), { ".aws/config": "new", ".aws/sso/cache/session.json": "changed" });
 });
 
 test("a command whose change loses a conflict says so on stderr", async (t) => {

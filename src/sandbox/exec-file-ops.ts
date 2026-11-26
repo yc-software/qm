@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
-import { swallow, swallowAs } from "../util/errors.ts";
+import { swallowAs } from "../util/errors.ts";
 import { makeTar, parseTar } from "./tar.ts";
 import { DISPLACED_DIR_REL } from "../credentials/resident-paths.ts";
 import { proxyExportPrefix } from "./sandbox-env.ts";
@@ -19,6 +19,7 @@ import {
   type StageOptions,
 } from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
+import { personalScope } from "../types.ts";
 
 export const tempPathBeside = (absPath: string): string =>
   posix.join(posix.dirname(absPath), `.qm-${randomBytes(8).toString("hex")}`);
@@ -42,7 +43,6 @@ export function posixJoin(base: string, rel: string): string {
 
 export interface ExecFileOpsDeps {
   label: string;
-  combineRemoveAndList?: boolean;
   exec(id: string, script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
   writeInline(id: string, abs: string, data: Uint8Array, label: string): Promise<void>;
 }
@@ -54,13 +54,12 @@ export interface ExecFileOps {
   ): Promise<void>;
   listDir(handle: SandboxHandle, relDir: string): Promise<string[]>;
   removeDir(handle: SandboxHandle, relDir: string): Promise<void>;
-  removeDirAndList?(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]>;
 }
 
 const listFilesScript = (rootDir: string, rel: string): string =>
   `cd ${shq(rootDir)} 2>/dev/null && [ -e ${shq(rel)} ] || exit 0; find ${shq(rel)} -type f`;
 
-export function createExecFileOps({ label, exec, writeInline, combineRemoveAndList }: ExecFileOpsDeps): ExecFileOps {
+export function createExecFileOps({ label, exec, writeInline }: ExecFileOpsDeps): ExecFileOps {
   return {
     async importFiles(handle, entries): Promise<void> {
       const list = [...entries];
@@ -88,26 +87,6 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
         .filter(Boolean);
     },
 
-    ...(combineRemoveAndList
-      ? {
-          async removeDirAndList(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]> {
-            const remove = workspaceRel(removeRelDir);
-            const prep = remove ? `rm -rf ${shq(posixJoin(handle.rootDir, remove))} || exit $?; ` : "";
-            const rel = workspaceRel(listRelDir) || ".";
-            const r = await exec(
-              handle.id,
-              `${prep}listing=$(${listFilesScript(handle.rootDir, rel)}) || echo "listing exited $?" >&2; printf '%s\\n' "$listing"; exit 0`,
-              60,
-            );
-            if (r.code !== 0) throw new Error(`${label} removeDir ${removeRelDir} failed: ${r.stderr}`);
-            if (r.stderr.trim()) swallow(`${label} list ${listRelDir}`, new Error(r.stderr.trim()));
-            return r.stdout
-              .split("\n")
-              .map((s) => s.trim().replace(/^\.\//, ""))
-              .filter(Boolean);
-          },
-        }
-      : {}),
     async removeDir(handle, relDir): Promise<void> {
       const rel = workspaceRel(relDir);
       if (!rel) return;
@@ -287,7 +266,7 @@ export function createBackendBlobStaging(
         {
           actorId: `${label}-sandbox`,
           aud: BLOB_TRANSFER_AUD,
-          scopeId: `personal:${label}-sandbox`,
+          scopeId: personalScope(`${label}-sandbox`),
           blob: grant,
           exp: Date.now() + (forTimeoutSec ?? STAGE_TIMEOUT_SEC) * 1000 + BLOB_TRANSFER_TTL_MS,
         },

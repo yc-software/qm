@@ -8,6 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
+import { personalScope } from "../src/types.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -22,7 +23,7 @@ async function setup() {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const get = async (user = "U1", scope = `personal:${user}`) => {
+  const get = async (user = "U1", scope = personalScope(user)) => {
     const response = await fetch(`${base}/v1/runtime-config?principalId=${user}&scopeId=${encodeURIComponent(scope)}`);
     assert.equal(response.status, 200);
     return response.json() as Promise<Snapshot>;
@@ -31,7 +32,7 @@ async function setup() {
     fetch(`${base}/v1/runtime-config`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", scopeId: "personal:U1", ...choice }),
+      body: JSON.stringify({ principalId: "U1", scopeId: personalScope("U1"), ...choice }),
     });
   return { built, get, put, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
@@ -99,7 +100,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     ]);
     assert.ok((await s.get("U1", "group:room")).models.includes("gpt-5.6-terra"));
     assert.ok(!(await s.get("U2", "group:room")).models.includes("gpt-5.6-terra"));
-    await s.built.config.setRuntimeSelection("personal:U1", { modelId: "gpt-5.6-terra" });
+    await s.built.config.setRuntimeSelection(personalScope("U1"), { modelId: "gpt-5.6-terra" });
     await s.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
     assert.ok(!(await s.get()).models.includes("gpt-5.6-terra"));
     assert.equal((await s.put({ modelId: "gpt-5.6-terra" })).status, 400);

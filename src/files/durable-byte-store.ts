@@ -26,6 +26,11 @@ interface PutBytesResult {
   sha256: string;
 }
 
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
 interface OpenBytes {
   sizeBytes: number;
   stream: Readable;
@@ -37,7 +42,7 @@ interface PutBytesOptions {
 
 export interface DurableByteStore {
   put(source: ByteSource, opts?: PutBytesOptions): Promise<PutBytesResult>;
-  open(blobKey: string): Promise<OpenBytes | null>;
+  open(blobKey: string, range?: ByteRange): Promise<OpenBytes | null>;
   delete(blobKey: string): Promise<void>;
 }
 
@@ -67,10 +72,10 @@ export function createMemoryDurableByteStore(): DurableByteStore {
       if (!blobs.has(blobKey)) blobs.set(blobKey, data);
       return { blobKey, sizeBytes: data.length, sha256 };
     },
-    async open(blobKey) {
+    async open(blobKey, range) {
       const hit = blobs.get(blobKey);
       if (!hit) return null;
-      return { sizeBytes: hit.length, stream: Readable.from(hit) };
+      return { sizeBytes: hit.length, stream: Readable.from(range ? hit.subarray(range.start, range.end + 1) : hit) };
     },
     async delete(blobKey) {
       blobs.delete(blobKey);
@@ -96,7 +101,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
       }
     },
 
-    async open(blobKey) {
+    async open(blobKey, range) {
       if (!BLOB_KEY.test(blobKey)) return null;
       const path = join(base, blobKey.slice("files/".length));
       let st;
@@ -107,7 +112,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
         throw err;
       }
       if (!st.isFile()) return null;
-      return { sizeBytes: st.size, stream: createReadStream(path) };
+      return { sizeBytes: st.size, stream: createReadStream(path, range) };
     },
 
     async delete(blobKey) {
@@ -193,20 +198,24 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
       }
     },
 
-    async open(blobKey) {
+    async open(blobKey, range) {
       if (!BLOB_KEY.test(blobKey)) return null;
-      let r: { Body?: unknown; ContentLength?: number };
+      let r: { Body?: unknown; ContentLength?: number; ContentRange?: string };
       try {
-        r = (await client.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key(blobKey) }))) as {
-          Body?: unknown;
-          ContentLength?: number;
-        };
+        r = (await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: s3Key(blobKey),
+            ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+          }),
+        )) as { Body?: unknown; ContentLength?: number; ContentRange?: string };
       } catch (err) {
         if (isNoSuchKey(err)) return null;
         throw err;
       }
       if (r.Body == null) return null;
-      return { sizeBytes: r.ContentLength ?? 0, stream: bodyToReadable(r.Body) };
+      const sizeBytes = r.ContentRange ? Number(r.ContentRange.split("/")[1]) : (r.ContentLength ?? 0);
+      return { sizeBytes, stream: bodyToReadable(r.Body) };
     },
 
     async delete(blobKey) {

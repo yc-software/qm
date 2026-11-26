@@ -1,4 +1,4 @@
-import type { AdminGrant } from "./admin-grant-store.ts";
+import { adminRoleRank, type AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import type { UserActivity, UserRecord } from "../identity/user-store.ts";
 
@@ -41,5 +41,7 @@ export function computeUsers({ roster, activity, grants }: UsersInput): AdminUse
         admin: adminStatusFromGrants(grants, user.principalId),
       };
     })
-    .sort((a, b) => Number(b.admin.isAdmin) - Number(a.admin.isAdmin) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0));
+    .sort(
+      (a, b) => adminRoleRank(b.admin.role) - adminRoleRank(a.admin.role) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0),
+    );
 }

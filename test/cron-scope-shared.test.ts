@@ -1,4 +1,3 @@
-import type { TurnOrigin } from "../src/types.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
@@ -9,9 +8,6 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
-
-const automationOrigin = (request?: { origin?: TurnOrigin }) =>
-  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const members = [
   { id: "U-carol", type: "internal" as const },
@@ -49,13 +45,12 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     });
     assert.equal(out.ran, true);
     const req = seen[0]!;
-    assert.equal(automationOrigin(req)?.useOwnerKeychain, true);
     assert.equal(req.actor.externalId, "U-carol");
     assert.equal(req.conversation.kind, "channel");
     assert.equal((await deps.deliveries.pending("slack")).length, 1);
   });
 
-  it("a webhook in a channel runs as its owner without their keychain", async () => {
+  it("a webhook in a channel runs as its owner", async () => {
     const { deps, seen } = captureDeps();
     await runTrigger(deps, {
       owner: "U-carol",
@@ -65,19 +60,6 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
       surface: "webhook",
     });
     assert.equal(seen[0]!.actor.externalId, "U-carol");
-    assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, undefined);
-  });
-
-  it("a personal cron does not need the union flag", async () => {
-    const { deps, seen } = captureDeps();
-    await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("personal", "U-carol"),
-      input: "x",
-      fireKey: "o1",
-      surface: "cron",
-    });
-    assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, undefined);
   });
 
   it("reports the owner as gone when a project's current roster no longer has them", async () => {
@@ -159,7 +141,6 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     });
     assert.equal(out.ran, true);
     assert.equal(seen[0]!.actor.externalId, "system:channel:C-eng");
-    assert.equal(automationOrigin(seen[0]!)?.useOwnerKeychain, undefined);
     assert.deepEqual(
       seen[0]!.conversation.audience?.map((member) => member.externalId),
       ["U3"],

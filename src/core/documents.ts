@@ -6,6 +6,7 @@ import { isOverheard, isUserItem, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { collectBytes } from "../util/bytes.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
 export const MAX_DOCUMENTS = 10;
@@ -87,13 +88,18 @@ export function isTextDocument(file: { name: string; mimeType?: string; mimetype
 }
 
 const DOCUMENT_BYTES_PER_TOKEN = 4;
+const PDF_PAGE_TOKENS = 3_000;
 
-export function estimateDocumentTokens(file: {
-  name: string;
-  mimeType?: string;
-  mimetype?: string;
-  sizeBytes: number;
-}): number {
+export function estimateDocumentTokens(
+  file: {
+    name: string;
+    mimeType?: string;
+    mimetype?: string;
+    sizeBytes: number;
+  },
+  pages?: number,
+): number {
+  if (pages && documentExtension(file) === "pdf") return pages * PDF_PAGE_TOKENS;
   const bytes = Number.isFinite(file.sizeBytes) && file.sizeBytes > 0 ? file.sizeBytes : 0;
   const expanded = isTextDocument(file) ? Math.min(bytes, MAX_DOCUMENT_TEXT_CHARS) : bytes;
   return Math.ceil(expanded / DOCUMENT_BYTES_PER_TOKEN);
@@ -186,9 +192,14 @@ export async function loadDocumentInputs(
       if (!artifact || !(await authorize(artifact)) || !artifact.sha256 || !isDocumentAttachment(artifact)) continue;
       const contentKey = JSON.stringify([artifact.sha256, artifact.name, artifact.mimetype]);
       if (loadedContent.has(contentKey)) continue;
-      const tokens = estimateDocumentTokens(artifact);
-      if (artifact.sizeBytes > remaining || documents.length >= maxDocuments || usedTokens + tokens > maxTokens) {
-        notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
+      const pdf = documentExtension(artifact) === "pdf";
+      const stub = () => notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
+      if (
+        artifact.sizeBytes > remaining ||
+        documents.length >= maxDocuments ||
+        (!pdf && usedTokens + estimateDocumentTokens(artifact) > maxTokens)
+      ) {
+        stub();
         continue;
       }
       const dataBase64 = await cachedArtifactData("document", artifact, async () => {
@@ -218,10 +229,20 @@ export async function loadDocumentInputs(
         return bytes.data.toString("base64");
       });
       if (dataBase64 === undefined) continue;
+      const document = { name: artifact.name, mimeType: artifact.mimetype, dataBase64, artifactId: artifact.id };
+      const pages = pdf
+        ? (await documentText(document, signal).catch(swallowAs(`documents: count pages of ${artifact.id}`, undefined)))
+            ?.pages
+        : undefined;
+      const tokens = estimateDocumentTokens(artifact, pages);
+      if (usedTokens + tokens > maxTokens) {
+        stub();
+        continue;
+      }
       remaining -= artifact.sizeBytes;
       usedTokens += tokens;
       loadedContent.add(contentKey);
-      documents.unshift({ name: artifact.name, mimeType: artifact.mimetype, dataBase64, artifactId: artifact.id });
+      documents.unshift(document);
     } catch {
       signal?.throwIfAborted();
       notices.push(`${meta.name}: document content is unavailable.`);
@@ -233,6 +254,7 @@ export async function loadDocumentInputs(
 export interface ExtractedDocumentText {
   text: string;
   truncated: boolean;
+  pages?: number;
 }
 
 const extracted = new WeakMap<DocumentInput, Promise<ExtractedDocumentText>>();
@@ -265,11 +287,15 @@ export function documentText(document: DocumentInput, signal?: AbortSignal): Pro
       }, 10_000);
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
-      worker.once("message", (result: { text?: string; truncated?: boolean; error?: string }) => {
+      worker.once("message", (result: { text?: string; truncated?: boolean; pages?: number; error?: string }) => {
         clearTimeout(timer);
         void worker.terminate();
         if (result.error) reject(new Error(result.error));
-        else resolve(boundedDocumentText(result.text ?? "", result.truncated === true));
+        else
+          resolve({
+            ...boundedDocumentText(result.text ?? "", result.truncated === true),
+            ...(result.pages ? { pages: result.pages } : {}),
+          });
       });
       worker.once("error", (error) => {
         clearTimeout(timer);

@@ -4,8 +4,8 @@
 
 A persona is a reusable agent — a name, icon, description and instructions, plus skills,
 notes and credentials — that people can use in any conversation. The conversation still
-decides **who is in the room and where writes land**; the persona decides **how the agent
-behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
+decides **who is in the room and where writes land**, except memory in a room that pins the
+persona ([Turns](#turns)); the persona decides **how the agent behaves and what it brings**. A persona is a scope, `persona:<id>`, that a conversation
 _wears_ rather than one it _lives in_.
 
 ## Storage
@@ -52,10 +52,10 @@ one is refused until the first is unpinned. Removing the channel's grant unpins 
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
-write. Only an owner can attach a credential, only their own, and only on a turn they
-sent that is still running; readers use it through the persona but never hold it.
-Detaching a credential, changing who holds a role and deleting the persona also take an
-owner, on a turn they sent that is still running.
+write. Only an owner can attach a credential, only their own, and attaching one raises an
+approval card to them; readers use it through the persona but never hold it. Detaching a
+credential and changing who holds a role also take an owner; deleting the persona takes an
+owner and their approval card.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named
@@ -79,11 +79,33 @@ if the sender holds a role on the persona (counting the conversation's channel),
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
 - adds a `## Persona` block after the organization and conversation instructions.
 
-If the sender has no role, the persona is skipped and the block says so. Writes (memory,
-files, crons) stay in the conversation's scope.
+If the sender has no role, the persona is skipped and the block says so. Files stay in the
+conversation's scope, and so does memory in a DM or in a conversation that only picked the
+persona (persona owners and write holders can also write directly to `persona:<id>` memory).
+Crons created in a DM while wearing a persona default to being owned by that persona when the
+sender holds write or owner on it (override with `persona: null`); persona-owned crons are
+managed by the persona's owners and write holders, and when posting to a DM they fan out into
+linked per-person copies when shared with teammates.
+
+A channel or group that pins a persona uses the persona's notebook in place of its own:
+automatic capture and the `memory` tool save there, and the room's own notebook is kept but
+not read by those turns. Every conversation that uses the persona reads the persona's
+notebook, so what one pinned room remembers is shown in the others and to everyone who can
+use the persona, including people who are not in that room. A turn in a pinned room keeps
+to the room's own notebook when its member list is missing or names anyone from outside
+the organization, when the `personas` flag does not reach its sender, and when its
+conversation picked a different persona. A person's message in a Slack channel with a
+guest carries no member list, and neither does a web conversation opened in a Slack
+channel. A cron or other automation fire takes its member list from the stored roster,
+which leaves workspace guests out, so in a channel with a guest it uses the persona's
+notebook. The room's own nightly memory tidy keeps to the room's notebook, and the
+persona's notebook gets a nightly tidy of its own. With `MEMORY_PROVIDER_CONFIG` set, the
+`default` route has to serve the `persona` kind ([memory providers](./memory-providers.md)).
 
 An org admin can route conversations to personas with a `turn_start` decision rule (Settings →
-Decision rules) whose option has the action `use_persona` and a `persona` id. The turn evaluates
+Decision rules) whose option has the action `use_persona` and a `persona` id, or `*` to expand
+that option at turn time into every persona the sender can use in that scope (ordered
+alphabetically by name; skipped if fewer than two options remain). The turn evaluates
 its `turn_start` rules once, before it settles its persona, and model selection reuses the same
 verdicts, so one enforcing rule may pick a persona while another picks a runtime: the hook
 allows one enforcing rule per action. The state the rules see includes the conversation kind
@@ -104,14 +126,16 @@ edits those messages under the persona's name and icon, ahead of any deployment-
 the app manifest requests) (a Unicode emoji maps to its Slack
 shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
-link when there is one. File uploads and the in-progress task card still show the app's own
-identity, since Slack doesn't let an app rename those.
+link when there is one. The in-progress task card wears the persona too: it sits inside the
+persona's latest message, or is posted under its name and icon when it stands alone. File
+uploads still show the app's own identity, since Slack doesn't let an app rename those.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the
 people who could already see that conversation can see it. Holding a role on a persona,
-even owner, shows you nothing of other people's chats with it; the sidebar groups only
-your own conversations under the persona.
+even owner, shows you nothing of other people's chats with it, apart from what a room that
+pins it saved to its notebook ([Turns](#turns)); the sidebar groups only your own
+conversations under the persona.
 
 ## Page
 

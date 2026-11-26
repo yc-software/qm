@@ -29,8 +29,8 @@ test("refusalNote: a boundary (internal-only) refusal keeps the DM/internal stee
 });
 
 test("refusalNote: no adminUrl ⇒ reason only, no dangling link", () => {
-  const note = refusalNote({ reason: "approval denied for git push" }, "dm");
-  assert.match(note, /approval denied for git push/);
+  const note = refusalNote({ reason: "approval declined for git push" }, "dm");
+  assert.match(note, /approval declined for git push/);
   assert.doesNotMatch(note, /Full error/);
 });
 

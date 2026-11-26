@@ -2,7 +2,7 @@ import { recordAuditInBinding, type AuditEvent } from "../audit/audit-log.ts";
 import { recordErrorInBinding, type ErrorEvent } from "../admin/error-log.ts";
 import { randomUUID } from "node:crypto";
 import { type Tenant, ambientTenant } from "../tenants/context.ts";
-import { executesOnApprove } from "../core/orchestrator/approvals.ts";
+import { executesOnApprove, visibleCall } from "../core/orchestrator/approvals.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -15,13 +15,13 @@ import type {
   TurnResult,
 } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, scopeId, personalScope } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
 import { deployRef, encodeRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
-import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { CapabilityClaims, ScopeAuthorizationClaims } from "../auth/capability-token.ts";
 import {
   createCanReadScope,
   createCanManageScope,
@@ -182,6 +182,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
       ...executesOnApprove(r),
+      ...visibleCall(r),
     }));
   }
 
@@ -206,7 +207,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return {
       status: "pending_approval",
       sessionId: session.id,
-      reason: "Approve or deny the pending command to continue.",
+      reason: "Approve or decline the pending call to continue.",
       pendingApprovals: approvals,
     };
   }
@@ -577,9 +578,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
 
   const membershipControlsScope = createMembershipControlsScope(scopeMembershipDeps);
 
-  async function authorizesCapabilityScope(
-    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
-  ): Promise<boolean> {
+  async function authorizesCapabilityScope(claims: ScopeAuthorizationClaims): Promise<boolean> {
     const { kind, ref } = parseScopeId(claims.scopeId);
     if (kind === "channel" && !deps.identity.isInternal(deps.identity.classify(claims.actorId))) return false;
     const privateChannel =
@@ -590,7 +589,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const attestedBot =
       privateChannel &&
       claims.botActor === true &&
-      claims.liveActor === true &&
+      claims.internalAudience === true &&
       claims.members?.some((member) => member.id === claims.actorId && member.type === "internal") === true &&
       capabilityMembership !== true &&
       (await deps.users?.resolve([claims.actorId]))?.get(claims.actorId)?.kind === "app";
@@ -689,11 +688,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       [];
     for (const g of grants) {
       if (g.permission !== "read" && g.permission !== "write") continue;
-      if (
-        g.permission === "read" &&
-        principalId.includes("@") &&
-        g.granteeScopeId === `personal:${principalId.trim().toLowerCase()}`
-      ) {
+      if (g.permission === "read" && principalId.includes("@") && g.granteeScopeId === personalScope(principalId)) {
         best = "read";
         continue;
       }

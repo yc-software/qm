@@ -45,12 +45,23 @@ error naming the entry. Errors never include secret values.
 
 - **Who can use them:** every conversation whose participants all belong to the org, as if the credential
   had an org-wide grant. Admins can't narrow that. Published apps can't use them.
-- **Delivery:** broker only. They are never injected into sandbox environments.
+- **Delivery:** broker only, except the Composio key below. They are never injected into sandbox environments.
 - **Precedence:** a deployment slug is reserved. Lookups return the deployment credential even if the
   settings database still holds one with the same slug, and admins can't create, edit or delete a stored
   credential with that slug.
 - **Broker only, everywhere:** decision providers and skill-pack Git auth can't use a deployment credential.
 - **Usage:** broker calls are logged and summarised in Settings like any other credential.
+
+## The Composio key
+
+An entry with `"composio": true` and no `host` or other broker field supplies the deployment's Composio key,
+so orgs get app connections without storing a key:
+`{ "slug": "composio", "displayName": "Composio", "secretEnv": "COMPOSIO_API_KEY", "composio": true }`.
+
+- Core uses it only to call Composio. Like a stored Composio key, it never reaches a sandbox or the broker.
+- It is a default, not a reservation. An org that stores a credential with the same slug uses that one, and
+  disabling it turns Composio off for the org; deleting it brings the default back. An org that stores an
+  enabled Composio key under another slug uses that one. Admins can create, edit or delete the stored one.
 
 ## Operating
 
