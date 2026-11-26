@@ -7,6 +7,7 @@ import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
+import type { FileArtifact } from "../src/files/file-artifact-store.ts";
 import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -51,7 +52,7 @@ const fake: DirectFileUploads = {
   },
   async complete() {
     calls++;
-    throw new Error("not reached");
+    return { id: "f".repeat(32), name: upload.name } as FileArtifact;
   },
   async abort() {
     calls++;
@@ -77,6 +78,7 @@ before(async () => {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     fileUploads: fake,
+    portalUrl: "https://qm.example/ui/",
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -196,4 +198,10 @@ test("an unrouted method gets a 404 pointing at the catalog, not a capability re
   });
   assert.equal(res.status, 404);
   assert.match(((await res.json()) as { message: string }).message, /^no route PUT .+; GET \/v1\/apis lists/);
+});
+
+test("completing an upload returns a web link that opens the file", async () => {
+  const result = await call(`/v1/files/uploads/${upload.id}/complete`, await token("U1"), "POST", {});
+  assert.equal(result.status, 200);
+  assert.equal(((await result.json()) as { url: string }).url, `https://qm.example/ui/files?file=${"f".repeat(32)}`);
 });

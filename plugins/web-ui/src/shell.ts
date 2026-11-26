@@ -107,7 +107,7 @@ import {
   routePersonasHistory,
 } from "./personas";
 import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
-import { renderFiles } from "./files";
+import { openFileById, renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
@@ -1337,6 +1337,8 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    const linkedFile = wanted === "files" ? params.get("file") : null;
+    if (linkedFile) openFileById(linkedFile);
     openViewAt(wanted as View, wantedItem, "push");
     return;
   }

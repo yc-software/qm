@@ -422,3 +422,30 @@ test("opening a title-only search hit opens the chat at its latest messages", as
     await h.close();
   }
 });
+
+test("a file link opens that file in the viewer with its Markdown rendered", async () => {
+  const h = await harness({
+    path: "/files?file=doc1",
+    api: (path) => {
+      if (path === "/api/files/doc1")
+        return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
+      if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
+      return undefined;
+    },
+  });
+  document.defaultView!.HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  const booted = h.boot();
+  try {
+    const shown = () => document.querySelector<HTMLElement & { content?: string }>(".file-viewer qm-markdown")?.content;
+    for (let i = 0; i < 1000 && !shown(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(shown(), "# Housing index");
+    assert.equal(document.querySelector(".file-viewer-head strong")?.textContent, "housing index.md");
+  } finally {
+    h.releaseRemoteSplit();
+    h.releaseSessions();
+    await booted;
+    await h.close();
+  }
+});
