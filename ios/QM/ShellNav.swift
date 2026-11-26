@@ -10,9 +10,17 @@ struct ShellNav: View {
   /// Room kept above the home indicator: a 52pt glass island plus a little air.
   static let height: CGFloat = 60
 
-  let selected: ShellNavItem
+  // Read here rather than in RootView, so opening or closing the list re-renders only the nav.
+  @Binding var showingConversations: Bool
+  let showingMore: Bool
+  let blankChat: Bool
   let waiting: Int
-  let action: (ShellNavItem) -> Void
+  let onNew: () -> Void
+  let onMore: () -> Void
+
+  private var selected: ShellNavItem {
+    showingConversations ? .conversations : showingMore ? .more : blankChat ? .new : .conversations
+  }
 
   var body: some View {
     // A floating Liquid Glass island; content scrolls freely behind it.
@@ -35,7 +43,11 @@ struct ShellNav: View {
     let isSelected = selected == target
     return Button {
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      action(target)
+      switch target {
+      case .conversations: showingConversations = true
+      case .new: onNew()
+      case .more: onMore()
+      }
     } label: {
       Image(systemName: isSelected ? selectedIcon ?? icon : icon)
         .font(.system(size: 19, weight: .medium))

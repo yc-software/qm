@@ -134,8 +134,14 @@ struct RootView: View {
     // content, and the list here is a drawer layered over every section, not a tab.
     .overlay(alignment: .bottom) {
       if showsNav {
-        nav(inList: showingConversations)
-          .transition(.opacity.combined(with: .offset(y: 24)))
+        ShellNav(
+          showingConversations: $showingConversations, showingMore: showingMore,
+          blankChat: blankChat, waiting: waitingCount, onNew: newChat
+        ) {
+          showingMore = true
+          showingConversations = false
+        }
+        .transition(.opacity.combined(with: .offset(y: 24)))
       }
     }
     // The launch loader sits above everything and fades away once the workspace arrives, so
@@ -201,11 +207,12 @@ struct RootView: View {
     }
     .modifier(
       ConversationDrawerEffects(
-        isOpen: $showingConversations, selected: selectedConversation, model: model)
+        isOpen: $showingConversations, selected: selectedConversation,
+        listVisible: homePath.isEmpty, phase: phase, model: model)
     )
     .task(id: webOnly) { await model.narrow(webOnly: webOnly) }
-    .task(id: syncURL) {
-      if syncURL != nil { await model.watchConversations() }
+    .task(id: foregroundURL) {
+      if model.identity == nil { await model.restore() }
     }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
@@ -333,35 +340,22 @@ struct RootView: View {
     model.identity == nil && model.client?.hasSession == true && model.error == nil
   }
 
-  /// The launch loader, the list and the nav's waiting dot all read the conversation list, so
-  /// it syncs whenever the app is in front with a session, whether or not the list is shown.
-  private var syncURL: URL? {
-    guard phase == .active, model.client?.hasSession == true else { return nil }
-    return model.client?.baseURL
-  }
+  /// The workspace to connect to whenever the app comes to the front. Launch opens on a
+  /// conversation rather than the list, so the list's own sync can't be what connects.
+  private var foregroundURL: URL? { phase == .active ? model.client?.baseURL : nil }
 
   private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
 
   private var navRoom: NavRoom { NavRoom(height: showsNav ? ShellNav.height : 0) }
 
-  private func nav(inList: Bool) -> ShellNav {
-    let blank = !showingMore && selectedConversation?.localOnly == true
-    let selected: ShellNavItem =
-      inList ? .conversations : showingMore ? .more : blank ? .new : .conversations
-    return ShellNav(selected: selected, waiting: waitingCount) { item in
-      switch item {
-      case .conversations: showingConversations = true
-      case .new:
-        // Already on a blank chat: just bring it back instead of doing nothing.
-        if blank {
-          showingConversations = false
-        } else if let conversation = model.newConversation() {
-          open(conversation)
-        }
-      case .more:
-        showingMore = true
-        showingConversations = false
-      }
+  private var blankChat: Bool { !showingMore && selectedConversation?.localOnly == true }
+
+  private func newChat() {
+    // Already on a blank chat: just bring it back instead of doing nothing.
+    if blankChat {
+      showingConversations = false
+    } else if let conversation = model.newConversation() {
+      open(conversation)
     }
   }
 
@@ -516,7 +510,16 @@ private struct ConversationErrorBanner: View {
 private struct ConversationDrawerEffects: ViewModifier {
   @Binding var isOpen: Bool
   let selected: Conversation?
+  let listVisible: Bool
+  let phase: ScenePhase
   let model: AppModel
+
+  private var syncURL: URL? {
+    guard phase == .active, isOpen, listVisible, model.client?.hasSession == true else {
+      return nil
+    }
+    return model.client?.baseURL
+  }
 
   private var openConversation: Conversation? { isOpen ? nil : selected }
 
@@ -525,6 +528,9 @@ private struct ConversationDrawerEffects: ViewModifier {
       .onChange(of: openConversation?.threadRef) {
         let opened = openConversation
         Task { await model.open(opened) }
+      }
+      .task(id: syncURL) {
+        if syncURL != nil { await model.watchConversations() }
       }
   }
 }
