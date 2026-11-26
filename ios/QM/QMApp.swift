@@ -417,17 +417,6 @@ struct RootView: View {
 
   private func listActions(_ identity: Identity) -> some View {
     HStack {
-      Button {
-        if let conversation = model.newConversation() { open(conversation) }
-      } label: {
-        Label("New", systemImage: "square.and.pencil")
-          .font(.body.weight(.semibold))
-          .padding(.horizontal, 20)
-          .frame(height: 48)
-      }
-      .buttonStyle(.plain)
-      .modifier(GlassPill(prominent: true))
-      .accessibilityLabel("New conversation")
       Spacer()
       HStack(spacing: 0) {
         NavigationLink(value: Page.search) {
@@ -661,8 +650,8 @@ enum ShellNavItem {
 }
 
 struct ShellNav: View {
-  /// Height above the home indicator: 10 top + 40 item + 12 bottom.
-  static let height: CGFloat = 62
+  /// Height above the home indicator: 8 top + 40 item, sitting right on the indicator area.
+  static let height: CGFloat = 48
 
   let selected: ShellNavItem
   let waiting: Int
@@ -680,8 +669,7 @@ struct ShellNav: View {
     }
     .frame(maxWidth: .infinity)
     // Match the composer bar's padding so the nav sits at the same height on every screen.
-    .padding(.top, plain ? 0 : 10)
-    .padding(.bottom, plain ? 0 : 12)
+    .padding(.top, plain ? 0 : 8)
     .background {
       // Blur what scrolls underneath; inside the composer bar there is already a background.
       if !plain { Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom) }
