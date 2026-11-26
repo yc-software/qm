@@ -820,18 +820,10 @@ export class ApiError extends Error {
   }
 }
 
-export interface SigninRequired {
-  mode?: "portal" | "dev";
-}
+let onSigninRequired: (() => void) | null = null;
 
-let onSigninRequired: ((detail: SigninRequired) => void) | null = null;
-
-export function setSigninRequiredHandler(fn: (detail: SigninRequired) => void): void {
+export function setSigninRequiredHandler(fn: () => void): void {
   onSigninRequired = fn;
-}
-
-function reportSigninRequired(detail: SigninRequired): void {
-  onSigninRequired?.(detail);
 }
 
 let servedRelease: string | null = null;
@@ -867,7 +859,7 @@ export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const redirect = signinRedirect((body as { loginUrl?: unknown } | null)?.loginUrl, window.location);
   if (redirect) window.location.assign(redirect);
   else {
-    reportSigninRequired((body ?? {}) as SigninRequired);
+    onSigninRequired?.();
     window.dispatchEvent(new Event(SIGNIN_REQUIRED_EVENT));
   }
   return response;

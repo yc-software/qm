@@ -1,7 +1,5 @@
 import type { ActivitySeeds, SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 
-export type AuthMode = "portal" | "dev";
-
 export interface Me {
   browserErrors?: { dsn: string; release?: string; tracesSampleRate?: number };
   analytics?: { module: string; options?: unknown };
@@ -12,7 +10,6 @@ export interface Me {
   suggestedActivitiesGeneration?: boolean;
   individualModelAuth?: boolean;
   modelAuthConnected?: boolean;
-  mode?: AuthMode;
   user: string;
   personalScope: string;
   org: string;
