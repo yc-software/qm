@@ -1190,27 +1190,31 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       res,
       200,
       cardPage({
-        title: "Open QM Desktop",
-        heading: "Sign in to QM Desktop",
+        title: "Open QM",
+        heading: "Sign in to the QM app",
         icon: LOCK_ICON,
         msg: `Continue as ${session.sub}.`,
-        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM Desktop</button></form>`,
-        help: "Only continue if you just started sign-in in the QM desktop app on this computer.",
+        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM</button></form>`,
+        help: "Only continue if you just started sign-in in the QM app on this device.",
       }),
     );
   }
+  launchDesktop(res, mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state), state);
+}
+
+function launchDesktop(res: ServerResponse, code: string, state: string): void {
   const callback = new URL("qm-desktop://auth/callback");
-  callback.searchParams.set("code", mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state));
+  callback.searchParams.set("code", code);
   callback.searchParams.set("state", state);
-  return sendHtml(
+  sendHtml(
     res,
     200,
     cardPage({
       title: "Ready to open QM",
-      heading: "Opening QM Desktop…",
+      heading: "Opening QM…",
       icon: LOCK_ICON,
       msg: "If QM doesn’t open automatically, use the button below.",
-      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
+      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
       help: "This link expires in two minutes and works only for the app that requested it.",
     }),
     `${PAGE_CSP}; script-src '${DESKTOP_LAUNCH_SCRIPT_HASH}'`,
@@ -1424,7 +1428,7 @@ function setAuthenticatedSession(
   appOnly = false,
   tenant?: string,
   domainWide = true,
-): void {
+): SessionClaims {
   const now = Math.floor(Date.now() / 1000);
   const session: SessionClaims = {
     k: "session",
@@ -1444,6 +1448,7 @@ function setAuthenticatedSession(
     clearCookie("portal_tenant_choice", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),
   ]);
+  return session;
 }
 
 function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
@@ -1519,6 +1524,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
       name: typeof rawName === "string" ? rawName.trim().slice(0, 200) : "",
       claims,
       userinfo: info,
+      freshAuth: typeof claims.auth_time === "number" && claims.auth_time >= tmp.iat,
     };
     const email = verifiedEmail(info);
     if (email) tenants = (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email)).tenants;
@@ -1550,7 +1556,7 @@ async function finishTrustedSignIn(
 
 async function finishSignIn(
   res: ServerResponse,
-  { sub, name, claims, userinfo }: VerifiedSignIn,
+  { sub, name, claims, userinfo, freshAuth }: VerifiedSignIn,
   returnTo: string,
   tenant: string | undefined,
 ): Promise<void> {
@@ -1574,11 +1580,23 @@ async function finishSignIn(
     return sendHtml(res, 400, signInErrorHtml(errMessage(e, "sign-in failed")));
   }
   if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);
-  setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
-  res.writeHead(302, {
-    location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
-    "cache-control": "no-store",
-  });
+  const session = setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
+  const location = sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN);
+  const desktop = new URL(location, PUBLIC_URL);
+  const challenge = desktop.searchParams.get("challenge") ?? "";
+  const state = desktop.searchParams.get("state") ?? "";
+  if (
+    freshAuth &&
+    !session.appOnly &&
+    SESSION_SECRET &&
+    SESSION_SECRET.trim().length >= 32 &&
+    desktop.origin === ORIGIN &&
+    desktop.pathname === "/auth/desktop" &&
+    desktopChallenge(challenge) &&
+    desktopChallenge(state)
+  )
+    return launchDesktop(res, mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state), state);
+  res.writeHead(302, { location, "cache-control": "no-store" });
   res.end();
 }
 
