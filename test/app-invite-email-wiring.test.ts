@@ -34,7 +34,12 @@ companyTest("inviting by email to a published app sends through the configured R
   });
   await built.app.upsertDirectory([{ principalId: "invitee@example.com", displayName: "Invitee", type: "internal" }]);
   const owner = { ownerScopeId: personalScope("U1"), createdBy: "U1" };
-  const app = await createDeployStore(backings).create({ ...owner, name: "status", entrypoint: "x" });
+  const app = await createDeployStore(backings).create({
+    ...owner,
+    name: "status",
+    entrypoint: "x",
+    snapshotDir: config.dataDir,
+  });
   const result = await built.app.inviteToApp(app.id, "Invitee@Example.com", owner);
   assert.deepEqual(result.invitation, { emailSent: true, appUrl: "https://acme1-status.apps.example.com/" });
   assert.deepEqual(
