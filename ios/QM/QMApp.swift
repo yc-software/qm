@@ -18,6 +18,12 @@ struct RootView: View {
     case workspace, search, waiting, archived, setup
   }
 
+  private enum HomeTab: Hashable {
+    case chats, waiting, workspace, search
+  }
+
+  @State private var tab = HomeTab.chats
+
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
   @State private var selectedConversation: Conversation?
@@ -41,7 +47,39 @@ struct RootView: View {
     model.visibleConversations(search: searchTerm, webOnly: webOnly)
   }
 
+  // The bottom island: Chats, Waiting and Workspace tabs, with search as its own tab.
+  @ViewBuilder
   private var home: some View {
+    if let identity = model.identity, let client = model.client {
+      TabView(selection: $tab) {
+        Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: HomeTab.chats) {
+          chatsStack
+        }
+        Tab("Waiting", systemImage: "tray", value: HomeTab.waiting) {
+          NavigationStack { waitingConversations }
+        }
+        .badge(waitingCount)
+        Tab("Workspace", systemImage: "square.grid.2x2", value: HomeTab.workspace) {
+          NavigationStack { BrowseView(identity: identity, client: client) }
+        }
+        Tab(value: HomeTab.search, role: .search) {
+          NavigationStack {
+            SearchView(client: client, user: identity.user)
+              .navigationTitle("Search")
+          }
+        }
+      }
+      .modifier(IslandMinimizesOnScroll())
+    } else {
+      chatsStack
+    }
+  }
+
+  private var waitingCount: Int {
+    model.conversations.filter { $0.awaitingInput == true && $0.archived != true }.count
+  }
+
+  private var chatsStack: some View {
     let contexts = Dictionary(uniqueKeysWithValues: model.contexts.map { ($0.scopeId, $0) })
     return NavigationStack(path: $homePath) {
       Group {
@@ -90,41 +128,11 @@ struct RootView: View {
           WelcomeView(model: model, choosingWorkspace: $choosingWorkspace)
         }
       }
-      .navigationTitle("")
-      .navigationBarTitleDisplayMode(.inline)
+      .navigationTitle(model.identity == nil ? "" : "Chats")
+      .navigationBarTitleDisplayMode(model.identity == nil ? .inline : .large)
       .safeAreaInset(edge: .bottom) {
-        if let identity = model.identity {
-          VStack(spacing: 8) {
-            if !model.conversations.isEmpty {
-              ConversationErrorBanner(model: model)
-            }
-            HStack(spacing: 10) {
-              HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                  .foregroundStyle(.secondary)
-                TextField("Find a conversation", text: $search)
-                  .textInputAutocapitalization(.never)
-                  .autocorrectionDisabled()
-                  .submitLabel(.search)
-                  .accessibilityIdentifier("conversationSearch")
-                if !search.isEmpty {
-                  Button {
-                    search = ""
-                  } label: {
-                    Image(systemName: "xmark.circle.fill")
-                      .foregroundStyle(.secondary)
-                  }
-                  .accessibilityLabel("Clear conversation search")
-                }
-              }
-              .padding(.horizontal, 16)
-              .frame(height: 48)
-              .background(.thinMaterial, in: Capsule())
-              accountMenu(identity)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-          }
+        if model.identity != nil, !model.conversations.isEmpty {
+          ConversationErrorBanner(model: model)
         }
       }
       .navigationDestination(for: Page.self) { page in
@@ -147,7 +155,7 @@ struct RootView: View {
   var body: some View {
     NativeConversationDrawer(
       isOpen: $showingConversations, hasSelection: selectedConversation != nil,
-      showsSidebarPage: !homePath.isEmpty
+      showsSidebarPage: !homePath.isEmpty || tab != .chats
     ) {
       home
     } detail: {
@@ -209,7 +217,7 @@ struct RootView: View {
     .modifier(
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation,
-        listVisible: homePath.isEmpty, phase: phase, model: model)
+        listVisible: homePath.isEmpty && tab == .chats, phase: phase, model: model)
     )
     .task(id: [searchTerm, String(webOnly)]) {
       if !searchTerm.isEmpty {
@@ -232,6 +240,7 @@ struct RootView: View {
       #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     selectedConversation = conversation
     homePath = []
+    tab = .chats
     showingConversations = false
   }
 
@@ -301,7 +310,6 @@ struct RootView: View {
   private func accountMenu(_ identity: Identity) -> some View {
     Menu {
       Text(identity.displayName ?? identity.user)
-      NavigationLink("Waiting on you", value: Page.waiting)
       NavigationLink("Archived conversations", value: Page.archived)
       Toggle("Web conversations only", isOn: $webOnly)
       Button("Change workspace") { choosingWorkspace = true }
@@ -315,46 +323,36 @@ struct RootView: View {
       }
       Button("Sign out", role: .destructive) { confirmingSignOut = true }
     } label: {
-      Image(systemName: "person.crop.circle")
-        .font(.system(size: 24))
-        .frame(width: 48, height: 48)
-        .background(.thinMaterial, in: Circle())
+      Text(String((identity.displayName ?? identity.user).prefix(1)).uppercased())
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.white)
+        .frame(width: 32, height: 32)
+        .background(
+          LinearGradient(
+            colors: [Color(red: 0.95, green: 0.65, blue: 0.35), Color(red: 0.89, green: 0.38, blue: 0.31)],
+            startPoint: .topLeading, endPoint: .bottomTrailing),
+          in: Circle())
     }
     .accessibilityLabel("Account")
   }
 
   @ToolbarContentBuilder
   private var homeToolbar: some ToolbarContent {
-    let wordmark = ToolbarItem(placement: .topBarLeading) {
-      Text("QM")
-        .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
-        .fixedSize()
+    let account = ToolbarItem(placement: .topBarLeading) {
+      if let identity = model.identity { accountMenu(identity) }
     }
     if #available(iOS 26.0, *) {
-      wordmark.sharedBackgroundVisibility(.hidden)
+      account.sharedBackgroundVisibility(.hidden)
     } else {
-      wordmark
-    }
-    ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
-        NavigationLink(value: Page.search) {
-          Image(systemName: "magnifyingglass")
-        }.accessibilityLabel("Search workspace")
-      }
-    }
-    ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
-        NavigationLink(value: Page.workspace) {
-          Image(systemName: "square.grid.2x2")
-        }.accessibilityLabel("Browse workspace")
-      }
+      account
     }
     ToolbarItem(placement: .topBarTrailing) {
       Button {
         if let conversation = model.newConversation() { open(conversation) }
       } label: {
-        Image(systemName: "square.and.pencil")
+        Label("New", systemImage: "plus").labelStyle(.titleAndIcon)
       }
+      .buttonStyle(.borderedProminent)
       .accessibilityLabel("New conversation")
     }
   }
@@ -559,5 +557,16 @@ private struct ConversationDrawerEffects: ViewModifier {
       .task(id: syncURL) {
         if syncURL != nil { await model.watchConversations() }
       }
+  }
+}
+
+/// On iOS 26 the tab bar shrinks to the current tab and search while the list scrolls down.
+private struct IslandMinimizesOnScroll: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.tabBarMinimizeBehavior(.onScrollDown)
+    } else {
+      content
+    }
   }
 }
