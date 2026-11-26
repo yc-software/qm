@@ -892,11 +892,10 @@ struct ChatView: View {
               Task { await stop() }
             } label: {
               Image(systemName: "stop.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 12, weight: .bold))
                 .modifier(NativeLoadingPulse(active: stopping))
                 .foregroundStyle(QMTheme.paper)
-                .frame(width: 44, height: 44)
-                .background(QMTheme.ink, in: Circle())
+                .composerCircle(QMTheme.ink)
             }
             .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
             .disabled(stopping)

@@ -41,13 +41,11 @@ struct RootView: View {
     model.visibleConversations(search: "", webOnly: webOnly)
   }
 
-  private var home: some View { chatsStack }
-
   private var waitingCount: Int {
     model.conversations.filter { $0.awaitingInput == true && $0.archived != true }.count
   }
 
-  private var chatsStack: some View {
+  private var home: some View {
     let contexts = Dictionary(uniqueKeysWithValues: model.contexts.map { ($0.scopeId, $0) })
     return NavigationStack(path: $homePath) {
       Group {
@@ -105,7 +103,6 @@ struct RootView: View {
           ConversationErrorBanner(model: model)
         }
       }
-      .modifier(navRoom)
       .navigationDestination(for: Page.self) { page in
         if let client = model.client, let identity = model.identity {
           switch page {
@@ -119,6 +116,8 @@ struct RootView: View {
         }
       }
     }
+    // On the stack, not its root, so pushed pages also stay clear of the nav.
+    .modifier(navRoom)
   }
 
   var body: some View {
@@ -131,7 +130,8 @@ struct RootView: View {
       shell
     }
     // One nav for the whole app, drawn above both the list and the main screen so it stays
-    // put while they slide underneath it.
+    // put while they slide underneath it. A TabView can't: its bar belongs to one tab's
+    // content, and the list here is a drawer layered over every section, not a tab.
     .overlay(alignment: .bottom) {
       if showsNav {
         nav(inList: showingConversations)
@@ -201,12 +201,11 @@ struct RootView: View {
     }
     .modifier(
       ConversationDrawerEffects(
-        isOpen: $showingConversations, selected: selectedConversation,
-        listVisible: homePath.isEmpty, phase: phase, model: model)
+        isOpen: $showingConversations, selected: selectedConversation, model: model)
     )
     .task(id: webOnly) { await model.narrow(search: "", webOnly: webOnly) }
-    .task(id: connectingURL) {
-      if connectingURL != nil { await model.watchConversations() }
+    .task(id: syncURL) {
+      if syncURL != nil { await model.watchConversations() }
     }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
@@ -327,9 +326,8 @@ struct RootView: View {
               .task { selectedConversation = model.newConversation() }
           }
         case .more:
-          NavigationStack {
-            MoreGrid(identity: identity, client: client).modifier(navRoom)
-          }
+          NavigationStack { MoreGrid(identity: identity, client: client) }
+            .modifier(navRoom)
         }
       }
     }
@@ -340,13 +338,10 @@ struct RootView: View {
     model.identity == nil && model.client?.hasSession == true && model.error == nil
   }
 
-  /// The workspace to connect to while the app is in front and nothing has loaded yet. Launch
-  /// opens on a conversation, not the list, so this is what loads the workspace; the list's
-  /// own sync takes over whenever it is shown.
-  private var connectingURL: URL? {
-    guard phase == .active, model.identity == nil, model.client?.hasSession == true else {
-      return nil
-    }
+  /// The launch loader, the list and the nav's waiting dot all read the conversation list, so
+  /// it syncs whenever the app is in front with a session, whether or not the list is shown.
+  private var syncURL: URL? {
+    guard phase == .active, model.client?.hasSession == true else { return nil }
     return model.client?.baseURL
   }
 
@@ -455,30 +450,6 @@ struct RootView: View {
     }
   }
 
-  private func conversationRows(_ conversations: [Conversation]) -> some View {
-    ForEach(conversations) { conversation in
-      Button {
-        open(conversation)
-      } label: {
-        NativeConversationRow(
-          conversation: conversation,
-          contextTitle: model.contexts.first { $0.scopeId == conversation.scopeId }.flatMap {
-            $0.isPersonal ? nil : $0.title
-          },
-          updating: model.updatingConversationIDs.contains(conversation.id))
-      }
-      .buttonStyle(.plain)
-      .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
-      .contextMenu { conversationActions(conversation) }
-      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        conversationActions(conversation)
-      }
-    }
-  }
-
-  @ViewBuilder
   private func conversationActions(_ conversation: Conversation) -> some View {
     if conversation.localOnly != true {
       Button(conversation.pinned == true ? "Unpin" : "Pin", systemImage: "pin") {
@@ -556,16 +527,7 @@ private struct ConversationErrorBanner: View {
 private struct ConversationDrawerEffects: ViewModifier {
   @Binding var isOpen: Bool
   let selected: Conversation?
-  let listVisible: Bool
-  let phase: ScenePhase
   let model: AppModel
-
-  private var syncURL: URL? {
-    guard phase == .active, isOpen, listVisible, model.client?.hasSession == true else {
-      return nil
-    }
-    return model.client?.baseURL
-  }
 
   private var openConversation: Conversation? { isOpen ? nil : selected }
 
@@ -574,9 +536,6 @@ private struct ConversationDrawerEffects: ViewModifier {
       .onChange(of: openConversation?.threadRef) {
         let opened = openConversation
         Task { await model.open(opened) }
-      }
-      .task(id: syncURL) {
-        if syncURL != nil { await model.watchConversations() }
       }
   }
 }
