@@ -1,5 +1,12 @@
 import { openDesktopBrowser } from "../../../chassis/src/desktop-browser.ts";
 import { SettingState } from "./setting-state.ts";
+
+const SLACK_ERRORS: Record<string, string> = {
+  slack_install_cancelled:
+    "The install was cancelled in Slack. Choose Add to Slack in your QM conversation when you're ready.",
+  workspace_already_connected: "That Slack workspace is already connected to another QM workspace.",
+  workspace_not_enabled: "QM can't be added to that Slack workspace. Choose your own company's workspace.",
+};
 export type Api = (
   method: string,
   path: string,
@@ -190,6 +197,9 @@ class SlackInstallationState extends Status {
     }
     if (step === "connected" && this.data.configured && this.data.setup?.connected)
       this.setStatus("Connected. You can return to your QM conversation.", "ok");
+    const failure = params.get("slack_error");
+    if (failure && !this.data.configured)
+      this.setStatus(SLACK_ERRORS[failure] ?? `Slack wasn't connected (${failure}). Try Add to Slack again.`, "err");
   }
   async run(busy: string, work: () => Promise<unknown>, failure?: string) {
     this.busy = busy;

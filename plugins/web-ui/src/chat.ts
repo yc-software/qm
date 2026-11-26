@@ -2502,6 +2502,7 @@ export function createChatSurface(
               .widget=${part.type === "setup" ? "apps" : part.type}
               .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
               .onConnected=${continueAfterConnection}
+              @slack-installed=${() => void continueAfterConnection("QM to our Slack workspace")}
               .returnKey=${`${returnKey}:${partIndex}`}
               .setupOnly=${true}
               .animateWelcome=${false}
