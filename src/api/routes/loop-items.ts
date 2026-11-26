@@ -12,7 +12,6 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   loadAdministrable,
-  loopDeps,
   actingPrincipal,
   forInboxLoopsPeople,
   inboxPreviewEnabled,
@@ -400,7 +399,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     }
   }
 
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
   const turn = await deps.fire.itemAction(loop, item, kind, args);
@@ -459,7 +457,6 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       message: "the draft changed; review it before continuing",
     });
   }
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
   try {
     const next = await deps.fire.followUp(
@@ -491,8 +488,7 @@ export function cronSummary(cron: Cron | null): {
 }
 
 async function getInboxLoop(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const loop =
@@ -506,8 +502,7 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
+  const deps = ctx.deps.loops;
   const body = isObj(ctx.body) ? ctx.body : {};
   const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
   if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
@@ -559,8 +554,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
 }
 
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId)))
@@ -618,7 +612,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
 
 function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
   return (ctx) => {
-    const lock = loopDeps(ctx)?.lock;
+    const lock = ctx.deps.loops.lock;
     return lock && !ctx.capability
       ? lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, () => handler(ctx))
       : handler(ctx);

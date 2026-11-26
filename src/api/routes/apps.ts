@@ -92,11 +92,9 @@ async function proxyApp(ctx: BaseCtx): Promise<void> {
     const actor = psecret && tok ? await verifyPortalIdentity(tok, psecret, Date.now()) : null;
     if (!psecret || !actor || actor.p !== principal)
       return sendJson(res, 403, { error: "forbidden", message: "portal identity required" });
-    if (deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") {
-        return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
-      }
+    await deps.identity.refresh();
+    if (deps.identity.classify(actor.p).type !== "internal") {
+      return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
     }
   }
   if (
@@ -908,10 +906,10 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   let authenticatedPermission: Permission | null = null;
   if (sub && publishedApp) {
     if (session?.appOnly) {
-      await deps.identity?.refresh();
+      await deps.identity.refresh();
       if (
         externalAllowed &&
-        deps.identity?.deactivationSource(sub) !== "manual" &&
+        deps.identity.deactivationSource(sub) !== "manual" &&
         (await app.appGrantees(publishedApp.id)).some(
           (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
         )
@@ -945,7 +943,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   };
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
-      !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
+      !!sub && (await deps.featureFlags.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
       cleanUrlRedirect();
       return true;
@@ -957,7 +955,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
           app.appGrantees(publishedApp.id),
           app.canManageArtifactHome(publishedApp.ownerScopeId, publishedApp.createdBy, sub!),
         ]);
-        const orgName = (deps.config?.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
+        const orgName = (deps.config.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
         const { ownerScopeId } = publishedApp;
         sendJson(res, 200, {
           version: publishedApp.appliedVersion ?? publishedApp.currentVersion,
@@ -1011,9 +1009,9 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       status: "denied",
     };
     const hour = Math.floor(ev.at / 3_600_000);
-    if (deps.auditLog?.recordOnce)
+    if (deps.auditLog.recordOnce)
       await deps.auditLog.recordOnce(tenantOf(ctx), `reach_denied|${viewer}|${slug}|${hour}`, ev);
-    else deps.auditLog?.record(tenantOf(ctx), ev);
+    else deps.auditLog.record(tenantOf(ctx), ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
     const d = await app.getApp(slug).catch(swallowAs("apps: load app", null));

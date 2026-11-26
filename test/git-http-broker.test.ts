@@ -224,6 +224,7 @@ test("git HTTP broker cannot use a Composio key for project-wide discovery or ex
   for (const method of ["GET", "POST"]) {
     let contacted = false;
     const deps = {
+      ...testCore(),
       control: {},
       serviceCreds: {
         getServiceCredentialSecret: async () => ({

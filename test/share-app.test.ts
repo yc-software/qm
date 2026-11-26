@@ -33,6 +33,7 @@ import { TEST_TENANT } from "./support/test-tenant.ts";
 import { companyTest } from "./support/app-handle.ts";
 import { trimTrailingSlashes } from "../src/util/text.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -135,6 +136,7 @@ function callManage(
     tenant,
     secret: "test-secret",
     deps: {
+      ...testCore(),
       featureFlags,
       control: createControlService(app),
       runs: liveRunStore(),
@@ -810,7 +812,7 @@ test("exact email read grants admit app-only login and guest reach without membe
     await handle({
       app,
       tenant,
-      deps: { identity, acl, featureFlags },
+      deps: { ...testCore(), identity, acl, featureFlags, directory: {} },
       url: new URL(`http://core/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`),
       res: {
         getHeader() {},

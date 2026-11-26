@@ -13,21 +13,19 @@ export const decisionsResource: AdminResource = {
   label:
     "Decision providers and rules. Send { provider }, { removeProvider: id }, { rule } or { removeRule: id }. A provider names a wire protocol (chat-completions, decisions or systemone); leave baseUrl unset to use the model gateway, or set baseUrl plus an org service credential. A rule asks a classifier a question at a hook and applies the chosen option's action. Rule mode is off, observe or enforce.",
   readKey: "decisions",
-  get: async (deps, scope, tenant) =>
-    deps.decisions && {
-      ...decisionCatalog(),
-      models: selectableBaseModels().map((m) => m.id),
-      credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? [])
-        .filter((c) => c.source !== "deployment")
-        .map((c) => c.slug),
-      providers: await deps.decisions.providers(tenant),
-      rules: await deps.decisions.rules(tenant),
-    },
+  get: async (deps, scope, tenant) => ({
+    ...decisionCatalog(),
+    models: selectableBaseModels().map((m) => m.id),
+    credentials: (await deps.serviceCreds.listServiceCredentials(scope))
+      .filter((c) => c.source !== "deployment")
+      .map((c) => c.slug),
+    providers: await deps.decisions.providers(tenant),
+    rules: await deps.decisions.rules(tenant),
+  }),
   apply: async (ctx, actor, scope) => {
     if (parseScopeId(scope).kind !== "org") return { error: "decisions are org-wide; target an org scope" };
     const store = ctx.deps.decisions;
     const tenant = tenantOf(ctx);
-    if (!store) return { error: "not available on this deployment", status: 404 };
     const body = (ctx.body ?? {}) as Record<string, unknown>;
     const by = { actorId: actor.id };
     let change: [string, string];
@@ -42,7 +40,7 @@ export const decisionsResource: AdminResource = {
         const parsed = parseDecisionProvider(body.provider);
         if ("error" in parsed) return parsed;
         const credential = parsed.provider.credential;
-        const credentials = credential ? ((await ctx.deps.serviceCreds?.listServiceCredentials(scope)) ?? []) : [];
+        const credentials = credential ? await ctx.deps.serviceCreds.listServiceCredentials(scope) : [];
         if (credentials.some((c) => c.slug === credential && c.source === "deployment"))
           return { error: `credential ${credential} is supplied by this deployment for the broker only` };
         await store.saveProvider(tenant, parsed.provider, by);

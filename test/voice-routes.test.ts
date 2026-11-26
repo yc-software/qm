@@ -12,6 +12,7 @@ import type { App } from "../src/api/app-types.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { testCore } from "./support/build-app.ts";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
@@ -22,6 +23,7 @@ async function serve(deps: Partial<ServerDeps>): Promise<string> {
   const server = createServer(
     {} as App,
     {
+      ...testCore(),
       signingSecret: "voice-route-signing-secret-0123456789",
       replayDedupe: { claim: async () => true },
       ...browserSessionDeps,

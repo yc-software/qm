@@ -20,7 +20,7 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
   const principal = ctx.actor!.p;
   for (const id of personIds(principal)) {
     for (const accountType of ACCOUNT_TYPES) {
-      const auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("slack.com", id, accountType);
+      const auth = await ctx.deps.connectorTokens.connectorDerivedAuth("slack.com", id, accountType);
       if (!auth) continue;
       const call = async (method: string, payload?: Record<string, unknown>, token = auth.accessToken) => {
         const client = slackWebClient(token, ctx.deps.slackWebClient);
@@ -35,9 +35,9 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
       };
       const identity = await call("auth.test");
       if (!identity.ok || identity.bot_id || !identity.user_id || !identity.team_id) continue;
-      const member = await ctx.deps.directory?.getBySlackId(identity.user_id);
+      const member = await ctx.deps.directory.getBySlackId(identity.user_id);
       if (!member || member.type !== "internal" || !samePerson(member.principalId, principal)) continue;
-      const installation = await ctx.deps.slackInstallation?.get();
+      const installation = await ctx.deps.slackInstallation.get();
       let teamId = installation?.teamId;
       if (!teamId && ctx.deps.slackEnvBotToken) {
         const bot = await call("auth.test", undefined, ctx.deps.slackEnvBotToken);

@@ -24,6 +24,7 @@ import { liveRun } from "./support/live-run.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createSecretClientResolver } from "../src/connectors/oauth.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { testCore } from "./support/build-app.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -40,12 +41,14 @@ function fixture() {
   const audits: Array<{ action: string; resource?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const deps: Partial<ServerDeps> = {
+    ...testCore(),
     approvals: testMap<PendingApprovalRecord>(),
     sessions: signOff.sessions as unknown as ServerDeps["sessions"],
     keychain,
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
+    config: { resolveSharingPostureDurable: async () => undefined } as unknown as ServerDeps["config"],
     composioReturns: testMap(),
     portalUrl: "https://qm.example",
     auditLog: {

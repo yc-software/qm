@@ -20,6 +20,7 @@ import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -440,7 +441,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
   };
   const apply = (body: unknown, capability: unknown = null) =>
     ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
-      { body, capability, tenant, deps: { decisions } } as never,
+      { body, capability, tenant, deps: { ...testCore(), decisions } } as never,
       { id: "admin@x.com" },
       "org:default-org",
     );

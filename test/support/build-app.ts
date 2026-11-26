@@ -17,8 +17,30 @@ afterEach(async (t) => {
 });
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
 
+const none = async () => undefined;
+const empty = async () => [];
+
+const absentServices = {
+  identity: {
+    refresh: none,
+    classify: (id: string) => ({ id, type: "internal" }),
+    isInternal: (p: { type: string }) => p.type === "internal",
+    deactivationSource: () => undefined,
+  },
+  auditLog: { record: () => {} },
+  credentialUsage: { record: () => {} },
+  featureFlags: { enabled: async () => false },
+  mcpServers: { list: empty },
+  mcpToolService: { appConnections: empty },
+  loopIngress: { list: empty },
+  slackInstallation: { get: none },
+  slackAccounts: { get: none },
+  connectorTokens: { connectorDerivedAuth: none },
+} as unknown as Partial<Core>;
+
 export function testCore(core = {} as Core): Core {
   return {
+    ...absentServices,
     ...core,
     signingSecret: undefined,
     capabilitySecret: undefined,

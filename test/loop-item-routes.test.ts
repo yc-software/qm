@@ -48,7 +48,7 @@ interface World {
 
 let cronSeq = 0;
 
-function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
+function world(over: { tokens?: boolean } = {}): World {
   const w: World = {
     loops: {
       store: createLoopStore(testMap()),
@@ -57,6 +57,24 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       grants: createShipGrantStore(testMap()),
       crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
       config: testConfigStore("org"),
+      fire: {
+        fire: async () => ({ status: "ok" as const }),
+        shipOutput: async () => null,
+        returnOutput: async () => null,
+        sweepStale: async () => {},
+        previewTriage: async () => [],
+        followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
+          w.followUps.push({ itemId: item.id, message, actorId });
+          await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
+          await w.loops.items.appendThread(item.id, [{ role: "agent", text: "shortened it" }]);
+          await w.loops.items.setProposal(item.id, { data: { body: "shorter" }, by: "agent" });
+          return w.loops.items.get(item.id);
+        },
+        itemAction: async (_loop: Loop, _item: LoopItem, kind: string, args: Record<string, unknown>) => {
+          w.actions.push({ kind, args });
+          return { ok: true, reply: `did ${kind}` };
+        },
+      },
     },
     crons: new Map(),
     sent: [],
@@ -65,26 +83,6 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
     actions: [],
     tokens: over.tokens !== false,
   };
-  if (over.fire !== false) {
-    w.loops.fire = {
-      fire: async () => ({ status: "ok" as const }),
-      shipOutput: async () => null,
-      returnOutput: async () => null,
-      sweepStale: async () => {},
-      previewTriage: async () => [],
-      followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
-        w.followUps.push({ itemId: item.id, message, actorId });
-        await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
-        await w.loops.items.appendThread(item.id, [{ role: "agent", text: "shortened it" }]);
-        await w.loops.items.setProposal(item.id, { data: { body: "shorter" }, by: "agent" });
-        return w.loops.items.get(item.id);
-      },
-      itemAction: async (_loop: Loop, _item: LoopItem, kind: string, args: Record<string, unknown>) => {
-        w.actions.push({ kind, args });
-        return { ok: true, reply: `did ${kind}` };
-      },
-    };
-  }
   return w;
 }
 
@@ -620,14 +618,6 @@ test("follow-up needs a message and a wired fire service", async () => {
     body: { message: "x".repeat(4_001) },
   });
   assert.equal(long.status, 400);
-  const unwired = world({ fire: false });
-  const seeded = await seed(unwired);
-  const out = await call(unwired, {
-    method: "POST",
-    path: `/v1/loops/${seeded.loop.id}/items/${seeded.item.id}/followup`,
-    body: { message: "hi" },
-  });
-  assert.equal(out.status, 404);
 });
 
 test("the inbox resolver reports no loop until sync is set up", async () => {
