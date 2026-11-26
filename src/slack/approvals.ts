@@ -332,7 +332,6 @@ export function createApprovals(deps: {
             ...(ctx.kind ? { kind: ctx.kind } : {}),
             ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
             ...(ctx.grantTool ? { grantTool: ctx.grantTool } : {}),
-            ...(ctx.grantTool ? { grantTool: ctx.grantTool } : {}),
             ...retained,
           },
         ]);
