@@ -1,0 +1,60 @@
+name: iOS TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "desktop/assets/becalmed-off-halfway-rock.webp"
+      - ".github/workflows/ios-testflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    if: vars.DEVELOPMENT_TEAM != ''
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ios
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      TEAM_ID: ${{ vars.DEVELOPMENT_TEAM }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: printf '%s\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+      - name: Archive
+        run: |
+          xcodebuild -project QM.xcodeproj -scheme QM -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/QM.xcarchive" \
+            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" QM_BUNDLE_ID="${{ vars.QM_BUNDLE_ID }}" \
+            QM_BASE_URL="${{ vars.QM_BASE_URL }}" \
+            CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d.%H%M)" \
+            archive
+      - name: Upload to TestFlight
+        run: |
+          plutil -create xml1 "$RUNNER_TEMP/export.plist"
+          plutil -insert method -string app-store-connect "$RUNNER_TEMP/export.plist"
+          plutil -insert destination -string upload "$RUNNER_TEMP/export.plist"
+          plutil -insert teamID -string "$TEAM_ID" "$RUNNER_TEMP/export.plist"
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/QM.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
