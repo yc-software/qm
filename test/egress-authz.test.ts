@@ -441,6 +441,28 @@ test("relay sink: batches decisions into a signed POST to core's /v1/egress-audi
   assert.equal(calls.length, 1, "an empty buffer does not POST");
 });
 
+test("relay sink: identical batches get distinct bodies so core's signature replay-dedupe never rejects them", async () => {
+  const bodies: string[] = [];
+  const fakeFetch = (async (_url: any, init: any) => {
+    bodies.push(String(init.body));
+    return new Response(JSON.stringify({ accepted: 1, rejected: 0 }), { status: 200 });
+  }) as typeof fetch;
+  for (let i = 0; i < 2; i++) {
+    const sink = createRelayAuditSink("http://core.example:4000/", SOURCE_SECRET, fakeFetch);
+    sink.record({
+      source: "proxy",
+      host: "api.github.com",
+      allowed: true,
+      verdict: "ok",
+      scopeLabel: scopeId("personal", "U1"),
+      principalId: "U1",
+    });
+    await sink.flush();
+  }
+  assert.equal(bodies.length, 2);
+  assert.notEqual(bodies[0], bodies[1], "same records, different signed bytes");
+});
+
 test("relay sink: signs over the real request path when CORE_API_URL carries a prefix", async () => {
   const calls: Array<{ url: string; body: any; headers: Record<string, string> }> = [];
   const fakeFetch = (async (url: any, init: any) => {
