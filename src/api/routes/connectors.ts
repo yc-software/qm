@@ -7,12 +7,9 @@ import {
   openOAuthState,
   PROVIDERS,
   oauthProvider,
-  withPublicOAuthClients,
   sealOAuthState,
-  createSecretClientResolver,
   generateCodeVerifier,
   codeChallengeS256,
-  type OAuthClientResolver,
   type AccountType,
   type OAuthState,
   ACCOUNT_TYPES,
@@ -21,7 +18,6 @@ import {
 } from "../../connectors/oauth.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
-import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
@@ -51,20 +47,13 @@ async function resumeOAuthFlow(deps: ServerDeps, secret: string | undefined, par
   return openOAuthState(param, { secret: oauthStateSecret(deps, secret), maxAgeMs: OAUTH_STATE_MAX_AGE_MS });
 }
 
-export function resolverFor(deps: ServerDeps): OAuthClientResolver {
-  return (
-    deps.resolveClient ??
-    withPublicOAuthClients(createSecretClientResolver(deps.oauthEnv ? createEnvSecretSource(deps.oauthEnv) : undefined))
-  );
-}
-
 function parseAccountType(v: string | null | undefined): AccountType {
   return isAccountType(v) ? v : "default";
 }
 
 async function providerConfigured(deps: ServerDeps, provider: string): Promise<boolean> {
   try {
-    await resolverFor(deps)(provider, {});
+    await deps.resolveClient(provider, {});
     return true;
   } catch {
     return false;
@@ -164,8 +153,6 @@ async function connectorProviderStatus(
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const { deps, secret, url, res } = ctx;
   const provider = parseOAuthRoute(ctx.pathname)!.provider;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
   const providerError = url.searchParams.get("error");
@@ -178,14 +165,11 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
     }
-    if (
-      !deps.replayDedupe ||
-      !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
-    ) {
+    if (!(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))) {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
-    const client = await resolverFor(deps)(provider, { accountType });
+    const client = await deps.resolveClient(provider, { accountType });
     const { hosts, token } = await exchangeCode(provider, code, state.redirectUri, {
       client,
       fetchImpl: deps.oauthFetch,
@@ -219,7 +203,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
 
 async function principalHasProvider(deps: ServerDeps, provider: string, principalId: string): Promise<boolean> {
   const p = oauthProvider(provider);
-  if (!p || !deps.connectorTokens) return false;
+  if (!p) return false;
   for (const host of p.hosts) {
     for (const at of ACCOUNT_TYPES) {
       const st = await deps.connectorTokens
@@ -233,7 +217,6 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
 
 async function consentRedeem(ctx: ApiCtx): Promise<void> {
   const { res, deps, secret, url } = ctx;
-  if (!deps.consentLinks || !deps.connectorTokens) return sendJson(res, 404, { error: "not_found" });
   const clicker = personKey(ctx.req.headers["x-consent-clicker"] as string | undefined);
   if (!clicker) return sendJson(res, 401, { error: "unauthorized", message: "sign in to complete this connection" });
   const linkId = decodeURIComponent(ctx.params.linkId ?? "");
@@ -260,7 +243,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    const client = await resolverFor(deps)(rec.provider, { accountType: rec.accountType });
+    const client = await deps.resolveClient(rec.provider, { accountType: rec.accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(rec.redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -301,7 +284,6 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
 
 async function consentMint(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
-  if (!deps.consentLinks) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, { error: "unauthorized", message: "oauth-consent capability token required" });
   if (!requirePersonAuthority(ctx)) return;
@@ -337,7 +319,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     });
   let client;
   try {
-    client = await resolverFor(deps)(provider, { accountType });
+    client = await deps.resolveClient(provider, { accountType });
   } catch (e) {
     return sendJson(res, 501, { error: "oauth_not_configured", message: errMessage(e) });
   }
@@ -417,8 +399,6 @@ async function browserOAuthStart(ctx: ApiCtx): Promise<void> {
 
 async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
   const { res, deps, secret } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const provider = oauthProvider(start.provider);
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${start.provider}` });
@@ -426,7 +406,7 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
   if (!principalId || !redirectUri)
     return sendJson(res, 400, { error: "bad_request", message: "principalId and redirectUri required" });
   try {
-    const client = await resolverFor(deps)(start.provider, { accountType });
+    const client = await deps.resolveClient(start.provider, { accountType });
     if (client.redirectAllowlist && !client.redirectAllowlist.includes(redirectUri)) {
       return sendJson(res, 400, {
         error: "redirect_not_allowed",
@@ -471,8 +451,6 @@ async function startOAuth(ctx: ApiCtx, start: OAuthStart): Promise<void> {
 
 async function oauthStatus(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const access = resolveSelfRead(ctx, {
     botMessage: "bot turns cannot read connector status",
     privateOnlyMessage: "connector status is only available in your own private conversation",
@@ -489,8 +467,6 @@ async function oauthStatus(ctx: ApiCtx): Promise<void> {
 async function oauthRevoke(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
   if (!requirePersonAuthority(ctx)) return;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
   let principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (capability) {
@@ -536,8 +512,6 @@ async function oauthRevoke(ctx: ApiCtx): Promise<void> {
 
 async function setToken(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.connectorTokens)
-    return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const b = body as Record<string, unknown>;
   const host = typeof b.host === "string" ? b.host : "";
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
@@ -601,7 +575,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
     let authError: unknown;
     for (const candidate of requestedAccountType ? [requestedAccountType] : ACCOUNT_TYPES) {
       try {
-        auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
+        auth = await ctx.deps.connectorTokens.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
         if (auth) {
           accountType = candidate;
           break;

@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
@@ -57,17 +57,7 @@ async function setup() {
 }
 
 function serve(built: Awaited<ReturnType<typeof setup>>["built"]) {
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    identity: built.identity,
-    sessions: built.sessions,
-    acl: built.acl,
-    featureFlags: built.featureFlags,
-    channelPolicy: built.channelPolicy,
-    directory: built.directory,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>

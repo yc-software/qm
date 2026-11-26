@@ -13,6 +13,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { ambientTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testCore } from "./support/build-app.ts";
 
 test("ephemeral tools expose read-only memory/files/skills, scratch-only execute, and omit durable tools", () => {
   const tools = createAgentTools({ current: null }, { ephemeral: true, controlTools: true });
@@ -163,10 +164,7 @@ test("ephemeral capability tokens block control-plane writes", async () => {
       authorizesCapabilityScope: async () => true,
       listMemoryFacts: async () => [],
     } as never,
-    {
-      capabilitySecret: secret,
-      runs: { get: async () => null } as never,
-    },
+    { ...testCore(), capabilitySecret: secret, runs: { get: async () => null } as never },
   );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

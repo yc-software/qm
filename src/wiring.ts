@@ -157,7 +157,7 @@ import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-stor
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type PublishedApp, type AppDraft } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { appCredentialSlugs } from "./deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -493,7 +493,7 @@ export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   blobTransfer: BlobTransferStore;
   fileUploads?: DirectFileUploads;
   featureFlags: FeatureFlagStore;
-  decisions?: DecisionStore;
+  decisions: DecisionStore;
   replayDedupe: ReplayDedupe;
   selfServe?: SelfServe;
   brokerSessions?: BrokerSessionStore;
@@ -503,6 +503,14 @@ export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
   slackCore: SlackCoreClient;
+}
+
+function controlPlaneOpts(config: Config) {
+  return {
+    signingSecret: config.signingSecret,
+    capabilitySecret: config.capabilitySecret,
+    apiBaseUrl: config.apiBaseUrl,
+  };
 }
 
 function coreSettings(config: Config, sandbox: Sandbox, drain: DrainController) {
@@ -524,6 +532,7 @@ function coreSettings(config: Config, sandbox: Sandbox, drain: DrainController) 
     capabilitySecret: config.capabilitySecret,
     capabilityTokenCompression: config.capabilityTokenCompression,
     portalIdentitySecret: config.portalIdentitySecret,
+    trustedOidcIssuer: config.trustedOidcAdminIssuer,
     requireSignedPortalIdentity: config.requireSignedPortalIdentity,
     brandingDefault: config.brandingDefault,
     companySubscriptionAuth: companySubscriptionAuth(config),
@@ -852,9 +861,7 @@ export function buildApp(
       credentialPaths: deploymentLayer.credentialPaths,
       connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       onError: sandboxOnError,
     });
   };
@@ -869,9 +876,7 @@ export function buildApp(
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       store: smolmachinesBodies,
       advisoryLock,
       ...(snapshotS3Bucket
@@ -940,9 +945,7 @@ export function buildApp(
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
@@ -973,9 +976,7 @@ export function buildApp(
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       store: managedAgentsBodies,
       ...(managedAgents.snapshotS3Bucket
         ? {
@@ -1025,9 +1026,7 @@ export function buildApp(
       connectorSdk: loadConnectorSdk,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
         ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
@@ -1043,9 +1042,7 @@ export function buildApp(
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       onError: sandboxOnError,
     });
   const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
@@ -1083,9 +1080,7 @@ export function buildApp(
         credentialPaths: deploymentLayer.credentialPaths,
         layerToolFiles: () => deploymentLayer.installFiles,
         blobTransfer,
-        ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-        ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-        ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+        ...controlPlaneOpts(config),
         store: superserveBodies,
         onError: sandboxOnError,
       }),
@@ -1101,9 +1096,7 @@ export function buildApp(
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
       blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       store: awsBodies,
       onError: sandboxOnError,
     });
@@ -1116,9 +1109,7 @@ export function buildApp(
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
       credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       onError: sandboxOnError,
     });
   const buildRender = (): Sandbox => {
@@ -1142,9 +1133,7 @@ export function buildApp(
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
       blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      ...controlPlaneOpts(config),
       onError: sandboxOnError,
     });
   };
@@ -1510,7 +1499,7 @@ export function buildApp(
     decisions,
     overrides.decisionBackend ??
       createDecisionBackend({
-        providers: async (tenant, ids) => (await decisions?.providers(tenant, ids)) ?? [],
+        providers: (tenant, ids) => decisions.providers(tenant, ids),
         ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
@@ -1919,11 +1908,15 @@ export function buildApp(
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
-            const credentials = await appCredentialSlugs(
-              ambientTenant(),
+            const tenant = ambientTenant();
+            const credentials = appCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
-              orgScope,
-              acl,
+              await appCredentialGrants(publishedApp, {
+                tenant,
+                orgScope,
+                acl,
+                teams,
+              }),
             );
             return {
               VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),
@@ -2153,7 +2146,7 @@ export function buildApp(
     config: configStore,
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+    brandingDefault: config.brandingDefault,
     surfaces,
     sessions,
     files,
@@ -2174,18 +2167,16 @@ export function buildApp(
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
     securityScreenTimeoutMs: config.securityScreenTimeoutMs,
-    ...(securityScreener ? { securityScreener } : {}),
+    securityScreener,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
     sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    signingSecret: config.signingSecret,
+    capabilitySecret: config.capabilitySecret,
     capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
-    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
-    ...(inviteMailer ? { inviteMailer } : {}),
-    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
+    apiBaseUrl: config.apiBaseUrl,
+    publicWebUrl: config.publicWebUrl,
+    webhookPublicUrl: config.publicUrl,
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture, card: config.memoryCard },
     memoryStrategy,
     skills,
@@ -2201,13 +2192,13 @@ export function buildApp(
     teams,
     credentialUsage,
     resolveConnectorClient: resolveClient,
-    ...(keychain ? { keychain } : {}),
+    keychain,
     serviceCreds,
     deliveries,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
     promptSnapshots,
-    ...(processes ? { processes } : {}),
+    processes,
     monitors,
     crons,
     notebookOnlyMemory: (threadRef) => memoryTidy.managesThread(threadRef),
@@ -2346,7 +2337,7 @@ export function buildApp(
     swarms,
     identity,
     users,
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
+    publicWebUrl: config.publicWebUrl,
     sessions,
     orchestrator,
     surfaces,
@@ -2365,7 +2356,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
-    ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),
+    modelCredentialFetch: overrides.modelCredentialFetch,
     acl,
     admin,
     isOrgAdmin,
@@ -2387,9 +2378,9 @@ export function buildApp(
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
-    ...(renderArtifacts ? { appGitPrincipals: renderArtifacts } : {}),
+    appGitPrincipals: renderArtifacts,
     deploymentLayer,
-    ...(processes ? { processes } : {}),
+    processes,
     monitors,
     sandbox,
     files,
@@ -3167,21 +3158,21 @@ export function buildApp(
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,
     memory,
-    ...(keychain ? { keychain } : {}),
+    keychain,
     serviceCreds,
-    ...(keychainApprovals ? { keychainApprovals } : {}),
-    ...(askResolution ? { fireAskResolution: askResolution } : {}),
-    ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
+    keychainApprovals,
+    fireAskResolution: askResolution,
+    fireDropResolution: dropResolution,
     sandboxResources,
     blobTransfer,
-    ...(fileUploads ? { fileUploads } : {}),
+    fileUploads,
     featureFlags,
-    ...(decisions ? { decisions } : {}),
+    decisions,
     replayDedupe,
-    ...(selfServe ? { selfServe } : {}),
-    ...(brokerSessions ? { brokerSessions } : {}),
-    ...(appPageViews ? { appPageViews } : {}),
-    ...(browserSessionStore ? { browserSessionStore } : {}),
+    selfServe,
+    brokerSessions,
+    appPageViews,
+    browserSessionStore,
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,

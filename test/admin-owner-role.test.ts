@@ -14,7 +14,7 @@ import { memberBrainId, putMemberBrain } from "../src/memory/registry.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId, personalScope } from "../src/types.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -45,20 +45,10 @@ async function start(overrides: Record<string, unknown> = {}) {
     key: deriveConnectorKey("admin-owner-keychain"),
   });
   const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    config: built.config,
-    memory: built.memory,
-    memoryRegistry: built.memoryRegistry,
-    secretDrops: built.secretDrops,
-    brokerSessions: built.brokerSessions,
+    ...testCore(built),
     sessions,
     runs: liveRunStore(built.runs),
-    errors: built.errors,
     keychain,
-    identity: built.identity,
-    principalLinks: built.principalLinks,
-    replayDedupe: built.replayDedupe,
     capabilitySecret: SECRET,
     ...browserSessionDeps,
     portalIdentitySecret: SECRET,

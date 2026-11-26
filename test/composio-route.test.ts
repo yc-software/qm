@@ -22,6 +22,9 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import { liveRun } from "./support/live-run.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
+import { createSecretClientResolver } from "../src/connectors/oauth.ts";
+import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { testCore } from "./support/build-app.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -38,12 +41,14 @@ function fixture() {
   const audits: Array<{ action: string; resource?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const deps: Partial<ServerDeps> = {
+    ...testCore(),
     approvals: testMap<PendingApprovalRecord>(),
     sessions: signOff.sessions as unknown as ServerDeps["sessions"],
     keychain,
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
+    config: { resolveSharingPostureDurable: async () => undefined } as unknown as ServerDeps["config"],
     composioReturns: testMap(),
     portalUrl: "https://qm.example",
     auditLog: {
@@ -1270,7 +1275,9 @@ async function nativeSlackFixture(linked = true) {
   const f = await slackReplyFixture();
   f.deps.slackAccounts = testMap();
   f.deps.connectorTokens = f.deps.keychain;
-  f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
+  f.deps.resolveClient = createSecretClientResolver(
+    createEnvSecretSource({ SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" }),
+  );
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
   f.deps.slackEnvBotToken = "workspace-bot";

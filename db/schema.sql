@@ -1802,7 +1802,9 @@ CREATE FUNCTION public.qm_tenants_for_email(email text) RETURNS TABLE(tenant_id 
         SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email)
         UNION
         SELECT l.tenant_id FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
-            AND u.kind = 'person' AND u.offboarded_at IS NULL WHERE l.alias_id = lower(btrim(email));
+            AND u.kind = 'person' AND u.offboarded_at IS NULL
+            AND (u.source IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
+              WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.alias_id <> u.primary_alias)) WHERE l.alias_id = lower(btrim(email));
     END $$;
 
 CREATE FUNCTION public.qm_tenants_for_gmail(key text) RETURNS SETOF uuid
@@ -1817,7 +1819,9 @@ CREATE FUNCTION public.qm_tenants_for_principal(principal text) RETURNS SETOF uu
     AS $$ BEGIN
         RETURN QUERY
           SELECT l.tenant_id FROM user_links l JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
-            AND u.kind = 'person' AND u.offboarded_at IS NULL WHERE l.alias_id = CASE WHEN position('@' IN btrim(principal)) > 0 THEN lower(btrim(principal)) ELSE btrim(principal) END
+            AND u.kind = 'person' AND u.offboarded_at IS NULL
+            AND (u.source IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
+              WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.alias_id <> u.primary_alias)) WHERE l.alias_id = CASE WHEN position('@' IN btrim(principal)) > 0 THEN lower(btrim(principal)) ELSE btrim(principal) END
           UNION
           SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
           UNION

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { personalScope } from "../src/types.ts";
 
@@ -46,15 +46,7 @@ async function start() {
       publishedApps.find((d) => d.id === id)!.status = "archived";
     },
   };
-  const server = createInsecureTestServer(app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    identity: built.identity,
-    keychain: built.keychain,
-    sandboxResources: built.sandboxResources,
-    sessions: built.sessions,
-    loops: built.loops,
-  });
+  const server = createInsecureTestServer(app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const offboard = (principal: string, body: unknown, headers: Record<string, string> = ADMIN) =>

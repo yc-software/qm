@@ -13,6 +13,7 @@ import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
@@ -52,6 +53,7 @@ async function fixture() {
   const replies: unknown[] = [];
   const audits: string[] = [];
   const deps: Partial<ServerDeps> = {
+    ...testCore(),
     keychain,
     serviceCreds: keychain,
     auditLog: {

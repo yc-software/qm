@@ -12,14 +12,12 @@ const ADMIN_SIGN_IN_NEEDS_ADMIN_CANONICAL =
   "that sign-in holds an org admin grant; a link may not make another principal an admin, so grant the canonical principal first or revoke it";
 
 async function directoryMember(deps: ApiCtx["deps"], id: string): Promise<boolean> {
-  if (!deps.directory) return false;
   const trimmed = id.trim();
   return (await deps.directory.list()).some((m) => samePerson(m.principalId, trimmed) || m.slackId === trimmed);
 }
 
 export async function listPrincipalLinks(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   return sendJson(res, 200, { links: await deps.principalLinks.list() });
@@ -27,7 +25,6 @@ export async function listPrincipalLinks(ctx: ApiCtx): Promise<void> {
 
 export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   const b = isObj(body) ? body : {};
@@ -46,7 +43,7 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
       evidence: b.evidence,
       linkedBy: actor.id,
     });
-    await deps.identity?.refresh(true);
+    await deps.identity.refresh(true);
     audit(ctx, {
       principalId: actor.id,
       action: "principal_link.create",
@@ -63,12 +60,11 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<void> {
 
 export async function deletePrincipalLink(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  if (!deps.principalLinks) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, orgScope(deps));
   if (!actor) return;
   const link = await deps.principalLinks.unlink(params.principalId!);
   if (!link) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh(true);
+  await deps.identity.refresh(true);
   audit(ctx, {
     principalId: actor.id,
     action: "principal_link.delete",

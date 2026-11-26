@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
@@ -59,6 +59,7 @@ describe("agent files self-API", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });
@@ -134,6 +135,13 @@ describe("agent files self-API", async () => {
       page.owned.map((file) => file.id),
       [binaryId],
     );
+  });
+
+  it("describes a file only to someone who may open it", async () => {
+    const token = await capFor("U1");
+    const mine = (await (await get(`/v1/files/${mineId}`, token)).json()) as { name: string; mimetype: string };
+    assert.deepEqual([mine.name, mine.mimetype], ["mine.txt", "text/plain"]);
+    assert.equal((await get(`/v1/files/${theirsId}`, token)).status, 404);
   });
 
   it("returns 404 for another principal's file content", async () => {

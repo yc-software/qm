@@ -137,6 +137,7 @@ directory/store/0011-group-surface
 directory/store/0012-member-is-bot
 directory/store/0013-member-slack-id-index
 directory/store/0014-meta-app-icon
+directory/store/0015-tenants-for-email-members
 durable-map/ack_emoji/0001
 durable-map/ack_emoji/0010-tenants/0-column
 durable-map/ack_emoji/0010-tenants/0-stamp-column
@@ -1507,6 +1508,7 @@ tenancy/lookups/0005-principal-admin-tenants
 tenancy/lookups/0006-principal-user-tenants
 tenancy/lookups/0007-partner-chat
 tenancy/lookups/0008-serving-slack-tenants
+tenancy/lookups/0009-principal-member-tenants
 tenancy/lookups/consent_links-inbound-indexes
 tenancy/lookups/deployments-inbound-indexes
 tenancy/lookups/loop_ingress-inbound-indexes

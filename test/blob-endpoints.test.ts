@@ -8,12 +8,12 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
-  const server = createInsecureTestServer(built.app, { blobTransfer: built.blobTransfer });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r()).closeAllConnections()) };
@@ -71,10 +71,7 @@ test("GET /v1/blobs/:id is 404 for an unknown id", async () => {
 
 function startWithDeadline(deadlineMs: number): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
-  const server = createInsecureTestServer(built.app, {
-    blobTransfer: built.blobTransfer,
-    requestBodyDeadlineMs: deadlineMs,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), requestBodyDeadlineMs: deadlineMs });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r()).closeAllConnections()) };

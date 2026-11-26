@@ -77,7 +77,7 @@ async function capabilityAdminDenied(
     if (
       parseScopeId(target).kind !== "org" &&
       (!carriesPersonAuthority(claims) ||
-        (await config?.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
+        (await config.resolveSharingPostureDurable(scopeId("personal", claims.actorId), claims.scopeId)) !== "open")
     ) {
       return "this admin read returns private content — ask the agent in a DM";
     }
@@ -726,7 +726,7 @@ export function loggablePath(url: string | undefined): string {
   return query < 0 ? url : `${url.slice(0, query)}?<query omitted>`;
 }
 
-export function createServer(app: App, deps: ServerOptions = {}): Server {
+export function createServer(app: App, deps: ServerOptions): Server {
   if (!deps.signingSecret && deps.allowUnauthenticatedCore) {
     console.warn(
       "[server] ALLOW_UNAUTHENTICATED_CORE=1 — HTTP ingress is UNAUTHENTICATED (intentionally isolated deployments only).",
@@ -757,7 +757,7 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
   return buildServer(app, deps, false);
 }
 
-export function createInsecureTestServer(app: App, deps: ServerOptions = {}): Server {
+export function createInsecureTestServer(app: App, deps: ServerOptions): Server {
   if (deps.signingSecret) throw new Error("createInsecureTestServer must not receive a signing secret");
   return buildServer(app, deps, true);
 }

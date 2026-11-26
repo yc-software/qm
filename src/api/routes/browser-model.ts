@@ -27,7 +27,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
   if (!capability?.browserModel || !capability.browserAccount)
     return sendJson(res, 403, { error: "browser model grant required" });
-  if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
+  if ((await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
     return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
   if (!body || typeof body !== "object" || Array.isArray(body))
     return sendJson(res, 400, { error: "invalid browser model request" });
@@ -39,10 +39,9 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     Object.keys(input).some((key) => !REQUEST_FIELDS.has(key))
   )
     return sendJson(res, 400, { error: "invalid browser model request" });
-  if (!deps.modelRoutes) return sendJson(res, 503, { error: "browser model unavailable" });
   const account = capability.browserAccount;
   const personal =
-    account === "company" || !deps.userModelCredentials
+    account === "company"
       ? undefined
       : await loadPersonalModelAuth(deps.userModelCredentials, capability.actorId, account, capability.browserModel);
   if (account !== "company" && personal?.modelId !== capability.browserModel)

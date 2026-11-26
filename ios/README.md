@@ -71,7 +71,7 @@ Native Markdown images use authenticated workspace file requests with an 8 MiB t
 
 Browse → Talk to QM opens native SwiftUI controls backed by the WebRTC iOS SDK. Web conversations also offer Talk to QM in their menu, keeping spoken tasks in that conversation. Voice and dictation are available to everyone signed in when the server has `OPENAI_API_KEY`. Never put a provider key in the iOS build settings.
 
-The voice frontend uses `gpt-live-1` with `gpt-5.6-terra` Responses delegation. Completed structured `ask_qm` calls submit to the existing authenticated QM turn API; captions cannot execute tasks. QM keeps its configured runtime, tools, permissions, and approval flow. Task records are durable; live captions are temporary and the provider session uses `store: false`.
+The voice frontend uses `gpt-live-1` with client delegation. When the voice model hands a request off, the app submits the transcribed words to the existing authenticated QM turn API and sends progress and the result back to be spoken. QM keeps its configured runtime, tools, permissions, and approval flow. Task records are durable; live captions are temporary and the provider session uses `store: false`.
 
 The native audio track starts only when the user starts a call. Mute stops microphone transmission; End conversation and backgrounding stop the call. Already submitted QM tasks continue. Session creation is limited durably to six per person per hour; the client ends calls after 20 minutes. These are usage controls, not a server-enforced spending cap.
 

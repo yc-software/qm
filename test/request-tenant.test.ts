@@ -11,7 +11,7 @@ import type { Route } from "../src/api/routes/route.ts";
 import { bindBootTenant, bootTenant, inBootTenant, readBootTenant } from "../src/tenants/boot.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { onTenantLoad } from "../src/tenants/cache.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
@@ -105,7 +105,7 @@ test("work started in the boot tenant stays bound across timers", () =>
 async function serve(databaseUrl: string): Promise<{ get: (path: string) => Promise<number>; close: () => void }> {
   const built = buildApp(testConfig({ databaseUrl }));
   await bindBootTenant(() => readBootTenant(databaseUrl));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return {

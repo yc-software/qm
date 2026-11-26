@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Core } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -31,10 +31,10 @@ describe("capability tokens verify under the core-only capability secret, not th
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-iso-")), signingSecret: SOURCE }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
-      scheduler: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -63,9 +63,9 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
 
   const boot = (extra: Record<string, unknown>) =>
     createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      scheduler: built.scheduler,
       requireSignedPortalIdentity: true,
       ...extra,
     });
@@ -107,24 +107,17 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
 
   it("does not gate when enforcement is off, even with shared secrets", () => {
     const server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      scheduler: built.scheduler,
     });
     assert.ok(server);
     server.close();
   });
 
   it("production refuses an unauthenticated core unless explicitly isolated", () => {
-    assert.throws(
-      () => createServer(built.app, { production: true, scheduler: built.scheduler }),
-      /CORE_SIGNING_SECRET/,
-    );
-    const server = createServer(built.app, {
-      production: true,
-      allowUnauthenticatedCore: true,
-      scheduler: built.scheduler,
-    });
+    assert.throws(() => createServer(built.app, { ...testCore(built), production: true }), /CORE_SIGNING_SECRET/);
+    const server = createServer(built.app, { ...testCore(built), production: true, allowUnauthenticatedCore: true });
     server.close();
   });
 
@@ -132,10 +125,10 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     assert.throws(
       () =>
         createServer(built.app, {
+          ...testCore(built),
           replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
           production: true,
           signingSecret: SOURCE,
-          scheduler: built.scheduler,
         }),
       /CAPABILITY_SECRET is not set/,
     );

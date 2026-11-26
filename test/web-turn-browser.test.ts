@@ -426,19 +426,13 @@ test("inbox turns, steers and approvals need the inbox feature flag", async () =
   });
 });
 
-test("inbox chat fails closed when the flag service is missing or the inbox cannot be read", async (t) => {
-  const unflagged = await serve({ featureFlags: undefined }, t);
+test("inbox chat fails closed when the inbox cannot be read", async (t) => {
   const unreadable = await serve({ loops: undefined }, t);
   await withInbox(["alice"], async () => {
-    for (const [at, status] of [
-      [unflagged, 403],
-      [unreadable, 500],
-    ] as const) {
-      const count = turns.length;
-      const response = await post("/api/turn", { text: "Summarize", threadRef: "web:alice:inbox" }, { at });
-      assert.equal(response.status, status);
-      assert.equal(turns.length, count);
-    }
+    const count = turns.length;
+    const response = await post("/api/turn", { text: "Summarize", threadRef: "web:alice:inbox" }, { at: unreadable });
+    assert.equal(response.status, 500);
+    assert.equal(turns.length, count);
   });
 });
 

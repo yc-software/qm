@@ -84,7 +84,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
       });
       try {
         await Promise.race([
-          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness?.(controller.signal))),
+          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness(controller.signal))),
           deadline,
         ]);
         sendJson(res, 200, { ok: true });
@@ -146,9 +146,9 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
+  ...fileUploadRoutes,
   ...fileContentRoutes,
   ...surfaceRoutes,
-  ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...reachRoutes,

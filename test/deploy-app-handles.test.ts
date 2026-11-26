@@ -23,6 +23,7 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { loadTenant, onTenantLoad } from "../src/tenants/cache.ts";
 import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -85,6 +86,7 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -172,6 +174,7 @@ test("app hosts resolve by their full label, so a hyphenated company handle work
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",

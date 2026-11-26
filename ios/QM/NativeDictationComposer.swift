@@ -132,11 +132,9 @@ struct NativeDictationDiscardButton: View {
       model.cancel()
     } label: {
       Image(systemName: "xmark")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 14, weight: .bold))
         .foregroundStyle(QMTheme.ink)
-        .frame(width: 44, height: 44)
-        .background(QMTheme.ink.opacity(0.08), in: Circle())
-        .contentShape(Circle())
+        .composerCircle(QMTheme.ink.opacity(0.08))
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Discard recording")
@@ -154,10 +152,9 @@ struct NativeDictationSendButton: View {
         model.retry()
       } label: {
         Image(systemName: "arrow.clockwise")
-          .font(.system(size: 17, weight: .semibold))
+          .font(.system(size: 14, weight: .bold))
           .foregroundStyle(QMTheme.paper)
-          .frame(width: 44, height: 44)
-          .background(QMTheme.ink, in: Circle())
+          .composerCircle(QMTheme.ink)
       }
       .buttonStyle(.plain)
       .accessibilityLabel(model.retryRecordsAgain ? "Record again" : "Retry transcription")

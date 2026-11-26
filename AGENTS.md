@@ -139,7 +139,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   end-to-end — new or changed agent behavior, or anything touching the Slack/web
   surfaces, orchestrator, directory, or cron flows — boot this worktree with the
   `/dev-instance` skill and exercise it through a browser against the configured Slack
-  development workspace before opening a PR. Do this Slack QA in **Firefox**, never the
+  development workspace before opening a PR; a run against the Slack twin does not count.
+  Do this Slack QA in **Firefox**, never the
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.

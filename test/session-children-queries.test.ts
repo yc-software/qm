@@ -12,10 +12,11 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 async function childrenQueries(children: number, busyTrees: number): Promise<number> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "children-")), seedSkills: false }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const principal: Principal = { id: "internal:U1", type: "internal" };

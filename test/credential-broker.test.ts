@@ -58,6 +58,7 @@ const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) =>
   orgScopeId: "org:default-org",
   reader: reader({ slug: "x-firehose", allowedMethods: ["GET"], allowedPathPrefixes: ["/2/tweets/search/"] }),
   fetchImpl: captureFetch().fetch,
+  appBorrows: async () => true,
   ...over,
 });
 
@@ -422,6 +423,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
       orgScopeId: "org:default-org",
       reader: reader({ slug: "relay", host: "example.test", injection: { actor } }),
       fetchImpl: cap.fetch,
+      appBorrows: async () => true,
     });
     assert.equal(result.status, actor ? 403 : 200);
     assert.equal(cap.calls.length, actor ? 0 : 1);
@@ -434,6 +436,7 @@ test("actor-attested credentials require exact host while legacy subdomain match
     orgScopeId: "org:default-org",
     reader: reader({ slug: "relay", host: "example.test", injection: { actor: true } }),
     fetchImpl: cap.fetch,
+    appBorrows: async () => true,
   });
   assert.equal(result.status, 200);
   assert.equal(cap.calls[0]!.headers["x-qm-actor"], "U1");
@@ -448,6 +451,7 @@ test("actor attestation rejects alternate ports before sending credentials", asy
     orgScopeId: "org:default-org",
     reader: reader({ slug: "relay", host: "example.test", injection: { actor: true } }),
     fetchImpl: cap.fetch,
+    appBorrows: async () => true,
   });
   assert.equal(result.status, 403);
   assert.equal(cap.calls.length, 0);
@@ -585,11 +589,23 @@ test("a deployment token is refused when the credential is switched off for publ
   );
   assert.equal(on.status, 200);
   assert.equal(cap.calls.length, 1);
+  const outgrown = await brokerCredentialCall(
+    base({
+      claims: asApp,
+      reader: reader({ slug: "x-firehose", deployments: true, allowedPathPrefixes: ["/2/tweets/search/"] }),
+      fetchImpl: cap.fetch,
+      audit,
+      appBorrows: async (deployment, slug) => !(deployment === "dpl-1" && slug === "x-firehose"),
+    }),
+  );
+  assert.equal(outgrown.status, 403);
+  assert.equal(cap.calls.length, 1, "an app whose audience outgrew the grant fetches nothing");
   assert.deepEqual(
     audits.map((e) => [e.action, e.detail]),
     [
       ["credential.broker.denied", "not_available_to_deployments"],
       ["credential.broker.use", "deployment:dpl-1"],
+      ["credential.broker.denied", "not_granted_to_app_audience"],
     ],
   );
   const agent = await brokerCredentialCall(

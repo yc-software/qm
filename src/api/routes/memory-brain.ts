@@ -24,14 +24,10 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
     return null;
   }
-  if (!deps.memoryRegistry) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   if (!requirePersonAuthority(ctx)) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
-    (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
+    (await deps.config.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
       "open"
   ) {
     sendJson(res, 403, { error: "forbidden", message: PRIVATE });

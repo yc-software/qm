@@ -18,13 +18,10 @@ export function filePreviewKind(name: string, mimetype = ""): "markdown" | "csv"
   return null;
 }
 
-export function previewFile(event: MouseEvent, name: string, href: string, mimetype?: string): void {
-  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+export function openFilePreview(name: string, href: string, mimetype?: string, origin?: Element | null): boolean {
   const kind = filePreviewKind(name, mimetype);
   const media = kind ? null : mediaKind(name, mimetype);
-  if (!kind && (!media || media === "audio")) return;
-  event.preventDefault();
-  const origin = event.currentTarget as Element | null;
+  if (!kind && (!media || media === "audio")) return false;
   const opened = media
     ? import("./media.ts").then(({ openMediaViewer }) =>
         openMediaViewer([{ kind: media, name, src: href, download: href }], 0, {
@@ -36,4 +33,10 @@ export function previewFile(event: MouseEvent, name: string, href: string, mimet
     reportHandledError("web:file_preview", error);
     window.open(href, "_blank", "noopener,noreferrer");
   });
+  return true;
+}
+
+export function previewFile(event: MouseEvent, name: string, href: string, mimetype?: string): void {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (openFilePreview(name, href, mimetype, event.currentTarget as Element | null)) event.preventDefault();
 }

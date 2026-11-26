@@ -21,10 +21,6 @@ import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 async function registryAdmin(ctx: ApiCtx) {
   const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
   if (!actor) return null;
-  if (!ctx.deps.memoryRegistry) {
-    sendJson(ctx.res, 404, { error: "not_found" });
-    return null;
-  }
   return { actor, registry: ctx.deps.memoryRegistry };
 }
 

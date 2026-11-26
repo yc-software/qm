@@ -488,6 +488,12 @@ export interface App {
   isOpenScopeMember(principalId: string, scope: ScopeId): Promise<boolean>;
   membershipControlsScope(scope: ScopeId): Promise<boolean>;
   authorizesCapabilityScope(claims: ScopeAuthorizationClaims): Promise<boolean>;
+  fileForViewer(
+    tenant: Tenant,
+    id: string,
+    principalId: string,
+    ownScopeBotWork: boolean,
+  ): Promise<FileListItem | null>;
   openFileForViewer(
     tenant: Tenant,
     id: string,

@@ -44,7 +44,7 @@ export interface TeamStore {
 }
 
 const keysOf = (id: string) => personIds(id).map(foldPrincipalId);
-const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
+export const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
 
 export function createPostgresTeamStore(
   connectionString: string,
