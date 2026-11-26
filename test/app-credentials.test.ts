@@ -65,4 +65,9 @@ test("a published app borrows a credential only when one grant covers its publis
   await grant(app.ownerScopeId, encodeRef(deployRef(app.id)), personalScope("cy"));
   assert.deepEqual(await slugs(), ["acme-data"], "sharing outside the team drops the dev credential");
   assert.deepEqual(await slugs({ ownerScopeId: DEVS }), ["acme-data", "e2b"], "a home the grant names is covered");
+  assert.deepEqual(
+    await slugs({ ownerScopeId: DEVS, createdInScope: scopeId("team", "ops") }),
+    ["acme-data"],
+    "writers of the team the app was created in must be covered too",
+  );
 });

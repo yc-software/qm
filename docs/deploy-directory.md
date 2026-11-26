@@ -169,10 +169,11 @@ credential broker accepts. Keep the token on the server; it authorizes calls as 
 immutable publisher, not the person viewing the app.
 
 An app may borrow an enabled broker-delivery credential that is granted to its whole
-audience: the publisher, the app's home, and everyone it is shared with. A credential
-granted org-wide qualifies for every app. A narrower grant qualifies only when one grantee
-covers that whole audience: the grantee is the home or share itself, or a team every
-shared person belongs to. A public app borrows only org-wide credentials. An administrator
+audience: the publisher, the app's home, the channel or team it was created in (whose
+writers can push new code to it), and everyone it is shared with. A credential granted
+org-wide qualifies for every app. A narrower grant qualifies only when one grantee covers
+that whole audience: the grantee is the home, creation scope or share itself, or a team
+every shared person belongs to. A public app borrows only org-wide credentials. An administrator
 switches a credential off for apps without affecting agent turns. The token is long-lived
 and names the app, so on every call the broker refuses a credential whose switch was
 flipped after the app shipped, or whose grant no longer covers the app because it was

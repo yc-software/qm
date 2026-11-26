@@ -2,7 +2,7 @@ import { grantedToEvery, type AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef, parseRef, serviceCredRef } from "../acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../credentials/keychain.ts";
 import { onTeam, type TeamStore } from "../teams/teams.ts";
-import { parseScopeId, personalScope, scopeId, type ScopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, personalScope, scopeId, type ScopeId } from "../types.ts";
 import type { Tenant } from "../tenants/context.ts";
 import type { PublishedApp } from "./deploy-store.ts";
 
@@ -14,7 +14,7 @@ export interface AppCredentialAccess {
 }
 
 export async function appCredentialGrants(
-  app: Pick<PublishedApp, "id" | "ownerScopeId" | "createdBy" | "public">,
+  app: Pick<PublishedApp, "id" | "ownerScopeId" | "createdBy" | "createdInScope" | "public">,
   access: AppCredentialAccess,
   slug?: string,
 ): Promise<Set<string>> {
@@ -31,7 +31,10 @@ export async function appCredentialGrants(
     return grantee.kind === "team" ? [grantee.ref] : [];
   });
   const shares = await acl.grantsFor(tenant, app.ownerScopeId, encodeRef(deployRef(app.id)));
-  const scopes = [...new Set([app.ownerScopeId, personalScope(app.createdBy), ...shares.map((g) => g.granteeScopeId)])];
+  const managers = isManageableCreationScope(app.createdInScope) ? [app.createdInScope!] : [];
+  const scopes = [
+    ...new Set([app.ownerScopeId, personalScope(app.createdBy), ...managers, ...shares.map((g) => g.granteeScopeId)]),
+  ];
   const people = scopes.flatMap((scope) => {
     const person = parseScopeId(scope);
     return person.kind === "personal" ? [person.ref] : [];
