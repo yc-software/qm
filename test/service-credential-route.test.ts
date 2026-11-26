@@ -1413,7 +1413,7 @@ test("credential inventory and policy reordering leave the system prompt byte-id
   assert.equal(system(second.reply), system(first.reply));
 });
 
-test("broker accepts no-expiry sandbox tokens but still enforces credential disablement", async () => {
+test("broker refuses expired and no-expiry tokens and enforces credential disablement", async () => {
   let calls = 0;
   const srv = startBroker(async () => {
     calls++;
@@ -1429,10 +1429,11 @@ test("broker accepts no-expiry sandbox tokens but still enforces credential disa
       );
     const request = { credential: "probe", method: "GET", url: "https://api.example.com/probe" };
     assert.equal((await broker(srv.base, await token(Date.now() - 1), request)).status, 401);
-    const unlimited = await token(0);
-    assert.equal((await broker(srv.base, unlimited, request)).status, 200);
+    assert.equal((await broker(srv.base, await token(0), request)).status, 401);
+    const live = await token(Date.now() + 60_000);
+    assert.equal((await broker(srv.base, live, request)).status, 200);
     await srv.built.serviceCreds.setServiceCredential("org:default-org", { ...credential, enabled: false });
-    assert.equal((await broker(srv.base, unlimited, request)).status, 404);
+    assert.equal((await broker(srv.base, live, request)).status, 404);
     assert.equal(calls, 1);
   } finally {
     await srv.close();

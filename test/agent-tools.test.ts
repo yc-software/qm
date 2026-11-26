@@ -4391,16 +4391,11 @@ test("sessions is available across surfaces unless sessionTools is disabled", ()
   }
 });
 
-test("background process guidance reflects the configured sandbox token lifetime", () => {
-  const guidance = (opts?: { sandboxCapabilityTtlMs?: number }) =>
-    createAgentTools({ current: fakeToolContext() }, { sandboxResources: true, ...opts })
-      .map((tool) => tool.description)
-      .join("\n");
-  assert.match(guidance(), /turn tokens expire 48 hours/);
-  assert.match(guidance({ sandboxCapabilityTtlMs: 72 * 3_600_000 }), /turn tokens expire 72 hours/);
-  const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
-  assert.match(unlimited, /turn tokens do not expire here/);
-  assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
+test("background process guidance states the sandbox token lifetime", () => {
+  const guidance = createAgentTools({ current: fakeToolContext() }, { sandboxResources: true })
+    .map((tool) => tool.description)
+    .join("\n");
+  assert.match(guidance, /turn tokens expire 48 hours/);
 });
 
 test("core tools carry retrySafe while client tools cannot advertise automatic replay", async () => {

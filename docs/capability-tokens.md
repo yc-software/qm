@@ -27,22 +27,19 @@ Compression is off by default for a staged protocol rollout:
 
 To disable issuance, set the switch to `0`. Both encodings remain readable regardless
 of that switch. Do not roll verifiers back to a version predating compression until
-all compressed tokens have expired or been revoked. Sandbox tokens live 48 hours by
-default (see below); other capability audiences may have longer lifetimes, so inventory those
+all compressed tokens have expired or been revoked. Sandbox tokens live 48 hours
+(see below); other capability audiences may have longer lifetimes, so inventory those
 before rolling back. Leaving the updated verifiers in place is the safe rollback.
 
 ## Sandbox token lifetime
 
 Turn tokens handed to sandboxes (agent API, credential broker, egress proxy, OAuth
 consent) expire 48 hours after the turn starts, which bounds how long background jobs
-launched by that turn keep their access. Set `SANDBOX_CAPABILITY_TTL_HOURS` on every
-process that issues capabilities to change it: a positive number of hours, or `0` /
-`none` for no expiry (`exp: 0`). The value is read
-once at startup; an invalid value fails startup. Tokens already issued keep the
-lifetime they were minted with. Revocation and scope checks still apply to
-non-expiring tokens. This does not remove run/lease, background-job, provider, or
-credential lifetime limits. Non-expiring bearer tokens increase exposure if leaked;
-keep the default unless background work requires longer access.
+launched by that turn keep their access. These are bearer credentials readable by any
+process in the sandbox, so the expiry is the bound on how long a leaked copy stays usable;
+48 hours is far above the background-job ceiling (one hour by default) and leaves room for
+a turn's jobs and follow-up work. The lifetime is fixed and every token carries an expiry;
+a token without one fails verification.
 
 A turn token carries `personAuthority` when the turn acts for a person: their own turn, a
 fire of a cron, loop, webhook or monitor they own, or a subagent of either, when everyone who

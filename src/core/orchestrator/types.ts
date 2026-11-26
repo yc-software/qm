@@ -133,7 +133,6 @@ export interface OrchestratorDeps {
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs: number;
-  sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs: number;
   agent: Agent;
   signingSecret?: string;

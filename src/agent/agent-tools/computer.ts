@@ -27,12 +27,7 @@ export function computerTools(kit: ToolKit) {
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlMs = opts?.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
-  const capabilityTtlHours = capabilityTtlMs / 3_600_000;
-  const capabilityExpiry =
-    capabilityTtlMs === 0
-      ? "Those turn tokens do not expire here, but authorization checks still apply."
-      : `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
+  const capabilityExpiry = `Those turn tokens expire ${SANDBOX_CAPABILITY_TTL_MS / 3_600_000} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
   const adoptSandbox = opts?.botActor ? "pass its sandbox_id" : "set it default";
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
