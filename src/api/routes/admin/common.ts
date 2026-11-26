@@ -62,7 +62,7 @@ export async function discoverScopes(
 ): Promise<Map<string, string>> {
   const labels = new Map<string, string>([[orgScope(deps), "org-wide"]]);
   const [scopes, participants, grants] = await Promise.all([
-    deps.sessions.distinctScopes() ?? [],
+    deps.sessions.distinctScopes(),
     deps.sessions.distinctParticipants() ?? [],
     deps.admin.listGrants(tenant) ?? [],
   ]);

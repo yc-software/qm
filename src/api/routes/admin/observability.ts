@@ -68,7 +68,7 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
     });
   }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
-  const total = (await deps.errors.count(tenantOf(ctx), filters)) ?? 0;
+  const total = await deps.errors.count(tenantOf(ctx), filters);
   if (url.searchParams.get("count")) return sendJson(res, 200, { scopeId: scope, total });
   const lastOffset = total ? Math.floor((total - 1) / limit) * limit : 0;
   const offset = Math.min(rawOffset, lastOffset);

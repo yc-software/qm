@@ -140,7 +140,6 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
       message: "Choose a provider and explicitly consent to verification with verify: true.",
     });
   const { config, modelVerifier } = ctx.deps;
-  if (!config || !modelVerifier) return sendJson(ctx.res, 503, { error: "verification_unavailable" });
   await ctx.deps.refreshModels();
   const spec = builtinModelSpec(input.data);
   if (!spec)

@@ -277,7 +277,7 @@ type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
 async function scopeServiceCredentials(deps: ApiCtx["deps"], tenant: Tenant, targetScope: string) {
   const [credentials, grants] = await Promise.all([
-    deps.serviceCreds.listServiceCredentials(targetScope) ?? [],
+    deps.serviceCreds.listServiceCredentials(targetScope),
     deps.acl.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
@@ -296,7 +296,7 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   const targetScope = ctx.params.scope!;
   if (!targetScope || targetScope.includes("/")) return sendJson(ctx.res, 404, { error: "not_found" });
   if (!(await authorizeAdmin(ctx, targetScope))) return;
-  const credentials = (await ctx.deps.serviceCreds.listServiceCredentials(targetScope)) ?? [];
+  const credentials = await ctx.deps.serviceCreds.listServiceCredentials(targetScope);
   const summaries = await ctx.deps.credentialUsage.summary(
     tenantOf(ctx),
     credentials.map((credential) => credential.slug),
