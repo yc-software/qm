@@ -14462,7 +14462,7 @@ button:disabled .qm-switch {
   overflow-y: auto;
   scrollbar-width: thin;
 }
-.composer-approval-panel:not(.docked, .composer-wrap > *) {
+.composer-approval-panel.boxed {
   box-sizing: border-box;
   width: min(var(--content-w), calc(100% - 32px));
   margin: 0 auto 10px;
@@ -14475,16 +14475,19 @@ button:disabled .qm-switch {
     0 8px 24px rgb(0 0 0 / 0.06);
   scrollbar-width: thin;
 }
-.subagent-row > .composer-approval-panel {
+.composer-approval-panel.strip {
+  box-sizing: border-box;
   flex-basis: 100%;
-  width: auto;
   margin: 2px 0 8px;
   padding: 14px 14px 12px;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: none;
+  background: var(--background);
+  scrollbar-width: thin;
 }
-.custom-chat-shell:has(> .readonly-top) {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+.composer-approval-panel.strip .ac-title {
+  margin: 4px 0 8px;
+  font-size: 1em;
 }
 .composer-wrap.has-approval {
   box-shadow:
@@ -14859,6 +14862,10 @@ button:disabled .qm-switch {
   color: var(--foreground);
   box-shadow: inset 0 0 0 1px var(--border);
 }
+.ac-dismiss kbd {
+  margin-left: 6px;
+}
+.ac-dismiss kbd,
 .send-btn.ac-confirm kbd {
   font: inherit;
   font-weight: 400;

@@ -593,7 +593,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       const selected =
         (ctx.chat.state.threadRef ? threadModelPicks.get(ctx.chat.state.threadRef) : undefined) ?? defaultModelId();
       return html`<div class="composer-wrap">
-        ${header} ${pausedApprovals.length ? composerApprovalPanel(pausedApprovals) : nothing}
+        ${header} ${pausedApprovals.length ? composerApprovalPanel(pausedApprovals, undefined, "inline") : nothing}
         <p role="status">
           ${composerState.error || activeRuntimeConfig?.unavailableReason || "Selected model is unavailable. Choose a replacement to continue."}
           ${selected}
@@ -684,7 +684,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             : nothing
         }
         ${attachmentStrip(agent)}
-        ${approvalPauses.length ? composerApprovalPanel(approvalPauses, ctx.chat.resolveCommandApproval, docked.length > 0) : nothing}
+        ${approvalPauses.length ? composerApprovalPanel(approvalPauses, undefined, docked.length ? "docked" : "inline") : nothing}
         ${!approvalPauses.length && receipt ? approvalReceipt(receipt) : nothing}
         ${composerInput({
           value: composerState.draft,
@@ -999,6 +999,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   let receipt: ApprovalReceipt | null = null;
   let receiptTimer: ReturnType<typeof setTimeout> | undefined;
   const settling = new Set<string>();
+  const batched = new Set<string>();
 
   function showReceipt(verdict: ApprovalReceipt["verdict"], approvals: PendingApproval[]): void {
     const first = approvals[0];
@@ -1044,19 +1045,22 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function composerApprovalPanel(
     approvals: PendingApproval[],
     resolve: (decision: ApprovalDecision) => void | Promise<void> = ctx.chat.resolveCommandApproval,
-    docked = false,
+    placement: "docked" | "inline" | "boxed" | "strip" = "boxed",
   ): TemplateResult {
+    const docked = placement === "docked";
     const resolving = ctx.chat.state.resolvingApprovals;
     const busy = resolving.size > 0;
+    if (approvals.length > 1) for (const a of approvals) batched.add(a.requestId);
     const decide = (decision: ApprovalDecision): void => {
       if (resolving.has(decision.requestId)) return;
       const target = approvals.filter((a) => a.requestId === decision.requestId);
       if (docked && approvals.length === 1) showReceipt(decision.approved ? "approved" : "declined", target);
       void resolve(decision);
     };
-    return html`<div class="composer-approval-panel ${docked ? "docked" : ""}">
+    return html`<div class="composer-approval-panel ${placement}">
       ${approvalCard(approvals, {
         docked,
+        batch: approvals.some((a) => batched.has(a.requestId)),
         typing: docked && !!composerState.draft.trim() && declinedByReply(approvals).length > 0,
         busy,
         decide,
@@ -1082,9 +1086,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : `${approveKey} to approve, or say what to change`;
   }
 
-  function approveDocked(approvals: PendingApproval[]): void {
-    showReceipt("approved", approvals);
-    void decideEach(approvals, true, ctx.chat.resolveCommandApproval);
+  function decideDocked(approvals: PendingApproval[], approved: boolean): void {
+    showReceipt(approved ? "approved" : "declined", approvals);
+    void decideEach(approvals, approved, ctx.chat.resolveCommandApproval);
   }
 
   function declineOnSend(agent: Agent, approvals: PendingApproval[]): void {
@@ -1439,6 +1443,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         return;
       }
     }
+    const docked = e.key === "Escape" && !composerState.openMenu ? dockedApprovals(agent) : [];
+    if (docked.length) {
+      e.preventDefault();
+      return decideDocked(docked, false);
+    }
     if (e.key === "Tab" && !e.shiftKey && !composerState.draft && suggestedNext) {
       e.preventDefault();
       return fillSuggestedPrompt(suggestedNext, agent);
@@ -1698,7 +1707,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const draft = composerState.draft.trim();
     const docked = dockedApprovals(agent);
     if (!draft && composerState.attachments.length === 0) {
-      if (docked.length && (!fromKey || flipSteer)) approveDocked(docked);
+      if (docked.length && (!fromKey || flipSteer)) decideDocked(docked, true);
       return;
     }
     const declining = declinedByReply(docked);

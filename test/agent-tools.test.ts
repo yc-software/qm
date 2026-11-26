@@ -2996,10 +2996,15 @@ test("execute and process approvals preserve intent and action identity", async 
     const entries: Array<Record<string, unknown>> = [];
     const tc = fakeToolContext();
     tc.execute = tc.backgroundStart = async () => {
-      throw new NeedsApproval("danger", "Review this", "approval", undefined, "sandbox:synthetic", {
-        session: false,
-        always: false,
-      });
+      throw new NeedsApproval(
+        "danger",
+        "Review this",
+        "approval",
+        undefined,
+        "sandbox:synthetic",
+        { session: false, always: false },
+        "Do the dangerous thing",
+      );
     };
     const ref: ToolContextRef = {
       current: tc,
@@ -3017,6 +3022,7 @@ test("execute and process approvals preserve intent and action identity", async 
     );
     assert.equal(ref.pausedOnApproval, true);
     assert.equal(ref.pendingApprovals?.[0]?.command, "danger");
+    assert.equal(ref.pendingApprovals?.[0]?.summary, "Do the dangerous thing");
     assert.ok(entries.every((e) => e.tool === "execute"));
     assert.equal(ref.pendingApprovals?.[0]?.purpose, "Verify protected operation");
     assert.deepEqual(ref.pendingApprovals?.[0]?.grantModes, { session: false, always: false });

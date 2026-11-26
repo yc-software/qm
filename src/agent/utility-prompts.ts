@@ -157,10 +157,12 @@ export const ACK_EMOJI_PROMPT = [
 ].join("\n");
 
 export const APPROVAL_SUMMARY_PROMPT = [
-  "A command hit a human-approval gate. Explain, in ONE plain-English sentence, what running THIS",
-  "specific command would actually do — concrete enough that a non-expert can decide whether to allow it.",
+  "A command hit a human-approval gate. Write the title of its approval card: what running THIS",
+  "specific command would do, as one short imperative phrase addressed to the person deciding, like",
+  '"Push branch fix/login to acme/widgets" or "Delete your staging database backups".',
   "Name the real targets (files, branches, tables, URLs) the command acts on; don't restate the policy",
-  "label or the raw flags.",
-  "Output ONLY the sentence: no quotes, no prefix, no markdown. If the command is unintelligible,",
-  "output exactly: NONE",
+  "label or the raw flags. Say only what the command itself shows: no hedging, no caveats, and nothing",
+  "about what it leaves unsaid.",
+  "Output ONLY the phrase: no quotes, no prefix, no closing period, no markdown. If the command is",
+  "unintelligible, output exactly: NONE",
 ].join("\n");

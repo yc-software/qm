@@ -20,8 +20,7 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
-import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
-import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { isSensitiveKey, maskSecretLiterals } from "../../../plugins/chassis/src/redact-secrets.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -51,13 +50,13 @@ export function newApprovalRecord(
 export function approvalView(requestId: string, record: PendingApprovalRecord): PendingApproval {
   return {
     requestId,
-    command: redactedCommand(record.command),
+    command: maskSecretLiterals(record.command),
     reason: record.reason ?? "requires approval",
     blocksInput: record.blocksInput !== false,
     ...(record.grantModes ? { grantModes: record.grantModes } : {}),
-    ...(record.matched ? { matched: redactedCommand(record.matched) } : {}),
+    ...(record.matched ? { matched: maskSecretLiterals(record.matched) } : {}),
     ...(record.purpose ? { purpose: record.purpose } : {}),
-    ...(record.summary ? { summary: redactedCommand(record.summary) } : {}),
+    ...(record.summary ? { summary: maskSecretLiterals(record.summary) } : {}),
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
@@ -68,22 +67,15 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
 
 export function decisionBody(record: PendingApprovalRecord): Record<string, unknown> {
   return {
-    command: redactedCommand(record.command),
+    command: maskSecretLiterals(record.command),
     ...(record.purpose ? { purpose: record.purpose } : {}),
-    ...(record.summary && record.call ? { summary: redactedCommand(record.summary) } : {}),
+    ...(record.summary && record.call ? { summary: maskSecretLiterals(record.summary) } : {}),
     ...visibleCall(record),
   };
 }
 
-function redactedCommand(command: string): string {
-  return redactCommandSecrets(command)
-    .split("\n")
-    .map((line) => line.split(" ").map(redactSecrets).join(" "))
-    .join("\n");
-}
-
 function redactedValue(value: unknown): unknown {
-  if (typeof value === "string") return redactCommandSecrets(redactSecrets(value));
+  if (typeof value === "string") return maskSecretLiterals(value);
   if (Array.isArray(value)) return value.map(redactedValue);
   if (value && typeof value === "object")
     return Object.fromEntries(

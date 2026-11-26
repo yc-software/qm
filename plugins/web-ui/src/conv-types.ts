@@ -148,7 +148,7 @@ export interface ComposerSurface {
   composerApprovalPanel(
     approvals: PendingApproval[],
     resolve?: (decision: ApprovalDecision) => void | Promise<void>,
-    docked?: boolean,
+    placement?: "docked" | "inline" | "boxed" | "strip",
   ): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;

@@ -1766,16 +1766,14 @@ export function createChatSurface(
       content = html`
         <div class="custom-chat-shell">
           ${header}
-          <div class="readonly-top">
-            ${
-              slackReply
-                ? nothing
-                : html`<div class="readonly-banner">
-                    This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
-                  </div>`
-            }
-            ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
-          </div>
+          ${
+            slackReply
+              ? nothing
+              : html`<div class="readonly-banner">
+                  This conversation is read-only here.${chatSurface ? ` Reply in ${chatSurface.label}.` : ""}
+                </div>`
+          }
+          ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
           <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
             <div class="message-stack">
@@ -2996,8 +2994,10 @@ export function createChatSurface(
       ${subagentStopTpl(rootId, row)}
       ${
         approvals.length
-          ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
-              resolveSubagentApproval(row.session.id, decision),
+          ? ctx.composer.composerApprovalPanel(
+              approvals,
+              (decision) => resolveSubagentApproval(row.session.id, decision),
+              "strip",
             )
           : nothing
       }
