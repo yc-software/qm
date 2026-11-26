@@ -5,10 +5,12 @@ struct NativeConversationSection: Identifiable {
   let title: String
   let icon: String
   var conversations: [Conversation]
+  /// Mixes conversations from several scopes, so rows show their scope and never collapse.
+  var crossScope = false
   var members: [WorkspaceContext.GroupMember] = []
 
   var hasPreview: Bool {
-    id != "pinned" && id != "waiting" && conversations.count > 5
+    !crossScope && conversations.count > 5
       && conversations.first.map { ScopeKind(scopeId: $0.scopeId) != .personal } == true
   }
 
@@ -25,12 +27,15 @@ struct NativeConversationSection: Identifiable {
     let waiting = conversations.filter { $0.awaitingInput == true }
     if !waiting.isEmpty {
       sections.append(
-        Self(id: "waiting", title: "Waiting on you", icon: "clock", conversations: waiting))
+        Self(
+          id: "waiting", title: "Waiting on you", icon: "clock", conversations: waiting,
+          crossScope: true))
     }
     let rest = conversations.filter { $0.awaitingInput != true }
     let pinned = rest.filter { $0.pinned == true }
     if !pinned.isEmpty {
-      sections.append(Self(id: "pinned", title: "Pinned", icon: "pin", conversations: pinned))
+      sections.append(
+        Self(id: "pinned", title: "Pinned", icon: "pin", conversations: pinned, crossScope: true))
     }
     var indices: [String: Int] = [:]
     for conversation in rest where conversation.pinned != true {
@@ -226,7 +231,7 @@ struct NativeConversationSections<Actions: View>: View {
       } label: {
         NativeConversationRow(
           conversation: conversation,
-          showsContext: section.id == "pinned" || section.id == "waiting",
+          showsContext: section.crossScope,
           contextTitle: contexts[conversation.scopeId].flatMap {
             $0.isPersonal ? nil : $0.title
           },

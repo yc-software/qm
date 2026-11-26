@@ -128,7 +128,8 @@ extension NativeConversationSidebarTests {
       ["chat-1", "chat-2", "chat-3", "chat-4", "chat-5", "chat-8"])
     XCTAssertEqual(section.preview(showAll: true, selectedID: nil), conversations)
     let pinned = NativeConversationSection(
-      id: "pinned", title: "Pinned", icon: "pin", conversations: conversations)
+      id: "pinned", title: "Pinned", icon: "pin", conversations: conversations,
+      crossScope: true)
     XCTAssertFalse(pinned.hasPreview)
     let personal = NativeConversationSection(
       id: "personal", title: "Personal", icon: "person",
