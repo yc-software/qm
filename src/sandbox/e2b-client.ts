@@ -72,6 +72,7 @@ interface E2bCreateOpts {
   autoPause?: boolean;
   autoResume?: boolean;
   fromSnapshot?: string;
+  template?: string;
 }
 
 export interface E2bClient {
@@ -315,7 +316,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     async create(createOpts): Promise<E2bSession> {
       const lib = await loadSdk();
       const timeoutMs = Math.min(maxLifetimeMs, createOpts.timeoutMs ?? sandboxTtlMs);
-      const sbx = await lib.Sandbox.create(createOpts.fromSnapshot ?? templateId, {
+      const sbx = await lib.Sandbox.create(createOpts.fromSnapshot ?? createOpts.template ?? templateId, {
         ...common,
         timeoutMs,
         metadata: createOpts.metadata,

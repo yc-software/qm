@@ -28,7 +28,8 @@ test("a new person sees their company's seeded activities, only apps they connec
     listSessions: [],
     connectionReturn: true,
     api: (path) => {
-      if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], ...me });
+      if (path === "/me")
+        return Response.json({ user: "tester", personalScope: "personal:tester", org: "test", permissions: [], ...me });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },
   });
@@ -112,7 +113,14 @@ test("/onboard shows the welcome to a person who already has conversations, with
     path: "/onboard",
     listSessions: [{ ...SESSION, createdAt: 1 }],
     api: (path) => {
-      if (path === "/me") return Response.json({ user: "tester", org: "test", permissions: [], welcome });
+      if (path === "/me")
+        return Response.json({
+          user: "tester",
+          personalScope: "personal:tester",
+          org: "test",
+          permissions: [],
+          welcome,
+        });
       if (path === "/api/composio/slack") return Response.json({ connected: true, workspaceInstalled: true });
       return path.startsWith("/api/runtime-config") ? Response.json(runtimeConfig) : undefined;
     },

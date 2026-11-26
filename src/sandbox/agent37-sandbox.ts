@@ -32,6 +32,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
@@ -105,6 +106,7 @@ interface InstanceExecResponse {
 }
 
 export interface Agent37SandboxOptions {
+  imageFor?: ImageFor;
   apiKey?: string;
   baseUrl?: string;
   namePrefix?: string;
@@ -202,14 +204,14 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
     }
   }
 
-  async function createInstance(name: string, memoryGb?: number): Promise<InstanceInfo> {
+  async function createInstance(name: string, memoryGb?: number, chosen?: string): Promise<InstanceInfo> {
     const sized = memoryGb ? { ...resources, memory: memoryGb } : resources;
     const res = await fetchWithRetry(
       (signal) =>
         send(
           "POST",
           "/v1/instances",
-          { template, name, resources: sized, auto_sleep: true },
+          { template: chosen ?? template, name, resources: sized, auto_sleep: true },
           CREATE_TIMEOUT_MS,
           signal,
         ),
@@ -430,7 +432,7 @@ export function createAgent37Sandbox(opts: Agent37SandboxOptions): Sandbox {
           return { coldStart: false };
         }
         onStatus?.("Creating the sandbox…");
-        const info = await createInstance(name, memoryGb);
+        const info = await createInstance(name, memoryGb, await opts.imageFor?.(key));
         idByName.set(name, info.id);
         return { coldStart: true };
       }),

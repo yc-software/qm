@@ -5,15 +5,17 @@ struct NativeConversationSection: Identifiable {
   let title: String
   let icon: String
   var conversations: [Conversation]
+  /// Mixes conversations from several scopes, so rows show their scope and never collapse.
+  var crossScope = false
   var members: [WorkspaceContext.GroupMember] = []
 
   var hasPreview: Bool {
-    id != "pinned" && conversations.count > 5
+    !crossScope && conversations.count > 5
       && conversations.first.map { ScopeKind(scopeId: $0.scopeId) != .personal } == true
   }
 
-  func preview(showAll: Bool, searching: Bool, selectedID: String?) -> [Conversation] {
-    guard hasPreview, !showAll, !searching else { return conversations }
+  func preview(showAll: Bool, selectedID: String?) -> [Conversation] {
+    guard hasPreview, !showAll else { return conversations }
     return conversations.enumerated().filter { $0.offset < 5 || $0.element.id == selectedID }.map(
       \.element)
   }
@@ -22,12 +24,21 @@ struct NativeConversationSection: Identifiable {
     _ conversations: [Conversation], contexts: [String: WorkspaceContext]
   ) -> [Self] {
     var sections: [Self] = []
-    let pinned = conversations.filter { $0.pinned == true }
+    let waiting = conversations.filter { $0.awaitingInput == true }
+    if !waiting.isEmpty {
+      sections.append(
+        Self(
+          id: "waiting", title: "Waiting on you", icon: "clock", conversations: waiting,
+          crossScope: true))
+    }
+    let rest = conversations.filter { $0.awaitingInput != true }
+    let pinned = rest.filter { $0.pinned == true }
     if !pinned.isEmpty {
-      sections.append(Self(id: "pinned", title: "Pinned", icon: "pin", conversations: pinned))
+      sections.append(
+        Self(id: "pinned", title: "Pinned", icon: "pin", conversations: pinned, crossScope: true))
     }
     var indices: [String: Int] = [:]
-    for conversation in conversations where conversation.pinned != true {
+    for conversation in rest where conversation.pinned != true {
       let scope = conversation.scopeId
       if let index = indices[scope] {
         sections[index].conversations.append(conversation)
@@ -164,7 +175,6 @@ struct NativeGroupAvatars: View {
 struct NativeConversationSections<Actions: View>: View {
   let conversations: [Conversation]
   let contexts: [String: WorkspaceContext]
-  let search: String
   let selectedID: String?
   let updatingIDs: Set<String>
   let onOpen: (Conversation) -> Void
@@ -182,7 +192,7 @@ struct NativeConversationSections<Actions: View>: View {
   private func conversationSection(
     _ section: NativeConversationSection, contexts: [String: WorkspaceContext]
   ) -> some View {
-    let expanded = !search.isEmpty || !collapsedScopes.contains(section.id)
+    let expanded = !collapsedScopes.contains(section.id)
     Button {
       if !collapsedScopes.insert(section.id).inserted {
         collapsedScopes.remove(section.id)
@@ -209,21 +219,19 @@ struct NativeConversationSections<Actions: View>: View {
     )
     .accessibilityValue(expanded ? "Expanded" : "Collapsed")
     .accessibilityHint("Show or hide conversations in this section")
-    .disabled(!search.isEmpty)
     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 0, trailing: 20))
     .listRowSeparator(.hidden)
     ForEach(
       expanded
         ? section.preview(
-          showAll: expandedFolderScopes.contains(section.id), searching: !search.isEmpty,
-          selectedID: selectedID) : []
+          showAll: expandedFolderScopes.contains(section.id), selectedID: selectedID) : []
     ) { conversation in
       Button {
         onOpen(conversation)
       } label: {
         NativeConversationRow(
           conversation: conversation,
-          showsContext: section.id == "pinned",
+          showsContext: section.crossScope,
           contextTitle: contexts[conversation.scopeId].flatMap {
             $0.isPersonal ? nil : $0.title
           },
@@ -239,7 +247,7 @@ struct NativeConversationSections<Actions: View>: View {
         actions(conversation)
       }
     }
-    if expanded, search.isEmpty, section.hasPreview {
+    if expanded, section.hasPreview {
       Button(expandedFolderScopes.contains(section.id) ? "Show less" : "Show more") {
         if !expandedFolderScopes.insert(section.id).inserted {
           expandedFolderScopes.remove(section.id)

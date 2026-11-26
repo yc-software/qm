@@ -1,4 +1,4 @@
-import { isPrincipalType, PRINCIPAL_TYPES, scopeId } from "../../types.ts";
+import { isPrincipalType, PRINCIPAL_TYPES, scopeId, scopeLabel, personalScope } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { cleanDisplayName } from "../../identity/user-store.ts";
@@ -12,7 +12,6 @@ const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" &&
 
 async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.deactivate(id);
@@ -22,7 +21,6 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
 
 async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.reactivate(id);
@@ -34,9 +32,9 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
-  await deps.identity?.refresh();
+  await deps.identity.refresh();
   const canonicalId = canonicalPerson(id);
-  const user = await deps.users?.get(canonicalId);
+  const user = await deps.users.get(canonicalId);
   const label = personLabel(canonicalId, { user });
   return sendJson(res, 200, {
     principalId: id,
@@ -48,7 +46,6 @@ async function canonicalPrincipal(ctx: ApiCtx): Promise<void> {
 
 async function recordProfile(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.users) return sendJson(res, 404, { error: "not_found" });
   const b = isObj(ctx.body) ? ctx.body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId.trim() : "";
   const displayName = cleanDisplayName(b.displayName);
@@ -196,7 +193,8 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   else if (r.kind === "ambiguous") found = r.candidates;
   const matches = found.map((m) => {
     const slackId = m.slackId ?? (SLACK_ID_RE.test(m.principalId) ? m.principalId : undefined);
-    return slackId ? { ...m, slackId } : m;
+    const scopeId = personalScope(m.principalId);
+    return slackId ? { ...m, slackId, scopeId } : { ...m, scopeId };
   });
   return sendJson(res, 200, { matches });
 }
@@ -226,6 +224,11 @@ async function channelsFor(ctx: ApiCtx): Promise<void> {
       isPrivate: channel.isPrivate === true,
     }));
   return sendJson(ctx.res, 200, { channels });
+}
+
+async function scopeLabels(ctx: ApiCtx): Promise<void> {
+  const scopes = ctx.url.searchParams.getAll("scope");
+  return sendJson(ctx.res, 200, { labels: Object.fromEntries(scopes.map((scope) => [scope, scopeLabel(scope)])) });
 }
 
 async function channelMembership(ctx: ApiCtx): Promise<void> {
@@ -261,6 +264,7 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "either",
     handle: resolveDirectory,
   },
+  { method: "GET", path: "/v1/scope-labels", browser: true, actor: "person", auth: "either", handle: scopeLabels },
   ...withActor("system", [
     { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
     { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },

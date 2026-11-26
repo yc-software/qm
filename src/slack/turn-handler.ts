@@ -55,6 +55,8 @@ import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { type SlackConversationKind, conversationPlaceLabel } from "./messaging.ts";
+import { personalScope } from "../types.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -119,20 +121,9 @@ export function createTurnHandler(deps: {
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
-  onEngaged?: (
-    runId: string,
-    channel: string,
-    threadTs?: string,
-    meta?: {
-      sessionId: string;
-      detailMode: "full" | "brief";
-      recipientUserId?: string;
-      recipientTeamId?: string;
-      unprompted?: boolean;
-      initialTitle?: string;
-    },
-  ) => void;
-  onSettled?: (runId?: string) => void;
+  onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
+  onSettled?: () => void;
+  card?: (channel: string, threadTs: string) => Pick<SlackStatusCard, "posted"> | undefined;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -237,7 +228,7 @@ export function createTurnHandler(deps: {
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
       replyThreadTs = inc.threadTs;
       if (!actor.isBot && !actor.isExternalGuest)
-        deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
+        deps.ensureHeader?.(client, inc.channel, personalScope(actor.externalId), "dm");
     } else {
       channelRef = inc.channel;
       channelObservedAt = Date.now();
@@ -263,21 +254,11 @@ export function createTurnHandler(deps: {
       triggerTs: inc.ts,
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
-      ...(core?.thinkingStream ? { thinkingStream: core.thinkingStream } : {}),
-      sessionId: () => threadRef,
-      detailMode: () =>
-        isExternallyShared(channelInfo) ||
-        Boolean(deps.externalAccess) ||
-        Boolean(actor.isExternalGuest) ||
-        audience.some((a) => a.isExternalGuest)
-          ? "brief"
-          : "full",
-      ...(ids.ownTeamId ? { recipientTeamId: ids.ownTeamId } : {}),
-      ...(inc.unprompted ? { unprompted: true } : {}),
-      ...(inc.rawText ? { initialTitle: inc.rawText } : {}),
       ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
+      ...(core.readSurfaceMessages ? { readSurfaceMessages: core.readSurfaceMessages.bind(core) } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),
+      ...(deps.card ? { card: deps.card } : {}),
     });
 
     if (inc.kind === "channel") {
@@ -355,6 +336,8 @@ export function createTurnHandler(deps: {
       let overheard: OverheardMessage[] | undefined;
       let detectContext: string | undefined;
       let detectOpener: string | undefined;
+      let threadFiles: SlackFile[] = [];
+      let nameById: ReadonlyMap<string, string> | undefined;
       if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
         const serialize = () =>
           serializer.serializeSlackConversation(client, inc, {
@@ -379,9 +362,13 @@ export function createTurnHandler(deps: {
         if (rendered.detectContext) detectContext = rendered.detectContext;
         if (rendered.detectOpener) detectOpener = rendered.detectOpener;
         allowedTs = rendered.allowedTs;
+        threadFiles = serialized.threadFiles ?? [];
+        nameById = serialized.view.nameById;
       }
 
-      const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
+      const ownFiles = [...inc.files, ...threadFiles].map((f) =>
+        f.user || !inc.userId ? f : { ...f, user: inc.userId },
+      );
       const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
         token: deps.botToken,
         where: { account: ids.ownTeamId, chat: inc.channel },
@@ -423,7 +410,7 @@ export function createTurnHandler(deps: {
           const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
           return candidates ? { deliveryCandidates: candidates } : {};
         })(),
-        text,
+        text: resolveMentions(text, nameById),
         gatewayContext,
         ...(deps.personaId ? { personaId: deps.personaId } : {}),
         ...(actor.isBot ? { botActor: true } : {}),

@@ -48,9 +48,7 @@ final class NativeConversationDrawerTests: XCTestCase {
         .background(Marker(view: sidebarMarker))
       } detail: {
         NavigationStack {
-          ChatView(
-            model: model,
-            onShowConversations: { state.open = true })
+          ChatView(model: model)
         }
         .background(Marker(view: detailMarker))
       }
@@ -59,7 +57,7 @@ final class NativeConversationDrawerTests: XCTestCase {
     }
   }
 
-  func testDrawerKeepsChatMountedAndLeavesAVisibleStrip() async throws {
+  func testListCoversTheScreenAndKeepsChatMounted() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ForegroundSyncProtocol.self]
     let client = APIClient(
@@ -77,17 +75,9 @@ final class NativeConversationDrawerTests: XCTestCase {
       Harness(state: state, sidebarMarker: sidebar, detailMarker: detail, model: model)
     ) { window in
       let openFrame = detail.convert(detail.bounds, to: window)
-      XCTAssertGreaterThan(openFrame.minX, window.bounds.width / 2)
-      XCTAssertLessThan(openFrame.minX, window.bounds.width - 44)
-      XCTAssertEqual(openFrame.width, window.bounds.width, accuracy: 1)
-      let image = capture(window, name: "Conversation drawer")
-      for y in [
-        window.safeAreaInsets.top / 2, window.bounds.height - window.safeAreaInsets.bottom / 2,
-      ] {
-        XCTAssertGreaterThan(
-          try contrast(image, in: CGRect(x: openFrame.minX, y: y, width: 32, height: 1)), 0.04,
-          "The drawer outline must remain visible in the top and bottom safe areas")
-      }
+      XCTAssertEqual(openFrame.minX, window.bounds.width, accuracy: 1)
+      XCTAssertEqual(sidebar.bounds.width, window.bounds.width, accuracy: 1)
+      capture(window, name: "Conversation list")
       state.open = false
       try await settle(window)
       XCTAssertEqual(detail.convert(detail.bounds, to: window).minX, 0, accuracy: 1)
@@ -131,98 +121,11 @@ final class NativeConversationDrawerTests: XCTestCase {
     }
   }
 
-  func testBottomSearchFiltersConversations() async throws {
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
-    let model = AppModel(defaults: defaults, configuredURL: "https://sidebar.example.test")
-    model.identity = Identity(user: "test", companyName: nil, displayName: "Test")
-    model.conversations = ["Review the launch plan", "Prepare meeting notes"].enumerated().map {
-      Conversation(
-        id: "conversation-\($0.offset)", scopeId: "personal:test",
-        threadRef: "web:test:\($0.offset)", surface: "web", title: $0.element)
-    }
-    try await withWindow(
-      RootView(model: model).environment(\.scenePhase, .background).tint(QMTheme.ink)
-    ) { window in
-      let search = try XCTUnwrap(
-        descendants(window).compactMap { $0 as? UITextField }.first {
-          $0.placeholder == "Find a conversation"
-        })
-      let collection = try XCTUnwrap(
-        descendants(window).compactMap { $0 as? UICollectionView }.first)
-      let count = collection.numberOfItems(inSection: 0)
-      XCTAssertGreaterThan(
-        search.convert(search.bounds, to: window).midY, window.bounds.height * 0.8)
-      capture(window, name: "Conversation search and account")
-      search.text = "launch"
-      search.sendActions(for: .editingChanged)
-      try await settle(window)
-      XCTAssertEqual(collection.numberOfItems(inSection: 0), count - 1)
-      search.text = ""
-      search.sendActions(for: .editingChanged)
-      try await settle(window)
-      XCTAssertEqual(collection.numberOfItems(inSection: 0), count)
-      window.overrideUserInterfaceStyle = .dark
-      try await settle(window)
-      capture(window, name: "Conversation search and account dark")
-    }
-  }
-
-  func testSearchFindsProjectConversationsAndRowsAreCompact() async throws {
-    let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
-    let model = AppModel(defaults: defaults, configuredURL: "https://sidebar.example.test")
-    model.identity = Identity(user: "test", companyName: nil, displayName: "Test")
-    model.contexts = [
-      WorkspaceContext(
-        scopeId: "group:billing", kind: "group", name: "Billing migration", isPrivate: nil,
-        sessionCount: 1, project: nil)
-    ]
-    model.conversations = [
-      Conversation(
-        id: "project", scopeId: "group:billing", threadRef: "web:project", surface: "web",
-        title: "Audit handlers"),
-      Conversation(
-        id: "personal", scopeId: "personal:test", threadRef: "web:personal", surface: "web",
-        title: "Prepare notes"),
-    ]
-    try await withWindow(RootView(model: model).environment(\.scenePhase, .background)) { window in
-      let search = try XCTUnwrap(
-        descendants(window).compactMap { $0 as? UITextField }.first {
-          $0.placeholder == "Find a conversation"
-        })
-      let collection = try XCTUnwrap(
-        descendants(window).compactMap { $0 as? UICollectionView }.first)
-      XCTAssertEqual(collection.numberOfItems(inSection: 0), 4)
-      let row = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 1, section: 0)))
-      XCTAssertLessThanOrEqual(row.bounds.height, 44)
-      search.text = "Billing"
-      search.sendActions(for: .editingChanged)
-      try await settle(window)
-      XCTAssertEqual(collection.numberOfItems(inSection: 0), 2)
-      search.text = "no match"
-      search.sendActions(for: .editingChanged)
-      try await settle(window)
-      for _ in 0..<12 where collection.numberOfSections == 0 { try await settle(window) }
-      XCTAssertEqual(collection.numberOfItems(inSection: 0), 1)
-    }
-  }
-
-  func testWorkspaceRendersAllPermittedDestinationsInThreeGroups() async throws {
+  func testWorkspaceGroupsAllPermittedDestinationsInThreeSections() {
     let identity = Identity(
       user: "test", companyName: nil, displayName: "Test", permissions: ["inbox", "loops"])
-    let client = APIClient(baseURL: URL(string: "https://workspace.example.test")!)
-    try await withWindow(NavigationStack { BrowseView(identity: identity, client: client) }) {
-      window in
-      let collection = try XCTUnwrap(
-        descendants(window).compactMap { $0 as? UICollectionView }.first)
-      XCTAssertEqual(collection.numberOfSections, 3)
-      XCTAssertEqual(
-        (0..<collection.numberOfSections).map { collection.numberOfItems(inSection: $0) },
-        [5, 3, 5])
-      capture(window, name: "Your Workspace")
-      window.overrideUserInterfaceStyle = .dark
-      try await settle(window)
-      capture(window, name: "Your Workspace dark")
-    }
+    XCTAssertEqual(
+      WorkspaceDestination.sections(for: identity).map(\.destinations.count), [5, 3, 5])
   }
 
   private func withWindow<Content: View>(
@@ -270,12 +173,6 @@ final class NativeConversationDrawerTests: XCTestCase {
     return Double(pixel[1]) / 255
   }
 
-  private func contrast(_ image: UIImage, in rect: CGRect) throws -> Double {
-    let values = try pixels(image, in: rect)
-    let red = stride(from: 0, to: values.count, by: 4).map { Double(values[$0]) / 255 }
-    return try XCTUnwrap(red.max()) - XCTUnwrap(red.min())
-  }
-
   private func pixels(_ image: UIImage, in rect: CGRect) throws -> [UInt8] {
     let crop = try XCTUnwrap(
       image.cgImage?.cropping(
@@ -290,9 +187,5 @@ final class NativeConversationDrawerTests: XCTestCase {
       context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
     }
     return pixels
-  }
-
-  private func descendants(_ view: UIView) -> [UIView] {
-    view.subviews.flatMap { [$0] + descendants($0) }
   }
 }

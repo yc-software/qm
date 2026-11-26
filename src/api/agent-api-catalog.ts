@@ -199,7 +199,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files. If the upload quota is full, the helper\'s --list and --abort ID free slots.',
+      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published; it prints the file and a `url` that opens it (Markdown rendered) for anyone who can see this conversation, so link that url, not a workspace path. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files. If the upload quota is full, the helper\'s --list and --abort ID free slots.',
     routes: [
       {
         method: "GET",
@@ -437,6 +437,7 @@ const FAMILIES: AgentApiFamily[] = [
         summary:
           "list files the asking person can reach across their contexts, split into owned and shared files, newest first; q=<text> matches file names, and limit and cursor page owned files",
       },
+      { method: "GET", path: "/v1/files/:id", summary: "a file's name, type and size" },
       {
         method: "GET",
         path: "/v1/files/:id/content",

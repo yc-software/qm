@@ -21,7 +21,6 @@ import { turnRoutes } from "./turns.ts";
 import { webTurnRoutes } from "./web-turns.ts";
 import { webEventRoutes } from "./web-events.ts";
 import { webMeRoutes } from "./web-me.ts";
-import { webPushRoutes } from "./web-push.ts";
 import { voiceRoutes } from "./voice.ts";
 import { credentialRoutes } from "./credentials.ts";
 import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
@@ -85,7 +84,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
       });
       try {
         await Promise.race([
-          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness?.(controller.signal))),
+          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness(controller.signal))),
           deadline,
         ]);
         sendJson(res, 200, { ok: true });
@@ -133,7 +132,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...webTurnRoutes,
   ...webEventRoutes,
   ...webMeRoutes,
-  ...webPushRoutes,
   ...voiceRoutes,
   ...runEventRoutes,
   ...credentialRoutes,
@@ -148,9 +146,9 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
+  ...fileUploadRoutes,
   ...fileContentRoutes,
   ...surfaceRoutes,
-  ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...reachRoutes,

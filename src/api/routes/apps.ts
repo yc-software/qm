@@ -20,7 +20,7 @@ import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
-import { personalScope, scopeId, type Permission } from "../../types.ts";
+import { personalScope, scopeId, type Permission, parseScopeId } from "../../types.ts";
 import { tenantOf, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
@@ -92,11 +92,9 @@ async function proxyApp(ctx: BaseCtx): Promise<void> {
     const actor = psecret && tok ? await verifyPortalIdentity(tok, psecret, Date.now()) : null;
     if (!psecret || !actor || actor.p !== principal)
       return sendJson(res, 403, { error: "forbidden", message: "portal identity required" });
-    if (deps.identity) {
-      await deps.identity.refresh();
-      if (deps.identity.classify(actor.p).type !== "internal") {
-        return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
-      }
+    await deps.identity.refresh();
+    if (deps.identity.classify(actor.p).type !== "internal") {
+      return sendJson(res, 403, { error: "forbidden", message: "principal is no longer active" });
     }
   }
   if (
@@ -908,10 +906,10 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   let authenticatedPermission: Permission | null = null;
   if (sub && publishedApp) {
     if (session?.appOnly) {
-      await deps.identity?.refresh();
+      await deps.identity.refresh();
       if (
         externalAllowed &&
-        deps.identity?.deactivationSource(sub) !== "manual" &&
+        deps.identity.deactivationSource(sub) !== "manual" &&
         (await app.appGrantees(publishedApp.id)).some(
           (grant) => grant.scope === scopeId("personal", sub.trim().toLowerCase()) && grant.permission === "read",
         )
@@ -945,7 +943,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
   };
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
-      !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
+      !!sub && (await deps.featureFlags.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
       cleanUrlRedirect();
       return true;
@@ -957,7 +955,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
           app.appGrantees(publishedApp.id),
           app.canManageArtifactHome(publishedApp.ownerScopeId, publishedApp.createdBy, sub!),
         ]);
-        const orgName = (deps.config?.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
+        const orgName = (deps.config.getBranding(orgScope(deps)) ?? deps.brandingDefault)?.orgName;
         const { ownerScopeId } = publishedApp;
         sendJson(res, 200, {
           version: publishedApp.appliedVersion ?? publishedApp.currentVersion,
@@ -1011,9 +1009,9 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       status: "denied",
     };
     const hour = Math.floor(ev.at / 3_600_000);
-    if (deps.auditLog?.recordOnce)
+    if (deps.auditLog.recordOnce)
       await deps.auditLog.recordOnce(tenantOf(ctx), `reach_denied|${viewer}|${slug}|${hour}`, ev);
-    else deps.auditLog?.record(tenantOf(ctx), ev);
+    else deps.auditLog.record(tenantOf(ctx), ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
     const d = await app.getApp(slug).catch(swallowAs("apps: load app", null));
@@ -1021,8 +1019,8 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       sendJson(res, 404, { error: "not_found" });
       return true;
     }
-    const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
-    const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
+    const owner = parseScopeId(d.ownerScopeId);
+    const ownerId = owner.kind === "personal" && owner.ref ? owner.ref : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
     const day = Math.floor(Date.now() / 86_400_000);
     try {
@@ -1329,8 +1327,10 @@ async function listApps(ctx: ApiCtx): Promise<void> {
   const viewer = capability ?? { actorId: principalId };
   const visible = await app.listAppsForViewer(tenantOf(ctx), viewer);
   const baseUrl = gitUrlBase(ctx);
-  const ownerOf = (d: { ownerScopeId?: string }) =>
-    d.ownerScopeId?.startsWith("personal:") ? d.ownerScopeId.slice("personal:".length) : undefined;
+  const ownerOf = (d: { ownerScopeId?: string }) => {
+    const { kind, ref } = parseScopeId(d.ownerScopeId ?? "");
+    return kind === "personal" ? ref : undefined;
+  };
   const names = await createPersonNames({ users: ctx.deps.users, directory: ctx.deps.directory }).labels(
     visible.flatMap((d) => [ownerOf(d), d.createdBy].filter((id): id is string => !!id)),
   );
@@ -1349,6 +1349,7 @@ async function listApps(ctx: ApiCtx): Promise<void> {
         canShare,
         ...(owner ? { ownerName: names.get(owner)! } : {}),
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
+        ...(d.createdBy && d.ownerScopeId === personalScope(d.createdBy) ? { ownedByCreator: true } : {}),
       };
       if (!secret) return named;
       const git = await app.appGitUrlFor(d.id, viewer, { secret, baseUrl });

@@ -17,6 +17,7 @@ const TOOL_PROBE = `for c in ${RENDER_BASE_TOOLS.map(([, command]) => shq(comman
 
 export interface StoredRenderBase {
   ref: string;
+  chosenImage?: string;
   snapshot?: RenderSnapshot;
   tools?: string[];
   readyAtMs?: number;
@@ -40,6 +41,7 @@ export interface RenderBaseOptions {
   client: RenderClient;
   store: DurableMap<StoredRenderBase>;
   image: string;
+  chosenImage?: string;
   hold?: <T>(work: () => Promise<T>) => Promise<T | null>;
   pollMs?: number;
   waitMs?: number;
@@ -114,7 +116,12 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   }
 
   async function step(): Promise<Progress> {
-    const record = (await store.get(image.digest)) ?? (await store.putIfAbsent(image.digest, { ref: image.ref }));
+    const record =
+      (await store.get(image.digest)) ??
+      (await store.putIfAbsent(image.digest, {
+        ref: image.ref,
+        ...(opts.chosenImage ? { chosenImage: opts.chosenImage } : {}),
+      }));
     if (isReady(record)) return "ready";
     try {
       if (record.error) await store.merge(image.digest, { error: undefined });
@@ -162,7 +169,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
           });
         const older = entries
           .map(([, record]) => record)
-          .filter(isReady)
+          .filter((record) => isReady(record) && record.chosenImage === opts.chosenImage)
           .sort((a, b) => b.readyAtMs! - a.readyAtMs!)[0];
         if (older)
           return { ref: older.ref, snapshotId: older.snapshot!.id, ...(older.tools ? { tools: older.tools } : {}) };

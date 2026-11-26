@@ -1,4 +1,4 @@
-import { previewFile } from "./file-open.ts";
+import { openFilePreview, previewFile } from "./file-open.ts";
 import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -16,7 +16,7 @@ import {
   Upload,
   type IconNode,
 } from "lucide";
-import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
+import { api, ApiError, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { formatBytes, relTime } from "./ui";
 import { browserRenderableImage } from "./media-layout";
@@ -463,8 +463,32 @@ async function loadFiles(seq: number): Promise<void> {
   drawFiles();
 }
 
+let linkedFileId: string | null = null;
+
+export function openFileById(id: string): void {
+  linkedFileId = id;
+}
+
+async function openLinkedFile(): Promise<void> {
+  const id = linkedFileId;
+  linkedFileId = null;
+  if (!id) return;
+  try {
+    const file = await api<FileItem>(`/api/files/${encodeURIComponent(id)}`);
+    const href = fileContentUrl(file.id, file.name);
+    if (!openFilePreview(file.name, href, file.mimetype)) window.location.assign(href);
+  } catch (e) {
+    filesNotice =
+      e instanceof ApiError && e.status === 404
+        ? "That file doesn't exist or you can't open it."
+        : errMessage(e, "Couldn't open that file.");
+    drawFiles();
+  }
+}
+
 export async function renderFiles(): Promise<void> {
   if (appState.currentView !== "files") return;
+  void openLinkedFile();
   if (scopedSession.active) {
     if (filesScope !== scopedSession.active.scopeId) {
       filesScope = scopedSession.active.scopeId;

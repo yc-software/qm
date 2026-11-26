@@ -1,9 +1,3 @@
-.custom-chat-shell.empty-chat:has(qm-onboarding-welcome) {
-  grid-template-rows: auto minmax(0, 1fr) auto;
-}
-.custom-chat-shell.in-pane.empty-chat:has(qm-onboarding-welcome) {
-  grid-template-rows: minmax(0, 1fr) auto;
-}
 .custom-chat-shell .chat-scroll:has(qm-onboarding-welcome) {
   display: block;
   padding-top: clamp(16px, 3vh, 32px);
@@ -20,6 +14,19 @@ qm-onboarding-welcome {
   max-width: 560px;
   padding: 12px 0;
 }
+qm-onboarding-welcome.inline-setup > .welcome-content {
+  padding-block: 0;
+}
+:is(.streaming-text, .inline-setup) + qm-onboarding-welcome.inline-setup,
+qm-onboarding-welcome.inline-setup + .streaming-text {
+  margin-top: 1rem;
+}
+.inline-setup :is(.welcome-slack, .slack-connected) {
+  margin-bottom: 0;
+}
+.inline-setup qm-slack-account {
+  margin-top: 12px;
+}
 .welcome-content h1 {
   font-size: 26px;
   letter-spacing: -0.7px;
@@ -30,49 +37,6 @@ qm-onboarding-welcome {
   font-size: 15px;
   line-height: 1.7;
   margin: 0 0 18px;
-}
-.welcome-cohort {
-  position: relative;
-  isolation: isolate;
-  width: fit-content;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-bottom: 22px;
-}
-.welcome-cohort-label {
-  position: relative;
-  z-index: 0;
-  padding: 3px 7px;
-  margin-left: -7px;
-  font-size: 15px;
-  font-weight: 500;
-}
-.welcome-cohort-label::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 3px;
-  background: #f26522;
-  transform: scaleX(0);
-  transform-origin: left;
-  z-index: -1;
-}
-.welcome-champagne {
-  font-size: 22px;
-}
-.welcome-flutter {
-  display: none;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  pointer-events: none;
-  width: 4px;
-  height: 7px;
-  background: var(--flutter-color);
-  border-radius: 1px;
-  opacity: 0;
-  z-index: -1;
 }
 .welcome-load {
   padding: 16px;
@@ -87,19 +51,6 @@ qm-onboarding-welcome {
 .welcome-rolling .welcome-beat {
   animation: onboarding-arrive 600ms var(--welcome-delay) cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
-.welcome-rolling .welcome-cohort-label::before {
-  animation: onboarding-orange 2100ms 1450ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-.welcome-rolling .welcome-cohort-label {
-  animation: onboarding-ink 2100ms 1450ms both;
-}
-.welcome-rolling .welcome-champagne {
-  animation: onboarding-arrive 500ms 1750ms ease-out both;
-}
-.welcome-rolling .welcome-flutter {
-  display: block;
-  animation: onboarding-flutter 2200ms var(--flutter-delay) both;
-}
 @keyframes onboarding-arrive {
   from {
     opacity: 0;
@@ -112,63 +63,8 @@ qm-onboarding-welcome {
     visibility: visible;
   }
 }
-@keyframes onboarding-orange {
-  0% {
-    transform: scaleX(0);
-  }
-  28%,
-  72% {
-    transform: scaleX(1);
-    transform-origin: left;
-  }
-  73% {
-    transform-origin: right;
-  }
-  100% {
-    transform: scaleX(0);
-    transform-origin: right;
-  }
-}
-@keyframes onboarding-ink {
-  0%,
-  8% {
-    color: var(--foreground);
-  }
-  28%,
-  72% {
-    color: white;
-  }
-  100% {
-    color: var(--foreground);
-  }
-}
-@keyframes onboarding-flutter {
-  0% {
-    opacity: 0;
-    transform: translate(0, 0) rotate(0deg) scale(0.3);
-  }
-  12% {
-    opacity: 0.85;
-  }
-  40% {
-    opacity: 0.8;
-    transform: translate(var(--flutter-mid), var(--flutter-peak)) rotate(var(--flutter-turn)) scale(1);
-    animation-timing-function: ease-in;
-  }
-  100% {
-    opacity: 0;
-    transform: translate(var(--flutter-x), var(--flutter-end)) rotate(var(--flutter-turn-end)) scale(0.65);
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .welcome-rolling .welcome-beat,
-  .welcome-rolling .welcome-cohort-label,
-  .welcome-rolling .welcome-cohort-label::before,
-  .welcome-rolling .welcome-champagne {
-    animation: none;
-  }
-  .welcome-rolling .welcome-flutter {
-    display: none;
+  .welcome-rolling .welcome-beat {
     animation: none;
   }
 }
@@ -348,10 +244,6 @@ qm-onboarding-welcome {
   color: var(--foreground);
   text-decoration-color: currentColor;
 }
-.welcome-more-ideas:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 
 .welcome-content.welcome-seeded {
   max-width: 720px;
@@ -409,6 +301,25 @@ qm-onboarding-welcome {
 .welcome-seeded > :not(.welcome-hero, .welcome-section, .connection-preview-label) {
   max-width: 480px;
   margin-inline: auto;
+}
+.welcome-seeded > .welcome-apps {
+  max-width: 640px;
+}
+.welcome-seeded .welcome-apps .connection-picker {
+  max-width: none;
+}
+.welcome-seeded .welcome-apps .connection-picker-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: none;
+}
+.welcome-seeded .welcome-apps .connection-picker > .connection-picker-search {
+  width: min(100%, 240px);
+  margin-inline: auto;
+}
+@container chat (max-width: 560px) {
+  .welcome-seeded .welcome-apps .connection-picker-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 @container chat (min-width: 471px) {
   .message-stack.empty-stack:has(.welcome-seeded) {

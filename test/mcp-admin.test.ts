@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
@@ -22,11 +22,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(testMap<McpServer>());
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    mcpServers: store,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), mcpServers: store });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(async () => {
@@ -226,11 +222,7 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints only from pu
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
   const store = createMcpServerStore(testMap<McpServer>());
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    mcpServers: store,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), mcpServers: store });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(async () => {
@@ -345,8 +337,7 @@ test("MCP admin save stores the server's own description from the probe", async 
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
   const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
+    ...testCore(built),
     mcpServers: store,
     mcpToolService: service,
   });

@@ -9,7 +9,7 @@ import {
   createManagesArtifactHome,
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
-import { scopeActor, scopeId, type ScopeId } from "../src/types.ts";
+import { scopeActor, scopeId, scopeLabel, type ScopeId } from "../src/types.ts";
 
 const channels: Record<string, { private?: boolean; members: string[]; known: boolean }> = {
   pub: { private: false, members: ["alice@x.com"], known: true },
@@ -86,7 +86,7 @@ async function table() {
   const controls = createMembershipControlsScope(deps);
   const rows: string[] = [];
   for (const scope of scopes) {
-    rows.push(`${scope} controls=${await controls(scope)}`);
+    rows.push(`${scopeLabel(scope)} controls=${await controls(scope)}`);
     for (const principal of principals) {
       const flags = [
         (await canRead(principal, scope)) ? "r" : "-",
@@ -95,7 +95,7 @@ async function table() {
         (await isMember(principal, scope)) ? "c" : "-",
         (await manages(scope, "alice@x.com", principal)) ? "a" : "-",
       ].join("");
-      rows.push(`${scope} ${principal || "(none)"} ${flags}`);
+      rows.push(`${scopeLabel(scope)} ${principal || "(none)"} ${flags}`);
     }
   }
   return rows;

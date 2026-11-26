@@ -251,6 +251,7 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
         body: { credential, url: "https://api.example.com/v1/me" },
         orgScopeId: org,
         reader: serviceCreds,
+        appBorrows: async () => false,
         fetchImpl: async () => ({ status: 200, text: async () => "{}" }),
       });
       return (res.json as { error?: string }).error ?? res.status;
@@ -285,7 +286,12 @@ test("a scheduled turn attests its owner only when the answer goes back to the o
     brokerAny: 200,
     memory: ["U1"],
   };
-  installPrincipalLinks({ canonical: (key) => (key === "u1@example.test" ? "U1" : undefined), aliases: () => [] });
+  installPrincipalLinks({
+    canonical: (key) => (key === "u1@example.test" ? "U1" : undefined),
+    aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
+  });
   t.after(() => installPrincipalLinks(null));
   assert.deepEqual(
     {

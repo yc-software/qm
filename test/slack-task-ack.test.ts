@@ -7,6 +7,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { personalScope } from "../src/types.ts";
 
 function setup() {
   const store = testMap<TaskAckState>();
@@ -175,7 +176,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
               trigger: "conversation",
               surface: "slack",
               fireKey: run.id,
-              sourceScopeId: "personal:person",
+              sourceScopeId: personalScope("person"),
               sourceThreadRef: "task-session",
             },
           });

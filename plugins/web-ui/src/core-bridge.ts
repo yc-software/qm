@@ -553,6 +553,7 @@ export interface PendingApproval {
   grantModes?: { session: boolean; always: boolean };
   blocksInput?: boolean;
   executesOnApprove?: boolean;
+  call?: { tool: string; input: Record<string, unknown> };
 }
 
 export function approvalDecidableDuringRun(approval: PendingApproval): boolean {
@@ -579,7 +580,8 @@ export type AssistantWork = AssistantMessage & {
   viaTitle?: string;
   viaId?: string;
   personaId?: string;
-  supersedes?: number;
+  supersedes?: number[];
+  runId?: string;
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -626,6 +628,7 @@ export interface TurnOptions {
   scopeId?: string | null;
   channelName?: string | null;
   ephemeral?: boolean;
+  declinePendingApprovals?: boolean;
 }
 
 export async function deleteEphemeralSession(threadRef: string, keepalive = false): Promise<void> {
@@ -1128,7 +1131,7 @@ export async function activeRunForThread(threadRef: string): Promise<ActiveRun> 
   return { ...live, queued: r.queued ?? [] };
 }
 
-export const PENDING_APPROVAL_REASON = "Approve or deny the pending command to continue.";
+export const PENDING_APPROVAL_REASON = "Approve or decline the pending call to continue.";
 
 export async function queueTurn(
   threadRef: string,
@@ -1348,6 +1351,7 @@ function turnRequestBody(
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
     ...(turnOptions.ephemeral ? { ephemeral: true } : {}),
+    ...(turnOptions.declinePendingApprovals ? { declinePendingApprovals: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -1700,7 +1704,7 @@ function applyRun(
   }
   if (approvalDenied) {
     (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(stream, partial, st, "Denied.");
+    finish(stream, partial, st, "Declined.");
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
@@ -2092,12 +2096,16 @@ export interface HistoryApprovalDecision {
   command: string;
   scope?: string;
   declined?: string;
+  purpose?: string;
+  summary?: string;
+  call?: { tool: string; input: Record<string, unknown> };
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope, declined } = item.body;
+  const { command, scope, declined, purpose, summary } = item.body;
+  const call = item.body.call as { tool?: unknown; input?: unknown } | undefined;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
     role: "approval-decision",
@@ -2107,6 +2115,11 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     requestId: item.elicitId,
     ...(typeof scope === "string" ? { scope } : {}),
     ...(typeof declined === "string" ? { declined } : {}),
+    ...(typeof purpose === "string" ? { purpose } : {}),
+    ...(typeof summary === "string" ? { summary } : {}),
+    ...(typeof call?.tool === "string" && call.input && typeof call.input === "object" && !Array.isArray(call.input)
+      ? { call: { tool: call.tool, input: call.input as Record<string, unknown> } }
+      : {}),
     timestamp: item.createdAt,
   };
 }
@@ -2230,9 +2243,9 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
-const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+export const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
 
-function deliveredSilence(item: Item): boolean {
+export function deliveredSilence(item: Item): boolean {
   if (item.kind !== "ToolResult") return false;
   return (
     (item.tool === "finish_silently" && item.body.silent === true) ||
@@ -2274,6 +2287,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
   let posted = false;
   let stoppedShown = false;
   let hiddenPrompt = false;
+  let turn = { id: null as string | null, start: 0 };
   const heldPosts = new Map<string, { text: string; item: Item }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.item);
@@ -2332,6 +2346,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     }
     const msg: AssistantWork = {
       persisted: true,
+      ...(turn.id !== null ? { runId: turn.id } : {}),
       ...(entrySeqs.length ? { entrySeqs } : {}),
       role: "assistant",
       content: [{ type: "text", text }],
@@ -2357,7 +2372,6 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
-  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
     if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";
@@ -2453,8 +2467,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         }
       }
       tagPersona(e, out.slice(turn.start));
-      if (typeof e.body.supersedes === "number" && out.length > before)
-        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes;
+      if (Array.isArray(e.body.supersedes) && out.length > before)
+        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes.filter(Number.isSafeInteger);
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

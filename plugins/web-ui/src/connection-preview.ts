@@ -1,6 +1,5 @@
 export interface PickerState {
   query: string;
-  expanded: boolean;
 }
 export interface PreviewAttempt {
   state: string;

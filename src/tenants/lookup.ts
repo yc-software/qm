@@ -2,7 +2,7 @@ import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
 import { servingTenant } from "./claim.ts";
-import { withTenant } from "./context.ts";
+import { type Tenant, withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
 
@@ -35,7 +35,7 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "app_host";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
@@ -113,14 +113,18 @@ export const PRINCIPAL_ADMIN_TENANTS: PgMigrationDefinition = {
 const ACTIVE_PERSON = `JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
             AND u.kind = 'person' AND u.offboarded_at IS NULL`;
 
-export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
-  id: "tenancy/lookups/0006-principal-user-tenants",
+const MEMBER_PERSON = `${ACTIVE_PERSON}
+            AND (u.source IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
+              WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.alias_id <> u.primary_alias))`;
+
+const principalUserTenants = (id: string, person: string): PgMigrationDefinition => ({
+  id,
   statements: [
     `CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
       LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
       AS $lookup$ BEGIN
         RETURN QUERY
-          SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = ${fold("principal")}
+          SELECT l.tenant_id FROM user_links l ${person} WHERE l.alias_id = ${fold("principal")}
           UNION
           SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
           UNION
@@ -130,10 +134,19 @@ export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
            WHERE l.alias_id = ${fold("principal")};
       END $lookup$`,
   ],
-};
+});
 
-export const EMAIL_USER_TENANTS: PgMigrationDefinition = {
-  id: "directory/store/0010-tenants-for-email-users",
+export const PRINCIPAL_USER_TENANTS = principalUserTenants(
+  "tenancy/lookups/0006-principal-user-tenants",
+  ACTIVE_PERSON,
+);
+export const PRINCIPAL_MEMBER_TENANTS = principalUserTenants(
+  "tenancy/lookups/0009-principal-member-tenants",
+  MEMBER_PERSON,
+);
+
+const emailUserTenants = (id: string, person: string): PgMigrationDefinition => ({
+  id,
   statements: [
     `DO $tenants_for_email$
 BEGIN
@@ -146,12 +159,15 @@ BEGIN
         UNION
         SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email)
         UNION
-        SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = lower(btrim(email));
+        SELECT l.tenant_id FROM user_links l ${person} WHERE l.alias_id = lower(btrim(email));
     END $body$$function$,
     current_schema());
 END $tenants_for_email$`,
   ],
-};
+});
+
+export const EMAIL_USER_TENANTS = emailUserTenants("directory/store/0010-tenants-for-email-users", ACTIVE_PERSON);
+export const EMAIL_MEMBER_TENANTS = emailUserTenants("directory/store/0015-tenants-for-email-members", MEMBER_PERSON);
 
 export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0004-slack-bridge",
@@ -180,18 +196,27 @@ export const GENERIC_CHAT_TENANT: PgMigrationDefinition = {
 
 export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
+  externalOrgTenant(issuer: string, org: string): Promise<string | undefined>;
+  boundExternalOrg(tenant: Tenant, issuer: string): Promise<string | undefined>;
   gmailTenants(email: string): Promise<string[]>;
   slackTenants(): Promise<string[]>;
   exists(tenant: string): Promise<boolean>;
 }
 
-export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
+export function tenantLookup(pg: Pick<PgPool, "q" | "forTenant">): TenantLookup {
+  const tenantFrom = async (sql: string, params: string[]) => {
+    const tenant = (await pg.q(sql, params))[0]?.tenant;
+    return typeof tenant === "string" ? tenant : undefined;
+  };
   return {
     async tenantFor(key, value) {
-      if (!value) return undefined;
-      const rows = await pg.q(`SELECT qm_tenant_for_${key}($1)::text AS tenant`, [value]);
-      const tenant = rows[0]?.tenant;
-      return typeof tenant === "string" ? tenant : undefined;
+      return value ? tenantFrom(`SELECT qm_tenant_for_${key}($1)::text AS tenant`, [value]) : undefined;
+    },
+    externalOrgTenant: (issuer, org) =>
+      tenantFrom("SELECT qm_tenant_for_external_org($1, $2)::text AS tenant", [issuer, org]),
+    async boundExternalOrg(tenant, issuer) {
+      const org = (await pg.forTenant(tenant).q("SELECT qm_bound_external_org($1) AS org", [issuer]))[0]?.org;
+      return typeof org === "string" ? org : undefined;
     },
     async gmailTenants(email) {
       const rows = await pg.q("SELECT tenant::text AS tenant FROM qm_tenants_for_gmail($1) tenant", [email]);

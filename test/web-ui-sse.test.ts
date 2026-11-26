@@ -8,12 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -21,10 +22,10 @@ const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-s
 built.runtime.start();
 await configureCommandRules(built.config);
 const core = createServer(built.app, {
+  ...testCore(built),
   ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
-  webhookReceiver: built.webhookReceiver,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
@@ -95,8 +96,8 @@ test("SSE streams partial frames then a terminal done frame carrying the reply",
 });
 
 test("SSE relays tool activity frames and folds them into the done frame", async () => {
-  const computer = await built.sandboxResources.create("alice", "personal:alice", "sprites", "default");
-  await built.sandboxResources.setDefault("alice", "personal:alice", computer.id);
+  const computer = await built.sandboxResources.create("alice", personalScope("alice"), "sprites", "default");
+  await built.sandboxResources.setDefault("alice", personalScope("alice"), computer.id);
   const submit = (await (
     await fetch(
       `${coreBase}/api/turn`,

@@ -16,6 +16,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { seedTestTenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -137,7 +138,7 @@ async function runTurn(
           return ["user#1: the budget doc is in shared/q2.md"];
         },
       } as unknown as ToolContext,
-      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       emit: async (item) => {
         const body = jsonb(item.body ?? {}) as Record<string, unknown>;
@@ -387,7 +388,7 @@ test("user and steer images replay as the exact image blocks the model saw, rest
   ] as const)
     await files.put({
       id,
-      ownerScopeId: "personal:tester" as never,
+      ownerScopeId: personalScope("tester") as never,
       createdBy: "tester",
       name: `${id}.png`,
       path: `${id}.png`,
@@ -507,7 +508,7 @@ test("a replayed image is read from the file store once, not on every turn", asy
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   await files.put({
     id: "art-once",
-    ownerScopeId: "personal:tester" as never,
+    ownerScopeId: personalScope("tester") as never,
     createdBy: "tester",
     name: "once.png",
     path: "once.png",
@@ -549,7 +550,7 @@ async function withPgSession(
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
-    const session = await store.getOrCreateByThread("web:replay", "dm", "personal:tester" as ScopeId);
+    const session = await store.getOrCreateByThread("web:replay", "dm", personalScope("tester") as ScopeId);
     const writer = { sessionId: session.id };
     await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({

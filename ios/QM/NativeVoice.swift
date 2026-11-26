@@ -367,6 +367,8 @@ final class NativeVoiceModel: NSObject {
         guard (event["error"] as? [String: Any])?["client_event_id"] is String else {
           return fail("Voice reported an error. Check QM before retrying a task.")
         }
+        Log.background.error(
+          "Voice update rejected: \(String(describing: event["error"]), privacy: .public)")
         transcript.appendStatus("Voice could not take an update. Results stay in QM.")
       default:
         if (event["type"] as? String)?.hasSuffix("_transcript.delta") == true,

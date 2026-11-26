@@ -57,6 +57,7 @@ interface ChatState {
   rememberedContextName: string | null;
   pendingSend: string | null;
   resolvingApprovals: Set<string>;
+  declineApprovalsOnSend: boolean;
   transcriptAnchorSeq: number | null;
   earlierCount: number;
   loadingEarlier: boolean;
@@ -110,8 +111,7 @@ export interface ChatSurface {
   setTurnRuntime(runtime: TurnRuntime | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
-  resolveCommandApproval(decision: ApprovalDecision): void;
-  approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
+  resolveCommandApproval(decision: ApprovalDecision): Promise<void>;
   notePendingSessionOnSend(): void;
   syncPaneState(): void;
   onDelivery(threadRef: string): void;
@@ -145,7 +145,11 @@ interface ComposerState {
 export type SteeringRun = QueuedRun & { attachments?: Attachment[] };
 
 export interface ComposerSurface {
-  composerApprovalPanel(approvals: PendingApproval[], resolve?: (decision: ApprovalDecision) => void): TemplateResult;
+  composerApprovalPanel(
+    approvals: PendingApproval[],
+    resolve?: (decision: ApprovalDecision) => void | Promise<void>,
+    docked?: boolean,
+  ): TemplateResult;
   submit(instruction?: string): Promise<void>;
   restageAttachments(attachments: Attachment[], note: string): void;
   state: ComposerState;

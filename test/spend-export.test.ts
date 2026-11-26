@@ -9,9 +9,8 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
-import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { scopeId, personalScope } from "../src/types.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -27,20 +26,18 @@ const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
 const apps = "/v1/apps/export?principalId=alice%40example.com";
 
-function fixture(options: { token?: string | null; sessions?: SessionStore | null; pageViews?: AppPageViewLog } = {}) {
+function fixture(options: { token?: string | null; sessions?: SessionStore; pageViews?: AppPageViewLog } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const sessions =
-    options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
+  const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const token = options.token === undefined ? exportToken : options.token;
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    ...(sessions ? { sessions } : {}),
+    sessions,
     ...(token ? { spendExportToken: token } : {}),
     ...(options.pageViews ? { appPageViews: options.pageViews } : {}),
   });
@@ -189,15 +186,13 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
       [
         [iso(today), "channel:C1", "channel", null, "live", null, "claude-opus-5", 1, 3],
         [iso(today), "channel:C1", "channel", null, "webhook", null, "claude-opus-5", 1, 4],
-        [iso(today), "personal:U1", "person", "U1", "live", null, "claude-opus-5", 1, 1],
-        [iso(today), "personal:alice", "person", "alice", "live", null, "claude-opus-5", 2, 3],
-        [iso(today), "personal:alice", "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
-      ],
+        [iso(today), personalScope("alice"), "person", "alice", "live", null, "claude-opus-5", 2, 3],
+        [iso(today), personalScope("alice"), "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
+        [iso(today), personalScope("U1"), "person", "U1", "live", null, "claude-opus-5", 1, 1],
+      ].sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
     );
-    assert.deepEqual(
-      [body.rows[3].input, body.rows[3].output, body.rows[3].cacheRead, body.rows[3].cacheWrite],
-      [200, 40, 800, 80],
-    );
+    const alice = body.rows.find((r: any) => r.principalId === "alice" && r.source === "live");
+    assert.deepEqual([alice.input, alice.output, alice.cacheRead, alice.cacheWrite], [200, 40, 800, 80]);
     const audited = (await s.built.auditLog.events(testTenant)).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");
@@ -211,7 +206,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
   const s = fixture();
   try {
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
+      ownerScopeId: personalScope("alice"),
       owner: "alice",
       createdBy: "alice",
       title: "Morning digest",
@@ -219,7 +214,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
       action: "summarize my unread mail",
     });
     await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
+      ownerScopeId: personalScope("alice"),
       owner: "alice",
       createdBy: "alice",
       title: "Never billed",
@@ -241,7 +236,7 @@ test("spend export: lists each billed cron's title, owner and schedule without i
         id: cron.id,
         title: "Morning digest",
         owner: "alice",
-        ownerScopeId: "personal:alice",
+        ownerScopeId: personalScope("alice"),
         schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
         enabled: true,
       },
@@ -286,17 +281,8 @@ test("spend export: the window is whole UTC days, ordered and at most 93 days", 
   }
 });
 
-test("spend export: an unavailable spend store is an error, not an empty export", async () => {
-  const s = fixture({ sessions: null });
-  try {
-    assert.equal((await s.get(`/v1/spend/export?${window}`)).status, 503);
-  } finally {
-    await s.close();
-  }
-});
-
 test("spend export: core receives the configured token", () => {
   const config = testConfig({ spendExportToken: exportToken });
-  assert.equal(serverDeps(config, buildApp(config)).spendExportToken, exportToken);
-  assert.equal(serverDeps(testConfig(), buildApp(testConfig())).spendExportToken, undefined);
+  assert.equal(buildApp(config).spendExportToken, exportToken);
+  assert.equal(buildApp(testConfig()).spendExportToken, undefined);
 });

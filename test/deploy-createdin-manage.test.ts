@@ -22,6 +22,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -55,6 +56,7 @@ async function fixture() {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
   });

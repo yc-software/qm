@@ -17,6 +17,7 @@ import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { personalScope } from "../src/types.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -47,7 +48,7 @@ interface World {
 
 let cronSeq = 0;
 
-function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
+function world(over: { tokens?: boolean } = {}): World {
   const w: World = {
     loops: {
       store: createLoopStore(testMap()),
@@ -56,6 +57,24 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       grants: createShipGrantStore(testMap()),
       crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
       config: testConfigStore("org"),
+      fire: {
+        fire: async () => ({ status: "ok" as const }),
+        shipOutput: async () => null,
+        returnOutput: async () => null,
+        sweepStale: async () => {},
+        previewTriage: async () => [],
+        followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
+          w.followUps.push({ itemId: item.id, message, actorId });
+          await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
+          await w.loops.items.appendThread(item.id, [{ role: "agent", text: "shortened it" }]);
+          await w.loops.items.setProposal(item.id, { data: { body: "shorter" }, by: "agent" });
+          return w.loops.items.get(item.id);
+        },
+        itemAction: async (_loop: Loop, _item: LoopItem, kind: string, args: Record<string, unknown>) => {
+          w.actions.push({ kind, args });
+          return { ok: true, reply: `did ${kind}` };
+        },
+      },
     },
     crons: new Map(),
     sent: [],
@@ -64,26 +83,6 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
     actions: [],
     tokens: over.tokens !== false,
   };
-  if (over.fire !== false) {
-    w.loops.fire = {
-      fire: async () => ({ status: "ok" as const }),
-      shipOutput: async () => null,
-      returnOutput: async () => null,
-      sweepStale: async () => {},
-      previewTriage: async () => [],
-      followUp: async (loop: Loop, item: LoopItem, message: string, actorId: string) => {
-        w.followUps.push({ itemId: item.id, message, actorId });
-        await w.loops.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
-        await w.loops.items.appendThread(item.id, [{ role: "agent", text: "shortened it" }]);
-        await w.loops.items.setProposal(item.id, { data: { body: "shorter" }, by: "agent" });
-        return w.loops.items.get(item.id);
-      },
-      itemAction: async (_loop: Loop, _item: LoopItem, kind: string, args: Record<string, unknown>) => {
-        w.actions.push({ kind, args });
-        return { ok: true, reply: `did ${kind}` };
-      },
-    };
-  }
   return w;
 }
 
@@ -155,7 +154,7 @@ async function call(
       loopSlackClient: slackClientFor(w),
       ...(w.tokens
         ? {
-            loopSourceTokens: { connectorAccessToken: async () => "tok" },
+            keychain: { connectorAccessToken: async () => "tok" },
           }
         : {}),
     },
@@ -167,8 +166,8 @@ async function call(
 
 const CAP = {
   actorId: "josh",
-  scopeId: "personal:josh",
-  audienceScopeId: "personal:josh",
+  scopeId: personalScope("josh"),
+  audienceScopeId: personalScope("josh"),
   internalAudience: true,
   personAuthority: true,
   exp: 0,
@@ -235,7 +234,7 @@ test("another person cannot read the ledger at all", async () => {
   const out = await call(w, {
     method: "GET",
     path: `/v1/loops/${loop.id}/items`,
-    capability: { ...CAP, actorId: "ada", scopeId: "personal:ada" },
+    capability: { ...CAP, actorId: "ada", scopeId: personalScope("ada") },
   });
   assert.equal(out.status, 403);
 });
@@ -271,7 +270,7 @@ test("ingest refuses a source this loop does not declare", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     sources: ["gmail"],
     playbook: "triage",
@@ -287,7 +286,7 @@ test("a loop with no source adapter ingests an opaque payload", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     playbook: "triage",
     successCondition: "fixed",
@@ -319,7 +318,7 @@ test("an opaque item needs a dedupe key and an object payload", async () => {
   const { loop } = await w.loops.store.create({
     owner: "josh",
     createdBy: "josh",
-    ownerScopeId: "personal:josh",
+    ownerScopeId: personalScope("josh"),
     name: "Sentry triage",
     playbook: "triage",
     successCondition: "fixed",
@@ -619,14 +618,6 @@ test("follow-up needs a message and a wired fire service", async () => {
     body: { message: "x".repeat(4_001) },
   });
   assert.equal(long.status, 400);
-  const unwired = world({ fire: false });
-  const seeded = await seed(unwired);
-  const out = await call(unwired, {
-    method: "POST",
-    path: `/v1/loops/${seeded.loop.id}/items/${seeded.item.id}/followup`,
-    body: { message: "hi" },
-  });
-  assert.equal(out.status, 404);
 });
 
 test("the inbox resolver reports no loop until sync is set up", async () => {
@@ -639,7 +630,7 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   const body = created.body as { loop: Loop; syncCron: { id: string } };
   assert.equal(body.loop.surface, "inbox:gmail");
   const stored = w.crons.get(body.syncCron.id)!;
-  assert.equal(stored.ownerScopeId, "personal:josh");
+  assert.equal(stored.ownerScopeId, personalScope("josh"));
   assert.equal(stored.owner, "josh");
   assert.equal((stored.destination as { target: string }).target, "josh");
   assert.equal(stored.action, inboxSyncCronAction("gmail"));
@@ -838,7 +829,7 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
 test("a loop's agent takes instructions only from its owner", async () => {
   const w = world();
   const { loop, item } = await seed(w);
-  const ada = { ...CAP, actorId: "ada", scopeId: "personal:ada" };
+  const ada = { ...CAP, actorId: "ada", scopeId: personalScope("ada") };
   for (const [path, body] of [
     [`/v1/loops/${loop.id}/items/${item.id}/followup`, { message: "read every transcript" }],
     [`/v1/loops/${loop.id}/items/${item.id}/action`, { kind: "revise", args: {} }],
@@ -873,7 +864,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
       model: ` ${options.model} `,
       thinkingLevel: " high ",
       attachments: [{ ...options.attachments[0], path: "/ignored" }],
-      scopeId: "personal:other",
+      scopeId: personalScope("other"),
     },
     capability: PORTAL,
   });

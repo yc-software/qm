@@ -37,75 +37,92 @@ struct WorkspaceDestination: Identifiable {
     }
     return destinations
   }
+
+  /// The destinations someone can open, grouped under their section titles in display order.
+  static func sections(for identity: Identity) -> [WorkspaceSection] {
+    let destinations = available(to: identity)
+    return ["Your work", "Automations", "Tools and settings"].map { title in
+      WorkspaceSection(title: title, destinations: destinations.filter { $0.section == title })
+    }
+  }
 }
 
-struct BrowseView: View {
+struct WorkspaceSection: Identifiable {
+  let title: String
+  let destinations: [WorkspaceDestination]
+  var id: String { title }
+}
+
+struct WorkspaceDestinationView: View {
+  let id: String
   let identity: Identity
   let client: APIClient
 
   var body: some View {
-    List {
-      ForEach(["Your work", "Automations", "Tools and settings"], id: \.self) { section in
-        Section {
-          ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
-            destination in
-            NavigationLink {
-              if destination.id == "contexts" {
-                ProjectsView(client: client, identity: identity)
-              } else if destination.id == "files" {
-                NativeFileLibrary(client: client)
-              } else if destination.id == "crons" {
-                NativeCronsView(client: client, user: identity.user)
-              } else if destination.id == "webhooks" {
-                NativeWebhooksView(client: client, user: identity.user)
-              } else if destination.id == "skills" {
-                NativeSkillsView(client: client, user: identity.user)
-              } else if destination.id == "apps" {
-                NativeAppsView(client: client, user: identity.user)
-              } else if destination.id == "calendar" {
-                ContentUnavailableView(
-                  "Calendar is coming soon", systemImage: "calendar",
-                  description: Text("Your calendar will appear here when it is available in QM."))
-              } else if destination.id == "keychain" {
-                NativeKeychainView(client: client)
-              } else if destination.id == "settings" {
-                NativeSettingsView(client: client, identity: identity)
-              } else if destination.id == "loops" {
-                NativeLoopsView(client: client)
-              } else if destination.id == "inbox" {
-                NativeInboxView(client: client, user: identity.user)
-              } else if destination.id == "memory" {
-                NativeMemoryView(client: client)
-              } else if destination.id == "voice.html" {
-                VoiceView(client: client)
-              }
-            } label: {
-              HStack(spacing: 12) {
-                Image(systemName: destination.icon).frame(width: 24)
-                Text(destination.title)
-              }
-              .font(.body)
-            }
-            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
-            .listRowBackground(QMTheme.paper)
-            .listRowSeparatorTint(QMTheme.border)
+    switch id {
+    case "contexts": ProjectsView(client: client, identity: identity)
+    case "files": NativeFileLibrary(client: client)
+    case "crons": NativeCronsView(client: client, user: identity.user)
+    case "webhooks": NativeWebhooksView(client: client, user: identity.user)
+    case "skills": NativeSkillsView(client: client, user: identity.user)
+    case "apps": NativeAppsView(client: client, user: identity.user)
+    case "calendar":
+      ContentUnavailableView(
+        "Calendar is coming soon", systemImage: "calendar",
+        description: Text("Your calendar will appear here when it is available in QM."))
+    case "keychain": NativeKeychainView(client: client)
+    case "settings": NativeSettingsView(client: client, identity: identity)
+    case "loops": NativeLoopsView(client: client)
+    case "inbox": NativeInboxView(client: client, user: identity.user)
+    case "memory": NativeMemoryView(client: client)
+    case "voice.html": VoiceView(client: client)
+    default: EmptyView()
+    }
+  }
+}
+
+/// Two-column tiles for every workspace destination, like ChatGPT's More screen, grouped by
+/// section.
+struct MoreGrid: View {
+  let identity: Identity
+  let client: APIClient
+
+  var body: some View {
+    ScrollView {
+      LazyVGrid(
+        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+        alignment: .leading, spacing: 12
+      ) {
+        ForEach(WorkspaceDestination.sections(for: identity)) { section in
+          Section {
+            ForEach(section.destinations) { tile($0) }
+          } header: {
+            Text(section.title).font(.subheadline).foregroundStyle(.secondary)
+              .padding(.top, 12).padding(.leading, 4)
           }
-        } header: {
-          Text(section).font(.subheadline).foregroundStyle(.secondary).textCase(nil)
         }
       }
+      .padding(16)
     }
-    .listStyle(.insetGrouped)
-    .listSectionSpacing(24)
-    .scrollContentBackground(.hidden)
-    .background(background)
-    .foregroundStyle(QMTheme.ink)
-    .toolbarBackground(background, for: .navigationBar)
-    .toolbarBackground(.visible, for: .navigationBar)
-    .navigationTitle("Your Workspace").navigationBarTitleDisplayMode(.inline)
+    .background(QMTheme.paper)
+    .navigationTitle("Your Workspace")
+    .navigationBarTitleDisplayMode(.inline)
   }
 
-  private var background: Color {
-    NativeThemeStore.shared.active?.surface.color ?? Color(uiColor: .systemGroupedBackground)
+  private func tile(_ destination: WorkspaceDestination) -> some View {
+    NavigationLink {
+      WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
+    } label: {
+      VStack(alignment: .leading, spacing: 0) {
+        Text(destination.title).font(.title3)
+        Spacer(minLength: 20)
+        Image(systemName: destination.icon).font(.system(size: 17, weight: .medium))
+      }
+      .foregroundStyle(QMTheme.ink)
+      .padding(18)
+      .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+      .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+    .buttonStyle(.plain)
   }
 }

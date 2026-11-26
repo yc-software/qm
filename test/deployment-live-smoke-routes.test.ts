@@ -7,7 +7,7 @@ import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -24,6 +24,7 @@ async function fixture(run: (supersede: () => void) => Promise<void> = async () 
   const dedupe = createPostgresReplayDedupe(testDatabaseUrl());
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),

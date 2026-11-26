@@ -13,14 +13,17 @@ import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
 import {
   deriveConnectorKey,
-  encryptSecret,
-  decryptSecret,
   toPublicConnectorClient,
   type StoredConnectorClient,
   type ConnectorClientInput,
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -262,6 +265,7 @@ export function createConfigStore(
   orgId: string,
   opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
+    secrets?: SecretStoreFactory;
     defaultSecurityPosture?: SecurityPosture;
     defaultSharingPosture?: SharingPosture;
   },
@@ -357,7 +361,9 @@ export function createConfigStore(
   const runtimeSelectionListeners = tenantListeners<[ScopeId]>("config runtime-selection");
   const noteRuntimeSelectionChanged = runtimeSelectionListeners.emit;
   const connectorClients = opts.connectorClients;
-  const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
+  const connectorSecrets = (opts.secrets ?? createEncryptedSecretStore)(
+    deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients"),
+  );
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
   const org = scopeId("org", orgId);
@@ -768,11 +774,12 @@ export function createConfigStore(
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
     setEmbeddingModel: (modelId) => setOrgModelField("embeddingModelId", modelId),
     async setConnectorClient(id, provider, input) {
+      const previous = await connectorClients.get(connectorMapKey(id, provider));
       const rec: StoredConnectorClient = {
         scopeId: id,
         provider,
         clientId: input.clientId,
-        secretEnc: encryptSecret(input.clientSecret, connectorKey),
+        secretEnc: await connectorSecrets.put(`connector-clients/${connectorMapKey(id, provider)}`, input.clientSecret),
         ...(input.scopes ? { scopes: input.scopes } : {}),
         ...(input.redirectAllowlist ? { redirectAllowlist: input.redirectAllowlist } : {}),
         ...(input.consentMode ? { consentMode: input.consentMode } : {}),
@@ -782,16 +789,20 @@ export function createConfigStore(
         updatedAt: Date.now(),
       };
       await connectorClients.put(connectorMapKey(id, provider), rec);
+      await deleteReplacedSecrets(connectorSecrets, [previous?.secretEnc], [rec.secretEnc]);
     },
     listConnectorClients: async (id) =>
       (await connectorClients.all()).filter((r) => r.scopeId === id).map(toPublicConnectorClient),
-    deleteConnectorClient: (id, provider) => connectorClients.delete(connectorMapKey(id, provider)),
+    async deleteConnectorClient(id, provider) {
+      const rec = await connectorClients.take(connectorMapKey(id, provider));
+      if (rec?.secretEnc) await connectorSecrets.delete(rec.secretEnc);
+    },
     async getConnectorClientSecret(id, provider) {
       const rec = await connectorClients.get(connectorMapKey(id, provider));
       if (!rec) return null;
       return {
         clientId: rec.clientId,
-        clientSecret: decryptSecret(rec.secretEnc, connectorKey),
+        clientSecret: await connectorSecrets.get(rec.secretEnc),
         ...(rec.scopes ? { scopes: rec.scopes } : {}),
         ...(rec.redirectAllowlist ? { redirectAllowlist: rec.redirectAllowlist } : {}),
         ...(rec.consentMode ? { consentMode: rec.consentMode } : {}),

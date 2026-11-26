@@ -206,7 +206,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
   if (ephemeral && (!privateConversation || ctx.actor?.imp))
     return sendJson(ctx.res, 403, { error: "forbidden", message: "ephemeral chats are only available in your own DM" });
   if (ephemeral) {
-    const existing = await ctx.deps.sessions?.getByThread(threadRef);
+    const existing = await ctx.deps.sessions.getByThread(threadRef);
     if (existing && !existing.ephemeral) return sendJson(ctx.res, 409, { error: "not_ephemeral" });
   }
   const idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
@@ -224,6 +224,7 @@ async function webTurn(ctx: ApiCtx): Promise<void> {
     ...(privateConversation && surfaceBriefing ? { surfaceBriefing } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(approval ? { approval } : {}),
+    ...(p.declinePendingApprovals === true && !approval && !ctx.actor?.imp ? { declinePendingApprovals: true } : {}),
     ...(ephemeral ? { ephemeral: true } : {}),
     ...(proactiveOpener ? { proactiveOpener: true } : {}),
     ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),

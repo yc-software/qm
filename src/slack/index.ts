@@ -13,7 +13,6 @@ import { createSweeper } from "../util/sweeper.ts";
 import bolt from "@slack/bolt";
 import { WebClient } from "@slack/web-api";
 import { createDeduper, createThreadTracker } from "./lib.ts";
-import { slackThreadRefCandidates } from "./message-gating.ts";
 import { installDevIntrospection } from "./dev-introspection.ts";
 import { setDefaultBotIdentity, createSurfaceHeaderEnsurer, type SurfaceHeaderClient } from "./delivery.ts";
 import {
@@ -337,18 +336,11 @@ export async function startSlackPlugin(
     rejectRateLimitedCalls: true,
   });
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
+  const statusCard = (channel: string, threadTs: string) =>
+    core.sessionStatus?.card(statusClient, statusAccount(), channel, threadTs);
   let statusSync: Promise<void> | undefined;
-  const activityUnsubs = new Map<string, () => void>();
-  const unsubscribeSessionStates = core.subscribeSessionStates?.((event) => {
-    void core.thinkingStream
-      ?.onSessionState(statusClient, statusAccount(), ids.ownTeamId, event)
-      .catch(swallowAs("slack: thinking stream session state", undefined));
-  });
   const reconcileStatus = () => {
     statusSync ??= Promise.all([
-      core.thinkingStream
-        ?.reconcile(statusClient, statusAccount())
-        .catch(swallowAs("slack: thinking stream reconciliation", undefined)),
       core.sessionStatus
         ?.reconcile(statusClient, statusAccount())
         .catch(swallowAs("slack: session status reconciliation", undefined)),
@@ -371,37 +363,7 @@ export async function startSlackPlugin(
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
     continuePrivate: (runId, task) =>
       continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id), cfg.webUiPublicUrl),
-    onEngaged: (runId, channel, threadTs, meta) => {
-      if (core.thinkingStream && threadTs && meta) {
-        void core.thinkingStream
-          .registerTurn({
-            account: statusAccount(),
-            teamId: ids.ownTeamId,
-            runId,
-            sessionId: meta.sessionId,
-            channel,
-            threadTs,
-            detailMode: meta.detailMode,
-            ...(meta.recipientUserId ? { recipientUserId: meta.recipientUserId } : {}),
-            ...(meta.recipientTeamId ? { recipientTeamId: meta.recipientTeamId } : {}),
-            ...(meta.unprompted ? { unprompted: meta.unprompted } : {}),
-            ...(meta.initialTitle ? { initialTitle: meta.initialTitle } : {}),
-          })
-          .then((registered) => {
-            if (!registered) return;
-            activityUnsubs.get(runId)?.();
-            const unsub = core.subscribeRunActivity?.(runId, () => {
-              void core.thinkingStream
-                ?.onActivity(statusClient, runId)
-                .catch(swallowAs("slack: thinking stream activity", undefined));
-            });
-            if (unsub) activityUnsubs.set(runId, unsub);
-            void core.thinkingStream
-              ?.onActivity(statusClient, runId)
-              .catch(swallowAs("slack: thinking stream initial activity", undefined));
-          })
-          .catch(swallowAs("slack: thinking stream register", undefined));
-      }
+    onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
         ?.start(statusClient, statusAccount(), runId, channel, threadTs)
         .catch(swallowAs("slack: session status start", undefined))
@@ -409,13 +371,10 @@ export async function startSlackPlugin(
           void reconcileStatus();
         });
     },
-    onSettled: (runId) => {
-      if (runId) {
-        activityUnsubs.get(runId)?.();
-        activityUnsubs.delete(runId);
-      }
+    onSettled: () => {
       void reconcileStatus();
     },
+    card: statusCard,
     rateLimitNotice,
     readHistory,
     core,
@@ -480,25 +439,6 @@ export async function startSlackPlugin(
     ...(denyResponder ? { denyResponder } : {}),
     ...(cfg.webUiPublicUrl ? { webUiPublicUrl: cfg.webUiPublicUrl } : {}),
     backfillHistory: (client: unknown, channel: string) => readHistory(client, channel),
-    onAgentSessionStopped: async (channel, threadTs) => {
-      for (const ref of slackThreadRefCandidates(channel, threadTs)) {
-        await core.stopSlackThread?.(ref).catch(swallowAs("slack: stop thread on agent_session_stopped", false));
-      }
-      await core.thinkingStream
-        ?.handleSessionStopped(statusClient, statusAccount(), channel, threadTs)
-        .catch(swallowAs("slack: thinking stream session stopped", undefined));
-    },
-    onAgentSessionTitleChanged: async (channel, threadTs, title) => {
-      await core.thinkingStream
-        ?.handleSessionTitleChanged(statusAccount(), channel, threadTs)
-        .catch(swallowAs("slack: thinking stream session title changed", undefined));
-      for (const ref of slackThreadRefCandidates(channel, threadTs)) {
-        const updated = await core
-          .renameSlackThread?.(ref, title)
-          .catch(swallowAs("slack: rename thread on agent_session_title_changed", false));
-        if (updated) break;
-      }
-    },
     ensureHeader,
   });
   const surfaceContext = createSurfaceContextFulfiller({
@@ -532,6 +472,7 @@ export async function startSlackPlugin(
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
+    card: statusCard,
   });
 
   let auth: AuthTestResponse;
@@ -639,9 +580,6 @@ export async function startSlackPlugin(
       }
       stopped = true;
       if (accounts.get(ACCOUNT_LABEL)?.client === app.client) accounts.delete(ACCOUNT_LABEL);
-      unsubscribeSessionStates?.();
-      for (const unsub of activityUnsubs.values()) unsub();
-      activityUnsubs.clear();
       await statusSweep.stop();
       await replaySweeper?.stop();
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);

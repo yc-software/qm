@@ -46,6 +46,8 @@ async function gbrain(
   installPrincipalLinks({
     canonical: (key) => (key === "jordan@acme.example" || key === "U0JORDAN" ? "U0JORDAN" : undefined),
     aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
   });
   t.after(async () => installPrincipalLinks(null));
   const calls: Call[] = [];
@@ -359,6 +361,8 @@ test("a gbrain write's provenance stays within the contract's limit for a long s
   installPrincipalLinks({
     canonical: (key) => (key === signIn || key === "U0JORDAN" ? "U0JORDAN" : undefined),
     aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
   });
   const scope = `personal:${signIn}` as const;
   const { outcomes } = await writeFacts(

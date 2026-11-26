@@ -52,8 +52,7 @@ export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvide
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  await ctx.deps.refreshModels?.();
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  await ctx.deps.refreshModels();
   audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.read",
@@ -77,7 +76,6 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
 export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
@@ -88,15 +86,14 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
-  const moved =
-    ctx.deps.config && ctx.deps.modelRoutes?.gateway
-      ? await moveGatewayDefaultsToProvider(
-          ctx.deps.config,
-          ctx.deps.modelRoutes,
-          provider,
-          orgScope(ctx.deps) as ScopeId,
-        )
-      : [];
+  const moved = ctx.deps.modelRoutes.gateway
+    ? await moveGatewayDefaultsToProvider(
+        ctx.deps.config,
+        ctx.deps.modelRoutes,
+        provider,
+        orgScope(ctx.deps) as ScopeId,
+      )
+    : [];
   audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.update",
@@ -111,7 +108,6 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.modelCredentials.delete(provider, authorized.id);

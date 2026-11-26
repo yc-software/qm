@@ -60,7 +60,12 @@ async function recordDeclined(
     elicitId: requestId,
     approved: false,
     author,
-    body: { command: record.command, ...body },
+    body: {
+      command: record.command,
+      ...(record.purpose ? { purpose: record.purpose } : {}),
+      ...(record.summary && record.call ? { summary: record.summary } : {}),
+      ...body,
+    },
   });
   if (record.kind === "input") return;
   await sessions.append(writer, {

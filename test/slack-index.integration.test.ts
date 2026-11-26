@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -666,7 +667,7 @@ test("a DM reply wearing a persona posts under its name and icon", async () => {
       assert.equal(post.icon_emoji, ":art:");
       assert.deepEqual(post.blocks?.at(-1), {
         type: "context",
-        elements: [{ type: "mrkdwn", text: "From Ada", verbatim: true }],
+        elements: [{ type: "mrkdwn", text: "Answered as Ada", verbatim: true }],
       });
     }
   } finally {
@@ -902,7 +903,7 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+        topic: `Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=${encodeURIComponent(personalScope("U1"))}|More settings>`,
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -1002,7 +1003,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
       ],
     );
     for (const listener of f.core.modelChangeListeners)
-      withTenant(TENANT, () => listener("personal:alice@example.com"));
+      withTenant(TENANT, () => listener(personalScope("alice@example.com")));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
@@ -1731,6 +1732,7 @@ test("thread status is detached from reply delivery and steering cannot take own
       await network;
     },
     reconcile: async () => {},
+    card: () => ({ posted: async () => {}, release: async () => {} }),
   };
   f.core.engageRun = true;
   f.core.holdRun("r1");
@@ -1763,6 +1765,7 @@ test("top-level DM replies remain top-level and never start native thread status
       starts++;
     },
     reconcile: async () => {},
+    card: () => ({ posted: async () => {}, release: async () => {} }),
   };
   f.core.engageRun = true;
   f.core.holdRun("r1");
@@ -1851,6 +1854,22 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "202.1",
     });
     assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
+    const ack = { user: "UBOT", bot_id: "BBOT", text: "On it.", ts: "203.1", blocks: [{ type: "section" }] };
+    const carrying = { ...ack, blocks: [...ack.blocks, ...status.blocks] };
+    const changed = (message: object, previous_message: object, ts: string) =>
+      f.app.emitMessage({
+        channel: "C1",
+        channel_type: "channel",
+        subtype: "message_changed",
+        message,
+        previous_message,
+        ts,
+      });
+    await changed(carrying, ack, "203.2");
+    await changed(ack, carrying, "203.3");
+    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === "203.1").length, 0);
+    await changed({ ...carrying, text: "The answer." }, carrying, "203.4");
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "203.1")?.text, "The answer.");
   } finally {
     await f.stop();
   }

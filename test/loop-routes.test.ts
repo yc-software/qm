@@ -17,6 +17,7 @@ import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-databa
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { signOffs } from "./support/signed-off-action.ts";
+import { testCore } from "./support/build-app.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -43,6 +44,7 @@ function services(): LoopServiceDeps {
     grants: createShipGrantStore(testMap()),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore("org"),
+    fire: {} as LoopServiceDeps["fire"],
   };
 }
 
@@ -130,6 +132,7 @@ async function call(
       samePerson: async (a: string, b: string) => a === b,
     },
     deps: {
+      ...testCore(),
       loops: deps,
       runs,
       sessions: signOff.sessions,
@@ -771,7 +774,7 @@ test("a source call without a principal is refused", async () => {
     params: {},
     capability: null,
     app: {},
-    deps: { loops: deps },
+    deps: { ...testCore(), loops: deps },
   } as unknown as ApiCtx);
   assert.equal(out.status, 403);
 });

@@ -11,7 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModel, providerKeysPresent } from "../src/config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { stopAtEnd, testCore } from "./support/build-app.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -19,11 +19,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: 
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
   const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    acl: built.acl,
-    modelCredentials: built.modelCredentials,
+    ...testCore(built),
     baseModelDefault: defaultModel(configuredModel(config), baseModelProviders(config)),
     providerKeys: providerKeysPresent(config),
   });
