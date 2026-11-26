@@ -36,7 +36,11 @@ test("a published app borrows a credential only when one grant covers its publis
     tenant,
     orgScope: ORG,
     acl,
-    memberTeams: async (id: string, teams: readonly string[]) => new Set(["ada", "bo"].includes(id) ? teams : []),
+    teams: {
+      forTurn: async () => [
+        { id: "devs", name: "Devs", isolatedInOpen: false, configured: false, present: new Set(["ada", "bo"]) },
+      ],
+    },
   };
   const app = { id: "app-1", ownerScopeId: personalScope("ada"), createdBy: "ada" };
   const slugs = async (over = {}) =>

@@ -2076,7 +2076,7 @@ export function buildApp(
                 tenant,
                 orgScope,
                 acl,
-                memberTeams: (id, teamIds) => teams.memberTeams(tenant, id, teamIds),
+                teams,
               }),
             );
             return {

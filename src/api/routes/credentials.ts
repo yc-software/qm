@@ -12,13 +12,11 @@ export function appBorrows(ctx: BaseCtx): (deployment: string, slug: string) => 
     const { acl, teams } = ctx.deps;
     const app = acl ? await ctx.app.getApp(deployment) : null;
     if (!acl || !app || app.id !== deployment) return false;
-    const tenant = tenantOf(ctx);
-    const granted = await appCredentialGrants(app, {
-      tenant,
-      orgScope: makeScopeId("org", configOrgId()),
-      acl,
-      memberTeams: async (id, teamIds) => (teams ? teams.memberTeams(tenant, id, teamIds) : new Set()),
-    });
+    const granted = await appCredentialGrants(
+      app,
+      { tenant: tenantOf(ctx), orgScope: makeScopeId("org", configOrgId()), acl, teams },
+      slug,
+    );
     return granted.has(slug);
   };
 }
