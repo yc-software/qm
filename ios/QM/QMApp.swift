@@ -313,7 +313,7 @@ struct RootView: View {
                   conversation: conversation, client: client, user: identity.user,
                   knownSession: conversation.localOnly != true),
                 onShowConversations: { showingConversations = true },
-                accessory: AnyView(ShellNav(section: $section, waiting: waitingCount, plain: true)))
+                accessory: AnyView(nav(plain: true)))
             }
             .id(conversation.id)
             .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
@@ -334,7 +334,28 @@ struct RootView: View {
 
   @ViewBuilder
   private var shellNav: some View {
-    if !keyboardUp { ShellNav(section: $section, waiting: waitingCount) }
+    if !keyboardUp { nav(plain: false) }
+  }
+
+  private func nav(plain: Bool) -> ShellNav {
+    let selected: ShellNavItem =
+      switch section {
+      case .more: .more
+      case .waiting: .conversations
+      case .home: selectedConversation?.localOnly == true ? .new : .conversations
+      }
+    return ShellNav(selected: selected, waiting: waitingCount, plain: plain) { item in
+      switch item {
+      case .conversations: showingConversations = true
+      case .new:
+        if section != .home || selectedConversation?.localOnly != true,
+          let conversation = model.newConversation()
+        {
+          open(conversation)
+        }
+      case .more: section = .more
+      }
+    }
   }
 
   @ToolbarContentBuilder
@@ -628,45 +649,56 @@ enum ShellSection: Hashable {
 }
 
 /// Small icon-only nav under the main screen, in the style of the ChatGPT app.
+enum ShellNavItem {
+  case conversations, new, more
+}
+
 struct ShellNav: View {
-  @Binding var section: ShellSection
+  let selected: ShellNavItem
   let waiting: Int
-  /// Inside the conversation's own bottom bar, which already has a background.
+  /// Inside the conversation's own bottom bar, which already has a background and padding.
   var plain = false
+  let action: (ShellNavItem) -> Void
 
   var body: some View {
     HStack(spacing: 24) {
-      item(.home, icon: "house", label: "Home")
-      item(.waiting, icon: "tray", label: "Waiting")
-      item(.more, icon: "square.grid.2x2", label: "More")
+      item(
+        .conversations, icon: "bubble.left.and.bubble.right",
+        filled: "bubble.left.and.bubble.right.fill", label: "Conversations")
+      item(.new, icon: "square.and.pencil", filled: "square.and.pencil", label: "New chat")
+      item(.more, icon: "square.grid.2x2", filled: "square.grid.2x2.fill", label: "More")
     }
     .frame(maxWidth: .infinity)
-    .padding(.top, plain ? 0 : 6)
+    // Match the composer bar's padding so the nav sits at the same height on every screen.
+    .padding(.top, plain ? 0 : 10)
+    .padding(.bottom, plain ? 0 : 12)
     .background(plain ? Color.clear : QMTheme.paper)
   }
 
-  private func item(_ target: ShellSection, icon: String, label: String) -> some View {
-    let selected = section == target
+  private func item(
+    _ target: ShellNavItem, icon: String, filled: String, label: String
+  ) -> some View {
+    let isSelected = selected == target
     return Button {
-      section = target
+      action(target)
     } label: {
-      Image(systemName: selected ? icon + ".fill" : icon)
+      Image(systemName: isSelected ? filled : icon)
         .font(.system(size: 20, weight: .medium))
         .frame(width: 64, height: 40)
         .background {
-          if selected { Capsule().fill(QMTheme.ink.opacity(0.1)) }
+          if isSelected { Capsule().fill(QMTheme.ink.opacity(0.1)) }
         }
         .overlay(alignment: .topTrailing) {
-          if target == .waiting, waiting > 0 {
-            Circle().fill(QMTheme.unread).frame(width: 8, height: 8).offset(x: -14, y: 7)
+          if target == .conversations, waiting > 0 {
+            Circle().fill(QMTheme.unread).frame(width: 8, height: 8).offset(x: -12, y: 6)
           }
         }
         .contentShape(Capsule())
     }
     .buttonStyle(.plain)
-    .foregroundStyle(QMTheme.ink.opacity(selected ? 1 : 0.6))
+    .foregroundStyle(QMTheme.ink.opacity(isSelected ? 1 : 0.6))
     .accessibilityLabel(label)
-    .accessibilityAddTraits(selected ? .isSelected : [])
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }
 
