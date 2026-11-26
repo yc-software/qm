@@ -318,7 +318,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  const what = approvalName(call, d.summary);
+  const what = approvalName(call);
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;

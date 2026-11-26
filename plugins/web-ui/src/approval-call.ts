@@ -120,21 +120,20 @@ export function argView(args: Record<string, unknown>, depth = 0): ArgView {
   return { fields, empty };
 }
 
-function toolWords(tool: string): string {
-  const words = keyLabel(tool);
+function toolWords(call: ApprovalCall): string {
+  const words = keyLabel(call.tool);
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function approvalName(call: ApprovalCall | null, summary?: string): string {
-  const tool = call?.tool ?? summary?.trim();
-  return tool ? toolWords(tool) : "a command";
+export function approvalName(call: ApprovalCall | null): string {
+  return call ? toolWords(call) : "a command";
 }
 
 export function approvalHeading(a: PendingApproval, call: ApprovalCall | null): string {
   const summary = a.summary?.trim();
   if (a.purpose?.trim()) return a.purpose.trim();
   if (summary && summary !== a.call?.tool) return summary;
-  if (call) return toolWords(call.tool);
+  if (call) return toolWords(call);
   return summary || "Run a command";
 }
 
