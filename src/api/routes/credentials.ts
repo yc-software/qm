@@ -4,22 +4,22 @@ import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { orgId as configOrgId } from "../../config.ts";
-import { deploymentBorrowing } from "../../deploy/app-credentials.ts";
+import { appCredentialGrants } from "../../deploy/app-credentials.ts";
 import type { BaseCtx } from "./route.ts";
 
 export function appBorrows(ctx: BaseCtx): (deployment: string, slug: string) => Promise<boolean> {
   return async (deployment, slug) => {
     const { acl, teams } = ctx.deps;
-    if (!acl) return false;
+    const app = acl ? await ctx.app.getApp(deployment) : null;
+    if (!acl || !app || app.id !== deployment) return false;
     const tenant = tenantOf(ctx);
-    return deploymentBorrowing((id) => ctx.app.getApp(id), {
+    const granted = await appCredentialGrants(app, {
       tenant,
       orgScope: makeScopeId("org", configOrgId()),
       acl,
-      ...(teams
-        ? { memberTeams: (id: string, teamIds: readonly string[]) => teams.memberTeams(tenant, id, teamIds) }
-        : {}),
-    })(deployment, slug);
+      memberTeams: async (id, teamIds) => (teams ? teams.memberTeams(tenant, id, teamIds) : new Set()),
+    });
+    return granted.has(slug);
   };
 }
 

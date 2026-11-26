@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appBorrowing, appCredentialSlugs } from "../src/deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "../src/deploy/app-credentials.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { deployRef, encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
@@ -39,7 +39,7 @@ test("a published app borrows a credential only when one grant covers its publis
     memberTeams: async (id: string, teams: readonly string[]) => new Set(["ada", "bo"].includes(id) ? teams : []),
   };
   const app = { id: "app-1", ownerScopeId: personalScope("ada"), createdBy: "ada" };
-  const slugs = (over = {}) =>
+  const slugs = async (over = {}) =>
     appCredentialSlugs(
       [
         cred("acme-data"),
@@ -51,7 +51,7 @@ test("a published app borrows a credential only when one grant covers its publis
         cred("no-secret", { hasSecret: false }),
         cred("env-only", { delivery: "env", envKey: "ENV_ONLY" }),
       ],
-      appBorrowing({ ...app, ...over }, access),
+      await appCredentialGrants({ ...app, ...over }, access),
     );
   assert.deepEqual(await slugs(), ["acme-data", "e2b"]);
   await grant(app.ownerScopeId, encodeRef(deployRef(app.id)), personalScope("bo"));

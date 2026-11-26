@@ -192,7 +192,7 @@ import {
   type AppDraft,
 } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { appBorrowing, appCredentialSlugs } from "./deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -2070,9 +2070,9 @@ export function buildApp(
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
             const tenant = ambientTenant();
-            const credentials = await appCredentialSlugs(
+            const credentials = appCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
-              appBorrowing(publishedApp, {
+              await appCredentialGrants(publishedApp, {
                 tenant,
                 orgScope,
                 acl,
