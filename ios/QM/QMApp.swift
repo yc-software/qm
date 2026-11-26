@@ -595,7 +595,10 @@ private struct ConversationDrawerEffects: ViewModifier {
   let model: AppModel
 
   private var syncURL: URL? {
-    guard phase == .active, isOpen, listVisible, model.client?.hasSession == true else {
+    // Launch now opens on Home with the list closed, so also sync until the workspace loads.
+    guard phase == .active, (isOpen && listVisible) || model.identity == nil,
+      model.client?.hasSession == true
+    else {
       return nil
     }
     return model.client?.baseURL
