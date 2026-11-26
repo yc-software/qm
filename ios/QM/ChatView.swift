@@ -5,6 +5,8 @@ struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
   var onShowConversations: (() -> Void)?
+  /// Room kept under the composer for the app's bottom nav.
+  var bottomInset: CGFloat = 0
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
   @State private var dictation: NativeDictationModel
@@ -41,9 +43,11 @@ struct ChatView: View {
   @State private var composerFocused = false
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil,
+    bottomInset: CGFloat = 0
   ) {
     self.onShowConversations = onShowConversations
+    self.bottomInset = bottomInset
     _model = State(initialValue: model)
     _dictation = State(
       initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
@@ -665,6 +669,7 @@ struct ChatView: View {
       bottomControls(proxy)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
+    .padding(.bottom, bottomInset)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
     // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the

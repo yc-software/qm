@@ -102,9 +102,10 @@ struct RootView: View {
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if let identity = model.identity {
+        if model.identity != nil {
           VStack(spacing: 8) {
             if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
+            if showsNav { Color.clear.frame(height: ShellNav.height) }
           }
         }
       }
@@ -136,7 +137,6 @@ struct RootView: View {
     }
     // One nav for the whole app, drawn above both the list and the main screen so it stays
     // put while they slide underneath it.
-    .safeAreaPadding(.bottom, showsNav ? ShellNav.height : 0)
     .overlay(alignment: .bottom) {
       if showsNav { nav(plain: false, inList: showingConversations) }
     }
@@ -314,7 +314,8 @@ struct RootView: View {
                 model: ChatModel(
                   conversation: conversation, client: client, user: identity.user,
                   knownSession: conversation.localOnly != true),
-                onShowConversations: { showingConversations = true })
+                onShowConversations: { showingConversations = true },
+                bottomInset: showsNav ? ShellNav.height : 0)
             }
             .id(conversation.id)
             .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
@@ -323,15 +324,20 @@ struct RootView: View {
               .task { selectedConversation = model.newConversation() }
           }
         case .waiting:
-          NavigationStack { waitingConversations.toolbar { menuToolbar } }
+          NavigationStack { waitingConversations.toolbar { menuToolbar }.modifier(navRoom) }
         case .more:
-          NavigationStack { MoreGrid(identity: identity, client: client).toolbar { menuToolbar } }
+          NavigationStack {
+            MoreGrid(identity: identity, client: client).toolbar { menuToolbar }.modifier(navRoom)
+          }
         }
       }
     }
   }
 
   private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
+
+  /// Keeps scrolling content clear of the bottom nav, which floats above every screen.
+  private var navRoom: NavRoom { NavRoom(height: showsNav ? ShellNav.height : 0) }
 
   private func nav(plain: Bool, inList: Bool = false) -> ShellNav {
     let selected: ShellNavItem
@@ -654,6 +660,13 @@ struct ShellNav: View {
     .foregroundStyle(QMTheme.ink.opacity(isSelected ? 1 : 0.6))
     .accessibilityLabel(label)
     .accessibilityAddTraits(isSelected ? .isSelected : [])
+  }
+}
+
+struct NavRoom: ViewModifier {
+  let height: CGFloat
+  func body(content: Content) -> some View {
+    content.safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: height) }
   }
 }
 
