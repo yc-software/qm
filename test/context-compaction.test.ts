@@ -405,24 +405,37 @@ test("planCompaction returns null when nothing needs to move (a still-fitting pr
   assert.equal(plan.reuse?.seq, 0, "the fitting prior summary is reused");
 });
 
-test("planCompaction never splits a tool_call from its kept tool_result (no fabricated interruption)", () => {
-  const history = [
+test("planCompaction never splits tool calls or assistant steps across the summary boundary", () => {
+  const wire = { message: { id: "s1", api: "anthropic-messages", provider: "a", model: "m", stopReason: "toolUse" } };
+  const call = (seq: number, callId: string, step?: number) =>
+    mkItem(seq, { kind: "ToolCall", callId, tool: "execute", ...(step !== undefined ? { step, body: { wire } } : {}) });
+  const res = (seq: number, callId: string, text = "ok") =>
+    mkItem(seq, { kind: "ToolResult", callId, tool: "execute", text });
+  const seqs = (items: Item[]) => items.map((e) => e.seq);
+  const check = (label: string, history: Item[], keepFrom: number, expected: number[]) => {
+    const budget = budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(keepFrom)));
+    const plan = planCompaction(history, budget, 0.6)!;
+    assert.deepEqual(seqs(plan.toSummarize), expected, label);
+    assert.deepEqual(seqs(plan.kept), seqs(history.slice(expected.length)), label);
+  };
+  check("single call", [mkItem(0), mkItem(1), call(2, "c1"), res(3, "c1"), mkItem(4), mkItem(5)], 3, [0, 1]);
+  const think = mkItem(1, { kind: "Reasoning", text: "plan", step: 0, body: { wire } });
+  const parallel = [
     mkItem(0),
-    mkItem(1),
-    mkItem(2, { kind: "ToolCall", callId: "c1", tool: "execute" }),
-    mkItem(3, { kind: "ToolResult", callId: "c1", tool: "execute", text: "ok" }),
-    mkItem(4),
-    mkItem(5),
+    think,
+    call(2, "c1", 1),
+    call(3, "c2", 2),
+    res(4, "c1", "a ".repeat(20)),
+    res(5, "c2"),
+    mkItem(6),
   ];
-  const plan = planCompaction(history, budgetWhoseKeepWindowFits(estimateHistoryTokens(history.slice(3))), 0.6)!;
-  assert.deepEqual(
-    plan.toSummarize.map((e) => e.seq),
-    [0, 1],
-    "the boundary tool_call is pulled back to its kept result",
-  );
-  assert.deepEqual(
-    plan.kept.map((e) => e.seq),
-    [2, 3, 4, 5],
+  check("parallel calls with stepped reasoning", parallel, 5, [0]);
+  const aside = mkItem(2, { kind: "UserMessage", text: "aside", body: { overheard: true } });
+  check(
+    "interleaved entry between call and result",
+    [mkItem(0), call(1, "c1"), aside, res(3, "c1"), mkItem(4)],
+    3,
+    [0],
   );
 });
 
