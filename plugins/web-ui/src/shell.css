@@ -4632,6 +4632,15 @@ summary.stopped-head:focus-visible {
   white-space: nowrap;
   text-decoration: none;
 }
+.split-pane-title > .chat-participants {
+  margin-left: 12px;
+}
+.split-pane-title > .chat-participant-names {
+  margin-left: 6px;
+}
+.split-pane-title > .open-in-surface {
+  margin-left: 12px;
+}
 .open-in-surface:hover {
   background: var(--secondary);
 }
