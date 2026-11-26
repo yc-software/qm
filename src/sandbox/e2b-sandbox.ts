@@ -26,6 +26,7 @@ import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   E2bCommandLostError,
+  E2bSandboxBusyError,
   E2bSandboxGoneError,
   type E2bClient,
   type E2bSandboxInfo,
@@ -89,7 +90,7 @@ export interface E2bSandboxOptions extends BlobStagingOptions {
   layerToolFiles?: () => readonly LayerInstallFile[];
   store: DurableMap<StoredE2bSandbox>;
   snapshots?: HomeSnapshotStore;
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }, error?: unknown) => void;
 }
 
 export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
@@ -113,12 +114,13 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
 
   const sessionByName = new Map<string, E2bSession>();
   const pauseFailed = new Set<string>();
+  const busyPauseReported = new Set<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
-    opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
+  const reportError = (category: string, code: string, message: string, scopeLabel?: string, error?: unknown): void => {
+    opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) }, error);
   };
 
   const homeSnapshots = opts.snapshots
@@ -599,11 +601,15 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
       await store.merge(scope, { preservationState: "paused", preservationError: undefined });
       sessionByName.delete(handle.id);
       pauseFailed.delete(handle.id);
+      busyPauseReported.delete(scope);
     } catch (error) {
       pauseFailed.add(handle.id);
       await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
-      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
-      throw error;
+      const busy = error instanceof E2bSandboxBusyError;
+      if (!busy || !busyPauseReported.has(scope))
+        reportError("sandbox_preservation", "pause_failed", errMessage(error), scope, error);
+      if (!busy) throw error;
+      busyPauseReported.add(scope);
     }
   }
 
