@@ -369,23 +369,27 @@ struct RootView: View {
     }
   }
 
-  // An opaque bar with search and settings; the list starts right under it and scrolls beneath.
+  // Search and settings float in a glass pill; the list scrolls all the way up behind it.
   private func listHeader(_ identity: Identity) -> some View {
-    HStack(spacing: 4) {
+    HStack {
       Spacer()
-      NavigationLink(value: Page.search) {
-        Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+      HStack(spacing: 0) {
+        NavigationLink(value: Page.search) {
+          Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search")
+        accountMenu(identity).frame(width: 44, height: 44)
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Search")
-      accountMenu(identity).frame(width: 44, height: 44)
+      .font(.system(size: 18, weight: .medium))
+      .foregroundStyle(QMTheme.ink)
+      .padding(.horizontal, 4)
+      .modifier(GlassPill(prominent: false))
     }
-    .font(.system(size: 19, weight: .medium))
-    .foregroundStyle(QMTheme.ink)
-    .padding(.horizontal, 12)
+    .padding(.horizontal, 16)
     .padding(.bottom, 4)
-    .background(QMTheme.sidebar.ignoresSafeArea(edges: .top))
   }
+
 
   @ViewBuilder
   private var loadMoreRow: some View {
