@@ -94,6 +94,11 @@ describe("a published app's broker token follows the app it was minted for, on e
           deployments: appsAllowed,
         }),
       },
+      acl: {
+        grantsFor: async (_tenant: unknown, ownerScopeId: string, ref: string) => [
+          { ownerScopeId, ref, granteeScopeId: ownerScopeId, permission: "read" },
+        ],
+      },
       brokerFetch: async () => ({ status: 200, text: async () => "{}" }),
       gitHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
     } as unknown as Partial<ServerDeps>;

@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -20,7 +20,7 @@ const CAP = "core-only-capability-secret-for-tests-01";
 describe("capability tokens verify under the core-only capability secret, not the shared source-auth secret", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = async (secret: string) =>
     mintCapabilityToken(
@@ -56,7 +56,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 });
 
 describe("createServer refuses to boot enforcement that a surface could bypass", () => {
-  let built: BuiltApp;
+  let built: Core;
   before(() => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-failclosed-")), signingSecret: SOURCE }));
   });

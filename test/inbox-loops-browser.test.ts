@@ -6,7 +6,6 @@ import { API_ALIASES } from "../src/api/browser-session.ts";
 import { createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -16,7 +15,7 @@ const config = testConfig({ signingSecret: SECRET, capabilitySecret: SECRET, pub
 const built = stopAtEnd(buildApp(config));
 const itemImages = new Map<string, () => Response>();
 const server = createServer(built.app, {
-  ...serverDeps(config, built),
+  ...built,
   ...browserSessionDeps,
   itemImageFetch: async (input) => {
     const fake = itemImages.get(String(input));

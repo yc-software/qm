@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { configureCommandRules } from "./support/command-rules.ts";
@@ -16,7 +16,7 @@ import { personalScope } from "../src/types.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "policy-route-")) }));
   const server = createInsecureTestServer(built.app, {
     config: built.config,

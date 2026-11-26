@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { BROWSER_MODEL_AUD, mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
@@ -40,7 +40,7 @@ async function browserEndpoint(
 ) {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), ...overrides });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const calls: Upstream[] = [];

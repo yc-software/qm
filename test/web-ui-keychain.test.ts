@@ -4,7 +4,7 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -14,7 +14,7 @@ import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 async function core(t: TestContext): Promise<{ base: string; built: ReturnType<typeof buildApp> }> {
   const config = testConfig({ signingSecret: "web-keychain-signing-secret-0123456789" });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, built };

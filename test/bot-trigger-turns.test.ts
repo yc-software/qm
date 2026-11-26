@@ -7,7 +7,6 @@ import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import type { Agent, RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeResult } from "../src/agent/runtime-types.ts";
 import { scopeId } from "../src/types.ts";
@@ -37,7 +36,7 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
     token = opts?.env?.AGENT_API_TOKEN ?? token;
     return provision(owner, opts);
   };
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const cronBy = async (botActor: boolean) => {

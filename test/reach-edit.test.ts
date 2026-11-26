@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type Destination } from "../src/types.ts";
@@ -17,7 +17,7 @@ const TS = "1723497600.123456";
 describe("POST /v1/reach with edit", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = async (destination?: Destination, turn: { surface?: string; liveReplies?: boolean } = {}) =>
     await mintCapabilityToken(

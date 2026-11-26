@@ -17,6 +17,7 @@ import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./cr
 import { sendJson } from "./http.ts";
 import { relayStream } from "../../plugins/chassis/src/http.ts";
 import { tenantOf, type BaseCtx } from "./routes/route.ts";
+import { appBorrows } from "./routes/credentials.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 
 export const GIT_HTTP_BROKER_PREFIX = "/v1/credentials/git/";
@@ -175,7 +176,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
   if (!reader) return sendJson(ctx.res, 404, { error: "not_found" });
   let grant: Awaited<ReturnType<typeof grantedCredential>>;
   try {
-    grant = await grantedCredential(claims, slug, reader, makeScopeId("org", configOrgId()));
+    grant = await grantedCredential(claims, slug, reader, makeScopeId("org", configOrgId()), appBorrows(ctx));
   } catch (error) {
     if (!(error instanceof KeychainError)) throw error;
     return sendDenied(ctx, claims, error.status, "credential_unavailable", error.message, slug, "");

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { createPrincipalLinkService, PrincipalLinkError } from "../src/identity/principal-links.ts";
@@ -247,7 +247,7 @@ describe("linked sign-ins across the HTTP surface", () => {
   const SECRET = "principal-links-source-secret".repeat(2);
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let nonce = 0;
 
   const signed = (method: string, rawPath: string, body = "", headers: Record<string, string> = {}) => {
@@ -406,7 +406,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
   const PID = "portal-only-identity-secret-for-tests-02";
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));

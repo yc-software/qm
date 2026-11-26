@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var onShowConversations: (() -> Void)?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
   @State private var dictation: NativeDictationModel
@@ -39,11 +38,11 @@ struct ChatView: View {
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
   @State private var composerFocused = false
+  @Environment(\.shellNavRoom) private var navRoom
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil
   ) {
-    self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
       initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
@@ -120,6 +119,10 @@ struct ChatView: View {
     }
   }
 
+  private var navigationTitleText: String {
+    model.conversation.localOnly == true ? "" : model.conversation.label
+  }
+
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
@@ -161,7 +164,8 @@ struct ChatView: View {
     .toolbarBackground(QMTheme.paper, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
-    .navigationTitle(model.conversation.label)
+    // A blank chat has no title; the greeting says enough.
+    .navigationTitle(navigationTitleText)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar { conversationToolbar }
     .navigationDestination(item: $openedConversation) { conversation in
@@ -257,14 +261,6 @@ struct ChatView: View {
 
   @ToolbarContentBuilder
   private var conversationToolbar: some ToolbarContent {
-    if let onShowConversations {
-      ToolbarItem(placement: .topBarLeading) {
-        Button(action: onShowConversations) {
-          Image(systemName: "chevron.left")
-        }
-        .accessibilityLabel("Conversations")
-      }
-    }
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
         if model.conversation.localOnly != true {
@@ -551,22 +547,27 @@ struct ChatView: View {
           && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
         {
-          ContentUnavailableView {
+          // A quiet greeting, ChatGPT-style, centred in the space above the composer.
+          VStack(spacing: 20) {
             Text("What shall we work on?")
-          } description: {
-            Text("Ask a question or hand off a task.")
-          }
-          .padding(.top, 60)
-          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-            let identity, !model.conversation.isShared
-          {
-            NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
-              guard model.draft.isEmpty else { return }
-              model.draft = activity.prompt
-              model.saveDraft()
-              composerFocused = true
+              .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
+              .foregroundStyle(QMTheme.ink)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: .infinity)
+            if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+              let identity, !model.conversation.isShared
+            {
+              NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
+                guard model.draft.isEmpty else { return }
+                model.draft = activity.prompt
+                model.saveDraft()
+                composerFocused = true
+              }
             }
           }
+          .containerRelativeFrame(.vertical, alignment: .center) { height, _ in height * 0.85 }
+          // Glide up with the keyboard rather than snapping to the new centre.
+          .animation(.smooth(duration: 0.3), value: composerFocused)
         }
         ForEach(sections) { section in
           VStack(alignment: .leading, spacing: 16) {
@@ -665,6 +666,7 @@ struct ChatView: View {
       bottomControls(proxy)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
+    .padding(.bottom, navRoom)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
     // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the
@@ -892,11 +894,10 @@ struct ChatView: View {
               Task { await stop() }
             } label: {
               Image(systemName: "stop.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 12, weight: .bold))
                 .modifier(NativeLoadingPulse(active: stopping))
                 .foregroundStyle(QMTheme.paper)
-                .frame(width: 44, height: 44)
-                .background(QMTheme.ink, in: Circle())
+                .composerCircle(QMTheme.ink)
             }
             .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
             .disabled(stopping)
@@ -998,13 +999,22 @@ struct ComposerSendLabel: View {
         NativeWave().foregroundStyle(QMTheme.paper)
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       } else {
-        Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold))
+        Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       }
     }
     .foregroundStyle(QMTheme.paper)
-    .frame(width: 44, height: 44)
-    .background(QMTheme.ink.opacity(enabled ? 1 : 0.25), in: Circle())
+    .composerCircle(QMTheme.ink.opacity(enabled ? 1 : 0.25))
+  }
+}
+
+extension View {
+  /// The composer's round buttons: a 32pt circle inside a full 44pt tap target.
+  func composerCircle(_ fill: Color) -> some View {
+    frame(width: 32, height: 32)
+      .background(fill, in: Circle())
+      .frame(width: 44, height: 44)
+      .contentShape(Rectangle())
   }
 }
 

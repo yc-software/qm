@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
-import { buildApp, serverDeps } from "./wiring.ts";
+import { buildApp } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
@@ -92,9 +92,11 @@ export async function startQm(
           ),
         };
   const server = createServer(built.app, {
-    ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
+    ...built,
+    slackEnvironmentState,
+    slackEnvBotToken: slackConfig?.botToken,
     managedSlack,
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    openaiApiKey: config.openaiApiKey,
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
@@ -110,7 +112,7 @@ export async function startQm(
 
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
-    await built.deploymentLayerReady;
+    await built.deploymentLayerReady();
   });
   server.listen(config.port);
   await once(server, "listening");

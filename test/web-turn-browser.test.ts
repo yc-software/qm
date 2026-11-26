@@ -8,7 +8,6 @@ import type { App } from "../src/api/app-types.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import type { RunSignal } from "../src/runs/run-signal-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -89,7 +88,7 @@ const admin = {
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     portalSession,
     admin,

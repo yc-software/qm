@@ -41,6 +41,18 @@ final class NativeConversationSidebarTests: XCTestCase {
     XCTAssertTrue(NativeConversationSection.grouped([], contexts: [:]).isEmpty)
   }
 
+  func testConversationsWaitingOnYouLeadTheListOnce() {
+    var waiting = Conversation(id: "w", scopeId: "project:work", threadRef: "web:w")
+    waiting.awaitingInput = true
+    waiting.pinned = true
+    var pinned = Conversation(id: "p", scopeId: "project:work", threadRef: "web:p")
+    pinned.pinned = true
+    let other = Conversation(id: "o", scopeId: "project:work", threadRef: "web:o")
+    let sections = NativeConversationSection.grouped([other, pinned, waiting], contexts: [:])
+    XCTAssertEqual(sections.map(\.title), ["Waiting on you", "Pinned", "Project conversation"])
+    XCTAssertEqual(sections.map { $0.conversations.map(\.id) }, [["w"], ["p"], ["o"]])
+  }
+
   func testContextFailureRetriesWithoutLosingConversationsAndStopsPollingAfterSuccess() async throws
   {
     let configuration = URLSessionConfiguration.ephemeral
@@ -109,15 +121,15 @@ extension NativeConversationSidebarTests {
       id: "scope:group:project", title: "Project", icon: "folder", conversations: conversations)
     XCTAssertTrue(section.hasPreview)
     XCTAssertEqual(
-      section.preview(showAll: false, searching: false, selectedID: nil).map(\.id),
+      section.preview(showAll: false, selectedID: nil).map(\.id),
       Array(conversations.prefix(5)).map(\.id))
     XCTAssertEqual(
-      section.preview(showAll: false, searching: false, selectedID: "chat-8").map(\.id),
+      section.preview(showAll: false, selectedID: "chat-8").map(\.id),
       ["chat-1", "chat-2", "chat-3", "chat-4", "chat-5", "chat-8"])
-    XCTAssertEqual(section.preview(showAll: true, searching: false, selectedID: nil), conversations)
-    XCTAssertEqual(section.preview(showAll: false, searching: true, selectedID: nil), conversations)
+    XCTAssertEqual(section.preview(showAll: true, selectedID: nil), conversations)
     let pinned = NativeConversationSection(
-      id: "pinned", title: "Pinned", icon: "pin", conversations: conversations)
+      id: "pinned", title: "Pinned", icon: "pin", conversations: conversations,
+      crossScope: true)
     XCTAssertFalse(pinned.hasPreview)
     let personal = NativeConversationSection(
       id: "personal", title: "Personal", icon: "person",

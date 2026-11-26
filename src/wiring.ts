@@ -4,7 +4,7 @@ import { onTenantLoad } from "./tenants/cache.ts";
 import { loadTenantSettings, TENANT_SETTINGS_REFRESH_MS } from "./tenants/settings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
-import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
+import { createPostgresTeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, createReplyCheck, routeTurnRuntime } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
@@ -76,7 +76,7 @@ import {
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
-import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
+import { createModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -88,34 +88,22 @@ import {
   providerKeysPresent,
   type Config,
 } from "./config.ts";
-import type { ServerDeps } from "./api/deps.ts";
 import { enabledSandboxBackends, superserveGenerationKey } from "./sandbox/sandbox-settings.ts";
-import {
-  actorAssertionActive,
-  createIdentityService,
-  type DeactivationRecord,
-  type IdentityService,
-} from "./identity/identity-service.ts";
+import { actorAssertionActive, createIdentityService, type DeactivationRecord } from "./identity/identity-service.ts";
 import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
-import { createPostgresUserStore, SPLIT_LINKED_BOTS_MIGRATION, type UserStore } from "./identity/user-store.ts";
+import { createPostgresUserStore, SPLIT_LINKED_BOTS_MIGRATION } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { configStoreMaps, createConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
-import { createAclStore, type AclStore } from "./acl/acl-store.ts";
+import { createAclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
-import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import {
-  createGitFetcher,
-  PACK_LIMITS,
-  packFetcherByKind,
-  resolvePackAuth,
-  type SkillPackFetcher,
-} from "./skills/pack-fetcher.ts";
+import { createSkillBundleStore, type SkillBundle } from "./skills/skill-bundle-store.ts";
+import { createGitFetcher, PACK_LIMITS, packFetcherByKind, resolvePackAuth } from "./skills/pack-fetcher.ts";
 import { readSeedSkills } from "./skills/seed.ts";
 import {
   createPostgresMap,
@@ -143,7 +131,6 @@ import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
 import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
 import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
-import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, APP_TABLES, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
@@ -167,7 +154,6 @@ import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
-import type { DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
 import { createSlackDeliveryJobs } from "./slack/delivery-jobs.ts";
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
@@ -175,11 +161,10 @@ import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { createDeliveryRelay } from "./delivery/relay.ts";
-import type { DirectoryStore } from "./directory/directory-store.ts";
 import { signInMembers, withSignInMembers } from "./directory/sign-in-members.ts";
 import { withOffChatRecipients } from "./delivery/off-chat-delivery.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
-import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
+import { createPostgresEnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
@@ -193,7 +178,7 @@ import {
   type AppDraft,
 } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { appCredentialSlugs } from "./deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -229,8 +214,8 @@ import {
   type MemoryRegistryStore,
 } from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, mcpServerAuth, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpServerStore, type McpServer } from "./mcp/mcp-server-store.ts";
+import { createMcpToolService, mcpServerAuth } from "./mcp/mcp-tool-service.ts";
 import { createMcpClient } from "./mcp/mcp-client.ts";
 import { createMcpPackFetcher } from "./skills/mcp-pack-fetcher.ts";
 import {
@@ -329,11 +314,10 @@ import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-fl
 import {
   createCustomProviderStore,
   createModelCredentialStore,
-  type CustomProviderStore,
   type ModelCredentialStore,
 } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
-import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
+import { createUserModelCredentialStore } from "./model/user-model-credential-store.ts";
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
@@ -379,7 +363,7 @@ import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes
 import { createSessionWork } from "./sessions/session-work.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { claimBarredBotJobs, createJobComputerSweep } from "./processes/job-computers.ts";
-import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
+import { createMonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine } from "./skills/skill-sync-engine.ts";
 import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
@@ -391,6 +375,7 @@ import { watchReplyNotices } from "./notifications/reply-notifications.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
+import type { AppDeps } from "./api/app-types.ts";
 import { startSession } from "./api/start-session.ts";
 import {
   createSwarmStore,
@@ -417,23 +402,18 @@ import {
   resolveDeploymentModel,
   modelSupported,
 } from "./model/pi-models.ts";
-import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { createAdminService, parseAdminGrants } from "./admin/admin-service.ts";
 import { createPgPool } from "./persistence/pg-pool.ts";
 import { createSelfServe, provisionerSigningKey, provisionWorkspace, type SelfServe } from "./tenants/self-serve.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
-import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
+import { createProjectStore, type Project } from "./projects/project-store.ts";
 import { createPersonaHandover } from "./personas/persona-handover.ts";
 import { createPersonaService } from "./personas/persona-service.ts";
 import { createPostgresPersonaStore } from "./personas/persona-store.ts";
-import { recordErrorInBinding, withErrorReporting, type ErrorEvent, type ErrorLog } from "./admin/error-log.ts";
+import { recordErrorInBinding, withErrorReporting, type ErrorEvent } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
-import {
-  emptyDeploymentLayer,
-  loadDeploymentLayer,
-  type BrokeredLayerTool,
-  type DeploymentLayerRuntime,
-} from "./deployment/load-layer.ts";
+import { emptyDeploymentLayer, loadDeploymentLayer, type BrokeredLayerTool } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
   DEPLOYMENT_LAYER_CHANNEL,
@@ -499,24 +479,16 @@ export function stopWithBackstop(
   );
 }
 
-export interface BuiltApp {
+export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   drain: DrainController;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
-  sessions: SessionStore;
-  runs: RunStore;
-  signals: RunSignalStore;
-  sessionStateBus: SessionStateBus;
+  deploymentLayerReady: () => Promise<unknown>;
   sessionSyscalls: SessionSyscallsFactory;
-  ledgerEventBus: LedgerEventBus;
-  surfaceCache: SurfaceCache;
   runtime: Runtime;
-  config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
   slackInstallation: SlackInstallationStore;
   resolveClient: OAuthClientResolver;
@@ -525,72 +497,83 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   modelRoutes: ModelRoutes;
-  runtimeFallback: { readonly modelId: string };
-  modelCredentials: ModelCredentialStore;
-  userModelCredentials: UserModelCredentialStore;
-  modelRegistry: ModelOverlayStore;
   modelVerifier: ModelVerifier;
-  refreshModels: () => Promise<void>;
-  customProviders: CustomProviderStore;
-  refreshCustomProviders: () => Promise<void>;
-  mcpServers: McpServerStore;
-  mcpToolService: McpToolService;
   memoryRegistry: MemoryRegistryStore;
-  acl: AclStore;
-  skills: SkillStore;
-  skillBundles: SkillBundleStore;
-  skillFetcher: SkillPackFetcher;
-  auditLog: AuditLog;
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
-  genericChatEvents?: ServerDeps["genericChatEvents"];
+  genericChatEvents?: ReturnType<typeof createGenericChatInbound>["handle"];
+  baseModelDefault: string;
   loopIngress: LoopIngressService;
-  admin: AdminService;
   budget: BudgetTracker | undefined;
-  errors: ErrorLog;
-  crons: CronStore;
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
-  identity: IdentityService;
-  users: UserStore;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
-  deliveries: DeliveryStore;
   keychainApprovals?: KeychainApprovals;
-  approvals: ServerDeps["approvals"];
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
   memory: MemoryService;
-  sandbox: Sandbox;
-  advisoryLock: AdvisoryLock;
   sandboxResources: SandboxResources;
   blobTransfer: BlobTransferStore;
-  files: FileArtifactStore;
   fileUploads?: DirectFileUploads;
   featureFlags: FeatureFlagStore;
-  teams?: TeamStore;
   decisions?: DecisionStore;
   replayDedupe: ReplayDedupe;
   selfServe?: SelfServe;
   brokerSessions?: BrokerSessionStore;
-  directory: DirectoryStore;
-  projects: ProjectStore;
-  environments: EnvironmentStore;
-  processes?: ProcessRegistry;
   appPageViews?: AppPageViewLog;
-  monitors: MonitorStore;
   browserSessionStore?: BrowserSessionStore;
-  ambientJudgments?: AmbientJudgmentStore;
-  ackEmojiPicks?: AckEmojiPickStore;
-  channelPolicy: ChannelPolicyStore;
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
   sessionShareBytes: DurableByteStore;
   slackCore: SlackCoreClient;
+}
+
+function coreSettings(config: Config, sandbox: Sandbox, drain: DrainController) {
+  const smoke =
+    config.backgroundDeploymentId && config.backgroundWorkEnabled ? config.backgroundDeploymentId : undefined;
+  return {
+    production: config.production,
+    deploymentControlSecret: smoke && config.deploymentControlSecret,
+    deploymentLiveSmoke: smoke
+      ? {
+          deploymentId: smoke,
+          superseded: () => !drain.canClaim(),
+          run: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+        }
+      : undefined,
+    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    spendExportToken: config.spendExportToken,
+    signingSecret: config.signingSecret,
+    capabilitySecret: config.capabilitySecret,
+    capabilityTokenCompression: config.capabilityTokenCompression,
+    portalIdentitySecret: config.portalIdentitySecret,
+    trustedOidcIssuer: config.trustedOidcAdminIssuer,
+    requireSignedPortalIdentity: config.requireSignedPortalIdentity,
+    brandingDefault: config.brandingDefault,
+    companySubscriptionAuth: companySubscriptionAuth(config),
+    slackEventsPort: config.slackEventsPort,
+    apiBaseUrl: config.apiBaseUrl,
+    publicUrl: config.publicUrl,
+    portalUrl: config.publicWebUrl,
+    emailAuthPrincipals: config.emailAuthPrincipals,
+    emailAuthDomain: config.emailAuthDomain,
+    slackAllowFrom: config.slack && (config.slack.allowFrom ?? []),
+    deployDialTimeoutMs: config.deployDialTimeoutMs,
+    deployGateSecret: config.awsDeploy.gateSecret,
+    deployAppsSessionSecret: config.deployAppsSessionSecret,
+    deployAppsLoginUrl: config.deployAppsLoginUrl,
+    deployAppsLoginPath: config.deployAppsLoginPath,
+    sandboxBackend: sandbox.profile.backend,
+    egressDeclaredEnforcement: sandbox.profile.egressEnforcement ?? "none",
+    egressEnforcement: effectiveEgressEnforcement(sandbox.profile, config),
+    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
+    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+  };
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -620,7 +603,7 @@ export function buildApp(
     agent?: Agent;
     canClaimRuns?: () => boolean;
   } = {},
-): BuiltApp {
+): Core {
   const admittedWork = createAdmittedWork();
   let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
@@ -2022,11 +2005,15 @@ export function buildApp(
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
-            const credentials = await appCredentialSlugs(
-              ambientTenant(),
+            const tenant = ambientTenant();
+            const credentials = appCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
-              orgScope,
-              acl,
+              await appCredentialGrants(publishedApp, {
+                tenant,
+                orgScope,
+                acl,
+                teams,
+              }),
             );
             return {
               VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),
@@ -2312,6 +2299,8 @@ export function buildApp(
     ],
   });
   const promptSnapshots = artifactMap<PromptSnapshot>("prompt_snapshots");
+  const inviteMailer =
+    config.resendApiKey && config.emailFrom ? resendMailer(config.resendApiKey, config.emailFrom) : undefined;
   const orchestratorDeps: OrchestratorDeps = {
     advisoryLock,
     admittedWork,
@@ -2357,9 +2346,7 @@ export function buildApp(
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
+    ...(inviteMailer ? { inviteMailer } : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture, card: config.memoryCard },
     memoryStrategy,
@@ -2509,7 +2496,8 @@ export function buildApp(
     advisoryLock,
     monitors,
   };
-  const app = createApp({
+  const appDeps: AppDeps = {
+    inviteMailer,
     errors,
     settleTreeWakes: (root, botRunsOnly) => settleTreeWakes(subagentMail, root, botRunsOnly),
     teams,
@@ -2587,9 +2575,9 @@ export function buildApp(
     judgeModelId,
     runtimeFallback: fallback,
     providerKeys,
-    modelProviders: providerKeys,
     runWaitMs: config.runWaitMs,
-  });
+  };
+  const app = createApp(appDeps);
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
@@ -3306,27 +3294,19 @@ export function buildApp(
     },
   };
   return {
+    ...appDeps,
+    ...coreSettings(config, sandbox, drain),
+    baseModelDefault: configuredModel(config) ?? fallback.modelId,
     app,
-    runtimeFallback: fallback,
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
       if (boundTenant()) await configStore.hydrate?.();
     },
-    deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    get deploymentLayerReady() {
-      return deploymentLayerReady();
-    },
-    sessions,
-    runs,
-    signals: runSignals,
-    sessionStateBus,
+    deploymentLayerReady,
     sessionSyscalls,
-    ledgerEventBus,
-    surfaceCache,
     runtime,
-    config: configStore,
     connectorTokens,
     slackInstallation,
     resolveClient,
@@ -3336,66 +3316,34 @@ export function buildApp(
     modelGatewayTransport: gatewayTransport,
     modelRoutes,
     budget,
-    modelCredentials,
-    userModelCredentials,
-    modelRegistry,
     modelVerifier,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-    mcpServers,
-    mcpToolService,
     memoryRegistry,
-    acl,
-    skills,
-    skillBundles,
-    skillFetcher,
-    auditLog,
     scheduler,
     loops,
     webhookReceiver,
     ...(genericChatInbound ? { genericChatEvents: genericChatInbound.handle } : {}),
     loopIngress,
-    admin,
-    errors,
-    crons,
     credentialUsage,
     egressAudit,
-    identity,
-    users,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,
     memory,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
-    deliveries,
-    approvals,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
-    sandbox,
     sandboxResources,
-    advisoryLock,
     blobTransfer,
-    files,
     ...(fileUploads ? { fileUploads } : {}),
     featureFlags,
-    teams,
     ...(decisions ? { decisions } : {}),
     replayDedupe,
     ...(selfServe ? { selfServe } : {}),
     ...(brokerSessions ? { brokerSessions } : {}),
-    directory,
-    projects,
-    environments,
-    ...(processes ? { processes } : {}),
     ...(appPageViews ? { appPageViews } : {}),
-    monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
-    ...(ambientJudgments ? { ambientJudgments } : {}),
-    ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
-    channelPolicy,
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
     uiState,
@@ -3410,141 +3358,5 @@ export function buildApp(
           })
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
     slackCore,
-  };
-}
-
-export function serverDeps(
-  config: Config,
-  built: BuiltApp,
-  slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
-  slackEnvBotToken?: string,
-): Omit<ServerDeps, "control"> {
-  const subscriptionAuth = companySubscriptionAuth(config);
-  return {
-    externalSlackPolicies: config.externalSlackPolicies,
-    modelGatewayTransport: built.modelGatewayTransport,
-    modelRoutes: built.modelRoutes,
-    production: config.production,
-    checkReadiness: built.checkReadiness,
-    ...(config.backgroundDeploymentId && config.backgroundWorkEnabled
-      ? {
-          deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: {
-            deploymentId: config.backgroundDeploymentId,
-            superseded: () => !built.drain.canClaim(),
-            run: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
-          },
-        }
-      : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
-    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-    replayDedupe: built.replayDedupe,
-    ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
-    config: built.config,
-    baseModelDefault: configuredModel(config) ?? built.runtimeFallback.modelId,
-    modelProviders: providerKeysPresent(config),
-    providerKeys: providerKeysPresent(config),
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
-    modelRegistry: built.modelRegistry,
-    modelVerifier: built.modelVerifier,
-    refreshModels: built.refreshModels,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    mcpServers: built.mcpServers,
-    mcpToolService: built.mcpToolService,
-    memoryRegistry: built.memoryRegistry,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
-    connectorTokens: built.connectorTokens,
-    slackInstallation: built.slackInstallation,
-    slackEnvironmentState,
-    ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
-    ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
-    resolveClient: built.resolveClient,
-    consentLinks: built.consentLinks,
-    oauthFlows: built.oauthFlows,
-    secretDrops: built.secretDrops,
-    ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
-    admin: built.admin,
-    ...(built.selfServe ? { selfServe: built.selfServe } : {}),
-    ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
-    ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
-    ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    budget: built.budget,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    featureFlags: built.featureFlags,
-    ...(built.decisions ? { decisions: built.decisions } : {}),
-    ...(built.teams ? { teams: built.teams } : {}),
-    egressAudit: built.egressAudit,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    crons: built.crons,
-    loops: built.loops,
-    deploymentLayer: built.deploymentLayerStore,
-    deployDialTimeoutMs: config.deployDialTimeoutMs,
-    ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-    ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
-    ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
-    ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-    ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
-    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
-    scheduler: built.scheduler,
-    webhookReceiver: built.webhookReceiver,
-    ...(built.genericChatEvents ? { genericChatEvents: built.genericChatEvents } : {}),
-    loopIngress: built.loopIngress,
-    identity: built.identity,
-    principalLinks: built.principalLinks,
-    slackAccounts: built.slackAccounts,
-    composioReturns: built.composioReturns,
-    ...(built.keychain ? { keychain: built.keychain } : {}),
-    serviceCreds: built.serviceCreds,
-    deliveries: built.deliveries,
-    ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
-    approvals: built.approvals,
-    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-    runs: built.runs,
-    signals: built.signals,
-    sessionStateBus: built.sessionStateBus,
-    files: built.files,
-    ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    memory: built.memory,
-    blobTransfer: built.blobTransfer,
-    sandboxBackend: built.sandbox.profile.backend,
-    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-      signingSecret: config.signingSecret,
-      apiBaseUrl: config.apiBaseUrl,
-    }),
-    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
-    sandbox: built.sandbox,
-    advisoryLock: built.advisoryLock,
-    ...(built.processes ? { processes: built.processes } : {}),
-    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
-    directory: built.directory,
-    ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
-    ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
-    channelPolicy: built.channelPolicy,
-    ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
-    uiState: built.uiState,
-    ...(built.keychain ? { loopSourceTokens: built.keychain } : {}),
-    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
-    sessionShares: built.sessionShares,
-    sessionShareBytes: built.sessionShareBytes,
-    environments: built.environments,
-    sandboxResources: built.sandboxResources,
   };
 }

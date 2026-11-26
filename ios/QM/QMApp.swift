@@ -15,30 +15,29 @@ struct QMApp: App {
 
 struct RootView: View {
   private enum Page: Hashable {
-    case workspace, search, waiting, archived, setup
+    case search, archived, setup
   }
+
+  @State private var showingMore = false
 
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
   @State private var selectedConversation: Conversation?
-  @State private var showingConversations = true
+  @State private var showingConversations = false
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
-  @State private var search = ""
   @State private var rename: Conversation?
   @State private var renamedTitle = ""
   @State private var choosingWorkspace = false
   @State private var confirmingSignOut = false
   @Environment(\.scenePhase) private var phase
 
-  private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
-
   private var narrowing: Bool {
-    model.narrowing || model.search != searchTerm || model.webOnly != webOnly
+    model.narrowing || model.webOnly != webOnly
   }
 
   private var visibleConversations: [Conversation] {
-    model.visibleConversations(search: searchTerm, webOnly: webOnly)
+    model.visibleConversations(webOnly: webOnly)
   }
 
   private var home: some View {
@@ -64,7 +63,7 @@ struct RootView: View {
                 .listRowSeparator(.hidden)
             }
             NativeConversationSections(
-              conversations: visibleConversations, contexts: contexts, search: search,
+              conversations: visibleConversations, contexts: contexts,
               selectedID: selectedConversation?.id, updatingIDs: model.updatingConversationIDs,
               onOpen: open, actions: conversationActions
             )
@@ -83,7 +82,9 @@ struct RootView: View {
           .scrollContentBackground(.hidden)
           .background(QMTheme.sidebar)
           .refreshable { await model.refresh() }
-          .toolbar { homeToolbar }
+          .contentMargins(.top, 4, for: .scrollContent)
+          .toolbar(.hidden, for: .navigationBar)
+          .safeAreaInset(edge: .top, spacing: 0) { listHeader(identity) }
         } else if model.client?.hasSession == true {
           workspaceConnection
         } else {
@@ -93,46 +94,14 @@ struct RootView: View {
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if let identity = model.identity {
-          VStack(spacing: 8) {
-            if !model.conversations.isEmpty {
-              ConversationErrorBanner(model: model)
-            }
-            HStack(spacing: 10) {
-              HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                  .foregroundStyle(.secondary)
-                TextField("Find a conversation", text: $search)
-                  .textInputAutocapitalization(.never)
-                  .autocorrectionDisabled()
-                  .submitLabel(.search)
-                  .accessibilityIdentifier("conversationSearch")
-                if !search.isEmpty {
-                  Button {
-                    search = ""
-                  } label: {
-                    Image(systemName: "xmark.circle.fill")
-                      .foregroundStyle(.secondary)
-                  }
-                  .accessibilityLabel("Clear conversation search")
-                }
-              }
-              .padding(.horizontal, 16)
-              .frame(height: 48)
-              .background(.thinMaterial, in: Capsule())
-              accountMenu(identity)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-          }
+        if model.identity != nil, !model.conversations.isEmpty {
+          ConversationErrorBanner(model: model)
         }
       }
       .navigationDestination(for: Page.self) { page in
         if let client = model.client, let identity = model.identity {
           switch page {
-          case .workspace: BrowseView(identity: identity, client: client)
           case .search: SearchView(client: client, user: identity.user)
-          case .waiting: waitingConversations
           case .archived:
             archivedConversations
               .task { await model.select(.archived) }
@@ -142,29 +111,24 @@ struct RootView: View {
         }
       }
     }
+    // On the stack, not its root, so pushed pages also stay clear of the nav.
+    .modifier(NavRoom())
   }
 
   var body: some View {
     NativeConversationDrawer(
-      isOpen: $showingConversations, hasSelection: selectedConversation != nil,
+      isOpen: $showingConversations, hasSelection: model.identity != nil && model.client != nil,
       showsSidebarPage: !homePath.isEmpty
     ) {
       home
     } detail: {
-      if let conversation = selectedConversation, let client = model.client,
-        let identity = model.identity
-      {
-        NavigationStack {
-          ChatView(
-            model: ChatModel(
-              conversation: conversation, client: client, user: identity.user,
-              knownSession: conversation.localOnly != true),
-            onShowConversations: { showingConversations = true })
-        }
-        .id(conversation.id)
-        .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
-      }
+      shell
     }
+    .modifier(
+      ShellChrome(
+        model: model, showingConversations: $showingConversations, showingMore: $showingMore,
+        blankChat: blankChat, onNew: newChat)
+    )
     .environment(\.qmIdentity, model.identity)
     .environment(model)
     .alert(
@@ -204,19 +168,13 @@ struct RootView: View {
       selectedConversation = nil
       homePath = []
       showingConversations = true
-      search = ""
     }
     .modifier(
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation,
         listVisible: homePath.isEmpty, phase: phase, model: model)
     )
-    .task(id: [searchTerm, String(webOnly)]) {
-      if !searchTerm.isEmpty {
-        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-      }
-      await model.narrow(search: searchTerm, webOnly: webOnly)
-    }
+    .task(id: webOnly) { await model.narrow(webOnly: webOnly) }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
         selectedConversation = nil
@@ -232,6 +190,7 @@ struct RootView: View {
       #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     selectedConversation = conversation
     homePath = []
+    showingMore = false
     showingConversations = false
   }
 
@@ -252,10 +211,8 @@ struct RootView: View {
       }
       .accessibilityIdentifier("workspaceConnectionError")
     } else {
-      NativeTwinSailsLoading(label: "Loading your workspace")
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(QMTheme.paper.ignoresSafeArea())
+      // The launch loader itself is drawn above the whole app (see `ShellChrome`).
+      QMTheme.paper.ignoresSafeArea()
     }
   }
 
@@ -277,16 +234,12 @@ struct RootView: View {
         .accessibilityIdentifier("conversationLoadError")
       } else if webOnly {
         ContentUnavailableView {
-          Label(
-            search.isEmpty ? "No web conversations" : "No matching web conversations",
-            systemImage: search.isEmpty ? "bubble.left" : "magnifyingglass")
+          Label("No web conversations", systemImage: "bubble.left")
         } description: {
           Text("Your conversation filter is hiding Slack conversations.")
         } actions: {
           Button("Show all conversations") { webOnly = false }
         }
-      } else if !search.isEmpty {
-        ContentUnavailableView.search(text: search)
       } else {
         let empty = ConversationEmptyState(filter: model.filter)
         ContentUnavailableView(
@@ -301,7 +254,6 @@ struct RootView: View {
   private func accountMenu(_ identity: Identity) -> some View {
     Menu {
       Text(identity.displayName ?? identity.user)
-      NavigationLink("Waiting on you", value: Page.waiting)
       NavigationLink("Archived conversations", value: Page.archived)
       Toggle("Web conversations only", isOn: $webOnly)
       Button("Change workspace") { choosingWorkspace = true }
@@ -315,48 +267,65 @@ struct RootView: View {
       }
       Button("Sign out", role: .destructive) { confirmingSignOut = true }
     } label: {
-      Image(systemName: "person.crop.circle")
-        .font(.system(size: 24))
-        .frame(width: 48, height: 48)
-        .background(.thinMaterial, in: Circle())
+      Image(systemName: "gearshape")
     }
-    .accessibilityLabel("Account")
+    .accessibilityLabel("Account and settings")
   }
 
-  @ToolbarContentBuilder
-  private var homeToolbar: some ToolbarContent {
-    let wordmark = ToolbarItem(placement: .topBarLeading) {
-      Text("QM")
-        .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
-        .fixedSize()
+  // The main screen: the open conversation or More, with a small nav underneath.
+  @ViewBuilder
+  private var shell: some View {
+    if let client = model.client, let identity = model.identity {
+      if showingMore {
+        NavigationStack { MoreGrid(identity: identity, client: client) }
+          .modifier(NavRoom())
+      } else if let conversation = selectedConversation {
+        NavigationStack {
+          ChatView(
+            model: ChatModel(
+              conversation: conversation, client: client, user: identity.user,
+              knownSession: conversation.localOnly != true))
+        }
+        .modifier(NavRoom(composer: true))
+        .id(conversation.id)
+        .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
+      } else {
+        QMTheme.paper.ignoresSafeArea()
+          .task { selectedConversation = model.newConversation() }
+      }
     }
-    if #available(iOS 26.0, *) {
-      wordmark.sharedBackgroundVisibility(.hidden)
-    } else {
-      wordmark
+  }
+
+  private var blankChat: Bool { !showingMore && selectedConversation?.localOnly == true }
+
+  private func newChat() {
+    // Already on a blank chat: just bring it back instead of doing nothing.
+    if blankChat {
+      showingConversations = false
+    } else if let conversation = model.newConversation() {
+      open(conversation)
     }
-    ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
+  }
+
+  // Search and settings float in a glass pill; the list scrolls all the way up behind it.
+  private func listHeader(_ identity: Identity) -> some View {
+    HStack {
+      Spacer()
+      HStack(spacing: 0) {
         NavigationLink(value: Page.search) {
-          Image(systemName: "magnifyingglass")
-        }.accessibilityLabel("Search workspace")
+          Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search")
+        accountMenu(identity).frame(width: 44, height: 44)
       }
+      .font(.system(size: 18, weight: .medium))
+      .foregroundStyle(QMTheme.ink)
+      .padding(.horizontal, 4)
+      .modifier(GlassPill())
     }
-    ToolbarItem(placement: .topBarTrailing) {
-      if model.client != nil {
-        NavigationLink(value: Page.workspace) {
-          Image(systemName: "square.grid.2x2")
-        }.accessibilityLabel("Browse workspace")
-      }
-    }
-    ToolbarItem(placement: .topBarTrailing) {
-      Button {
-        if let conversation = model.newConversation() { open(conversation) }
-      } label: {
-        Image(systemName: "square.and.pencil")
-      }
-      .accessibilityLabel("New conversation")
-    }
+    .padding(.horizontal, 16)
+    .padding(.bottom, 4)
   }
 
   @ViewBuilder
@@ -373,31 +342,6 @@ struct RootView: View {
       .listRowSeparator(.hidden)
       .listRowBackground(QMTheme.sidebar)
     }
-  }
-
-  private var waitingConversations: some View {
-    let showing = model.filter == .waiting
-    let rows = showing ? visibleConversations : []
-    let empty = ConversationEmptyState(filter: .waiting)
-    return QMList {
-      if !showing || model.showingInitialConversationLoad {
-        NativeConversationListLoading()
-          .listRowSeparator(.hidden)
-      }
-      conversationRows(rows)
-      if showing { loadMoreRow }
-    }
-    .navigationTitle("Waiting on you")
-    .safeAreaInset(edge: .bottom) { ConversationErrorBanner(model: model) }
-    .refreshable { await model.refresh() }
-    .overlay {
-      if showing, !model.showingInitialConversationLoad, model.error == nil, rows.isEmpty {
-        ContentUnavailableView(
-          empty.title, systemImage: empty.systemImage, description: Text(empty.description))
-      }
-    }
-    .task { await model.select(.waiting) }
-    .onDisappear { Task { await model.select(.active) } }
   }
 
   private var archivedConversations: some View {
@@ -432,29 +376,6 @@ struct RootView: View {
         })
       {
         ContentUnavailableView("No archived conversations", systemImage: "archivebox")
-      }
-    }
-  }
-
-  private func conversationRows(_ conversations: [Conversation]) -> some View {
-    ForEach(conversations) { conversation in
-      Button {
-        open(conversation)
-      } label: {
-        NativeConversationRow(
-          conversation: conversation,
-          contextTitle: model.contexts.first { $0.scopeId == conversation.scopeId }.flatMap {
-            $0.isPersonal ? nil : $0.title
-          },
-          updating: model.updatingConversationIDs.contains(conversation.id))
-      }
-      .buttonStyle(.plain)
-      .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-      .listRowSeparator(.hidden)
-      .listRowBackground(QMTheme.paper)
-      .contextMenu { conversationActions(conversation) }
-      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        conversationActions(conversation)
       }
     }
   }

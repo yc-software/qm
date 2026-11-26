@@ -8,7 +8,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createControlService } from "../src/api/control-service.ts";
@@ -27,8 +27,8 @@ const SECRET = "route-test-secret".repeat(3);
 describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
-  let signOff: ReturnType<typeof signOffs<BuiltApp["sessions"]>>;
+  let built: Core;
+  let signOff: ReturnType<typeof signOffs<Core["sessions"]>>;
   const SESSION = "cap-routes-session";
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>

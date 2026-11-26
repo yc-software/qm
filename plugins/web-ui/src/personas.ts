@@ -110,8 +110,12 @@ function setPersonaList(list: PersonaView[]): void {
   renderList();
 }
 
+export function personaById(personaId: string | undefined): PersonaView | undefined {
+  return personaId ? personasState.list.find((p) => p.id === personaId) : undefined;
+}
+
 export function personaGlyph(personaId: string, size: number): TemplateResult {
-  return personaIconTpl(personasState.list.find((p) => p.id === personaId)?.icon, size);
+  return personaIconTpl(personaById(personaId)?.icon, size);
 }
 
 export function personaSeeds(): Array<{ scopeId: string; name: string; kind: "persona" }> {
@@ -139,12 +143,12 @@ export function viewPersona(personaId: string, focusEditor = false): void {
 }
 
 export function personaEditable(personaId: string): boolean {
-  const persona = personasState.list.find((p) => p.id === personaId);
+  const persona = personaById(personaId);
   return persona ? canEditPersona(persona.role) : false;
 }
 
 export async function chatWithPersonaId(personaId: string): Promise<void> {
-  const persona = personasState.list.find((p) => p.id === personaId);
+  const persona = personaById(personaId);
   if (persona) await chatWithPersona(persona);
 }
 

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps, type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -26,8 +26,8 @@ async function start(
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): Promise<{
   base: string;
-  built: BuiltApp;
-  signOff: ReturnType<typeof signOffs<BuiltApp["sessions"]>>;
+  built: Core;
+  signOff: ReturnType<typeof signOffs<Core["sessions"]>>;
   close: () => Promise<void>;
 }> {
   const config = testConfig({
@@ -52,7 +52,7 @@ async function start(
   const runs = liveRunStore(built.runs);
   const signOff = signOffs(built.sessions);
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     sessions: signOff.sessions,
     runs,
     oauthFetch: fetchImpl,

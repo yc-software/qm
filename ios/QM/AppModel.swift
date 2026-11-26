@@ -22,7 +22,6 @@ final class AppModel {
   var error: String?
   var loading = false
   private(set) var filter = ConversationFilter.active
-  private(set) var search = ""
   private(set) var webOnly = false
   private(set) var narrowing = false
   private(set) var nextCursor: String?
@@ -226,33 +225,25 @@ final class AppModel {
     }
   }
 
-  func visibleConversations(search: String, webOnly: Bool) -> [Conversation] {
-    let matchingScopes = Set(
-      contexts.filter { $0.title.localizedCaseInsensitiveContains(search) }.map(\.scopeId))
-    return sidebarConversations(conversations).filter {
-      filter.includes($0)
-        && (!webOnly || $0.surface == "web")
-        && (search.isEmpty || $0.label.localizedCaseInsensitiveContains(search)
-          || $0.contextLabel?.localizedCaseInsensitiveContains(search) == true
-          || matchingScopes.contains($0.scopeId))
+  func visibleConversations(webOnly: Bool) -> [Conversation] {
+    sidebarConversations(conversations).filter {
+      filter.includes($0) && (!webOnly || $0.surface == "web")
     }
   }
 
   private var listQuery: [URLQueryItem] {
     filter.query
       + (webOnly ? [URLQueryItem(name: "surface", value: "web")] : [])
-      + (search.isEmpty ? [] : [URLQueryItem(name: "q", value: search)])
   }
 
-  func narrow(search: String, webOnly: Bool) async {
-    guard search != self.search || webOnly != self.webOnly else { return }
-    self.search = search
+  func narrow(webOnly: Bool) async {
+    guard webOnly != self.webOnly else { return }
     self.webOnly = webOnly
     resetPaging()
     nextCursor = nil
     narrowing = true
     await load(refreshIdentity: false)
-    if search == self.search, webOnly == self.webOnly { narrowing = false }
+    if webOnly == self.webOnly { narrowing = false }
   }
 
   private func firstPage(_ list: ConversationList) -> [Conversation] {

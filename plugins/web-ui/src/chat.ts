@@ -165,7 +165,7 @@ import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { tellEmbedderOfFinishedTools } from "./embedder";
 import { slackPreviewText, slackWireToPlain, stripSlackDirectives } from "./slack-text";
-import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackAppIcon } from "./slack-view";
+import { collectReactions, continuedSpeakers, fromSomeoneElse, hiddenMessage, slackRows } from "./slack-view";
 import { charForName } from "./emoji-picker";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
@@ -190,6 +190,7 @@ import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shel
 import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
+import { setPaneHeaderExtra } from "./pane-header-extras";
 import {
   addPendingSession,
   onSessionDragStart,
@@ -230,7 +231,8 @@ import { createSwarmStrip } from "./swarm-strip.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { ephemeralEmptyTpl, ephemeralTopbarTpl } from "./ephemeral-chat";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
-import { sessionPersonaChip } from "./personas";
+import { personaById, sessionPersonaChip } from "./personas";
+import { projectIconUrl } from "./project-icon";
 import { base64ToBytes } from "./paste-text";
 import { pageAnchor, storeTranscript } from "./transcript-cache";
 import { tip } from "./tooltip";
@@ -416,6 +418,14 @@ export function createChatSurface(
       names.size > 1 ||
       (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
     chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
+  }
+
+  function assistantSpeaker(message: AgentMessage): { name: string; icon: string | undefined } {
+    const name = chatState.assistantSpeakerLabel || brandName();
+    if (chatState.forkSession?.surface !== "slack") return { name, icon: undefined };
+    const persona = personaById((message as AssistantWork).personaId);
+    const personaIcon = persona?.icon && projectIconUrl(persona.icon);
+    return { name: persona?.name || name, icon: personaIcon || appState.me?.slackAppIconUrl || undefined };
   }
 
   function speakerLabelFor(message: AgentMessage): string | undefined {
@@ -1687,11 +1697,12 @@ export function createChatSurface(
       }
       sideChats.sync();
     }
-    const messages = [
+    const transcript = [
       ...(chatState.inheritedExpanded ? chatState.inheritedMessages : []),
       ...currentMessages,
       ...(roSession ? readOnly.pendingSlackMessages() : []),
     ];
+    const messages = isReadOnlySlackView() ? slackRows(transcript) : transcript;
     prepareMessageRows(messages);
     const isNewUser = sessionsState.list.filter((s) => s.id).length === 0;
     const editingApp = appEditSlug(chatState.threadRef, appState.me?.user);
@@ -1748,21 +1759,30 @@ export function createChatSurface(
       const approvals = readOnly.approvals();
       const chatSurface = chatSurfaceOf(roSession);
       const slackReply = readOnly.slackReply();
-      const header =
-        roSession.surface === "slack"
-          ? chatHeader(
-              roSession.type === "channel"
-                ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
-                : groupDmTitle(roSession),
-              null,
-              messages,
-              { shown: 3, named: true },
-              openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
-            )
-          : chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
-              shown: 5,
-              named: false,
-            });
+      const slackUrl = sessionSlackUrl(roSession);
+      let header: TemplateResult | typeof nothing = nothing;
+      if (roSession.surface !== "slack")
+        header = chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
+          shown: 5,
+          named: false,
+        });
+      else if (ctx.pane && slackUrl) {
+        const people = conversationParticipants(messages);
+        setPaneHeaderExtra(
+          roSession.id,
+          people.map((person) => `${person.key}:${person.avatarUrl ?? ""}`).join(","),
+          html`${namedParticipants(people, 3)}${openInSurface(slackUrl, chatSurface?.label)}`,
+        );
+      } else
+        header = chatHeader(
+          roSession.type === "channel"
+            ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
+            : groupDmTitle(roSession),
+          null,
+          messages,
+          { shown: 3, named: true },
+          openInSurface(slackUrl, chatSurface?.label),
+        );
       content = html`
         <div class="custom-chat-shell">
           ${header}
@@ -1969,6 +1989,12 @@ export function createChatSurface(
     return `${named.join(", ")}${people.length > shown ? ` +${people.length - shown}` : ""}`;
   }
 
+  function namedParticipants(people: Participant[], shown: number): TemplateResult {
+    return html`${participantStack(people.slice(0, shown), shown)}${
+      people.length ? html`<span class="chat-participant-names">${peopleNames(people, shown)}</span>` : nothing
+    }`;
+  }
+
   function chatHeader(
     title: string | TemplateResult,
     subtitle: string | null,
@@ -1983,8 +2009,7 @@ export function createChatSurface(
           <div class="chat-title" dir="auto">${title}</div>
           ${subtitle === null ? nothing : html`<div class="chat-subtitle">${subtitle}</div>`}
         </div>
-        ${participantStack(people.named ? participants.slice(0, people.shown) : participants, people.shown)}
-        ${people.named && participants.length ? html`<span class="chat-participant-names">${peopleNames(participants, people.shown)}</span>` : nothing}
+        ${people.named ? namedParticipants(participants, people.shown) : participantStack(participants, people.shown)}
         ${action}
       </header>
     `;
@@ -2038,7 +2063,7 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && chatState.labelSpeakers
-        ? `${chatState.assistantSpeakerLabel || brandName()}\n${slackAppIcon(chatState.forkSession, message, appState.me?.slackAppIconUrl) ?? ""}`
+        ? Object.values(assistantSpeaker(message)).join("\n")
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}\n${continuedSpeakerRows.has(message)}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -2264,6 +2289,7 @@ export function createChatSurface(
           meta: isStreaming ? nothing : messageMeta(message, index),
         });
       const labeled = chatState.labelSpeakers;
+      const speaker = assistantSpeaker(msg);
       const workBelow = isReadOnlySlackView();
       return html`
         <article
@@ -2278,7 +2304,7 @@ export function createChatSurface(
           ${
             labeled && !continuedSpeakerRows.has(message)
               ? html`<div class="speaker-label">
-                  ${brandMark(slackAppIcon(chatState.forkSession, msg, appState.me?.slackAppIconUrl))}<span>${chatState.assistantSpeakerLabel || brandName()}</span>${isReadOnlySlackView() ? appTag() : nothing}${speakerTime(msg)}
+                  ${brandMark(speaker.icon)}<span>${speaker.name}</span>${isReadOnlySlackView() ? appTag() : nothing}${speakerTime(msg)}
                 </div>`
               : nothing
           }

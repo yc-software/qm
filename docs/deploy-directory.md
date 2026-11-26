@@ -168,13 +168,19 @@ same `credential`, `url`, `method`, `headers`, and string `body` fields the agen
 credential broker accepts. Keep the token on the server; it authorizes calls as the
 immutable publisher, not the person viewing the app.
 
-Every enabled broker-delivery credential is available to published apps by default; an
-administrator switches a credential off for apps without affecting agent turns. The
-token is long-lived and names the app, so the broker refuses a credential whose switch
-was flipped after the app shipped and the audit row records which app called. Disabling
-the credential revokes access on the next call. The token is minted at deploy time from
-the credentials switched on at that moment, so a credential added later reaches an app
-on its next deploy.
+An app may borrow an enabled broker-delivery credential that is granted to its whole
+audience: the publisher, the app's home, the channel or team it was created in (whose
+writers can push new code to it), and everyone it is shared with. A credential granted
+org-wide qualifies for every app. A narrower grant qualifies only when one grantee covers
+that whole audience: the grantee is the home, creation scope or share itself, or a team
+every shared person belongs to. A public app borrows only org-wide credentials. An administrator
+switches a credential off for apps without affecting agent turns. The token is long-lived
+and names the app, so on every call the broker refuses a credential whose switch was
+flipped after the app shipped, or whose grant no longer covers the app because it was
+shared further, made public or moved, and the audit row records which app called.
+Disabling the credential revokes access on the next call. The token is minted at deploy
+time from the credentials the app qualifies for at that moment, so a credential granted
+later reaches an app on its next deploy.
 
 The destination host, HTTP methods, and paths remain constrained by the credential
 record. If its injection configuration enables actor attestation, the broker sets

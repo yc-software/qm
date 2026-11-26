@@ -14,6 +14,7 @@ import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import { externalOrgSchema } from "../../tenants/self-serve.ts";
 import { personalScope } from "../../types.ts";
+import { offboardTrustedSubject } from "./admin/offboard.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -369,6 +370,14 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     tenant: "none",
     handle: selfServeWorkspace,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/offboard-trusted-subject",
+    actor: "system",
+    auth: "source",
+    tenant: "none",
+    handle: offboardTrustedSubject,
   },
   {
     method: "POST",

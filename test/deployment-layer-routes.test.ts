@@ -25,7 +25,7 @@ function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Reco
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    deploymentLayer: built.deploymentLayerStore,
+    deploymentLayerStore: built.deploymentLayerStore,
     auditLog: built.auditLog,
     ...serverDeps,
   });

@@ -9,7 +9,6 @@ import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -84,7 +83,7 @@ const app = {
 };
 
 async function frontDoor(t: TestContext, deps: Partial<ServerDeps> = {}): Promise<string> {
-  const core = createServer(app, { ...serverDeps(config, built), ...browserSessionDeps, ...deps });
+  const core = createServer(app, { ...built, ...browserSessionDeps, ...deps });
   const portal = createHttpServer((req, res) => {
     res.setHeader("x-frame-options", "DENY");
     core.emit("request", req, res);
