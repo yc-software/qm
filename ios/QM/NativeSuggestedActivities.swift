@@ -25,7 +25,10 @@ final class NativeSuggestedActivitiesModel {
           "api/suggested-activities", body: ["timezone": TimeZone.current.identifier])
         try Task.checkCancellation()
         guard client.generation == generation else { return }
-        if !response.activities.isEmpty { generated = response.activities }
+        if !response.activities.isEmpty {
+          // Fresh suggestions ease in rather than popping into place.
+          withAnimation(.smooth(duration: 0.45)) { generated = response.activities }
+        }
         if response.pending != true { return }
         try await Task.sleep(for: .seconds(10))
       } catch {
@@ -43,7 +46,9 @@ final class NativeSuggestedActivitiesModel {
       struct Outcome: Decodable { let dismissed: Bool? }
       let outcome: Outcome = try await client.fetch(
         "api/suggested-activities/dismiss", body: ["id": activity.id])
-      if outcome.dismissed == true { dismissed.insert(activity.id) }
+      if outcome.dismissed == true {
+        _ = withAnimation(.smooth(duration: 0.35)) { dismissed.insert(activity.id) }
+      }
     } catch {
       Log.background.failure("Dismiss suggested activity", error)
     }
@@ -54,6 +59,7 @@ struct NativeSuggestedActivities: View {
   let model: NativeSuggestedActivitiesModel
   let identity: Identity
   let select: (SuggestedActivity) -> Void
+  @State private var appeared = false
 
   var dismissible: Bool { identity.suggestedActivitiesGeneration == true }
 
@@ -61,7 +67,7 @@ struct NativeSuggestedActivities: View {
     // Plain rows split by hairlines, rather than stacked grey cards.
     let activities = model.activities(for: identity)
     VStack(spacing: 0) {
-      ForEach(activities) { activity in
+      ForEach(Array(activities.enumerated()), id: \.element.id) { index, activity in
         HStack(spacing: 0) {
           Button {
             select(activity)
@@ -95,9 +101,15 @@ struct NativeSuggestedActivities: View {
             Rectangle().fill(QMTheme.border).frame(height: 0.5)
           }
         }
+        // Rows rise and fade in one after another; later arrivals and dismissals cross-fade.
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 8)
+        .animation(.smooth(duration: 0.45).delay(0.1 + Double(index) * 0.07), value: appeared)
+        .transition(.opacity.combined(with: .offset(y: 8)))
       }
     }
     .padding(.horizontal, 4)
+    .onAppear { appeared = true }
     .task(id: identity.user) { await model.generate(for: identity) }
   }
 }
