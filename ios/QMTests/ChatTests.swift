@@ -141,8 +141,8 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(
       chat.messages.map(\.text),
       [
-        #"@ada and @here: see [the plan](https://docs.example/plan) in #launch \<today> & reply"#,
-        #"Return Result\<T, E> & ping @ada"#,
+        #"@ada and @here: see [the plan](https://docs.example/plan) in \#launch \<today\> \& reply"#,
+        #"Return Result\<T, E\> \& ping @ada"#,
       ])
     XCTAssertEqual(
       SlackText.plain("<@U1|ada> see <https://docs.example/plan|the plan> &lt;3 <not a token"),
