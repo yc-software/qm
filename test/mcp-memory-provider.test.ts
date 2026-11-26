@@ -91,6 +91,63 @@ test("MCP recall is locally bounded and times out", async () => {
   await assert.rejects(shared.recall("org:acme", { startedAt: Date.now() - 900 }), TimeoutError);
 });
 
+test(
+  "a lookup pins acting_user and the provider's actor argument to the member, and stops with its turn",
+  { timeout: 5_000 },
+  async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const brain: McpClient = {
+      listTools: async () => ({ tools: [] }),
+      callTool: (_tool, args, _headers, signal) => {
+        sent.push(args);
+        return new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      },
+    };
+    const provider = createMcpMemoryProvider({
+      read: { client: brain, tool: "recall", actorArg: "member", timeoutMs: 100 },
+      attestActor: true,
+      url: "https://brain.example/mcp",
+    });
+    const turn = new AbortController();
+    const asked = provider.lookup!(
+      "personal:U1",
+      "get_page",
+      { acting_user: "U2", member: "U3", slug: "a" },
+      { actorId: "U1", context: "conversation", personAuthority: true },
+      { audienceScopeId: "personal:U1", signal: turn.signal },
+    );
+    turn.abort(new Error("turn stopped"));
+    await assert.rejects(asked, /turn stopped/);
+    assert.deepEqual(sent, [{ acting_user: "U1", member: "U1", slug: "a" }]);
+  },
+);
+
+test("a brain that refuses a member's tool list offers them none, and one that fails it leaves a lookup nothing to check", async (t) => {
+  t.mock.method(console, "error", () => {});
+  let failure = new McpCallError("mcp tools/list failed", { code: "actor_not_attested", answered: true });
+  let asked = 0;
+  const provider = createMcpMemoryProvider({
+    read: {
+      client: { ...client([]), listTools: () => (asked++, Promise.reject(failure)) },
+      tool: "recall",
+      timeoutMs: 100,
+    },
+    attestActor: true,
+    url: "https://brain.example/mcp",
+  });
+  const listed = (member: string, allowStale = false) =>
+    provider.lookupTools!(
+      `personal:${member}`,
+      { actorId: member, audienceScopeId: `personal:${member}` },
+      { allowStale },
+    );
+  assert.deepEqual(await listed("U1"), []);
+  failure = new McpCallError("mcp tools/list failed (HTTP 502)", { status: 502 });
+  await assert.rejects(listed("U2"), /HTTP 502/);
+  asked = 0;
+  assert.deepEqual([await listed("U3", true), await listed("U3", true), asked], [[], [], 1]);
+});
+
 test("MCP recall returns one row per line of the provider's answer", async () => {
   const memory = createMcpMemoryProvider({
     read: { client: client([], "first fact\n\nsecond fact\n"), tool: "search_knowledge", timeoutMs: 100 },
@@ -342,6 +399,21 @@ function answering(answer: () => Promise<Record<string, unknown>>): McpClient {
 }
 
 const facts = (count: number) => Array.from({ length: count }, (_, i) => `fact ${i + 1}`);
+
+test("a brain that refuses a write or a recall fails with its code alone, leaving the brain's text out of QM's logs", async () => {
+  const refusing = answering(async () => ({ code: "permission_denied", message: "Priya's salary is private" }));
+  const memory = createMcpMemoryProvider({
+    read: { client: refusing, tool: "read", timeoutMs: 100 },
+    write: { client: refusing, tool: "write", timeoutMs: 100, factsArg: "facts" },
+  });
+  const by = { actorId: "u1", context: "conversation" } as const;
+  await assert.rejects(memory.capture("org:acme", facts(1), 10, by, { mode: "automatic" }), {
+    message: "memory provider refused write (permission_denied)",
+  });
+  await assert.rejects(memory.recall("org:acme", { query: "q" }), {
+    message: "memory provider refused read (permission_denied)",
+  });
+});
 
 test("a write split into batches carries the turn's input and reply once", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];

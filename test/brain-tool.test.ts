@@ -16,7 +16,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { AddressFetch } from "../src/util/network.ts";
 import { buildApp, testCore } from "./support/build-app.ts";
-import { contract, contractTools } from "./support/gbrain-contract.ts";
+import { contract, contractListing } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { connectorTool } from "../src/mcp/mcp-tool-service.ts";
 import { withBrainTools } from "../src/resolution/turn-context.ts";
@@ -33,7 +33,9 @@ interface Call {
 }
 
 const HOT_MEMORY = "Alice prefers morning meetings before 10am.";
-const LOOKUPS = contract.personal_tools.tools.filter(({ mutating }) => !mutating).map(({ name }) => name);
+const LOOKUPS = contract.personal_tools.tools
+  .filter(({ mutating, name }) => !mutating && name !== "get_write_request")
+  .map(({ name }) => name);
 const PRIYA = { slug: "people/priya-raman", source_id: "default", title: "Priya Raman", type: "person" };
 const PAGE = {
   slug: "companies/widget-co",
@@ -59,12 +61,7 @@ async function gbrain(t: { after(fn: () => Promise<void>): void }) {
   const failures = new Map<string, CallToolResult | number>();
   const pages: Row[] = [];
   const server = await startMcpTestServer(t, {
-    tools: contractTools.map(({ name, description, mutating, input_schema }) => ({
-      name,
-      description,
-      inputSchema: input_schema,
-      annotations: { readOnlyHint: !mutating },
-    })),
+    tools: contractListing,
     clients: { qm: "brain-secret" },
     call: async (tool, args, _authorization, actor) => {
       calls.push({ tool, args, ...(actor ? { actor } : {}) });
@@ -164,7 +161,7 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
 const lookups = (brain: { calls: Call[] }) => brain.calls.filter(({ tool }) => tool !== "memory_recall");
 const listings = (brain: { requests: Array<{ rpc?: string }> }) =>
   brain.requests.filter(({ rpc }) => rpc === "tools/list").length;
-const whois = { call: { server: "acme", tool: "whois", args: { query: "Priya Raman" } } };
+const whois = { call: { server: "brain.acme", tool: "whois", args: { query: "Priya Raman" } } };
 const VOLUNTEER = { tool: "volunteer_context", args: { window: "Prep me for Priya." }, actor: "U1" };
 const cards = (run?: { environment?: string }) =>
   run?.environment?.match(/### Brain cards\n```untrusted-data\n([\s\S]*?)\n```/)?.[1]!.split("\n") ?? [];
@@ -178,17 +175,21 @@ test("the person's own DM gets each brain's read-only tools through the connecto
   const run = (await turn([
     { search: "whois" },
     {
-      call: { server: "acme", tool: "get_page", args: { slug: PRIYA.slug, include_deleted: true, acting_user: "U2" } },
+      call: {
+        server: "brain.acme",
+        tool: "get_page",
+        args: { slug: PRIYA.slug, include_deleted: true, acting_user: "U2" },
+      },
     },
   ]))!;
   const listed = [...run.prompt.matchAll(/^ {2}- (\w+)/gm)].map(([, name]) => name);
   assert.deepEqual(listed.toSorted(), LOOKUPS.toSorted());
-  assert.match(run.prompt, /^- Acme brain \[acme\] /m);
+  assert.match(run.prompt, /^- Acme brain \[brain\.acme\] /m);
   const found = JSON.parse(run.texts[0]!.split("\n\n")[0]!) as Row;
   assert.deepEqual(
     { server: found.server, tool: found.tool, parameters: found.parameters },
     {
-      server: "acme",
+      server: "brain.acme",
       tool: "whois",
       parameters: contract.personal_tools.tools.find(({ name }) => name === "whois")!.input_schema,
     },
@@ -221,13 +222,13 @@ test("turns without the person's authority in their own DM, and app-drawer chats
   ];
   for (const request of others) {
     const run = (await turn([{ search: "*" }, whois], request))!;
-    assert.doesNotMatch(run.prompt, /\[acme\]/, JSON.stringify(request));
+    assert.doesNotMatch(run.prompt, /\[brain\.acme\]/, JSON.stringify(request));
     assert.deepEqual(run.texts, ["[no connector tools]", "[no connector tools]"], JSON.stringify(request));
   }
   assert.equal(listings(acme), 0);
   assert.deepEqual(lookups(acme), []);
-  assert.match((await turn([]))!.prompt, /\[acme\]/);
-  assert.match((await turn([], { origin: { kind: "automation" } }))!.prompt, /\[acme\]/);
+  assert.match((await turn([]))!.prompt, /\[brain\.acme\]/);
+  assert.match((await turn([], { origin: { kind: "automation" } }))!.prompt, /\[brain\.acme\]/);
   assert.equal(listings(acme), 1);
 });
 
@@ -237,7 +238,7 @@ test("with recall off, the person's own DM offers no brain tools and never asks 
   assert.equal(listings(acme), 0);
 });
 
-test("a brain sharing a connector's id stays hidden, a tool whose cleaned name repeats is dropped, only the first brain carries the guidance, and optional intent is dropped", () => {
+test("a brain sharing a connector's id is listed beside it, a tool whose cleaned name repeats is dropped, only the first brain carries the guidance, and optional intent is dropped", () => {
   const whoisTool = {
     name: "whois",
     description: "Who someone is",
@@ -260,27 +261,31 @@ test("a brain sharing a connector's id stays hidden, a tool whose cleaned name r
   }));
   assert.deepEqual(listed, [
     { name: "acme_search", guided: false, params: ["query"], brain: false },
-    { name: "team_whois", guided: true, params: ["query"], brain: true },
-    { name: "team_who_is", guided: true, params: ["query"], brain: true },
-    { name: "mine_whois", guided: false, params: ["query"], brain: true },
-    { name: "mine_who_is", guided: false, params: ["query"], brain: true },
+    { name: "brain_acme_whois", guided: true, params: ["query"], brain: true },
+    { name: "brain_acme_who_is", guided: true, params: ["query"], brain: true },
+    { name: "brain_team_whois", guided: false, params: ["query"], brain: true },
+    { name: "brain_team_who_is", guided: false, params: ["query"], brain: true },
+    { name: "brain_mine_whois", guided: false, params: ["query"], brain: true },
+    { name: "brain_mine_who_is", guided: false, params: ["query"], brain: true },
   ]);
 });
 
-test("a lookup checks the person and the live binding when it runs, and sends nothing otherwise", async (t) => {
-  const { built, acme, turn } = await brainApp(t);
-  await assert.rejects(
-    built.memory.lookup!(personalScope("U1"), "acme:whois", { query: "Priya Raman" }, turnAuthority("U1", undefined), {
+test("a lookup checks the person, the live binding and the brain's read-only tools when it runs, and sends nothing otherwise", async (t) => {
+  const { built, acme, beta, bind, turn } = await brainApp(t);
+  const lookup = (tool: string, personAuthority?: boolean) =>
+    built.memory.lookup!(personalScope("U1"), tool, {}, turnAuthority("U1", undefined, personAuthority), {
       audienceScopeId: personalScope("U1"),
-    }),
-    /^Error: \[brain_refused\] Only the person/,
+    });
+  await assert.rejects(lookup("acme:whois"), /^Error: \[brain_refused\] Only the person/);
+  await assert.rejects(
+    lookup("acme:memory_write", true),
+    /^Error: \[brain_refused\] memory_write isn't a read-only tool/,
   );
-  const run = (await turn(["revoke", whois]))!;
-  assert.match(
-    run.texts[0]!,
-    /^\[error\] \[brain_refused\] No brain is connected to this conversation\. Nothing was sent\.$/,
-  );
-  assert.deepEqual(lookups(acme), [VOLUNTEER]);
+  await bind("beta", "Beta brain");
+  const run = (await turn(["revoke", whois, { call: { ...whois.call, server: "brain.beta" } }]))!;
+  assert.match(run.texts[0]!, /^\[error\] \[brain_refused\] acme:whois isn't a tool of a brain connected/);
+  assert.match(run.texts[1]!, /"tool":"whois"/);
+  assert.deepEqual([lookups(acme), asks(beta, "whois").length], [[VOLUNTEER], 1]);
 });
 
 test("a lookup outlasts recall's timeout, and a refusal or failure answers with what to do next and the brain's own words", async (t) => {
@@ -299,12 +304,11 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
     isError: false,
     structuredContent: { code: "scope_denied" },
   });
-  acme.failures.set("Warned", {
-    content: [{ type: "text", text: "nothing found" }],
-    _meta: { warnings: [{ code: "unknown_param", param: "colour" }], brain_hot_memory: HOT_MEMORY },
-  });
-  const ask = (query: string) => ({ call: { server: "acme", tool: "query", args: { query } } });
-  const asked = ["slow", "Nobody", "Unlisted", "Broken", "Malformed", "Withheld", "Warned"];
+  const warned = { _meta: { warnings: [{ code: "unknown_param", param: "colour" }], brain_hot_memory: HOT_MEMORY } };
+  acme.failures.set("Warned", { content: [{ type: "text", text: "nothing found" }], ...warned });
+  acme.failures.set("Unknown", { isError: true, content: [{ type: "text", text: "query needs words" }], ...warned });
+  const ask = (query: string) => ({ call: { server: "brain.acme", tool: "query", args: { query } } });
+  const asked = ["slow", "Nobody", "Unlisted", "Broken", "Malformed", "Withheld", "Warned", "Unknown"];
   const { texts } = (await turn(asked.map(ask)))!;
   assert.match(texts[0]!, /"query":"slow"/);
   assert.match(
@@ -322,6 +326,7 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
   );
   assert.match(texts[5]!, /^\[error\] \[memory_provider_denied\] Memory provider acme refused query \(scope_denied\)/);
   assert.equal(texts[6], 'nothing found\nwarning: {"code":"unknown_param","param":"colour"}');
+  assert.match(texts[7]!, /query needs words[\s\S]*\nwarning: \{"code":"unknown_param","param":"colour"\}\n```$/);
   for (const text of texts.slice(1, 6)) assert.equal(text.match(/refused with|rebuilding/g)?.length, 1, text);
 });
 
@@ -348,7 +353,7 @@ test("a brain card needs its switch and the binding's recall, and a revoked bind
     acme.pages.push(PAGE);
     const run = (await turn([], MENTION))!;
     assert.deepEqual(lookups(acme), [], JSON.stringify(config));
-    assert.deepEqual([asks(acme, "memory_recall").length > 0, /\[acme\]/.test(run.prompt)], [recalled, offered]);
+    assert.deepEqual([asks(acme, "memory_recall").length > 0, /\[brain\.acme\]/.test(run.prompt)], [recalled, offered]);
   }
 });
 

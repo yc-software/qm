@@ -7,7 +7,7 @@ import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { boundedResponse } from "../util/bytes.ts";
-import { reportFailureAs, swallowAs } from "../util/errors.ts";
+import { reportFailure, swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 
@@ -30,23 +30,38 @@ export class McpCallError extends Error {
   readonly code: string | undefined;
   readonly unsent: boolean;
   readonly answered: boolean;
+  readonly warnings: string[];
   constructor(
     message: string,
-    detail: { status?: number; code?: string; unsent?: boolean; answered?: boolean; cause?: unknown },
+    detail: {
+      status?: number;
+      code?: string;
+      unsent?: boolean;
+      answered?: boolean;
+      warnings?: string[];
+      cause?: unknown;
+    },
   ) {
     super(message, { cause: detail.cause });
     this.status = detail.status;
     this.code = detail.code;
     this.unsent = detail.unsent ?? false;
     this.answered = detail.answered ?? false;
+    this.warnings = detail.warnings ?? [];
   }
 }
 
 export function mcpResultText(result: CallToolResult): string {
-  return result.content
+  const text = result.content
     .flatMap((c) => (c.type === "text" ? [c.text] : []))
     .join("\n")
     .trim();
+  return text || (result.structuredContent == null ? "" : JSON.stringify(result.structuredContent));
+}
+
+export function metaWarnings(result: CallToolResult): string[] {
+  const warnings: unknown[] = Array.isArray(result._meta?.warnings) ? result._meta.warnings : [];
+  return warnings.map((warning) => `warning: ${JSON.stringify(warning)}`);
 }
 
 export interface McpEnvelope {
@@ -116,10 +131,11 @@ export function toolListings(): ToolListings {
     ttl: LISTING_TTL_MS,
     allowStale: true,
     ignoreFetchAbort: true,
-    fetchMethod: (_key, stale, { context, options }) =>
+    noDeleteOnFetchRejection: true,
+    fetchMethod: (_key, _stale, { context, options }) =>
       context.list().catch((error: unknown) => {
-        if (!stale || !options.allowStale) throw error;
-        return reportFailureAs(context.label, stale)(error);
+        if (options.allowStale) reportFailure(context.label, error);
+        throw error;
       }),
   });
 }
@@ -154,13 +170,14 @@ interface McpSkillLimits {
   maxTotalBytes: number;
 }
 
-async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise<McpSkillEntry[]> {
+async function listSkillEntries(client: Client, limits: McpSkillLimits, signal: AbortSignal): Promise<McpSkillEntry[]> {
   const entries: McpSkillEntry[] = [];
   let cursor: string | undefined;
   do {
     const page = await client.request(
       { method: "skills/list", params: cursor === undefined ? {} : { cursor } },
       skillsPageSchema,
+      { signal },
     );
     for (const skill of page.skills) {
       const file = Array.isArray(skill.resources) ? skill.resources.find((r) => r.uri === skill.uri) : undefined;
@@ -177,10 +194,10 @@ async function listSkillEntries(client: Client, limits: McpSkillLimits): Promise
   return entries;
 }
 
-async function readSkillEntries(client: Client, entries: McpSkillEntry[]): Promise<McpSkill[]> {
+async function readSkillEntries(client: Client, entries: McpSkillEntry[], signal: AbortSignal): Promise<McpSkill[]> {
   const skills: McpSkill[] = [];
   for (const entry of entries) {
-    const { contents } = await client.readResource({ uri: entry.uri });
+    const { contents } = await client.readResource({ uri: entry.uri }, { signal });
     const file = contents.find((content) => content.uri === entry.uri && "text" in content);
     if (!file || !("text" in file)) throw new Error(`mcp resources/read returned no text for ${entry.uri}`);
     if (Buffer.byteLength(file.text, "utf8") !== entry.size)
@@ -271,9 +288,11 @@ export function createMcpClient(opts: {
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
+      const rpcCode = e instanceof McpError ? envelopeOf(e.data).code : undefined;
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
+        ...(rpcCode ? { code: rpcCode } : {}),
         ...(opened
           ? {
               answered:
@@ -299,12 +318,13 @@ export function createMcpClient(opts: {
     listTools: (opts) =>
       session(
         "tools/list",
-        async (client) => {
+        async (client, signal) => {
+          const max = opts?.maxTools ?? MAX_TOOLS;
           const tools: McpRemoteTool[] = [];
           let cursor: string | undefined;
           let bytes = 0;
           do {
-            const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+            const page = await client.listTools(cursor === undefined ? undefined : { cursor }, { signal });
             for (const t of page.tools) {
               const tool = {
                 name: t.name,
@@ -318,19 +338,23 @@ export function createMcpClient(opts: {
             if (maxResponseBytes !== undefined && bytes > maxResponseBytes)
               throw new Error(`${endpoint.origin} listed tools larger than ${maxResponseBytes} bytes in all`);
             cursor = page.nextCursor;
-          } while (cursor && tools.length < (opts?.maxTools ?? MAX_TOOLS));
+          } while (cursor && tools.length < max);
+          if (cursor || tools.length > max)
+            console.warn(`[mcp] ${endpoint.origin} lists more than ${max} tools; QM keeps the first ${max}`);
           const about = (client.getServerVersion()?.description || client.getInstructions() || "").trim();
           return {
-            tools: tools.slice(0, opts?.maxTools ?? MAX_TOOLS),
+            tools: tools.slice(0, max),
             ...(about ? { about } : {}),
           };
         },
         opts?.headers,
         opts?.signal,
       ),
-    listSkills: (limits) => session("skills/list", (client) => listSkillEntries(client, limits)),
+    listSkills: (limits) => session("skills/list", (client, signal) => listSkillEntries(client, limits, signal)),
     readSkills: (limits) =>
-      session("skills/list", async (client) => readSkillEntries(client, await listSkillEntries(client, limits))),
+      session("skills/list", async (client, signal) =>
+        readSkillEntries(client, await listSkillEntries(client, limits, signal), signal),
+      ),
     async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",
@@ -341,10 +365,11 @@ export function createMcpClient(opts: {
       )) as CallToolResult;
       if (result.isError) {
         const code = errorCode(result);
-        const detail =
-          mcpResultText(result) ||
-          (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
-        throw new McpCallError(`mcp tool ${name} error: ${detail}`, { ...(code ? { code } : {}), answered: true });
+        throw new McpCallError(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`, {
+          ...(code ? { code } : {}),
+          answered: true,
+          warnings: metaWarnings(result),
+        });
       }
       return result;
     },

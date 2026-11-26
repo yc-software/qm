@@ -50,7 +50,7 @@ export async function brainCards(input: {
           providerRef(brain.id, "volunteer_context"),
           { window: window.slice(0, RECALL_MESSAGE_CHARS), ...(prior ? { prior_context: prior } : {}) },
           by,
-          context,
+          { ...context, allowStale: true },
         )
       ).structuredContent ?? {};
     if (!Array.isArray(pages) || !pages.every(isPage))

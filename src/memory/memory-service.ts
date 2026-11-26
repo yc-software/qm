@@ -117,14 +117,14 @@ export interface BoundBrain {
 export interface MemoryService {
   attestActor?: boolean;
   brain?: Pick<BoundBrain, "endpoint" | "timeoutMs">;
-  lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
+  lookupTools?(scopeId: ScopeId, reader: MemoryReader, listing: { allowStale: boolean }): Promise<McpRemoteTool[]>;
   brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
   lookup?(
     scopeId: ScopeId,
     tool: string,
     args: Record<string, unknown>,
     by: MemoryAuthority | undefined,
-    context?: { audienceScopeId?: ScopeId; startedAt?: number },
+    context?: { audienceScopeId?: ScopeId; startedAt?: number; signal?: AbortSignal; allowStale?: boolean },
   ): Promise<CallToolResult>;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
