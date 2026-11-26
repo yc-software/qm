@@ -65,7 +65,8 @@ synthesizes the `app_mention` twin of a bot-mentioning `message` event (real Sla
 both; the plugin only dispatches channel mentions from `app_mention`).
 
 The twin is a stand-in, not real Slack. Use it for fast catalog regression runs; QA a
-Slack-facing change in a real development Slack workspace ("Run locally" above) before merge.
+Slack-facing change on a pool app in a real development Slack workspace (the dev instance
+under "## Run locally") before merge.
 
 Run locally (Free-tier keys cap the twin at 10 minutes — enough for `@smoke`):
 
