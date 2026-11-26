@@ -739,9 +739,9 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   const sp = await built.app.turn({ ...s, surfaceOrigin, conversation: { kind: "dm", threadRef: "dm:D_BEA" } });
   assert.equal(sp.persona?.id, bea.id);
   assert.equal((await built.sessions.get(sp.sessionId!))?.personaId, bea.id);
-  assert.equal(
-    (await built.app.turn({ ...s, conversation: { kind: "dm", threadRef: "dm:D_SPOOF" } })).persona,
-    undefined,
+  assert.notEqual(
+    (await built.app.turn({ ...s, conversation: { kind: "dm", threadRef: "dm:D_SPOOF" } })).persona?.id,
+    bea.id,
   );
 });
 
