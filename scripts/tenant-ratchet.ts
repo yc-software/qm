@@ -6,7 +6,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const BASELINE = resolve(ROOT, "scripts/tenant-ratchet.json");
 
 const SITES = {
-  mintSites: { "plugins/chassis/src/tenant.ts": ["withTenant"] },
+  mintSites: { "common/tenant.ts": ["withTenant"] },
   implicitQueries: {
     "src/persistence/pg-pool.ts": [
       "PgPool.q",
@@ -17,7 +17,7 @@ const SITES = {
     ],
   },
   ambientReads: {
-    "plugins/chassis/src/tenant.ts": ["boundTenant", "ambientTenant"],
+    "common/tenant.ts": ["boundTenant", "ambientTenant"],
     "src/tenants/context.ts": ["currentTenant"],
   },
   ambientCaches: { "src/tenants/cache.ts": ["perTenant", "tenantListeners", "onTenantLoad"] },
@@ -64,7 +64,8 @@ function countTenantSites(): Record<Metric, Map<string, number>> {
   >;
   for (const source of program.getSourceFiles()) {
     const file = relative(ROOT, source.fileName);
-    if (source.isDeclarationFile || !/^(src|plugins)\//.test(file) || file.endsWith(".test.ts")) continue;
+    if (source.isDeclarationFile || program.isSourceFileFromExternalLibrary(source) || file.endsWith(".test.ts"))
+      continue;
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         const declaration = checker.getResolvedSignature(node)?.declaration;

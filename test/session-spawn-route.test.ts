@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../common/source-auth-sign.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";

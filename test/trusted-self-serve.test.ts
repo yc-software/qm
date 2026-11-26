@@ -23,7 +23,7 @@ import { TEST_TENANT } from "./support/test-tenant.ts";
 import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
 import { orgId } from "../src/config.ts";
 import { personalScope, scopeId } from "../src/types.ts";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders, withSourceAuthNonce } from "../common/core-client.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);

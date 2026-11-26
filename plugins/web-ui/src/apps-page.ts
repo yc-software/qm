@@ -3,7 +3,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { AppWindow, Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
 import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";

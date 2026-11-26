@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { escapeHtml, json, readBody } from "../../chassis/src/http.ts";
-import { isTenantId } from "../../chassis/src/tenant.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { escapeHtml, json, readBody } from "../../../common/http.ts";
+import { isTenantId } from "../../../common/tenant.ts";
 import { clearCookie, open, readCookie, seal, setCookie } from "./session.ts";
 
 export interface SignInTenant {

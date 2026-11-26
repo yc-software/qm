@@ -4,7 +4,7 @@ import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnOrigin, TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, spokenByPerson } from "../core/turn-origin.ts";
-import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
+import { traceCarrier } from "../../common/error-reporting.ts";
 import { sleep } from "../util/async.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";

@@ -11,7 +11,7 @@ import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId, personalScope } from "../src/types.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders } from "../common/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

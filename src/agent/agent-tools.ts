@@ -5,7 +5,7 @@ import { type Config } from "../config.ts";
 import type { ApprovedToolCallSpec, ClientToolDeclaration, ScopeId } from "../types.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
-import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
+import { type Phase } from "../../common/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { type GoalGovernor, type GoalInbox, type GoalRecord } from "./goal.ts";
 import { type ToolResultScreen, type ToolResultScreenInput } from "../security/security-posture.ts";

@@ -1,4 +1,4 @@
-import { openDesktopBrowser } from "../../../chassis/src/desktop-browser.ts";
+import { openDesktopBrowser } from "../../../../common/desktop-browser.ts";
 import { SettingState } from "./setting-state.ts";
 export type Api = (
   method: string,

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders, withSourceAuthNonce } from "../common/core-client.ts";
 import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -12,9 +12,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
-import type { Mailer } from "../plugins/chassis/src/resend.ts";
+import type { Mailer } from "../common/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
-import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
+import { coreEmailAdmission, coreEmailAllowed } from "../common/external-members.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";

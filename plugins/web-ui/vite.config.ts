@@ -87,6 +87,6 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] },
+    fs: { allow: [here("."), here("../../common")] },
   },
 });

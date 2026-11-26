@@ -29,7 +29,7 @@ import {
 } from "../documents.ts";
 import { senderNote, shownPlace } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment, MAX_AUTO_ATTACHMENT_SCREEN_BYTES } from "./turn-helpers.ts";
-import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase } from "../../../common/error-reporting.ts";
 import type { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { securityScreenChunks } from "../../security/security-posture.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";

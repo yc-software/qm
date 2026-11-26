@@ -5,7 +5,7 @@ import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../common/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

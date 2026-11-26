@@ -25,7 +25,7 @@ import { webMeConfig } from "./api/routes/web-me.ts";
 import { createWebShell } from "./web/shell.ts";
 import { resolveBranding } from "./resolution/branding.ts";
 import { orgScope } from "./config.ts";
-import { createBrandingCache, type OrgBranding } from "../plugins/chassis/src/branding.ts";
+import { createBrandingCache, type OrgBranding } from "../common/branding.ts";
 
 function tenantBranding(load: () => Promise<OrgBranding>): () => Promise<OrgBranding> {
   const caches = perTenant(() => createBrandingCache(load));

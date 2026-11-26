@@ -4,7 +4,7 @@ import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { errMessage } from "../util/errors.ts";
-import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
+import { PayloadTooLargeError, readBody } from "../../common/http.ts";
 
 const { isValidSlackRequest } = bolt;
 

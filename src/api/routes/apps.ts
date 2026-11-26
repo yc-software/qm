@@ -15,8 +15,8 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { appView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
-import { escapeHtml, relayStream } from "../../../plugins/chassis/src/http.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { escapeHtml, relayStream } from "../../../common/http.ts";
+import { canonicalPayload } from "../../../common/source-auth-sign.ts";
 import { frameAncestorsDirective, sendJson, UNTRUSTED_CONTENT_SANDBOX_CSP, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, exportTokenAccepted, isObj, orgScope } from "./shared.ts";
@@ -31,14 +31,14 @@ import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
-import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
+import { isDnsLabel } from "../../../common/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
 import { appSubdomainUrlOf } from "../../deploy/deploy-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
-import { relayWebSocket } from "../../../plugins/chassis/src/websocket-relay.ts";
-import { appGitParts, isAppGitRoute } from "../../../plugins/chassis/src/app-git.ts";
+import { relayWebSocket } from "../../../common/websocket-relay.ts";
+import { appGitParts, isAppGitRoute } from "../../../common/app-git.ts";
 
 function appProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};

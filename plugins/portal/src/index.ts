@@ -7,8 +7,8 @@ import {
 } from "./desktop-login.ts";
 import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
-import { isDnsLabel } from "../../chassis/src/dns-label.ts";
-import { reportBackendError, withRequestContext } from "../../chassis/src/error-reporting.ts";
+import { isDnsLabel } from "../../../common/dns-label.ts";
+import { reportBackendError, withRequestContext } from "../../../common/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin, selfServeWorkspace } from "./trusted-admin.ts";
 import {
@@ -26,7 +26,7 @@ import {
 } from "./pages.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
-import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../chassis/src/websocket-relay.ts";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../../common/websocket-relay.ts";
 import type { Duplex } from "node:stream";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -87,11 +87,11 @@ import {
   FORWARD_BROKER_HEADERS,
   INTERNAL_HEADERS,
 } from "./proxy.ts";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { coreClaimStore, claimOnce, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
-import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { coreClaimStore, claimOnce, ClaimStoreUnavailableError } from "../../../common/claims.ts";
+import { coreEmailAdmission } from "../../../common/external-members.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../common/portal-identity.ts";
+import { errMessage } from "../../../common/errors.ts";
 import {
   json,
   escapeHtml,
@@ -106,15 +106,15 @@ import {
   KEEP_ALIVE_TIMEOUT_MS,
   destroyIfRequestFailed,
   logUnansweredCloses,
-} from "../../chassis/src/http.ts";
+} from "../../../common/http.ts";
 import {
   CORE_API_URL as CORE,
   CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   isMissingOrPlaceholder,
-} from "../../chassis/src/env.ts";
-import { isAppGitRoute } from "../../chassis/src/app-git.ts";
+} from "../../../common/env.ts";
+import { isAppGitRoute } from "../../../common/app-git.ts";
 import { matchPublicPassthrough } from "./public-passthrough.ts";
 
 const PUBLIC_URL = (process.env.PUBLIC_WEB_URL ?? "http://localhost:8097").replace(/\/$/, "");

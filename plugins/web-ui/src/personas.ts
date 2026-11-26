@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide";
 import { api, ApiError, isSharedScopeId, type CoreSession, type ProjectIcon } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { appState } from "./shell-state";

@@ -1,4 +1,4 @@
-import { describeActiveRequest } from "../../plugins/chassis/src/error-reporting.ts";
+import { describeActiveRequest } from "../../common/error-reporting.ts";
 import { errMessage } from "./errors.ts";
 
 export function shutdownOnUncaught(label: string, shutdown: (reason: string, fatal: boolean) => void): void {

@@ -1,10 +1,6 @@
 import type { TurnResult } from "../types.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../plugins/chassis/src/security-quarantine.ts";
-import {
-  GENERIC_FAILURE_CLAUSE,
-  providerBlockClause,
-  userFacingFailureText,
-} from "../../plugins/chassis/src/failure-copy.ts";
+import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../../common/security-quarantine.ts";
+import { GENERIC_FAILURE_CLAUSE, providerBlockClause, userFacingFailureText } from "../../common/failure-copy.ts";
 
 interface FailureShape {
   status?: string;

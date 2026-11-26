@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { standaloneFailureText, userFacingFailureClause } from "../src/core/failure-copy.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
-import { GENERIC_FAILURE_TEXT, userFacingFailureText } from "../plugins/chassis/src/failure-copy.ts";
+import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../common/security-quarantine.ts";
+import { GENERIC_FAILURE_TEXT, userFacingFailureText } from "../common/failure-copy.ts";
 
 test("the shared failure policy renders quarantine canned, refused reasons verbatim, everything else generic", () => {
   const quarantine = {

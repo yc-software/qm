@@ -11,7 +11,7 @@ const CLAIM_TIMEOUT_MS = 4_000;
 
 export class ClaimStoreUnavailableError extends Error {}
 
-export function coreClaimStore(coreApiUrl: string, signingSecret: string | undefined, label = "chassis"): ClaimStore {
+export function coreClaimStore(coreApiUrl: string, signingSecret: string | undefined, label = "common"): ClaimStore {
   return {
     async claimFirst(ids, expiresAtMs) {
       const path = withSourceAuthNonce(CLAIM_PATH, signingSecret);

@@ -1,9 +1,9 @@
 import type { ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { escapeHtml, json } from "../../chassis/src/http.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
-import { HARBOUR_SCENE_PATH, HARBOUR_STYLE, harbourScene } from "../../chassis/src/harbour.ts";
+import { escapeHtml, json } from "../../../common/http.ts";
+import { errMessage } from "../../../common/errors.ts";
+import { HARBOUR_SCENE_PATH, HARBOUR_STYLE, harbourScene } from "../../../common/harbour.ts";
 
 let brandSource: () => string | undefined = () => undefined;
 export function setCardBrandSource(source: () => string | undefined): void {

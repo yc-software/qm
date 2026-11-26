@@ -1,5 +1,5 @@
 import type { EgressPolicy } from "../types.ts";
-import { isDnsName } from "../../plugins/chassis/src/dns-label.ts";
+import { isDnsName } from "../../common/dns-label.ts";
 
 function normalizeHost(host: string): string {
   const s = host

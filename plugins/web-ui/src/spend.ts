@@ -1,5 +1,5 @@
 import { html, render } from "lit";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import type { AdminPage } from "./admin/sections";
 import { card, pageHeader, table } from "./admin/shared";
 import { spendAsOf, spendCustomRange, spendWindow, spendWindowTabs } from "./admin/spend";

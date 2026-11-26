@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DNS_LABEL_MAX, isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
+import { DNS_LABEL_MAX, isDnsLabel } from "../../common/dns-label.ts";
 import { gzipSync } from "node:zlib";
 import type { PublishedApp, AppVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";

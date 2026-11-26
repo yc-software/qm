@@ -7,7 +7,7 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, explicitTenantId, pinTenant, type Tenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { tracePoolCheckout, untraced } from "../../plugins/chassis/src/error-reporting.ts";
+import { tracePoolCheckout, untraced } from "../../common/error-reporting.ts";
 
 export type { Pool, PoolClient };
 

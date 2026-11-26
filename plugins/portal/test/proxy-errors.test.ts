@@ -4,7 +4,7 @@ import { createServer, request, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { format } from "node:util";
-import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity } from "../../../common/portal-identity.ts";
 import { startWithFakeCore, type CoreHit } from "./fake-core.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";

@@ -11,7 +11,7 @@ import {
   type EgressAuditSink,
 } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../common/source-auth-sign.ts";
 import { createSweeper } from "./util/sweeper.ts";
 import { errMessage, reportFailure, swallow } from "./util/errors.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";

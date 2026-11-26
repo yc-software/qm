@@ -6,7 +6,7 @@ import { states, load, patternError, type GovernanceState } from "./governance-s
 import { putSetting } from "./setting-state.ts";
 import { pageHeader } from "./shared.ts";
 import type { AdminPage } from "./sections.ts";
-import { errMessage } from "../../../chassis/src/errors.ts";
+import { errMessage } from "../../../../common/errors.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "security-posture": (s) =>

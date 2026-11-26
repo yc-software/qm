@@ -8,7 +8,7 @@ import {
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
 import { sendJson } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../common/http.ts";
 import { audit, isObj } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 

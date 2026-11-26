@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 import { testViteServer } from "./vite-server.ts";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
-import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { SuggestedActivity } from "../../../common/suggested-activities.ts";
 
 test("activity selection fills and persists an editable draft without sending or overwriting work", async () => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><main></main>', {

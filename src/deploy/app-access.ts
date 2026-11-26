@@ -4,7 +4,7 @@ import {
   orgAccessNote,
   orgDisplayName,
   PUBLIC_ACCESS_NOTE,
-} from "../../plugins/chassis/src/app-access.ts";
+} from "../../common/app-access.ts";
 import { parseScopeId, type ScopeKind } from "../types.ts";
 
 export type AppAccess = {

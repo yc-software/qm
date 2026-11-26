@@ -1,4 +1,4 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../common/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders } from "../common/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";

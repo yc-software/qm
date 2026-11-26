@@ -15,7 +15,7 @@ import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
 import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
 import { refuseImpersonated, sendJson } from "../http.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure, swallow } from "../../util/errors.ts";
 import { activePrincipal, audit, requirePersonAuthority } from "./shared.ts";

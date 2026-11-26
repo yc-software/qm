@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { errMessage, swallowAs } from "../../../chassis/src/errors.ts";
+import { errMessage, swallowAs } from "../../../../common/errors.ts";
 import type { AdminPage } from "./sections.ts";
 type Data = Record<string, any>;
 type Context = Pick<AdminPage, "api" | "orgScope" | "host" | "href" | "current">;

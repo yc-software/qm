@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { parseSuggestedActivities } from "../../../common/suggested-activities.ts";
 
 const activity = {
   id: "weekly-brief",

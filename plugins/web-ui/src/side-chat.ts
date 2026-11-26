@@ -28,7 +28,7 @@ import type { Conversation, ConvCtx } from "./conv-types";
 import { messageEntrySeqs } from "./message-link";
 import { icon } from "./icons";
 import { brandMark, brandName, sheenLabel } from "./ui";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { reportHandledError } from "./browser-errors";
 
 const PREVIEW_NOTE = {

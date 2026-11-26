@@ -15,7 +15,7 @@ import { personalCredentialId, personalGitBasicCredential, personalGitRemote } f
 import { samePerson } from "../directory/person.ts";
 import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
 import { sendJson } from "./http.ts";
-import { relayStream } from "../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../common/http.ts";
 import { tenantOf, type BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
 

@@ -11,7 +11,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { entitledScopes, loadsScopeContext } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
-import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase } from "../../common/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";

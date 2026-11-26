@@ -13,7 +13,7 @@ import { buildApp, type Core } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders, withSourceAuthNonce } from "../common/core-client.ts";
 import { BlobTooLargeError, type BlobInfo } from "../src/persistence/blob-transfer.ts";
 import { personalScope } from "../src/types.ts";
 

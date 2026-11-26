@@ -28,7 +28,7 @@ import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../common/source-auth-sign.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";

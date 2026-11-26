@@ -11,9 +11,9 @@ import {
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { tenantOf, usesBrowserSession } from "./route.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { canonicalPayload } from "../../../common/source-auth-sign.ts";
 import { extendBodyDeadline, headerValue, sendJson, verifyOrReject } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../common/http.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 const SHA256_HEX = /^[0-9a-f]{64}$/;

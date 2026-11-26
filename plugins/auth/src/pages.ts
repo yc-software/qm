@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { HARBOUR_STYLE, harbourScene } from "../../chassis/src/harbour.ts";
-import { escapeHtml } from "../../chassis/src/http.ts";
+import { HARBOUR_STYLE, harbourScene } from "../../../common/harbour.ts";
+import { escapeHtml } from "../../../common/http.ts";
 
 const CONFIRM_SCRIPT = `(function () {
   var key = "qm.signin.token";

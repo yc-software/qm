@@ -2,7 +2,7 @@ import { githubRepoUrl, isGitBranchName } from "../../cli/src/render-source.ts";
 import { porterLocatorPresent, porterApiBaseUrl } from "../sandbox/sandbox-settings.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 import { commitShaSchema } from "../util/ids.ts";
-import { isDnsName } from "../../plugins/chassis/src/dns-label.ts";
+import { isDnsName } from "../../common/dns-label.ts";
 
 export interface DeploySettings {
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b" | "render";

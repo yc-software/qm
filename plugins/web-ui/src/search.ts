@@ -11,7 +11,7 @@ import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
 import { icon } from "./icons";
-import { swallow, swallowAs } from "../../chassis/src/errors.ts";
+import { swallow, swallowAs } from "../../../common/errors.ts";
 
 interface ChatSearchHit {
   sessionId: string;

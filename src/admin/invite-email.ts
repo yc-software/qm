@@ -1,4 +1,4 @@
-import { escapeHtml } from "../../plugins/chassis/src/http.ts";
+import { escapeHtml } from "../../common/http.ts";
 
 export const INVITE_EMAIL_NOT_CONFIGURED =
   "invitation emails are not configured — set RESEND_API_KEY and AUTH_EMAIL_FROM on core (the same Resend key and verified sender the sign-in broker uses)";

@@ -5,7 +5,7 @@ import type { ConvCtx, Conversation } from "./conv-types.ts";
 import { appState } from "./shell-state.ts";
 import { icon } from "./icons.ts";
 import { reportHandledError } from "./browser-errors.ts";
-import { errMessage, swallow } from "../../chassis/src/errors.ts";
+import { errMessage, swallow } from "../../../common/errors.ts";
 
 type Owner = Pick<ConvCtx, "chat" | "composer">;
 

@@ -4,7 +4,7 @@ import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
 import { offboardingCard } from "./offboarding.ts";
 import { pageHeader, card, table, badge, stacked, subline } from "./shared.ts";
-import { errChain } from "../../../chassis/src/errors.ts";
+import { errChain } from "../../../../common/errors.ts";
 
 export const userHref = (page: AdminPage, row: { userId?: string | null; principalId?: string | null }) =>
   page.href("user", { user: row.userId || row.principalId });

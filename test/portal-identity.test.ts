@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mintPortalIdentity, verifyPortalIdentity } from "../plugins/chassis/src/portal-identity.ts";
+import { mintPortalIdentity, verifyPortalIdentity } from "../common/portal-identity.ts";
 
 const SECRET = "portal-identity-test-secret";
 const now = 1_000_000;

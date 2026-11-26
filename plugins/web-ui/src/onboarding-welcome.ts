@@ -1,4 +1,4 @@
-import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
+import { openDesktopBrowser } from "../../../common/desktop-browser";
 import {
   isConnectionReturn,
   takeConnectionReturn,
@@ -15,7 +15,7 @@ import { mountConnectionPicker, type ConnectionService } from "./connection-pick
 import { connectionActions, connectionCard, type ConnectionOutcome } from "./connection-card";
 import { suggestedActivities } from "./suggested-activities";
 import { welcomeActivities } from "./welcome-ideas";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errMessage } from "../../../common/errors.ts";
 
 interface ConnectedAccount {
   id: string;
@@ -23,7 +23,7 @@ interface ConnectedAccount {
   missingScopes?: string[];
 }
 import type { Me } from "./shell-state";
-import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
+import type { ActivitySeeds } from "../../../common/suggested-activities.ts";
 import "./onboarding-welcome.css";
 import "./onboarding-slack";
 import "./slack-account";

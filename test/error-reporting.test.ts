@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { traceStatus } from "../plugins/chassis/src/timing.ts";
+import { traceStatus } from "../common/timing.ts";
 import { readEnvelope, segments, type SentSpan } from "./support/sentry-spans.ts";
 
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
@@ -36,7 +36,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       "-e",
       `
     import * as Sentry from '@sentry/node';
-    import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, startDispatchTrace } from './plugins/chassis/src/error-reporting.ts';
+    import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, startDispatchTrace } from './common/error-reporting.ts';
     initializeErrorReporting(Sentry, 'test');
     ${body}
   `,
@@ -77,7 +77,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
 test("real SDK sends full exception details, causes and classification", async () => {
   const { events, code, output } = await runReporting(`
     const error = Object.assign(new TypeError('top-message', { cause: new Error('root-cause') }), { stderr: 'command failed', exitCode: 17, body: { upstream: { reason: 'failure' } } });
-    const { errDetail } = await import('./plugins/chassis/src/errors.ts');
+    const { errDetail } = await import('./common/errors.ts');
     console.log(errDetail(error));
     reportBackendError(error);
     console.error('request-url', error);
@@ -170,8 +170,8 @@ test("fatal log and report name the core route and request id in flight", async 
 test("fatal log marks a request that finished before its work failed", async () => {
   const { events, code, errors } = await runReporting(`
     const { createServer } = await import('node:http');
-    const { withRequestContext } = await import('./plugins/chassis/src/error-reporting.ts');
-    const { findRoute } = await import('./plugins/chassis/src/router.ts');
+    const { withRequestContext } = await import('./common/error-reporting.ts');
+    const { findRoute } = await import('./common/router.ts');
     const { shutdownOnUncaught } = await import('./src/util/process-guard.ts');
     shutdownOnUncaught('qm', () => setTimeout(async () => { await flushErrorReporting(); process.exit(1); }, 50));
     const routes = [{ method: 'GET', path: '/api/files/:id/content' }];
@@ -449,7 +449,7 @@ test("human turns are always traced while other runs follow the configured rate"
     `
     const { createServer } = await import('node:http');
     let declined;
-    const { setRunAttribute } = await import('./plugins/chassis/src/error-reporting.ts');
+    const { setRunAttribute } = await import('./common/error-reporting.ts');
     const server = createServer((req, res) => { declined = traceCarrier(); res.end('ok'); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     await fetch('http://127.0.0.1:' + server.address().port + '/v1/things', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
@@ -490,7 +490,7 @@ test("human turns are always traced while other runs follow the configured rate"
 test("execute stages keep their diagnostic attributes and the command's own run time", async () => {
   const { spans } = await runReporting(
     `
-    const { tracePhase, traceElapsed } = await import('./plugins/chassis/src/error-reporting.ts');
+    const { tracePhase, traceElapsed } = await import('./common/error-reporting.ts');
     await traceQueued(undefined, 'run', { 'qm.origin': 'human' }, () =>
       tracePhase('exec.run', async () => { traceElapsed('exec.command', 250); return { code: 3 }; }, {
         attributes: (ran) => ({ 'qm.exec.provider': 'sprites', 'qm.exec.exit_code': ran.code }),

@@ -1,4 +1,4 @@
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../common/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test, after } from "node:test";

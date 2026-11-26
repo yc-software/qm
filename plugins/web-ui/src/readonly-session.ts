@@ -10,7 +10,7 @@ import {
   type CoreSession,
   type PendingApproval,
 } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { transcriptModel } from "./model-options";
 import { repliesAsViewer } from "./session-list";
 import { appState } from "./shell";

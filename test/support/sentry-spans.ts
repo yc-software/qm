@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
-import { flushErrorReporting } from "../../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting } from "../../common/error-reporting.ts";
 
 export interface SentSpan {
   name: string;

@@ -14,7 +14,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { sendJson } from "../http.ts";
 import { APP_CONNECTION_ROUTES } from "../../connectors/app-connection-routes.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { audit } from "./shared.ts";

@@ -1,8 +1,8 @@
-import type { UpgradeTarget } from "../../../plugins/chassis/src/websocket-relay.ts";
+import type { UpgradeTarget } from "../../../common/websocket-relay.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readCookie } from "../../../plugins/portal/src/session.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { compilePath, findRoute } from "../../../plugins/chassis/src/router.ts";
+import { compilePath, findRoute } from "../../../common/router.ts";
 
 export { compilePath, findRoute };
 import type { App } from "../app.ts";

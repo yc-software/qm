@@ -14,7 +14,7 @@ import { runtimeConfigBody } from "../runtime-config.ts";
 import { respondChatCompletion } from "./chat-completion-response.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { sendJson } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../common/http.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 
 const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];

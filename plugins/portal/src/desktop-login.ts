@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isTenantId } from "../../chassis/src/tenant.ts";
+import { isTenantId } from "../../../common/tenant.ts";
 import { deriveKey, open, randomToken, safeEqual, seal, type SessionClaims } from "./session.ts";
 
 export const DESKTOP_LAUNCH_SCRIPT = `window.location.href = document.getElementById("desktop-launch").href;`;

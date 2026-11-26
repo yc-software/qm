@@ -1,4 +1,4 @@
-import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
+import { appEditSlug } from "../../common/app-edit.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";

@@ -1,6 +1,6 @@
 import { request, type IncomingHttpHeaders, type OutgoingHttpHeaders } from "node:http";
 import { sendJson } from "../http.ts";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../common/http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
 const HOP_BY_HOP = new Set([

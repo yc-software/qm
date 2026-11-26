@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { assert, type Actor, type Ctx, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
-import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../common/source-auth-sign.ts";
 import { trimTrailingSlashes } from "../../src/util/text.ts";
 
 const EVENTS_URL = () =>

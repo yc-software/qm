@@ -1,17 +1,17 @@
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError } from "../../../common/error-reporting.ts";
 import { createHmac } from "node:crypto";
 import { coreRememberedSessions, type RememberedSessions, type RememberedSession } from "./sessions.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readBody, PayloadTooLargeError, sendBuffered, serveFavicon } from "../../chassis/src/http.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { readBody, PayloadTooLargeError, sendBuffered, serveFavicon } from "../../../common/http.ts";
+import { errMessage } from "../../../common/errors.ts";
 import type { AuthConfig } from "./config.ts";
 import { passwordConfigured, validEmail } from "./config.ts";
 import { verifyPassword } from "./password.ts";
-import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore } from "../../chassis/src/claims.ts";
-import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore } from "../../../common/claims.ts";
+import { coreEmailAllowed } from "../../../common/external-members.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
-import type { Mailer } from "../../chassis/src/resend.ts";
+import type { Mailer } from "../../../common/resend.ts";
 import { renderSignInEmail } from "./email.ts";
 import { confirmSignInPage, signInPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
 

@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { slackWebClient } from "../src/slack/web-client.ts";
-import { errDetail } from "../plugins/chassis/src/errors.ts";
+import { errDetail } from "../common/errors.ts";
 
 test("Slack transport errors retain diagnostic evidence without credentials or automatic resends", async (t) => {
   const token = "synthetic-slack-transport-token";

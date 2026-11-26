@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  validIcon,
-  type ActivitySeeds,
-  type SuggestedActivity,
-} from "../../plugins/chassis/src/suggested-activities.ts";
+import { validIcon, type ActivitySeeds, type SuggestedActivity } from "../../common/suggested-activities.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { scopeId, type ScopeId } from "../types.ts";

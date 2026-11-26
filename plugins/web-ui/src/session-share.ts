@@ -3,7 +3,7 @@ import { X, Link, Copy, Check, Users, Globe, ChevronDown } from "lucide";
 import { toggleFormMenu, closeFormMenus } from "./ui";
 import { icon } from "./icons";
 import { api, withBase } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 
 interface ShareState {
   share: { token: string; audience: "internal" | "external"; createdAt: number } | null;

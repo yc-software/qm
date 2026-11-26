@@ -27,7 +27,7 @@ import {
   type ProjectIcon,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
-import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { errMessage, swallowAs } from "../../../common/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";

@@ -1,4 +1,4 @@
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
 
 export interface RememberedSession {
   email: string;

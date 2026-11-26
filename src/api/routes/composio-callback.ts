@@ -2,7 +2,7 @@ import { externalOrgId } from "../../tenants/external-org.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { scopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { ACCOUNT_ID, composioUserId, credential, request } from "./composio.ts";

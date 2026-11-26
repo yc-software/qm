@@ -9,7 +9,7 @@ import { NeedsApproval, CommandDenied } from "../../tools/primitives.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { withAbort } from "../../util/async.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { text, type ToolKit } from "./kit.ts";
 

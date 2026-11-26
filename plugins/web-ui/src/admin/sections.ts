@@ -1,4 +1,4 @@
-import { errMessage } from "../../../chassis/src/errors.ts";
+import { errMessage } from "../../../../common/errors.ts";
 import { webFetch } from "../core-bridge.ts";
 
 export const ADMIN_SECTIONS = [

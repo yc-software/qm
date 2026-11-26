@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { isTenantId } from "../../chassis/src/tenant.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { isTenantId } from "../../../common/tenant.ts";
 import { open, seal } from "./session.ts";
 
 interface AppTarget {

@@ -1,12 +1,12 @@
-import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { reportBackendError } from "../../../common/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
 import { createServer } from "node:http";
-import { destroyIfRequestFailed, json, logUnansweredCloses } from "../../chassis/src/http.ts";
+import { destroyIfRequestFailed, json, logUnansweredCloses } from "../../../common/http.ts";
 import { bootProblems, readConfig } from "./config.ts";
-import { coreClaimStore } from "../../chassis/src/claims.ts";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { createBrandingCache } from "../../chassis/src/branding.ts";
+import { coreClaimStore } from "../../../common/claims.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { createBrandingCache } from "../../../common/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";

@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { can } from "./shell-state";
 
 interface PersonaSlackStatus {

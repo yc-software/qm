@@ -5,7 +5,7 @@ import {
   orgDisplayName,
   PUBLIC_ACCESS_NOTE,
   type GeneralAccess,
-} from "../../chassis/src/app-access.ts";
+} from "../../../common/app-access.ts";
 import { html, render, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, Share2, X } from "lucide";
@@ -15,7 +15,7 @@ import { icon } from "./icons";
 import { ensureContexts, scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./app-view";
 import { rememberScopeLabels, scopePerson } from "./scope-labels";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
 import { COPY_STATUS } from "./cron-delivery";

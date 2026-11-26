@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { deriveKey, impersonationFor, openSession, readCookie } from "../../plugins/portal/src/session.ts";
-import { originOf, sameOriginRequest } from "../../plugins/chassis/src/http.ts";
+import { originOf, sameOriginRequest } from "../../common/http.ts";
 import type { PortalIdentity } from "../auth/portal-identity.ts";
 import { isStrongSigningSecret, MIN_SIGNING_SECRET_LENGTH } from "../auth/source-auth.ts";
 import { orgId } from "../config.ts";

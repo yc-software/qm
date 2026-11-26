@@ -14,7 +14,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   legitimate human coauthors. CI rejects AI coauthor trailers on new PR commits;
   do not rewrite existing repository history to remove attribution.
 - **Fix every instance, not just the reported one.** When you find a bug or a pattern
-  worth changing, grep the whole repo (`src/`, `plugins/`, `test/`, `scripts/`) for the
+  worth changing, grep the whole repo (`src/`, `common/`, `plugins/`, `test/`, `scripts/`) for the
   same pattern and fix all of it in the same change. One autocorrected call site with
   five untouched siblings is a regression waiting to be rediscovered.
 - **Fixes should make the system simpler, not more complex.** Prefer removing or
@@ -31,8 +31,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   (sleep, createKeyedQueue), `src/util/sweeper.ts` (periodic loops),
   `src/sandbox/process-poll.ts` (process polling/liveness), `src/memory/notebook.ts`
   (memory line grammar). Plugins are separate packages and keep their own local
-  copies rather than importing core code — the one exception is the shared
-  `plugins/chassis` package (the sanctioned home for the plugin↔core plumbing:
+  copies rather than importing core code — the one exception is the top-level
+  `common/` directory (the sanctioned home for the plugin↔core plumbing:
   source-auth signer, signed core-client, node:http helpers, error helpers, CORE_*
   env), imported by relative path and never importing core. The bar cuts both ways:
   don't manufacture an abstraction for a pattern with one caller.

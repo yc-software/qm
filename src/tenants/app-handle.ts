@@ -5,7 +5,7 @@ import {
   APP_HANDLE_MIN,
   DNS_LABEL_MAX,
   isAppHandleShape,
-} from "../../plugins/chassis/src/dns-label.ts";
+} from "../../common/dns-label.ts";
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
 const RESERVED_APP_HANDLES = ["auth", "slack", "mt", "www", "api", "docs", "apps", "admin"] as const;

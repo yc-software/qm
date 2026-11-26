@@ -3,7 +3,7 @@ import { emojiCompletion } from "./emoji-completion";
 import { composerInput, resizeComposerInput } from "./composer-input";
 import { slackComposerForm, type SlackSkin } from "./composer-slack";
 import { reportHandledError } from "./browser-errors.ts";
-import { appEditSlug } from "../../chassis/src/app-edit";
+import { appEditSlug } from "../../../common/app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
@@ -38,7 +38,7 @@ import {
 } from "./core-bridge";
 import { approvalCall, approvalHeading } from "./approval-call";
 import { approvalCard, approvalReceipt, type ApprovalReceipt } from "./approval-card";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { fieldSelect } from "./ui";
 import { icon } from "./icons";
 import {

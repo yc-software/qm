@@ -4,7 +4,7 @@ import { handbackStop } from "../../runs/run-store.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import type { ScopeId } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
-import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase } from "../../../common/error-reporting.ts";
 import { isObj } from "../../util/objects.ts";
 import { headSlice, tailSlice } from "../../util/text.ts";
 import { GOAL_INBOX_POLL_MS, goalInboxHeld, GOAL_SWARM_HELD_NOTE, takeGoalMessages } from "../goal.ts";

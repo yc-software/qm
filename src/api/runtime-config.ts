@@ -1,5 +1,5 @@
 import { errMessage, swallow } from "../util/errors.ts";
-import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_CLAUSE } from "../../common/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { TurnRuntimePurpose } from "../resolution/config-store.ts";

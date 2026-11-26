@@ -1,6 +1,6 @@
 import { createTransport } from "nodemailer";
-import { escapeHtml } from "../../chassis/src/http.ts";
-import { resendMailer, type Mailer, type OutgoingEmail } from "../../chassis/src/resend.ts";
+import { escapeHtml } from "../../../common/http.ts";
+import { resendMailer, type Mailer, type OutgoingEmail } from "../../../common/resend.ts";
 import { emailConfigured, type AuthConfig } from "./config.ts";
 
 const SMTP_TIMEOUT_MS = 15_000;

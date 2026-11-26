@@ -90,7 +90,7 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { chatWithPersonaId, personaEditable, personaGlyph, personaName, personaSeeds, viewPersona } from "./personas";
-import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
+import { errMessage, swallow, swallowAs } from "../../../common/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";

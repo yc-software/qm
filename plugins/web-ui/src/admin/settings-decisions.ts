@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { page, draw as redraw } from "./settings.ts";
-import { errChain } from "../../../chassis/src/errors.ts";
+import { errChain } from "../../../../common/errors.ts";
 const NEW_PROVIDER = { id: "", protocol: "chat-completions", baseUrl: "", credential: "", editing: false };
 const state = {
   scope: "",

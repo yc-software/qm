@@ -1,7 +1,7 @@
 import { bootTenant, tenancyBooted } from "../../tenants/boot.ts";
-import { analyticsHookConfig } from "../../../plugins/chassis/src/analytics-config.ts";
-import { browserErrorConfig } from "../../../plugins/chassis/src/browser-error-config.ts";
-import { parseSuggestedActivities, type SuggestedActivity } from "../../../plugins/chassis/src/suggested-activities.ts";
+import { analyticsHookConfig } from "../../../common/analytics-config.ts";
+import { browserErrorConfig } from "../../../common/browser-error-config.ts";
+import { parseSuggestedActivities, type SuggestedActivity } from "../../../common/suggested-activities.ts";
 import { orgId } from "../../config.ts";
 import { starterActivities } from "../../suggestions/company-seeds.ts";
 import { resolveBranding } from "../../resolution/branding.ts";

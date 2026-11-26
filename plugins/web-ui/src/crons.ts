@@ -6,7 +6,7 @@ import { friendlyPrincipal } from "./app-view";
 import { draftFromSchedule, schedulePicker, type ScheduleDraft } from "./cron-schedule-picker";
 import { closeFormMenus, relTime, toggleFormMenu } from "./ui";
 import { api, userSendMessage } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";

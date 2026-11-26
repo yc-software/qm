@@ -1,10 +1,10 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
-import { relayWebSocket, type UpgradeTarget } from "../../chassis/src/websocket-relay.ts";
-import { signedHeaders } from "../../chassis/src/core-client.ts";
-import { relayStream, withVary } from "../../chassis/src/http.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
-import { REQUEST_ID_HEADERS } from "../../chassis/src/error-reporting.ts";
+import { relayWebSocket, type UpgradeTarget } from "../../../common/websocket-relay.ts";
+import { signedHeaders } from "../../../common/core-client.ts";
+import { relayStream, withVary } from "../../../common/http.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../../common/portal-identity.ts";
+import { CLIENT_SURFACE_HEADER } from "../../../common/client-surface.ts";
+import { REQUEST_ID_HEADERS } from "../../../common/error-reporting.ts";
 
 const IDENTITY_TTL_MS = 60_000;
 

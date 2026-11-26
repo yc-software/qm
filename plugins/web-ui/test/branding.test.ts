@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 
 test("injectBranding rewrites the tab title with the escaped label when a suffix is given", async () => {
-  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const { injectBranding } = await import("../../../common/branding.ts");
   const shell =
     '<!doctype html><html><head><title>QM · Web</title><meta name="brand-self-label" content="Agent" /></head><body></body></html>';
   const branded = injectBranding(shell, { selfLabel: "straylight" }, { titleSuffix: "· Web" });
@@ -15,7 +15,7 @@ test("injectBranding rewrites the tab title with the escaped label when a suffix
 });
 
 test("injectBranding refuses any CSS value that could escape the style block it writes", async () => {
-  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const { injectBranding } = await import("../../../common/branding.ts");
   const shell = "<!doctype html><html><head></head><body></body></html>";
   assert.match(
     injectBranding(shell, { markUrl: "https://cdn.example.com/icon.png" }),
@@ -55,7 +55,7 @@ test("brandName() reads the injected self-label and falls back to the product na
 });
 
 test("the installable-app metadata follows the brand: manifest link, touch icon, home-screen title", async () => {
-  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const { injectBranding } = await import("../../../common/branding.ts");
   const shell =
     '<html><head><meta name="brand-self-label" content="QM" /><meta name="apple-mobile-web-app-title" content="QM" /></head></html>';
   const branded = injectBranding(shell, { selfLabel: 'Ship "Q"' });
@@ -64,7 +64,7 @@ test("the installable-app metadata follows the brand: manifest link, touch icon,
 });
 
 test("injectBranding flags the page only when an org configured a mark, so the UI has no default mark", async () => {
-  const { injectBranding } = await import("../../chassis/src/branding.ts");
+  const { injectBranding } = await import("../../../common/branding.ts");
   const shell = '<!doctype html><html lang="en"><head></head><body></body></html>';
   assert.doesNotMatch(injectBranding(shell, {}), /data-brand-mark/);
   assert.doesNotMatch(injectBranding(shell, { accent: "#ff6600", selfLabel: "Acme" }), /data-brand-mark/);

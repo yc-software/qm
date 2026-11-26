@@ -9,7 +9,7 @@ import { apiRoutes } from "../src/api/routes/index.ts";
 import { sendJson } from "../src/api/http.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders, withSourceAuthNonce } from "../common/core-client.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../src/auth/portal-identity.ts";
 
 const SIGNING = "browser-session-signing-secret-0123456789";

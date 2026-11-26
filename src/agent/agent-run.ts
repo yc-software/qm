@@ -45,7 +45,7 @@ import { TITLE_GENERATION_PROMPT, TITLE_MODEL_ID, sanitizeTitle, titleUserPrompt
 import { NEXT_PROMPT_MODEL_ID, NEXT_PROMPT_PROMPT } from "./next-prompt-prompt.ts";
 import { providerTurnError } from "../model/provider-error.ts";
 import { asError, reportFailure, swallow, swallowAs } from "../util/errors.ts";
-import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
+import { startPhase } from "../../common/error-reporting.ts";
 import {
   defaultInteractiveThinkingLevel,
   resolveModel,

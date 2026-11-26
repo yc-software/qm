@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
-import { json as sendJson, sendBuffered } from "../../plugins/chassis/src/http.ts";
+import { json as sendJson, sendBuffered } from "../../common/http.ts";
 
 export { sendJson };
 

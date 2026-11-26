@@ -4,7 +4,7 @@ import { loadTenant, perTenant } from "./cache.ts";
 import { boundTenant } from "./context.ts";
 import { appHandleSchema, appLabelLimitError } from "./app-handle.ts";
 import { SCOPE_KINDS } from "../types.ts";
-import { isDnsLabel } from "../../plugins/chassis/src/dns-label.ts";
+import { isDnsLabel } from "../../common/dns-label.ts";
 
 const text = z.string().min(1);
 

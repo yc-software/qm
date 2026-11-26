@@ -1,5 +1,5 @@
 import { desktopTurnId, webClientSurface } from "./desktop-computer.ts";
-import { CLIENT_SURFACE_HEADER } from "../../chassis/src/client-surface.ts";
+import { CLIENT_SURFACE_HEADER } from "../../../common/client-surface.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -19,8 +19,8 @@ import type {
   TextContent,
 } from "@earendil-works/pi-ai";
 import type { Agent, AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import { errChain, errMessage, swallow } from "../../chassis/src/errors.ts";
-import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
+import { errChain, errMessage, swallow } from "../../../common/errors.ts";
+import { userFacingFailureText } from "../../../common/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";

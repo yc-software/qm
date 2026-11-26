@@ -2,7 +2,7 @@ import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalNoticeView } from "./turn-presenters.ts";
 import type { Delivery, TurnRequest, TurnResult, WornPersona } from "../types.ts";
-import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_TEXT } from "../../common/failure-copy.ts";
 
 class TurnFailure extends Error {
   constructor(message: string, cause: unknown) {

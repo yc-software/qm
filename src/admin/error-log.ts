@@ -1,4 +1,4 @@
-import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
+import { reportBackendError } from "../../common/error-reporting.ts";
 import { errorAlreadyReported, markErrorReported } from "../util/errors.ts";
 import { isProviderDecision } from "../core/turn-error.ts";
 import type { ScopeId } from "../types.ts";

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import * as Sentry from "@sentry/node";
-import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting, initializeErrorReporting } from "../common/error-reporting.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";

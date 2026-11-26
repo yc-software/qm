@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { runInNewContext } from "node:vm";
-import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sign.ts";
+import { canonicalPayload, signRequest } from "../../../common/source-auth-sign.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "../src/invite-login.ts";
 import { deriveKey, openSession } from "../src/session.ts";
 

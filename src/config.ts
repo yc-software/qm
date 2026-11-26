@@ -1,6 +1,6 @@
 import type { VaultSettings } from "./credentials/vault-secret-store.ts";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
-import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
+import { isDnsLabel } from "../common/dns-label.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,

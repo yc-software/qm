@@ -1,4 +1,4 @@
-import type { ClientSurface } from "../plugins/chassis/src/client-surface.ts";
+import type { ClientSurface } from "../common/client-surface.ts";
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";

@@ -1,4 +1,4 @@
-import type { ClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
+import type { ClientSurface } from "../../../common/client-surface.ts";
 import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";

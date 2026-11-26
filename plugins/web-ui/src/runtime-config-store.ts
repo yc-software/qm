@@ -5,7 +5,7 @@ import {
   setRuntimeBootScope,
   type RuntimeConfig,
 } from "./runtime-config-cache.ts";
-import { swallow } from "../../chassis/src/errors.ts";
+import { swallow } from "../../../common/errors.ts";
 
 type Change = Parameters<typeof updateRuntimeConfig>[1];
 type Entry = {

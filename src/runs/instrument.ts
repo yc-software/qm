@@ -1,4 +1,4 @@
 import * as Sentry from "@sentry/node";
-import { initializeErrorReporting } from "../../plugins/chassis/src/error-reporting.ts";
+import { initializeErrorReporting } from "../../common/error-reporting.ts";
 
 initializeErrorReporting(Sentry, "worker");
