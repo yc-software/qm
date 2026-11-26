@@ -172,8 +172,6 @@ export function createRelayAuditSink(
     flushing = true;
     try {
       const batch = buffer.slice(0, RELAY_MAX_BATCH);
-      // Core dedupes source-signed requests on the signature, so identical batches signed in the same second
-      // (e.g. two proxy tasks reporting the same host) would 401; a nonce keeps each relay unique.
       const body = JSON.stringify({ records: batch, nonce: randomUUID() });
       const res = await fetchImpl(url, {
         method: "POST",
