@@ -13,7 +13,7 @@ import {
   withRequestId,
 } from "../src/util/errors.ts";
 import { WorkAdmissionClosed } from "../src/util/admitted-work.ts";
-import { errDetail, errMessage as pluginErrMessage } from "../plugins/chassis/src/errors.ts";
+import { errDetail, errMessage as pluginErrMessage } from "../common/errors.ts";
 import { runInNewContext } from "node:vm";
 
 test("errMessage keeps the cause chain that fetch failures hide behind their generic message", () => {

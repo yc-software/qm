@@ -62,7 +62,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
-import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase } from "../../common/error-reporting.ts";
 import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";

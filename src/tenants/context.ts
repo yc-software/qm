@@ -7,7 +7,7 @@ import {
   Tenant,
   withoutTenant,
   withTenant,
-} from "../../plugins/chassis/src/tenant.ts";
+} from "../../common/tenant.ts";
 
 export { ambientTenant, boundTenant, explicitTenantId, isTenantId, pinTenant, Tenant, withoutTenant, withTenant };
 

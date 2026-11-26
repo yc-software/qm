@@ -1,7 +1,7 @@
 import type { PersonaService } from "../../personas/persona-service.ts";
 import type { UiStateStore } from "../../surfaces/ui-state.ts";
 import type { AdmittedWork } from "../../util/admitted-work.ts";
-import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
+import type { TraceCarrier } from "../../../common/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";

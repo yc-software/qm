@@ -13,7 +13,7 @@ import {
   type LoadoutEntry,
 } from "./composer-loadout";
 import { modelSupportsFastMode } from "./pi-models";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 
 const INHERIT = "";
 

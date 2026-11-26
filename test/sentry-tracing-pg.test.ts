@@ -7,7 +7,7 @@ import {
   tracePhase,
   tracePoolCheckout,
   traceQueued,
-} from "../plugins/chassis/src/error-reporting.ts";
+} from "../common/error-reporting.ts";
 import { configurePgPooling, createPgPool, withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { collectSpans } from "./support/sentry-spans.ts";
 

@@ -1,4 +1,4 @@
-import { appGitParts } from "../../../plugins/chassis/src/app-git.ts";
+import { appGitParts } from "../../../common/app-git.ts";
 import { firstSegment } from "../inbound-tenant.ts";
 import type { KeyedTenant } from "./route.ts";
 

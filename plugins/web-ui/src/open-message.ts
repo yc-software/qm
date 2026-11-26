@@ -1,4 +1,4 @@
-import { swallowAs } from "../../chassis/src/errors";
+import { swallowAs } from "../../../common/errors";
 import {
   fetchTranscript,
   TAIL_TURNS,

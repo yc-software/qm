@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import * as Sentry from "@sentry/node";
-import { initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
+import { initializeErrorReporting, traceQueued } from "../common/error-reporting.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";

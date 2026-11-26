@@ -5,7 +5,7 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { compactVerify, generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
-import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity } from "../../../common/portal-identity.ts";
 import { trustedPrincipal } from "../src/trusted-entry.ts";
 
 const secret = "tenant-choice-session-test-secret";

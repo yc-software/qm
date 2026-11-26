@@ -3,7 +3,7 @@ import { ByteSourceTooLargeError } from "../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../core/attachments.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
-import { relayStream } from "../../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../../common/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { browserUploadFields, stageBrowserUpload } from "../blobs.ts";
 import { usesBrowserSession } from "../route.ts";

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CompactSign } from "jose";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { isTenantId } from "../../chassis/src/tenant.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { isTenantId } from "../../../common/tenant.ts";
 import type { ExternalOrg } from "./tenant-choice.ts";
 
 const SELF_SERVE_TIMEOUT_MS = 45_000;

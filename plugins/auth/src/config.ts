@@ -1,5 +1,5 @@
-import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
-import { isSecureOrLoopbackUrl } from "../../chassis/src/http.ts";
+import { isMissingOrPlaceholder } from "../../../common/env.ts";
+import { isSecureOrLoopbackUrl } from "../../../common/http.ts";
 import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";

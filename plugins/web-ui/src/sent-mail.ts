@@ -5,7 +5,7 @@ import { api } from "./core-bridge";
 import { listBackLink } from "./list-page";
 import { initials, relTime } from "./ui";
 import { icon } from "./icons";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 
 interface SentThreadMessage {
   from: string;

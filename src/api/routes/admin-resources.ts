@@ -41,7 +41,7 @@ import { PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
 import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
-import type { ActivitySeeds } from "../../../plugins/chassis/src/suggested-activities.ts";
+import type { ActivitySeeds } from "../../../common/suggested-activities.ts";
 import { parseActivitySeeds } from "../../suggestions/company-seeds.ts";
 import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";

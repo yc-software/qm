@@ -1,4 +1,4 @@
-import { signRequest as signCanonical } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { signRequest as signCanonical } from "../../common/source-auth-sign.ts";
 import type { ReplayDedupe } from "./replay-dedupe.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 

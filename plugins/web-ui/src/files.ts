@@ -17,7 +17,7 @@ import {
   type IconNode,
 } from "lucide";
 import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { formatBytes, relTime } from "./ui";
 import { browserRenderableImage } from "./media-layout";
 import { icon } from "./icons";

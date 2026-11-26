@@ -1,7 +1,7 @@
 import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
-import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
+import type { ActivitySeeds } from "../../../common/suggested-activities.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {

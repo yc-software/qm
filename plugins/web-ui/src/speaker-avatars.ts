@@ -1,4 +1,4 @@
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { api } from "./core-bridge";
 
 const RETRY_AFTER_MS = 60_000;

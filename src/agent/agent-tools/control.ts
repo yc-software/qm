@@ -3,7 +3,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type } from "typebox";
 import { splitToScope } from "../../api/artifact-share.ts";
 import { errMessage } from "../../util/errors.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { BOT_MODES } from "../../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import { NeedsApproval } from "../../tools/primitives.ts";

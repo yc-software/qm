@@ -1,4 +1,4 @@
-import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
+import { parseSuggestedActivities, type SuggestedActivity } from "../../common/suggested-activities.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { isAgentReply } from "../sessions/items.ts";

@@ -1,7 +1,7 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { api, type CoreContext } from "./core-bridge";
 import type { SkillItem } from "./composer";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { fieldSelect } from "./ui";
 import { appState, switchView } from "./shell";
 import { skillActions } from "./skill-actions";

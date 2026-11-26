@@ -4,7 +4,7 @@ import { Shuffle } from "lucide";
 import { api, type ProjectIcon } from "./core-bridge";
 import { EMOJI_ROWS, filterEmoji, type EmojiRow } from "./emoji-picker";
 import { icon } from "./icons";
-import { errMessage, swallow } from "../../chassis/src/errors";
+import { errMessage, swallow } from "../../../common/errors";
 
 interface PickerItem {
   icon: ProjectIcon;

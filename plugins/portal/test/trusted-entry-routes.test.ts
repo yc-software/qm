@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
 import { deriveKey, openSession, readCookie } from "../src/session.ts";
-import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity } from "../../../common/portal-identity.ts";
 
 const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
 const adminEnabled = process.env.TRUSTED_ADMIN_ROUTE_TEST === "1";

@@ -4,7 +4,7 @@ import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
-import { coreEmailAdmission, coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import { coreEmailAdmission, coreEmailAllowed } from "../../../common/external-members.ts";
 
 const secret = "app-only-session-test-secret";
 const origin = "http://portal.test";

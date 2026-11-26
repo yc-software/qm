@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readConfig } from "../src/config.ts";
-import { resendMailer } from "../../chassis/src/resend.ts";
+import { resendMailer } from "../../../common/resend.ts";
 import { mailerFor, renderSignInEmail } from "../src/email.ts";
 import { testEnv } from "./helpers.ts";
 

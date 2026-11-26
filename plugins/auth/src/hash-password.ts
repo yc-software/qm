@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { hashPassword, passwordProblem } from "./password.ts";
-import { errChain } from "../../chassis/src/errors.ts";
+import { errChain } from "../../../common/errors.ts";
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];

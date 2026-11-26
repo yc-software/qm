@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { json, readBody } from "../../plugins/chassis/src/http.ts";
+import { json, readBody } from "../../common/http.ts";
 import { sleep } from "./lib.ts";
 
 const CANARY_PREFIX = "qm-canary:";

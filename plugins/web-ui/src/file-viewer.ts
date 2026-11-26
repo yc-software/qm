@@ -4,7 +4,7 @@ import { webFetch } from "./core-bridge";
 import { icon } from "./icons";
 import { markdown } from "./message-markdown";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import type { filePreviewKind } from "./file-open";
 
 const PREVIEW_LIMIT = 2 * 1024 * 1024;

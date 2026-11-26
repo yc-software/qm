@@ -20,7 +20,7 @@ import {
 } from "../../memory/registry.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { canonicalPerson, samePerson } from "../../directory/person.ts";
-import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { escapeHtml } from "../../../common/http.ts";
 import { sendJson } from "../http.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import {

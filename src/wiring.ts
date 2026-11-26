@@ -30,7 +30,7 @@ import {
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
 import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting } from "../common/error-reporting.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
@@ -95,7 +95,7 @@ import { createPostgresUserStore, SPLIT_LINKED_BOTS_MIGRATION } from "./identity
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
-import { resendMailer } from "../plugins/chassis/src/resend.ts";
+import { resendMailer } from "../common/resend.ts";
 import { configStoreMaps, createConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore } from "./acl/acl-store.ts";

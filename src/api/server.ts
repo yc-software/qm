@@ -1,7 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing, MemoryForgetRefused } from "../memory/facts.ts";
-import { nameRequest, reportBackendError, withRequestContext } from "../../plugins/chassis/src/error-reporting.ts";
+import { nameRequest, reportBackendError, withRequestContext } from "../../common/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -10,7 +10,7 @@ import {
   type Server,
 } from "node:http";
 import type { Duplex } from "node:stream";
-import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../plugins/chassis/src/websocket-relay.ts";
+import { failUpgrade, isWebSocketUpgrade, responseOnSocket } from "../../common/websocket-relay.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -30,8 +30,8 @@ import { inboundKey, withInboundTenant } from "./inbound-tenant.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { canonicalScopeId, parseScopeId, scopeId, type ScopeId } from "../types.ts";
-import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../plugins/chassis/src/http.ts";
+import { canonicalPayload } from "../../common/source-auth-sign.ts";
+import { KEEP_ALIVE_TIMEOUT_MS, destroyIfRequestFailed, logUnansweredCloses } from "../../common/http.ts";
 import {
   armBodyDeadline,
   PayloadTooLargeError,

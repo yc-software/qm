@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { isTenantId } from "../../chassis/src/tenant.ts";
+import { isTenantId } from "../../../common/tenant.ts";
 
 export function deriveKey(secret: string, label: string): Buffer {
   return createHmac("sha256", secret).update(label).digest();

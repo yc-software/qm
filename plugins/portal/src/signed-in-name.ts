@@ -1,6 +1,6 @@
 import { LRUCache } from "lru-cache";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../../common/core-client.ts";
+import { errMessage } from "../../../common/errors.ts";
 
 const BACKFILL_TTL_MS = 10 * 60_000;
 

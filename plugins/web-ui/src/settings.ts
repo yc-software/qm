@@ -21,7 +21,7 @@ import { brandName } from "./ui";
 import { notificationsSettingsRow, onNotificationStateChange } from "./notifications";
 import { ADMIN_SECTIONS, OWNER_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
-import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { errMessage, swallowAs } from "../../../common/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 import { answerEmbedder, hasEmbedder, tellEmbedder } from "./embedder";
 

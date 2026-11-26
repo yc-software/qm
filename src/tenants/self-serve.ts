@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { readBoundedText } from "../util/bytes.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { signedRequestHeaders } from "../../common/source-auth-sign.ts";
 import { tenantSettingsSchema } from "./settings.ts";
 import { bootTenant } from "./boot.ts";
 import { AdminError, trustedSubjectPrincipal } from "../admin/admin-service.ts";

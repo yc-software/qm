@@ -11,7 +11,7 @@ const rawErrorRule = {
 const rawPipeRule = {
   selector: "CallExpression[callee.property.name='pipe']:not([arguments.0.callee.object.name='z'])",
   message:
-    "Relay streams with relayStream() (plugins/chassis/src/http.ts) — a raw .pipe() leaves upstream errors unhandled and crashes the process.",
+    "Relay streams with relayStream() (common/http.ts) — a raw .pipe() leaves upstream errors unhandled and crashes the process.",
 };
 
 const noComments = {
@@ -144,7 +144,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ["plugins/**/*.ts", "src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
+    files: [
+      "plugins/**/*.ts",
+      "common/**/*.ts",
+      "src/config.ts",
+      "src/index.ts",
+      "src/runs/worker-main.ts",
+      "src/egress-authz-main.ts",
+    ],
     rules: {
       "no-restricted-syntax": ["error", rawErrorRule, rawPipeRule],
     },
@@ -161,7 +168,7 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-floating-promises": ["error", { ignoreVoid: false }] },
   },
   {
-    files: ["plugins/chassis/src/http.ts"],
+    files: ["common/http.ts"],
     rules: { "no-restricted-syntax": ["error", rawErrorRule] },
   },
 );

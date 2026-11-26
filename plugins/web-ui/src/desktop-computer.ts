@@ -1,4 +1,4 @@
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errMessage } from "../../../common/errors.ts";
 import { reportHandledError } from "./browser-errors.ts";
 
 type Result = {

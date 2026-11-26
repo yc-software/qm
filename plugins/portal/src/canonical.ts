@@ -1,5 +1,5 @@
 import { LRUCache } from "lru-cache";
-import { errMessage } from "../../chassis/src/errors.ts";
+import { errMessage } from "../../../common/errors.ts";
 
 const FRESH_MS = 60_000;
 const STALE_MS = 5 * 60_000;

@@ -16,7 +16,7 @@ Tenant separation is moving from an implicit binding to an explicit argument. Po
 
 - While both paths exist, `forTenant` refuses a token for a tenant other than the one bound to the work. A half-converted codebase is never less safe than the implicit path alone. Work with no ambient binding, including work inside `withoutTenant`, may use any token.
 - `ambientTenant()` returns the token minted by the enclosing `withTenant`. It is the bridge from converted stores to callers that do not yet carry a token, and it disappears with the binding.
-- `scripts/tenant-ratchet.ts` (CI step `Tenant ratchet`) uses the type checker to count call sites in the program rooted at `src/` (core code and the `plugins/chassis` code it imports), excluding tests:
+- `scripts/tenant-ratchet.ts` (CI step `Tenant ratchet`) uses the type checker to count call sites in the program rooted at `src/` (core code and the `common/` code it imports), excluding tests:
   - `mintSites`: `withTenant`.
   - `implicitQueries`: `PgPool.q`, `PgPool.query`, `withPgTransaction`, which take their tenant from the binding, and `PgPool.pool` and `PgPool.sessionPool`, which hand out raw connections with no tenant at all.
   - `ambientReads`: `boundTenant`, `currentTenant` and `ambientTenant`.

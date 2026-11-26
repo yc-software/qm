@@ -4,7 +4,7 @@ import type { PersonaService } from "../personas/persona-service.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { Mailer } from "../../plugins/chassis/src/resend.ts";
+import type { Mailer } from "../../common/resend.ts";
 import type { AppInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus, SubscribeOptions } from "../util/event-bus.ts";

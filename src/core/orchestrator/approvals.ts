@@ -21,7 +21,7 @@ import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
 import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
-import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { isSensitiveKey, redactSecrets } from "../../../common/redact-secrets.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,

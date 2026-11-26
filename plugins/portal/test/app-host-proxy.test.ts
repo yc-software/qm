@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { proxyToAppHost, relayUpgradeToAppHost } from "../src/proxy.ts";
-import { responseOnSocket } from "../../chassis/src/websocket-relay.ts";
+import { responseOnSocket } from "../../../common/websocket-relay.ts";
 
 const upgrades: Array<Record<string, string | string[] | undefined>> = [];
 const upstream = createServer(async (req, res) => {

@@ -19,7 +19,7 @@ RUN npm ci --no-audit --no-fund
 COPY plugins/web-ui/index.html plugins/web-ui/shared.html plugins/web-ui/vite.config.ts plugins/web-ui/tsconfig.json ./
 COPY plugins/web-ui/public ./public
 COPY plugins/web-ui/src ./src
-COPY plugins/chassis/src /app/plugins/chassis/src
+COPY common /app/common
 COPY docs/images/slack-app-config-token-setup.gif /app/docs/images/slack-app-config-token-setup.gif
 RUN npm run build
 
@@ -41,7 +41,7 @@ COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/frontmatter.t
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
 COPY plugins/onboarding ./plugins/onboarding
-COPY plugins/chassis ./plugins/chassis
+COPY common ./common
 COPY plugins/auth/src ./plugins/auth/src
 COPY plugins/portal/src ./plugins/portal/src
 COPY desktop/assets/becalmed-off-halfway-rock.webp ./desktop/assets/becalmed-off-halfway-rock.webp

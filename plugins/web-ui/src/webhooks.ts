@@ -2,7 +2,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { Check, ChevronDown, Pencil, Plus } from "lucide";
 import { live } from "lit/directives/live.js";
 import { api } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";

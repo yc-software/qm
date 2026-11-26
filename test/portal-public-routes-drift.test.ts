@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isAppGitRoute } from "../plugins/chassis/src/app-git.ts";
+import { isAppGitRoute } from "../common/app-git.ts";
 import { matchPublicPassthrough } from "../plugins/portal/src/public-passthrough.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
 

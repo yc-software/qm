@@ -4,7 +4,7 @@ import type { LoopItemLedger } from "../item-ledger.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import { personalScope } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { isResolved } from "../ledger-view.ts";
 import { draftOf, isObj } from "../sources/adapter.ts";
 import { INBOX_LEDGER_MAX_ITEMS, INBOX_LEDGER_RETENTION_MS } from "../inbox-loop.ts";

@@ -23,7 +23,7 @@ import type { SkillResolution } from "../../skills/skill-store.ts";
 import { createTurnSkills } from "../../skills/turn-skills.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
-import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import { tracePhase } from "../../../common/error-reporting.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
 const SCOPED = "scoped";

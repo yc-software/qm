@@ -10,7 +10,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { PassThrough, Readable } from "node:stream";
-import { relayStream } from "../plugins/chassis/src/http.ts";
+import { relayStream } from "../common/http.ts";
 
 const uncaught: unknown[] = [];
 const onUncaught = (e: unknown): void => void uncaught.push(e);

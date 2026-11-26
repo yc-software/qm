@@ -1,5 +1,5 @@
 import { LRUCache } from "lru-cache";
-import { swallow } from "../../chassis/src/errors";
+import { swallow } from "../../../common/errors";
 import { fetchTranscript, TAIL_TURNS, type TranscriptPage } from "./core-bridge";
 
 const cache = new LRUCache<string, TranscriptPage>({ max: 40 });

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { canonicalPayload } from "../common/source-auth-sign.ts";
+import { signedHeaders } from "../common/core-client.ts";
 import { requestPort } from "../plugins/portal/src/proxy.ts";
 import { createAdminService, parseAdminGrants } from "../src/admin/admin-service.ts";
 import { createAdminGrantStore } from "../src/admin/admin-grant-store.ts";

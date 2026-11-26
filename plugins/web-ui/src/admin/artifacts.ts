@@ -4,7 +4,7 @@ import { cronScheduleDetail, cronScheduleSummary } from "../cron-format.ts";
 import { bareCard, card, denseList as dense, empty, pageHeader, type Header } from "./shared.ts";
 import { VIEW_TITLE, type AdminPage } from "./sections.ts";
 import { load, orgWide, plural, scopeName, scopeRows, scopeSelect, when } from "./activity.ts";
-import { errChain } from "../../../chassis/src/errors.ts";
+import { errChain } from "../../../../common/errors.ts";
 
 type Row = Record<string, any>;
 const queries = new Map<string, string>();

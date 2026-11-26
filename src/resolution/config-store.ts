@@ -10,7 +10,7 @@ import { composeSecurityPosture, type SecurityPosture } from "../security/securi
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import type { SpendLimit } from "../ratelimit/spend-limits.ts";
-import type { ActivitySeeds } from "../../plugins/chassis/src/suggested-activities.ts";
+import type { ActivitySeeds } from "../../common/suggested-activities.ts";
 import {
   deriveConnectorKey,
   toPublicConnectorClient,

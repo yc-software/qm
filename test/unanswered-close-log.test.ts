@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { test } from "node:test";
 import { format } from "node:util";
-import { logUnansweredCloses } from "../plugins/chassis/src/http.ts";
+import { logUnansweredCloses } from "../common/http.ts";
 
 async function capture(run: (port: number) => Promise<void>): Promise<string[]> {
   const lines: string[] = [];

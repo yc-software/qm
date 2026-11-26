@@ -1,15 +1,9 @@
-import { REQUEST_ID_HEADERS, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
-import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
+import { REQUEST_ID_HEADERS, reportBackendError } from "../../common/error-reporting.ts";
+import { errChain as errMessage, errDetail, failureCode } from "../../common/errors.ts";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
 import { isProviderDecision } from "../core/turn-error.ts";
 
-export {
-  errChain as errMessage,
-  errMessage as errText,
-  failureCode,
-  swallow,
-  swallowAs,
-} from "../../plugins/chassis/src/errors.ts";
+export { errChain as errMessage, errMessage as errText, failureCode, swallow, swallowAs } from "../../common/errors.ts";
 
 export function asError(e: unknown): Error {
   return e instanceof Error ? e : new Error(errMessage(e), { cause: e });

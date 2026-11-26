@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { History, RotateCcw } from "lucide";
 import { api, type ProjectIcon } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { icon } from "./icons";
 import { projectIconTpl } from "./project-icon";
 

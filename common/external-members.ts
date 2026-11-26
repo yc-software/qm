@@ -13,7 +13,7 @@ export async function coreEmailAdmission(
   coreApiUrl: string,
   signingSecret: string | undefined,
   email: string,
-  label = "chassis",
+  label = "common",
   headers: Record<string, string> = {},
 ): Promise<EmailAdmission> {
   const path = withSourceAuthNonce(`${EMAIL_ALLOWED_PATH}?email=${encodeURIComponent(email)}`, signingSecret);
@@ -40,7 +40,7 @@ export async function coreEmailAllowed(
   coreApiUrl: string,
   signingSecret: string | undefined,
   email: string,
-  label = "chassis",
+  label = "common",
 ): Promise<boolean> {
   return (await coreEmailAdmission(coreApiUrl, signingSecret, email, label)).allowed;
 }

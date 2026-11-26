@@ -46,7 +46,7 @@ import {
   fetchSessionRow,
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
-import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
+import { errMessage, swallow, swallowAs } from "../../../common/errors";
 import { brandMark, brandName, closeFormMenus, toggleFormMenu } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
 import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";

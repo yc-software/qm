@@ -2,8 +2,8 @@ import type * as Browser from "@sentry/browser";
 import type { init } from "@sentry/browser";
 import type { Me } from "./shell-state";
 import { parseDeepLink, UI_BASE } from "./deep-link.ts";
-import { finishTiming, traceStatus, type TimingResult } from "../../chassis/src/timing.ts";
-import { errDetail, swallow } from "../../chassis/src/errors.ts";
+import { finishTiming, traceStatus, type TimingResult } from "../../../common/timing.ts";
+import { errDetail, swallow } from "../../../common/errors.ts";
 
 const MAX_TIMINGS_PER_PAGE = 200;
 const API_RESOURCES = new Set([

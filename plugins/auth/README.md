@@ -30,7 +30,7 @@ authorization code, and the access token are self-contained JWTs sealed with
 purpose-separated keys derived from `AUTH_TOKEN_SECRET`; the id_token is signed
 with the P-256 key in `AUTH_SIGNING_JWK`. Single use — of both the link and the
 code — and the send rate limits are claimed through core's Postgres-backed
-`ReplayDedupe` over the chassis signed core client, so a restart, a blue-green
+`ReplayDedupe` over the signed core client in `common/`, so a restart, a blue-green
 deploy, or a second instance cannot resurrect a spent link. If core cannot record
 a claim the broker fails closed and refuses the sign-in.
 
@@ -53,7 +53,7 @@ Fully supplied email configuration is validated at boot.
 | `AUTH_EMAIL_TRANSPORT` and the chosen transport's variables (below)             | the operator's email provider                                                                                               |
 | `AUTH_LINK_TTL_S`, `AUTH_CODE_TTL_S`, `AUTH_ACCESS_TTL_S`, `AUTH_REQUEST_TTL_S` | optional, capped                                                                                                            |
 | `AUTH_SEND_WINDOW_S`, `AUTH_SEND_LIMIT_PER_EMAIL`, `AUTH_SEND_LIMIT_PER_IP`     | optional                                                                                                                    |
-| `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the chassis core block                                                                                                      |
+| `CORE_API_URL`, `CORE_ORG_ID`, `CORE_SIGNING_SECRET`                            | the `common/` core block                                                                                                    |
 
 The signing key is single, not a set: rotating it means redeploying, and links
 minted by the previous key stop verifying at that moment.

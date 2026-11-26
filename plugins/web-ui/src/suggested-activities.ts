@@ -3,7 +3,7 @@ import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ArrowUpRight, X } from "lucide";
 import { icon } from "./icons";
-import type { SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { SuggestedActivity } from "../../../common/suggested-activities.ts";
 
 const icons: Record<string, string> = {
   schedule: "⏰",

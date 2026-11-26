@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { APP_HANDLE_CHARS, APP_HANDLE_MAX, isAppHandleShape } from "../../../chassis/src/dns-label.ts";
+import { APP_HANDLE_CHARS, APP_HANDLE_MAX, isAppHandleShape } from "../../../../common/dns-label.ts";
 import { cardClass, saveFooter } from "./setting-controls.ts";
 import type { SettingsState } from "./settings.ts";
 

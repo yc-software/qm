@@ -5,7 +5,7 @@ import { canonicalPerson } from "../../directory/person.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSecrets } from "../../../common/redact-secrets.ts";
 import { sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
 import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";

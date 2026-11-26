@@ -1,5 +1,5 @@
-import { clientSurfaceOf } from "../../../plugins/chassis/src/client-surface.ts";
-import { appEditSlug } from "../../../plugins/chassis/src/app-edit.ts";
+import { clientSurfaceOf } from "../../../common/client-surface.ts";
+import { appEditSlug } from "../../../common/app-edit.ts";
 import { LIVE_EDIT_PUBLISH_DELAY_MS } from "../../deploy/live-edits.ts";
 
 const FAILURE_HEADER_LINES = 5;

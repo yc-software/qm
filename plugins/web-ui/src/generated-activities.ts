@@ -1,6 +1,6 @@
-import { parseSuggestedActivities, type SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import { parseSuggestedActivities, type SuggestedActivity } from "../../../common/suggested-activities.ts";
 import { api } from "./core-bridge";
-import { swallowAs } from "../../chassis/src/errors.ts";
+import { swallowAs } from "../../../common/errors.ts";
 import type { Me } from "./shell-state";
 
 const REFRESH_DEBOUNCE_MS = 3_000;

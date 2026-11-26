@@ -27,7 +27,7 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
-import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
+import { FLUSH_MS, traceQueued } from "../../common/error-reporting.ts";
 import { type Tenant, withTenant } from "../tenants/context.ts";
 
 export interface ProcessDeps {

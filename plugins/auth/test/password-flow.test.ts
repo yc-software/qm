@@ -178,7 +178,7 @@ test("password sign-in fails closed when core cannot record attempt claims", asy
     claims: Object.assign(refusingClaimStore(), {
       calls: [] as string[][],
       async claimFirst(): Promise<string | null> {
-        throw new (await import("../../chassis/src/claims.ts")).ClaimStoreUnavailableError("down");
+        throw new (await import("../../../common/claims.ts")).ClaimStoreUnavailableError("down");
       },
     }),
   });

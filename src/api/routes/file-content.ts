@@ -1,5 +1,5 @@
 import parseRange from "range-parser";
-import { relayStream } from "../../../plugins/chassis/src/http.ts";
+import { relayStream } from "../../../common/http.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   contentTypeWithUtf8Charset,

@@ -18,7 +18,7 @@ import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { appHandleCard, appHandleError } from "./settings-app-handle.ts";
 import { runtimesCard } from "./settings-runtimes.ts";
-import { errMessage } from "../../../chassis/src/errors.ts";
+import { errMessage } from "../../../../common/errors.ts";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;

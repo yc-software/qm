@@ -1,4 +1,4 @@
-import type { ActivitySeeds, SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
+import type { ActivitySeeds, SuggestedActivity } from "../../../common/suggested-activities.ts";
 
 export function welcomeActivities(
   seeds: ActivitySeeds,

@@ -55,7 +55,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
-import { errChain, errMessage } from "../../chassis/src/errors";
+import { errChain, errMessage } from "../../../common/errors";
 
 export type InboxSource = "gmail" | "slack" | "generic";
 

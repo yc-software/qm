@@ -18,15 +18,10 @@ import { createAdminCall } from "../tools/admin.ts";
 import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
-import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
-import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
+import { appEditSlug } from "../../common/app-edit.ts";
+import { desktopComputerTool } from "../../common/desktop-computer.ts";
 import { DESKTOP_PERSON_ONLY_TEXT, desktopCallFor } from "../surfaces/desktop-calls.ts";
-import {
-  startDispatchTrace,
-  setRunAttribute,
-  tracePhase,
-  type DispatchTrace,
-} from "../../plugins/chassis/src/error-reporting.ts";
+import { startDispatchTrace, setRunAttribute, tracePhase, type DispatchTrace } from "../../common/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";

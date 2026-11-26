@@ -1,5 +1,5 @@
 import { SettingState } from "./setting-state.ts";
-import { errChain } from "../../../chassis/src/errors.ts";
+import { errChain } from "../../../../common/errors.ts";
 export type Rule = { id: number; pattern: string; decision: string; reason: string };
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;

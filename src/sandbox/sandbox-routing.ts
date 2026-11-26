@@ -1,6 +1,6 @@
 import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
-import { traceElapsed } from "../../plugins/chassis/src/error-reporting.ts";
+import { traceElapsed } from "../../common/error-reporting.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";

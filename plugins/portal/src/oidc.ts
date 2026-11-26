@@ -1,4 +1,4 @@
-import type { EmailAdmission } from "../../chassis/src/external-members.ts";
+import type { EmailAdmission } from "../../../common/external-members.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from "jose";
 

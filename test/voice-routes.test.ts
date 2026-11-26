@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { App } from "../src/api/app-types.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders } from "../common/core-client.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));

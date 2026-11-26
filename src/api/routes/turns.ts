@@ -5,7 +5,7 @@ import { samePerson } from "../../directory/person.ts";
 import { isTerminal } from "../../runs/run-store.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { isClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
+import { isClientSurface } from "../../../common/client-surface.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
 function renderSurfaceBriefing(surface: SurfaceBriefing): string {

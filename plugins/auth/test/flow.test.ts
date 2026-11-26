@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
+import { ClaimStoreUnavailableError } from "../../../common/claims.ts";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWK } from "jose";
 import {
   authorizeQuery,

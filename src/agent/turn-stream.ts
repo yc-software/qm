@@ -2,7 +2,7 @@ import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { piUsageToCallUsage } from "../model/model-runtime.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { Item } from "../sessions/items.ts";
-import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
+import { startPhase } from "../../common/error-reporting.ts";
 import { swallow } from "../util/errors.ts";
 import type { AgentTurnInput } from "./agent.ts";
 import { meterGoalCall, meterGrindCall, type GrindMeter } from "./goal.ts";

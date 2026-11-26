@@ -1,6 +1,6 @@
 import { html, render, nothing, type TemplateResult } from "lit";
 import { api, ApiError } from "./core-bridge";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage } from "../../../common/errors";
 import { brandMark, brandName } from "./ui";
 import { appState } from "./shell-state";
 import { trapDialogFocus, restoreDialogFocus } from "./dialog-focus";
