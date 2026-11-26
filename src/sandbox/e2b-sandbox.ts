@@ -155,6 +155,13 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
   ): Promise<{ session: E2bSession; coldStart: boolean }> {
     return provisionQueue(scope, async () => {
       const adopt = async (session: E2bSession, patch: Partial<StoredE2bSandbox>) => {
+        if (session.memoryDiscarded)
+          reportError(
+            "sandbox_preservation",
+            "memory_snapshot_discarded",
+            `e2b sandbox ${session.sandboxId}: its memory snapshot could not be resumed, so it was cold-booted from disk and its processes were lost`,
+            scope,
+          );
         await store.merge(scope, { ...patch, preservationState: "running", preservationError: undefined });
         sessionByName.set(name, session);
         return { session, coldStart: false };
@@ -394,6 +401,19 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
     listProcesses: procSessions.listProcesses,
     ...execFileOps,
     ...blobStaging,
+
+    async restartComputer(scopeId: string): Promise<void> {
+      const name = sandboxScopeName(prefix, scopeId);
+      scopeByName.set(name, scopeId);
+      return provisionQueue(scopeId, async () => {
+        const stored = await store.get(scopeId);
+        if (!stored) throw new Error("e2b restart: no sandbox provisioned yet");
+        sessionByName.delete(name);
+        pauseFailed.delete(name);
+        await client.restart(stored.sandboxId);
+        await store.merge(scopeId, { preservationState: "running", preservationError: undefined });
+      });
+    },
 
     async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;

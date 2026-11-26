@@ -581,6 +581,14 @@ test("a command whose sandbox is lost mid-flight fails loudly instead of running
   assert.equal(fake.createdCount(scopeName()), 1);
 });
 
+test("restart stops processes but keeps the disk", async () => {
+  const h = await sandbox.provision(scope);
+  await sandbox.run(h, "echo kept > disk.txt; sleep 300 >/dev/null 2>&1 & echo $! > pid");
+  await sandbox.restartComputer!(scope);
+  const r = await sandbox.run(h, "cat disk.txt; kill -0 $(cat pid) 2>/dev/null && echo alive || echo stopped");
+  assert.deepEqual(r.stdout.trim().split("\n"), ["kept", "stopped"]);
+});
+
 test("an egress proxy is advertised as domain enforcement", () => {
   assert.equal(make({ egressProxyUrl: "https://proxy.example.com" }).profile.egressEnforcement, "domain");
   assert.equal(make().profile.egressEnforcement, "none");
