@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { approvalView } from "../src/core/orchestrator/approvals.ts";
+import { approvalView, decisionBody } from "../src/core/orchestrator/approvals.ts";
 
 const token = "gho_" + "Xq7Lm2Pz9Rt4Vw8Ky3Nb6Hc1Jd5Fg0Sa2Ue7";
 
@@ -23,5 +23,14 @@ test("an approval shown to a person masks literal tokens and nothing else", () =
   assert.deepEqual(view.call?.input, {
     sandbox_id: "79ef6ac8-10a3-4415-83e7-0cebcd2b90a4",
     header: "Authorization: Bearer [redacted]",
+  });
+});
+
+test("a decision keeps the call it decided, so approved and declined rows name the same tool", () => {
+  const call = { tool: "slack_api_write_as_you", input: { method: "chat.postMessage", token } };
+  assert.deepEqual(decisionBody({ sessionId: "s1", command: "slack_api_write_as_you {}", summary: call.tool, call }), {
+    command: "slack_api_write_as_you {}",
+    summary: call.tool,
+    call: { tool: call.tool, input: { method: "chat.postMessage", token: "[redacted]" } },
   });
 });
