@@ -320,6 +320,7 @@ test("shell-evaluated payloads and ANSI-C words cannot bypass command rules", ()
   }
   assert.equal(evaluateCommand("bash -c 'echo \"rm -rf /tmp/x\"'", org).decision, "allow");
   assert.equal(evaluateCommand("printf '%s' 'bash -c rm -rf /tmp/x'", org).decision, "allow");
+  assert.equal(evaluateCommand("echo $'\\U00110000'", org).decision, "allow");
 
   const policy: CommandPolicy = { mode: "denylist", rules: [] };
   const layer: CommandRule[] = [{ pattern: "\\bacmecli\\s+tool\\s+query_database\\b", decision: "require_approval" }];
@@ -328,6 +329,8 @@ test("shell-evaluated payloads and ANSI-C words cannot bypass command rules", ()
     "eval 'acmecli tool query_database'",
     "acmecli $'tool' query_database",
     "acmecli $'to\\x6fl' query_database",
+    "acmecli $'to\\u6fl' query_database",
+    "acmecli $'to\\U6fl' query_database",
   ]) {
     assert.equal(evaluateCommandWithLayer(command, policy, layer).decision, "require_approval", command);
   }
@@ -346,6 +349,10 @@ test("literal stdin executed by a shell and simple command variables stay inside
     `env -S "printf 'rm -rf /tmp/x\\n'" | bash`,
     `printf 'rm -rf /tmp/x\\n' | env -S "bash /dev/stdin"`,
     `echo -e 'rm\\x20-rf /tmp/x\\n' | bash`,
+    `echo -e '\\u72\\u6d -rf /tmp/x\\n' | bash`,
+    `echo -e '\\0162\\0155 -rf /tmp/x\\n' | bash`,
+    `printf '%b\\n' '\\0162\\0155 -rf /tmp/x' | bash`,
+    `printf '\\U72\\U6d -rf /tmp/x\\n' | bash`,
     `printf 'rm -rf /tmp/x\\n' | stdbuf -oL bash`,
     `bash <<< 'rm -rf /tmp/x'`,
     `bash<<<'rm -rf /tmp/x'`,
