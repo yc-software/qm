@@ -12,23 +12,21 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
-import { webNotificationsOn } from "../../notifications/web-push.ts";
+import { webNotificationsOn } from "../../notifications/reply-notifications.ts";
+import { personalScope } from "../../types.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
   browserErrors?: ReturnType<typeof browserErrorConfig>;
-  welcomeCohort?: string;
   suggestedActivities: SuggestedActivity[];
 }
 
 export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
-  const welcomeCohort = env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
   const { analytics } = analyticsHookConfig(env.WEB_UI_ANALYTICS);
   const browserErrors = browserErrorConfig(env);
   return {
     ...(analytics ? { analytics } : {}),
     ...(browserErrors ? { browserErrors } : {}),
-    ...(welcomeCohort ? { welcomeCohort } : {}),
     suggestedActivities: parseSuggestedActivities(env.WEB_UI_SUGGESTED_ACTIVITIES),
   };
 }
@@ -65,6 +63,7 @@ async function me(ctx: ApiCtx): Promise<void> {
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
     user,
+    personalScope: personalScope(user),
     org: orgId(),
     companyName: branding.orgName?.trim() || null,
     workspace: tenancyBooted() && !bootTenant() ? branding.orgName?.trim() || null : null,
@@ -81,7 +80,6 @@ async function me(ctx: ApiCtx): Promise<void> {
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
     ...(teammate ? { teammate } : {}),
-    ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(starters.welcome ? { welcome: starters.welcome } : {}),
     ...(starters.activities.length && !generated ? { suggestedActivities: starters.activities } : {}),

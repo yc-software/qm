@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
-import { buildApp, serverDeps } from "./wiring.ts";
+import { buildApp } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
@@ -65,7 +65,6 @@ export async function startQm(
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
   const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
-  if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -93,9 +92,11 @@ export async function startQm(
           ),
         };
   const server = createServer(built.app, {
-    ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
+    ...built,
+    slackEnvironmentState,
+    slackEnvBotToken: slackConfig?.botToken,
     managedSlack,
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    openaiApiKey: config.openaiApiKey,
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
@@ -111,8 +112,7 @@ export async function startQm(
 
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
-    await built.deploymentLayerReady;
-    built.deploymentLayerRefresh.start();
+    await built.deploymentLayerReady();
   });
   server.listen(config.port);
   await once(server, "listening");
@@ -296,7 +296,6 @@ export async function startQm(
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-      built.deploymentLayerRefresh.stop();
       await built.runtime.stop({
         fatal,
         beforeClose: async () => {

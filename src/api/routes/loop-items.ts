@@ -213,7 +213,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   const slackHosted = host === "slack.com" || host.endsWith(".slack.com");
   let authHeader: Record<string, string> = {};
   if (slackHosted) {
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     const token = tokens
       ? ((await tokens.connectorAccessToken("slack.com", loop.owner, "personal")) ??
         (await tokens.connectorAccessToken("slack.com", loop.owner)))
@@ -369,7 +369,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
       });
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
     if (!decisionToken)

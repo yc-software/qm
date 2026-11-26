@@ -1,7 +1,7 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { GrantedHandle, Principal, ScopeId } from "../types.ts";
-import { parseScopeId, personalScope } from "../types.ts";
+import { parseScopeId, personalScope, scopeLabel } from "../types.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
 import type { IsCurrentSharedScopeMember } from "./scope-membership.ts";
 import type { SharingPosture } from "./sharing-posture.ts";
@@ -72,7 +72,7 @@ export async function sharingSourcesForTurn(input: SharingSourcesInput): Promise
 }
 
 function handleSource(scope: ScopeId): string {
-  return scope.replace(/[^A-Za-z0-9._-]+/g, "-");
+  return scopeLabel(scope).replace(/[^A-Za-z0-9._-]+/g, "-");
 }
 
 function handlePath(path: string): string {

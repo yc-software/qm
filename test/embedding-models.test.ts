@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -27,6 +26,7 @@ import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { loadTenant } from "../src/tenants/cache.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const definition = {
   kind: "embedding",
@@ -161,7 +161,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   });
   await built.modelRegistry.upsert(definition, "admin");
   assert.ok(await loadTenant().then(() => resolveEmbeddingModel(definition.id)));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;
@@ -179,8 +179,8 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   const view = (await models.json()) as { memoryEmbeddingModel: string; memoryEmbeddingOptions: { id: string }[] };
   assert.equal(view.memoryEmbeddingModel, definition.id);
   assert.ok(view.memoryEmbeddingOptions.some((model) => model.id === definition.id));
-  await built.memory.capture("personal:test", ["first fact"], Date.now());
-  assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
+  await built.memory.capture(personalScope("test"), ["first fact"], Date.now());
+  assert.match(recallText(await built.memory.recall(personalScope("test"), { query: "first" })), /first fact/);
   assert.equal((await put({ modelId: "gpt-5.5" })).status, 400);
   assert.equal((await put({ modelId: null })).status, 200);
   assert.equal(await built.config.getEmbeddingModelDurable(), null);

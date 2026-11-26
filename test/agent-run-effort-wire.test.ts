@@ -5,6 +5,7 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { createModelRoutes } from "../src/model/model-route.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { personalScope } from "../src/types.ts";
 
 for (const [modelId, upper, allowed, off, minimal] of [
   ["gpt-5.4", "xhigh", ["none", "low", "medium", "high", "xhigh"], "none", "low"],
@@ -150,7 +151,7 @@ for (const [modelId, upper, allowed, off, minimal] of [
           systemPrompt: "Reply ok.",
           history: [],
           tools: { attach: async () => ({ ok: true, files: [], staged: 0 }) } as unknown as AgentTurnInput["tools"],
-          scopeLabel: "personal:test",
+          scopeLabel: personalScope("test"),
           orgScopeId: "org:test",
           runtime: { effortLevel },
           emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as never,

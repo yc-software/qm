@@ -2,8 +2,9 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
+import { personalScope } from "../src/types.ts";
 
-const OWN = "personal:alice";
+const OWN = personalScope("alice");
 
 function fixture(
   over: {

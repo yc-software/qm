@@ -1,3 +1,4 @@
+import { isObj } from "../util/objects.ts";
 import { LRUCache } from "lru-cache";
 
 export const SLACK_STATUS_TASK_PREFIX = "qm_status:";
@@ -10,63 +11,41 @@ export function isOwnSlackMessage(
   return Boolean((botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId));
 }
 
-export function isStatusChromeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") return false;
-  const b = block as {
-    type?: unknown;
-    task_id?: unknown;
-    tasks?: unknown;
-    block_id?: unknown;
-  };
-  if (b.type === "task_card") {
-    return typeof b.task_id === "string" && b.task_id.startsWith(SLACK_STATUS_TASK_PREFIX);
-  }
-  if (b.type === "plan") {
-    if (typeof b.block_id === "string" && b.block_id.startsWith(SLACK_STATUS_TASK_PREFIX)) return true;
-    return (
-      Array.isArray(b.tasks) &&
-      b.tasks.some(
-        (t) =>
-          !!t &&
-          typeof t === "object" &&
-          typeof (t as { task_id?: unknown }).task_id === "string" &&
-          (t as { task_id: string }).task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
-      )
-    );
-  }
-  return false;
+interface StatusBearing {
+  user?: string;
+  bot_id?: string;
+  blocks?: unknown[];
+  text?: string;
 }
 
-export function isOwnStatusCard(
-  msg: { bot_id?: unknown; user?: unknown; blocks?: unknown },
-  botUserId?: string,
-  ownBotId?: string,
+const isStatusBlock = (block: unknown): boolean =>
+  isObj(block) && typeof block.task_id === "string" && block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX);
+
+const carriesStatus = (message: StatusBearing): boolean =>
+  Array.isArray(message.blocks) && message.blocks.some(isStatusBlock);
+
+export function isOwnStatusCard(message: StatusBearing, botUserId: string, ownBotId = ""): boolean {
+  return (
+    isOwnSlackMessage(message, botUserId, ownBotId) &&
+    carriesStatus(message) &&
+    (message.blocks ?? []).every(isStatusBlock)
+  );
+}
+
+export function isOwnStatusEvent(
+  event: StatusBearing & { message?: StatusBearing; previous_message?: StatusBearing },
+  botUserId: string,
+  ownBotId = "",
 ): boolean {
-  if (
-    !isOwnSlackMessage(
-      {
-        user: typeof msg.user === "string" ? msg.user : undefined,
-        bot_id: typeof msg.bot_id === "string" ? msg.bot_id : undefined,
-      },
-      botUserId ?? "",
-      ownBotId ?? "",
-    ) ||
-    !Array.isArray(msg.blocks) ||
-    msg.blocks.length === 0
-  )
-    return false;
-  let hasStatus = false;
-  for (const block of msg.blocks) {
-    if (isStatusChromeBlock(block)) {
-      hasStatus = true;
-      continue;
-    }
-    if (block && typeof block === "object" && (block as { type?: unknown }).type === "context") {
-      continue;
-    }
-    return false;
-  }
-  return hasStatus;
+  const { message: now, previous_message: was } = event;
+  if (isOwnStatusCard(now ?? was ?? event, botUserId, ownBotId)) return true;
+  return Boolean(
+    now &&
+    was &&
+    isOwnSlackMessage(now, botUserId, ownBotId) &&
+    now.text === was.text &&
+    (carriesStatus(now) || carriesStatus(was)),
+  );
 }
 
 export function mentionsBot(text: string, botUserId: string): boolean {

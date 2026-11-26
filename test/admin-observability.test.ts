@@ -12,6 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { isAgentReply, isUserItem, type Item } from "../src/sessions/items.ts";
+import { personalScope } from "../src/types.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -247,7 +248,7 @@ test("batched capture reads retain exact session and turn pairs", async () => {
   const s = start();
   try {
     const sessions = await Promise.all(
-      ["a", "b"].map((id) => s.built.sessions.getOrCreateByThread(`web:batch:${id}`, "dm", "personal:batch")),
+      ["a", "b"].map((id) => s.built.sessions.getOrCreateByThread(`web:batch:${id}`, "dm", personalScope("batch"))),
     );
     for (const session of sessions)
       for (const turnSeq of [1, 2])
@@ -306,7 +307,12 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     });
 
     const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
+      destination: {
+        type: "principal",
+        target: "U-erica",
+        audienceScopeId: personalScope("U-erica"),
+        onBehalfOf: "U-alice",
+      },
       text: "The script ran clean and posted the digest DM.",
       attachments: [
         {
@@ -353,7 +359,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
 
     const scopedRead = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-erica")}`,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent(personalScope("U-erica"))}`,
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
@@ -421,7 +427,12 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     assert.equal(sourceBody.origin.fireKey, fireKey);
 
     const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
+      destination: {
+        type: "principal",
+        target: "U-erica",
+        audienceScopeId: personalScope("U-erica"),
+        onBehalfOf: "U-alice",
+      },
       text: "Webhook alert triaged.",
       idempotencyKey: "delivery:non-cron-key",
       provenance: {
@@ -456,7 +467,7 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
 
     const scopedRead = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-erica")}`,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent(personalScope("U-erica"))}`,
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
@@ -469,7 +480,7 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
       destination: {
         type: "principal",
         target: "U-mismatch",
-        audienceScopeId: "personal:U-mismatch",
+        audienceScopeId: personalScope("U-mismatch"),
         onBehalfOf: "U-alice",
       },
       text: "Mismatched legacy provenance.",
@@ -507,7 +518,12 @@ test("a live conversation post's provenance joins its source session but renders
     const sourceScope = "channel:C-live";
     const source = await s.built.sessions.getOrCreateByThread("slack/C-live:171.5", "channel", sourceScope, "live");
     const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
+      destination: {
+        type: "principal",
+        target: "U-erica",
+        audienceScopeId: personalScope("U-erica"),
+        onBehalfOf: "U-alice",
+      },
       text: "forwarding this from the channel",
       idempotencyKey: "post:live:1",
       provenance: {
@@ -574,7 +590,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
   const s = start();
   try {
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U-carol",
+      ownerScopeId: personalScope("U-carol"),
       owner: "U-carol",
       createdBy: "U-carol",
       schedule: { everyMs: 60_000 },
@@ -582,7 +598,12 @@ test("principal deliveries render as delivery events and later DM turns get stru
       message: "the deploy is done",
     });
     const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
+      destination: {
+        type: "principal",
+        target: "U-alice",
+        audienceScopeId: personalScope("U-alice"),
+        onBehalfOf: "U-carol",
+      },
       text: "the deploy is done",
       attachments: [
         {
@@ -626,7 +647,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
 
     const scopedTx = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=${encodeURIComponent("personal:U-alice")}`,
+      `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=${encodeURIComponent(personalScope("U-alice"))}`,
     );
     assert.equal(scopedTx.status, 200);
     const scopedBody = (await scopedTx.json()) as any;
@@ -660,7 +681,7 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
     const source = await s.built.sessions.getOrCreateByThread(
       `agent:main:monitor:${monitorId}`,
       "dm",
-      "personal:U-carol",
+      personalScope("U-carol"),
     );
     const writer = { sessionId: source.id };
     const sourceUser = await s.built.sessions.append(writer, {
@@ -675,19 +696,24 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
       turnSeq: sourceUser.seq,
       step: 0,
       model: "mock",
-      scopeLabel: "personal:U-carol",
+      scopeLabel: personalScope("U-carol"),
       promptEnvelope: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
       truncated: false,
     });
     const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
+      destination: {
+        type: "principal",
+        target: "U-alice",
+        audienceScopeId: personalScope("U-alice"),
+        onBehalfOf: "U-carol",
+      },
       text: "Approval is due.",
       idempotencyKey: `monitor:${monitorId}:42`,
       provenance: {
         trigger: "monitor",
         surface: "monitor",
         fireKey: `monitor:${monitorId}:42`,
-        sourceScopeId: "personal:U-carol",
+        sourceScopeId: personalScope("U-carol"),
         sourceThreadRef: `agent:main:monitor:${monitorId}`,
         sourceSessionId: source.id,
         sourceUserSeq: sourceUser.seq,
@@ -719,7 +745,7 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
 
     const scopedRead = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-alice")}`,
+      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent(personalScope("U-alice"))}`,
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
@@ -982,19 +1008,19 @@ test("cron fire rows carry the fire's result digest from the cron's fire log", a
 test("session deep links resolve by id even when the scope filter does not match", async () => {
   const s = start();
   try {
-    const sess = await s.built.sessions.getOrCreateByThread("dm:U9:t1", "dm", "personal:U9");
+    const sess = await s.built.sessions.getOrCreateByThread("dm:U9:t1", "dm", personalScope("U9"));
     const mismatched = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(sess.id)}?scope=${encodeURIComponent("personal:someone-else")}`,
+      `/v1/admin/sessions/${encodeURIComponent(sess.id)}?scope=${encodeURIComponent(personalScope("someone-else"))}`,
     );
     assert.equal(mismatched.status, 200, "a stale or mismatched scope param cannot break a session link");
     const body = (await mismatched.json()) as any;
     assert.equal(body.session.id, sess.id);
-    assert.equal(body.session.scopeId, "personal:U9");
+    assert.equal(body.session.scopeId, personalScope("U9"));
 
     const llm = await get(
       s.base,
-      `/v1/admin/sessions/${encodeURIComponent(sess.id)}/llm?scope=${encodeURIComponent("personal:someone-else")}`,
+      `/v1/admin/sessions/${encodeURIComponent(sess.id)}/llm?scope=${encodeURIComponent(personalScope("someone-else"))}`,
     );
     assert.equal(llm.status, 200);
   } finally {
@@ -1074,7 +1100,7 @@ test("the files listing filters by name server-side with q", async () => {
 
 test("a saved document is read and downloaded by artifact id", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-doc-")) }));
-  const scope = "personal:U1";
+  const scope = personalScope("U1");
   await built.files.put({
     id: "csv-1",
     ownerScopeId: scope,
@@ -1447,7 +1473,7 @@ test("admin errors paginate all retained records with scoped totals and bounded 
         category: "turn",
         code: String(i),
         message: "failure",
-        scopeLabel: "personal:U1",
+        scopeLabel: personalScope("U1"),
         sessionId: "test-session",
       });
       await s.built.errors.flush();
@@ -1456,7 +1482,7 @@ test("admin errors paginate all retained records with scoped totals and bounded 
       category: "turn",
       code: "other",
       message: "failure",
-      scopeLabel: "personal:U2",
+      scopeLabel: personalScope("U2"),
     });
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");

@@ -9,6 +9,7 @@ import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 
@@ -36,11 +37,11 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
 
 test("each notebook keeps its own semantic order under one heading, in scope order", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.7 local near tie", "0.1 irrelevant local"], AT);
+  await base.capture(personalScope("a"), ["0.7 local near tie", "0.1 irrelevant local"], AT);
   await base.capture("channel:b", ["0.72 remote near tie", "0.99 remote best"], AT);
-  await base.capture("personal:forbidden", ["1 never authorized"], AT);
+  await base.capture(personalScope("forbidden"), ["1 never authorized"], AT);
   const out = renderRecall(
-    await recallAcrossScopes(memory, ["personal:a", "channel:b"], {
+    await recallAcrossScopes(memory, [personalScope("a"), "channel:b"], {
       query: "verify",
     }),
     new Map(),
@@ -55,9 +56,9 @@ test("each notebook keeps its own semantic order under one heading, in scope ord
 
 test("global packing counts source labels, skips oversized rows, deduplicates, and doesn't pad weak facts", async (t) => {
   const { base, memory } = await fixture(t);
-  await base.capture("personal:a", [`0.9 ${"x".repeat(6100)}`, "0.8 duplicate", "0.1 weak"], AT);
+  await base.capture(personalScope("a"), [`0.9 ${"x".repeat(6100)}`, "0.8 duplicate", "0.1 weak"], AT);
   await base.capture("channel:b", ["0.8 duplicate", "0.85 remote high"], AT);
-  const scopes = ["personal:a", "channel:b", "personal:a"];
+  const scopes = [personalScope("a"), "channel:b", personalScope("a")];
   const out = renderRecall(
     await recallAcrossScopes(memory, scopes, {
       query: "verify",
@@ -75,7 +76,7 @@ test("global packing counts source labels, skips oversized rows, deduplicates, a
 
 test("provider routing excludes recall-disabled routes and embeds the query once", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.6 local"], AT);
+  await base.capture(personalScope("a"), ["0.6 local"], AT);
   await base.capture("channel:b", ["0.99 remote"], AT);
   const routed = createRoutedMemoryService({
     providers: {
@@ -93,7 +94,7 @@ test("provider routing excludes recall-disabled routes and embeds the query once
     ],
   });
   const out = renderRecall(
-    await recallAcrossScopes(routed, ["personal:a", "channel:b"], {
+    await recallAcrossScopes(routed, [personalScope("a"), "channel:b"], {
       query: "verify",
     }),
     new Map(),
@@ -115,7 +116,8 @@ test("a provider block keeps its repeated lines, escapes every line and stays in
       { provider: "external", scopes: ["personal"], manage: false },
     ],
   });
-  const render = async () => renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "x" }), new Map());
+  const render = async () =>
+    renderRecall(await recallAcrossScopes(routed, [personalScope("a")], { query: "x" }), new Map());
   assert.equal(await render(), `### personal:a · external\n\`\`\`untrusted-data\n${structured}\n\`\`\``);
   text = hostile;
   const out = await render();
@@ -141,13 +143,13 @@ test("many large notebooks still share one 6000 character maximum", async (t) =>
 test("grep interleaves notebooks and scope-targeted queries can reach later results", async (t) => {
   const { base } = await fixture(t);
   await base.capture(
-    "personal:a",
+    personalScope("a"),
     Array.from({ length: 50 }, (_, i) => `match local ${i}`),
     AT,
   );
   await base.capture("channel:b", ["match remote"], AT);
-  assert.deepEqual(await searchAcrossScopes(base, ["personal:a", "channel:b"], "match", 2), [
-    { scopeId: "personal:a", fact: "#1 (2026-10-01) match local 0" },
+  assert.deepEqual(await searchAcrossScopes(base, [personalScope("a"), "channel:b"], "match", 2), [
+    { scopeId: personalScope("a"), fact: "#1 (2026-10-01) match local 0" },
     { scopeId: "channel:b", fact: "#51 (2026-10-01) match remote" },
   ]);
   assert.deepEqual(await searchAcrossScopes(base, ["channel:b"], "match", 2), [
@@ -157,7 +159,7 @@ test("grep interleaves notebooks and scope-targeted queries can reach later resu
 
 test("candidate routing preserves fail-open/fail-closed providers without embedding their text", async (t) => {
   const { base, memory, calls } = await fixture(t);
-  await base.capture("personal:a", ["0.8 local fact"], AT);
+  await base.capture(personalScope("a"), ["0.8 local fact"], AT);
   const external = { ...base, recall: async () => [{ text: "External provider answer" }] };
   const failing = {
     ...base,
@@ -167,14 +169,14 @@ test("candidate routing preserves fail-open/fail-closed providers without embedd
   };
   const providers = { default: memory, external, failing };
   const routes = [
-    { provider: "default", scopes: ["personal:a"] },
+    { provider: "default", scopes: [personalScope("a")] },
     { provider: "external", scopes: ["channel:b"] },
     { provider: "failing", scopes: ["channel:c"], failOpen: true },
   ];
   const out = renderRecall(
     await recallAcrossScopes(
       createRoutedMemoryService({ providers, routes }),
-      ["personal:a", "channel:b", "channel:c"],
+      [personalScope("a"), "channel:b", "channel:c"],
       { query: "verify" },
     ),
     new Map(),
@@ -195,7 +197,7 @@ test("candidate routing preserves fail-open/fail-closed providers without embedd
 test("a recall-only provider's block gets one heading and fills the remaining budget", async (t) => {
   const { base } = await fixture(t);
   await base.capture(
-    "personal:a",
+    personalScope("a"),
     Array.from({ length: 60 }, (_, i) => `old fact ${i} ${"x".repeat(100)}`),
     AT,
   );
@@ -208,14 +210,14 @@ test("a recall-only provider's block gets one heading and fills the remaining bu
       { provider: "external", scopes: ["personal"], manage: false },
     ],
   });
-  const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "x" }), new Map());
+  const out = renderRecall(await recallAcrossScopes(routed, [personalScope("a")], { query: "x" }), new Map());
   assert.match(out, /\n### personal:a · external\n```untrusted-data\nEXTERNAL BLOCK/);
   assert.equal(out.match(/### /g)?.length, 2);
 });
 
 test("an external block that fills its maxChars is trimmed to the remaining budget, not dropped", async (t) => {
   const { base } = await fixture(t);
-  await base.capture("personal:a", ["notebook fact"], AT);
+  await base.capture(personalScope("a"), ["notebook fact"], AT);
   const external = {
     ...base,
     recall: async (_scope: string, context?: { maxChars?: number }) => [
@@ -229,25 +231,31 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
       { provider: "external", scopes: ["personal"], manage: false },
     ],
   });
-  const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "q", maxChars: 6000 }), new Map());
+  const out = renderRecall(
+    await recallAcrossScopes(routed, [personalScope("a")], { query: "q", maxChars: 6000 }),
+    new Map(),
+  );
   assert.match(out, /zzzz/);
   assert.ok(out.length <= 6000);
 });
 
 test("facts captured in a session are not recalled or searched back into that session", async (t) => {
   const { base, memory } = await fixture(t);
-  await base.capture("personal:a", ["0.9 said in session S"], AT, undefined, { mode: "automatic", sessionId: "S" });
-  await base.capture("personal:a", ["0.8 said elsewhere"], AT);
+  await base.capture(personalScope("a"), ["0.9 said in session S"], AT, undefined, {
+    mode: "automatic",
+    sessionId: "S",
+  });
+  await base.capture(personalScope("a"), ["0.8 said elsewhere"], AT);
   const recalled = async (sessionId?: string) =>
-    (await recallAcrossScopes(memory, ["personal:a"], { query: "verify", ...(sessionId ? { sessionId } : {}) })).map(
-      (fact) => fact.text,
-    );
+    (
+      await recallAcrossScopes(memory, [personalScope("a")], { query: "verify", ...(sessionId ? { sessionId } : {}) })
+    ).map((fact) => fact.text);
   assert.deepEqual(await recalled("S"), ["- (2026-10-01) 0.8 said elsewhere"]);
   assert.deepEqual(await recalled("T"), ["- (2026-10-01) 0.9 said in session S", "- (2026-10-01) 0.8 said elsewhere"]);
   assert.deepEqual(await recalled(), await recalled("T"));
   const searched = async (sessionId?: string) =>
-    (await searchAcrossScopes(memory, ["personal:a"], "said", 20, sessionId ? { sessionId } : undefined)).map((hit) =>
-      hit.fact.replace(/^#\d+ /, ""),
+    (await searchAcrossScopes(memory, [personalScope("a")], "said", 20, sessionId ? { sessionId } : undefined)).map(
+      (hit) => hit.fact.replace(/^#\d+ /, ""),
     );
   assert.deepEqual(await searched("S"), ["(2026-10-01) 0.8 said elsewhere"]);
   assert.deepEqual(await searched("T"), ["(2026-10-01) 0.9 said in session S", "(2026-10-01) 0.8 said elsewhere"]);

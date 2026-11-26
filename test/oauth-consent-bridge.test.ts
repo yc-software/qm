@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps, type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { PROVIDERS, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -15,6 +15,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 
@@ -25,8 +26,8 @@ async function start(
   opts: { portalUrl?: string } = { portalUrl: "http://callback.test" },
 ): Promise<{
   base: string;
-  built: BuiltApp;
-  signOff: ReturnType<typeof signOffs<BuiltApp["sessions"]>>;
+  built: Core;
+  signOff: ReturnType<typeof signOffs<Core["sessions"]>>;
   close: () => Promise<void>;
 }> {
   const config = testConfig({
@@ -51,7 +52,7 @@ async function start(
   const runs = liveRunStore(built.runs);
   const signOff = signOffs(built.sessions);
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     sessions: signOff.sessions,
     runs,
     oauthFetch: fetchImpl,
@@ -65,7 +66,7 @@ const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
   return await mintCapabilityToken(
     {
       actorId,
-      scopeId: opts.scopeId ?? `personal:${actorId}`,
+      scopeId: opts.scopeId ?? personalScope(actorId),
       aud: OAUTH_CONSENT_AUD,
       ...liveRunClaims(actorId),
       exp: Date.now() + CAPABILITY_TTL_MS,
@@ -271,7 +272,7 @@ test("the consent-mint route takes only an oauth-consent token carrying a person
   const srv = await start();
   try {
     await selectDefaultSandbox(srv.built, "U1", "channel:C1");
-    await selectDefaultSandbox(srv.built, "release-bot", "personal:release-bot");
+    await selectDefaultSandbox(srv.built, "release-bot", personalScope("release-bot"));
     const outcome = async (cap: string) => {
       const res = await mint(srv.base, cap, { provider: "google" });
       return `${res.status} ${((await res.json()) as { error?: string }).error ?? "minted"}`;
@@ -302,7 +303,7 @@ test("the consent-mint route takes only an oauth-consent token carrying a person
       { surface: "cron", origin: { kind: "automation" } },
     ];
     for (const [i, extra] of turns.entries()) {
-      await selectDefaultSandbox(srv.built, "U1", "personal:U1");
+      await selectDefaultSandbox(srv.built, "U1", personalScope("U1"));
       const res = await srv.built.app.turn({
         surface: "test",
         actor: { externalId: "U1" },
@@ -314,7 +315,7 @@ test("the consent-mint route takes only an oauth-consent token carrying a person
       assert.equal(res.status, "ok", res.reason);
     }
     const audless = await mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
     for (const cap of [envs[0]!.AGENT_API_TOKEN, audless, "", envs[0]!.AGENT_OAUTH_CONSENT_TOKEN])
@@ -339,14 +340,17 @@ test("removing a connection, a saved login or a persona needs a person's authori
   const srv = await start();
   try {
     await srv.built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U9", { accessToken: "kept" });
-    await srv.built.featureFlags.setEnabled("personas", "personal:U1", true, "test");
+    await srv.built.featureFlags.setEnabled("personas", personalScope("U1"), true, "test");
     const { value } = (await srv.built.app.personas!.create("U1", { name: "Ada" })) as { value: { id: string } };
     const exp = Date.now() + CAPABILITY_TTL_MS;
     const run = { ...liveRunClaims("U1"), sessionId: "consent-session" };
     const body = (method: string, principalId?: string) =>
       method === "DELETE" ? undefined : { provider: "google", principalId, access };
     const send = async (method: string, path: string, claims: object = {}, principalId?: string, signed = false) => {
-      const cap = await mintCapabilityToken({ ...run, actorId: "U1", scopeId: "personal:U1", exp, ...claims }, SECRET);
+      const cap = await mintCapabilityToken(
+        { ...run, actorId: "U1", scopeId: personalScope("U1"), exp, ...claims },
+        SECRET,
+      );
       const approval = signed
         ? srv.signOff.approve({ actorId: "U1", ...run }, { method, path, body: body(method, principalId) ?? {} })
         : {};
@@ -362,7 +366,7 @@ test("removing a connection, a saved login or a persona needs a person's authori
     const login = "/v1/keychain/credentials/x";
     const grant = "/v1/keychain/grants/x/revoke";
     const persona = `/v1/personas/${value.id}`;
-    const access = ["personal:U1", "org:acme"].map((scopeId, i) => ({ scopeId, role: i ? "read" : "owner" }));
+    const access = [personalScope("U1"), "org:acme"].map((scopeId, i) => ({ scopeId, role: i ? "read" : "owner" }));
     assert.equal(await send("POST", revoke), "200 U1");
     assert.equal(await send("POST", revoke, { keychainMembers: [{ id: "U2", type: "internal" }] }, "U2"), "200 U2");
     const [revoked] = await srv.built.auditLog.tail(testTenant, { limit: 1, action: "connector.oauth.revoked" });

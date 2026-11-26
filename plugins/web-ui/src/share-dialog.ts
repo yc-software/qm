@@ -14,6 +14,7 @@ import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { icon } from "./icons";
 import { ensureContexts, scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./app-view";
+import { rememberScopeLabels, scopePerson } from "./scope-labels";
 import { errMessage } from "../../chassis/src/errors";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { appState } from "./shell-state";
@@ -36,9 +37,6 @@ interface Shareable {
 
 const NOUN = { deploy: "app", cron: "cron", skill: "skill", file: "file" };
 
-const scopeOf = (match: DirectoryMatch): string =>
-  match.type === "context" ? match.principalId : `personal:${match.principalId}`;
-
 export async function openShare(
   { type, id, title, owner }: Shareable,
   hooks: { onChange?: () => void; onClose?: () => void } = {},
@@ -60,6 +58,7 @@ export async function openShare(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let searching = false;
   const names = new Map<string, string>();
+  const person = (scope: string): string => (scope.startsWith("personal:") ? scopePerson(scope) : scope);
   let busy = true;
   let loaded = false;
   let error = "";
@@ -86,15 +85,21 @@ export async function openShare(
     error = "";
     draw();
     try {
-      const response = await api<{ public?: boolean; grantees: Grant[]; invitation?: { emailProblem?: string } }>(
-        endpoint,
-        {
-          method: "POST",
-          body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
-        },
-      );
+      const response = await api<{
+        public?: boolean;
+        grantees: Grant[];
+        labels?: Record<string, string>;
+        target?: { scope: string };
+        invitation?: { emailProblem?: string };
+      }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ ...(email ? { email } : { scope }), access: value }),
+      });
       publicAccess = response.public === true;
       grantees = response.grantees;
+      rememberScopeLabels(response.labels);
+      const named = names.get(scope);
+      if (named && response.target) names.set(response.target.scope, named);
       hooks.onChange?.();
       if (response.invitation?.emailProblem)
         error = `Access granted, but no invitation email was sent: ${response.invitation.emailProblem}`;
@@ -113,12 +118,13 @@ export async function openShare(
   const orgGrant = (): Grant | undefined => grantees.find(isOrgGrant);
   const generalAccess = (): GeneralAccess => generalAccessOf({ public: publicAccess, grantees });
   const post = async (body: Record<string, unknown>) => {
-    const response = await api<{ public?: boolean; grantees: Grant[] }>(endpoint, {
+    const response = await api<{ public?: boolean; grantees: Grant[]; labels?: Record<string, string> }>(endpoint, {
       method: "POST",
       body: JSON.stringify(body),
     });
     publicAccess = response.public === true;
     grantees = response.grantees;
+    rememberScopeLabels(response.labels);
     hooks.onChange?.();
   };
   const changeGeneral = async (next: GeneralAccess) => {
@@ -163,9 +169,9 @@ export async function openShare(
       if (sequence !== searchSequence || !dialog.isConnected) return;
       const places = contexts
         .filter((c) => c.kind !== "personal" && c.name?.toLowerCase().includes(term.toLowerCase()))
-        .map((c) => ({ principalId: c.scopeId, displayName: c.name!, type: "context" }));
+        .map((c) => ({ principalId: c.scopeId, scopeId: c.scopeId, displayName: c.name!, type: "context" }));
       matches = [...(response.matches ?? []), ...places]
-        .filter((match) => scopeOf(match) !== owner && !grantees.some((grant) => grant.scope === scopeOf(match)))
+        .filter((match) => match.scopeId !== owner && !grantees.some((grant) => grant.scope === match.scopeId))
         .slice(0, 8);
       searched = true;
     } catch (e) {
@@ -188,10 +194,7 @@ export async function openShare(
     const email = query.trim().toLowerCase();
     if (!externalSharing || !offers.email) return null;
     if (email.length > 254 || !/^[^@\s,;<>"]+@[^@\s,;<>"]+\.[^@\s,;<>"]+$/.test(email)) return null;
-    if (
-      owner.toLowerCase() === `personal:${email}` ||
-      grantees.some((g) => g.scope.toLowerCase() === `personal:${email}`)
-    )
+    if (person(owner).toLowerCase() === email || grantees.some((g) => person(g.scope).toLowerCase() === email))
       return null;
     if (matches.some((m) => m.principalId.toLowerCase() === email)) return null;
     return email;
@@ -260,8 +263,8 @@ export async function openShare(
                             ?disabled=${busy}
                             @click=${() => {
                               if (selected) {
-                                names.set(scopeOf(selected), selected.displayName);
-                                void change(scopeOf(selected), selected.email ? "view" : access, selected.email);
+                                names.set(selected.scopeId, selected.displayName);
+                                void change(selected.scopeId, selected.email ? "view" : access, selected.email);
                               }
                             }}
                           >
@@ -311,7 +314,13 @@ export async function openShare(
                                   @click=${() => {
                                     const email = emailCandidate();
                                     if (!email) return;
-                                    selected = { principalId: email, displayName: email, type: "guest", email };
+                                    selected = {
+                                      principalId: email,
+                                      scopeId: email,
+                                      displayName: email,
+                                      type: "guest",
+                                      email,
+                                    };
                                     access = "view";
                                     closeFormMenus();
                                     draw();
@@ -336,11 +345,11 @@ export async function openShare(
         <div class="permission-section-label">People with access</div>
         <div class="project-member-list">
           <div class="permission-row">
-            ${avatarTpl({ key: owner, name: owner.replace("personal:", "") })}<span class="permission-person-label"
-              >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
+            ${avatarTpl({ key: owner, name: person(owner) })}<span class="permission-person-label"
+              >${owner.startsWith("personal:") ? friendlyPrincipal(person(owner)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${grant.status ? html`<span class="badge">${COPY_STATUS[grant.status].label}</span>` : nothing}${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : person(grant.scope) })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? person(grant.scope) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${person(grant.scope)}</small>` : nothing}</span>${grant.status ? html`<span class="badge">${COPY_STATUS[grant.status].label}</span>` : nothing}${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         ${
           offers.org
@@ -411,11 +420,13 @@ export async function openShare(
       externalSharing?: boolean;
       offers: typeof offers;
       grantees: Grant[];
+      labels?: Record<string, string>;
     }>(endpoint);
     publicAccess = response.public === true;
     externalSharing = response.externalSharing !== false;
     offers = response.offers;
     grantees = response.grantees;
+    rememberScopeLabels(response.labels);
     loaded = true;
   } catch (e) {
     error = errMessage(e, "Could not load permissions.");

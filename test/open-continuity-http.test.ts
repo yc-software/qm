@@ -11,6 +11,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -52,7 +53,7 @@ async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,
@@ -81,7 +82,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
@@ -153,7 +153,7 @@ async function fixture(t: TestContext) {
 
 test("HTTP Open continuity: personal sandbox follows owner into shared channel and back, never another member", async (t) => {
   const b = await fixture(t);
-  const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "personal-proof");
+  const resource = await b.sandboxResources.create("alice", personalScope("alice"), "sprites", "personal-proof");
   const command = (cmd: string) => `!proof ${JSON.stringify({ id: resource.id, command: cmd })}`;
   const first = await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false);
   assert.equal(first.http, 200, JSON.stringify(first));
@@ -161,10 +161,10 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
   assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
-  await b.config.setSharingPosture("personal:alice", "isolated");
+  await b.config.setSharingPosture(personalScope("alice"), "isolated");
   assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
   assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
-  await b.config.clearSharingPosture("personal:alice");
+  await b.config.clearSharingPosture(personalScope("alice"));
   await b.roster(["bob"]);
   assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
   const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
@@ -176,7 +176,7 @@ test("HTTP Open continuity: personal sandbox follows owner into shared channel a
 
 test("HTTP Open continuity: only the owner or a write grantee edits; grantee edits keep the owner, notify privately, and fire with owner resources", async (t) => {
   const b = await fixture(t);
-  const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "cron-proof");
+  const resource = await b.sandboxResources.create("alice", personalScope("alice"), "sprites", "cron-proof");
   const action = `!proof ${JSON.stringify({ id: resource.id, command: "printf cron-owner-resource" })}`;
   const owner = await b.cap("alice");
   const member = await b.cap("bob");
@@ -191,7 +191,7 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
   const shared = await b.request("POST", "/v1/share", owner, {
     type: "cron",
     id,
-    toScope: "personal:bob",
+    toScope: personalScope("bob"),
     permission: "write",
   });
   assert.equal(shared.status, 200, JSON.stringify(shared.body));
@@ -215,8 +215,11 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
     JSON.stringify(log),
   );
   assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), { title: "Back in personal" }))
-      .status,
+    (
+      await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", personalScope("alice")), {
+        title: "Back in personal",
+      })
+    ).status,
     200,
   );
   assert.equal((await b.deliveries.pending("principal")).length, 1, "owner edits do not notify themselves");
@@ -304,7 +307,7 @@ test("HTTP an owner's cron fire and their own turn both write back changes to th
 });
 
 for (const isPrivate of [false, true]) {
-  for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
+  for (const veto of ["org:default-org", personalScope("alice"), "channel:public-room"]) {
     test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
       const b = await fixture(t);
       assert.ok(b.keychain);

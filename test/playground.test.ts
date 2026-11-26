@@ -8,6 +8,7 @@ import {
 } from "../src/playgrounds/playground.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const HTML = "<!doctype html><button id='go'>Go</button><script>go.onclick=()=>go.textContent='Done'</script>";
 
@@ -16,7 +17,7 @@ test("playgrounds are stored unchanged as ordinary scoped file artifacts", async
   const result = await createPlaygroundArtifact(store, {
     title: "  Tiny   demo  ",
     html: HTML,
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     createdBy: "alice",
   });
 
@@ -24,7 +25,7 @@ test("playgrounds are stored unchanged as ordinary scoped file artifacts", async
   assert.equal(result.title, "Tiny demo");
   const opened = await store.open(result.artifactId);
   assert.equal(opened?.artifact.mimetype, "text/html");
-  assert.equal(opened?.artifact.ownerScopeId, "personal:alice");
+  assert.equal(opened?.artifact.ownerScopeId, personalScope("alice"));
   assert.equal(await opened?.stream.toArray().then((chunks) => Buffer.concat(chunks).toString()), HTML);
 });
 

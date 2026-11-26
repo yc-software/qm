@@ -19,7 +19,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -368,7 +368,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     assert.deepEqual(deliveries[0]!.destination, {
       type: "principal",
       target: "alice@example.com",
-      audienceScopeId: "personal:alice@example.com",
+      audienceScopeId: personalScope("alice@example.com"),
       onBehalfOf: "mallory@example.com",
       deploymentAccess: { deploymentId: (await app.getApp("mysite"))!.id, requesterId: "mallory@example.com" },
     });

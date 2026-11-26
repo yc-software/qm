@@ -95,3 +95,20 @@ test("no timeout and no signal → no opts override leaks; a signal alone still 
   await ctx.execute("echo hi", { signal });
   assert.deepEqual(lastOpts(), { signal });
 });
+
+test("oversized execute output logs a warning without truncating or leaking output", async (t) => {
+  const warns: string[] = [];
+  t.mock.method(console, "warn", (line: string) => warns.push(line));
+  const big = "secret-marker-" + "x".repeat(1_000_000);
+  const sandbox = {
+    async run(): Promise<ExecResult> {
+      return { stdout: big, stderr: "", code: 0, timedOut: false };
+    },
+  } as unknown as Sandbox;
+  const ctx = ctxFor(sandbox, { provision: async () => ({ ...handle, backend: "e2b" }) });
+  const res = await ctx.execute("echo big");
+  assert.equal(res.stdout.length, big.length);
+  assert.equal(warns.length, 1);
+  assert.match(warns[0]!, /^\[execute\] slow or large output bytes=1000014 maskMs=\d+ sandbox=h backend=e2b$/);
+  assert.ok(!warns[0]!.includes("secret-marker"));
+});

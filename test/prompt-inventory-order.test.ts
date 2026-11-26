@@ -13,6 +13,7 @@ import {
 import type { GrantedHandle, CandidateDestination } from "../src/types.ts";
 import type { Cron, Webhook, Monitor } from "../src/triggers/types.ts";
 import type { DirectoryMember } from "../src/directory/directory-store.ts";
+import { personalScope } from "../src/types.ts";
 
 function checkOrder<T>(items: T[], render: (items: T[]) => string | null): void {
   const before = structuredClone(items);
@@ -35,7 +36,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
   checkOrder<GrantedHandle>(
     ids.map((id) => ({
       handlePath: `shared/${id}`,
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       fileId: id,
       permission: "read",
     })),
@@ -43,7 +44,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
   );
   const base = ids.map((id) => ({
     id,
-    ownerScopeId: "personal:U1" as const,
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     createdAt: 1,

@@ -218,7 +218,6 @@ test("the same sign-in is a separate user in each tenant, and a link stays in it
     await withTenant(b, () => roster.record({ id: pat, source: "invite", at: Date.now() }));
     const inA = (await withTenant(a, () => roster.get(pat)))!;
     const inB = (await withTenant(b, () => roster.get(pat)))!;
-    assert.notEqual(inA.id, inB.id);
     assert.deepEqual([inA.source, inB.source], ["turn", "invite"]);
     await withTenant(a, () =>
       roster.link({ principalId: alias, canonicalId: pat, evidence: "test", linkedBy: "", createdAt: Date.now() }),

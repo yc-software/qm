@@ -13,6 +13,8 @@ import { bootTenant } from "../../tenants/boot.ts";
 import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import { externalOrgSchema } from "../../tenants/self-serve.ts";
+import { personalScope } from "../../types.ts";
+import { offboardTrustedSubject } from "./admin/offboard.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -91,7 +93,7 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
   const grants =
-    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
+    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [personalScope(email)], kind: "deploy" })) ?? [];
   const publishedApps = await app.listApps();
   const granted = publishedApps.filter(
     (d) =>
@@ -368,6 +370,14 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     tenant: "none",
     handle: selfServeWorkspace,
+  },
+  {
+    method: "POST",
+    path: "/v1/auth/broker/offboard-trusted-subject",
+    actor: "system",
+    auth: "source",
+    tenant: "none",
+    handle: offboardTrustedSubject,
   },
   {
     method: "POST",

@@ -13,7 +13,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { withDeploymentCredentials } from "../src/credentials/deployment-credentials.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testUserStore } from "./support/test-database.ts";
@@ -253,10 +253,12 @@ test("the catalog can be asked for one app, which costs one small request", asyn
     (await f.invoke("/v1/composio/toolkits?toolkit=granola")).data.items.map((x: { id: string }) => x.id),
     ["granola"],
   );
+  f.replies.push({ items: [] }, app("linear_mcp", "Linear MCP", "OAUTH2"));
+  assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=linear")).data.items[0]?.id, "linear_mcp");
   f.replies.push(new Response("down", { status: 500 }));
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=dropbox")).status, 502);
   assert.equal((await f.invoke("/v1/composio/toolkits?toolkit=../auth_configs")).status, 400);
-  assert.equal(f.calls.length, 4);
+  assert.equal(f.calls.length, 6);
 });
 
 test("ambiguous personal keys fail closed rather than switching to the company key", async () => {
@@ -622,7 +624,7 @@ const privateCap: CapabilityClaims = {
   runAttempt: 1,
   runLeaseToken: "test-lease",
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   ownerConnections: true,
   internalAudience: true,
   personAuthority: true,
@@ -727,6 +729,22 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   assert.equal(f.calls.length, 1);
 });
 
+test("unknown tools and connections are caller errors answered without reporting a failure", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.join(" ")));
+  const notFound = () => new Response("{}", { status: 404 });
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, notFound(), notFound());
+  const tool = await f.invoke("/v1/composio/execute", { ...execution, tool: "GMAIL_AUTH_TEST" }, null, privateCap);
+  const account = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.deepEqual(
+    [tool.status, tool.data.error, account.status, account.data.error],
+    [404, "tool_not_found", 403, "connection_not_authorized"],
+  );
+  assert.equal(logged.length, 0, logged.join("\n"));
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
@@ -816,7 +834,7 @@ test("shared org connections recheck grants for every audience member", async ()
   await f.deps.acl!.grant(tenant, {
     ownerScopeId: org,
     ref: "service-cred:composio",
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "read",
     grantedBy: "admin",
   });

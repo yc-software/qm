@@ -6,6 +6,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
+import { personalScope } from "../src/types.ts";
 
 type Sink = {
   entries: Item[];
@@ -39,7 +40,7 @@ function turnInput(sink: Sink, overrides: Partial<AgentTurnInput>): AgentTurnInp
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId: "resume", seq: seq++, createdAt: Date.now() });

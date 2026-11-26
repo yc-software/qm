@@ -15,7 +15,7 @@ import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import { createSwarmStore, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
-import { scopeId, type PendingApprovalRecord, type TurnResult } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord, type TurnResult, personalScope } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { assertRowsByTenant, describeTwoTenants } from "./support/two-tenants.ts";
 
@@ -102,7 +102,7 @@ describeTwoTenants("monitor, approval, skill and swarm sweeps bind each row's te
       await withTenant(tenant, async () => {
         await processes.register({
           processId: "p-1",
-          scopeId: "personal:U1",
+          scopeId: personalScope("U1"),
           sandboxId: "sandbox-1",
           kind: "background",
           command: "bg: npm run build",
@@ -205,7 +205,7 @@ describeTwoTenants("monitor, approval, skill and swarm sweeps bind each row's te
     const swarm = (id: string, pending: boolean) =>
       ({
         id,
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         ownerId: "U1",
         participants: [],
         createdAt: 1,

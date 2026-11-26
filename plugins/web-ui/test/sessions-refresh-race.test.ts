@@ -45,7 +45,7 @@ test("session refresh bursts share one trailing read and observe its fresh list"
   try {
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState, sessionsReady, refreshSessions } = await vite.ssrLoadModule("/src/sessions.ts");
-    appState.me = { user: "alex", org: "acme" };
+    appState.me = { user: "alex", personalScope: "personal:alex", org: "acme" };
     const boot = refreshSessions({ silent: true });
     const pane1 = (async () => {
       const refreshed = await refreshSessions({ silent: true });

@@ -13,6 +13,7 @@ import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { personalScope } from "../src/types.ts";
 
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
@@ -47,7 +48,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     destination: {
       type: "principal",
       target: "U_REQUESTER",
-      audienceScopeId: "personal:U_REQUESTER",
+      audienceScopeId: personalScope("U_REQUESTER"),
       onBehalfOf: "U_JOB_OWNER",
     },
   });

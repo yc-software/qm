@@ -12,7 +12,7 @@ import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -267,7 +267,7 @@ test("stored files retain metadata and need no sandbox, including replacement an
   const transfer = createMemoryBlobTransferStore();
   await store.put({
     id: "saved",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     createdBy: "U1",
     name: "report.custom",
     path: "report.custom",
@@ -281,7 +281,7 @@ test("stored files retain metadata and need no sandbox, including replacement an
       throw new Error("no default sandbox");
     },
     blobTransfer: transfer,
-    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "new" },
+    fileRegistration: { store, ownerScopeId: personalScope("U1"), createdBy: "U1", seed: "new" },
     openStored: async (id) => {
       const opened = await store.open(id);
       return opened ? { ...opened.artifact, stream: opened.stream } : null;
@@ -317,7 +317,7 @@ test("workspace staging selects the requested sandbox and never falls back on re
     blobTransfer: transfer,
     fileRegistration: {
       store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       createdBy: "U1",
       seed: "selector",
     },
@@ -374,7 +374,7 @@ test("a stored stream failure rolls back earlier workspace staging", async () =>
       handle,
       ["report.txt", { file_id: "broken" }],
       transfer,
-      { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "rollback" },
+      { store, ownerScopeId: personalScope("U1"), createdBy: "U1", seed: "rollback" },
       [],
       async () => ({
         name: "broken.txt",
@@ -391,7 +391,7 @@ test("a stored stream failure rolls back earlier workspace staging", async () =>
     /read failed/,
   );
   assert.equal(await transfer.sweep(0), 0);
-  assert.equal((await store.listOwnedByScopes(["personal:U1"])).files.length, 0);
+  assert.equal((await store.listOwnedByScopes([personalScope("U1")])).files.length, 0);
 });
 
 test("replacing a path preserves its artifact when staged again by ID", async () => {
@@ -400,7 +400,7 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
     sandbox: fakeSandbox({ "report.txt": bytes("report") }),
     provision: async () => handle,
     blobTransfer: createMemoryBlobTransferStore(),
-    fileRegistration: { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "reference" },
+    fileRegistration: { store, ownerScopeId: personalScope("U1"), createdBy: "U1", seed: "reference" },
     openStored: async (id) => {
       const opened = await store.open(id);
       return opened ? { ...opened.artifact, stream: opened.stream } : null;

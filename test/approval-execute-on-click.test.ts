@@ -14,11 +14,12 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, TurnRequest } from "../src/types.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 type Sink = Item[];
 type ProviderMessage = { role: string; content: Array<Record<string, unknown>> | string };
 
-const scope = "personal:tester" as ScopeId;
+const scope = personalScope("tester") as ScopeId;
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");

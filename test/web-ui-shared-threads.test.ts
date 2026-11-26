@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -137,9 +138,9 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
 });
 
 test("a person's own chats stay writable whichever login started them; Slack threads and other people stay out", async () => {
-  const old = await built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", "personal:carol@example.com");
+  const old = await built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", personalScope("carol@example.com"));
   await built.sessions.addParticipant(old.id, "carol@example.com", "Started on my other login");
-  const slack = await built.sessions.getOrCreateByThread("dm:D9", "dm", "personal:carol@example.com");
+  const slack = await built.sessions.getOrCreateByThread("dm:D9", "dm", personalScope("carol@example.com"));
   await built.sessions.addParticipant(slack.id, "carol@example.com", "Slack DM");
 
   const mine = await waitForSession("carol@example.com", "web:oidc:test:42:p1");

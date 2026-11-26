@@ -1,15 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appCredentialSlugs } from "../src/deploy/app-credentials.ts";
+import { appCredentialGrants, appCredentialSlugs } from "../src/deploy/app-credentials.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
+import { deployRef, encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import type { PublicServiceCredential } from "../src/credentials/keychain.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
 const ORG = scopeId("org", "default-org");
+const DEVS = scopeId("team", "devs");
 const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): PublicServiceCredential => ({
   slug,
   name: slug,
@@ -22,39 +23,51 @@ const cred = (slug: string, over: Partial<PublicServiceCredential> = {}): Public
   ...over,
 });
 
-test("a published app gets only enabled broker credentials that are switched on for apps AND granted org-wide", async () => {
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const grant = (slug: string, grantee: string) =>
-    acl.grant(tenant, {
-      ownerScopeId: ORG,
-      ref: encodeRef(serviceCredRef(slug)),
-      granteeScopeId: grantee,
-      permission: "read",
-      grantedBy: "admin",
-    });
-  await grant("acme-data", ORG);
-  await grant("finance-api", "personal:cfo");
-  await grant("off-for-apps", ORG);
-  await grant("disabled", ORG);
-  await grant("no-secret", ORG);
-  await grant("env-only", ORG);
-  const slugs = await appCredentialSlugs(
+test("a published app borrows a credential only when one grant covers its publisher and everyone it is shared with", async () => {
+  const grants = createPostgresGrantStore(testDatabaseUrl());
+  const acl = createAclStore(grants);
+  const grant = (ownerScopeId: string, ref: string, granteeScopeId: string) =>
+    grants.put(tenant, { ownerScopeId, ref, granteeScopeId, permission: "read", grantedBy: "admin" });
+  for (const slug of ["acme-data", "off-for-apps", "disabled", "no-secret", "env-only"])
+    await grant(ORG, encodeRef(serviceCredRef(slug)), ORG);
+  await grant(ORG, encodeRef(serviceCredRef("e2b")), DEVS);
+  await grant(ORG, encodeRef(serviceCredRef("finance-api")), personalScope("cfo"));
+  const access = {
     tenant,
-    [
-      cred("acme-data"),
-      cred("finance-api"),
-      cred("ungranted"),
-      cred("off-for-apps", { deployments: false }),
-      cred("disabled", { enabled: false }),
-      cred("no-secret", { hasSecret: false }),
-      cred("env-only", { delivery: "env", envKey: "ENV_ONLY" }),
-    ],
-    ORG,
+    orgScope: ORG,
     acl,
-  );
+    teams: {
+      forTurn: async () => [
+        { id: "devs", name: "Devs", isolatedInOpen: false, configured: false, present: new Set(["ada", "bo"]) },
+      ],
+    },
+  };
+  const app = { id: "app-1", ownerScopeId: personalScope("ada"), createdBy: "ada" };
+  const slugs = async (over = {}) =>
+    appCredentialSlugs(
+      [
+        cred("acme-data"),
+        cred("e2b"),
+        cred("finance-api"),
+        cred("ungranted"),
+        cred("off-for-apps", { deployments: false }),
+        cred("disabled", { enabled: false }),
+        cred("no-secret", { hasSecret: false }),
+        cred("env-only", { delivery: "env", envKey: "ENV_ONLY" }),
+      ],
+      await appCredentialGrants({ ...app, ...over }, access),
+    );
+  assert.deepEqual(await slugs(), ["acme-data", "e2b"]);
+  await grant(app.ownerScopeId, encodeRef(deployRef(app.id)), personalScope("bo"));
+  assert.deepEqual(await slugs(), ["acme-data", "e2b"], "sharing with another dev keeps the dev credential");
+  assert.deepEqual(await slugs({ public: true }), ["acme-data"], "a public app borrows only org-wide credentials");
+  assert.deepEqual(await slugs({ createdBy: "cy" }), ["acme-data"], "the publisher must be covered too");
+  await grant(app.ownerScopeId, encodeRef(deployRef(app.id)), personalScope("cy"));
+  assert.deepEqual(await slugs(), ["acme-data"], "sharing outside the team drops the dev credential");
+  assert.deepEqual(await slugs({ ownerScopeId: DEVS }), ["acme-data", "e2b"], "a home the grant names is covered");
   assert.deepEqual(
-    slugs,
+    await slugs({ ownerScopeId: DEVS, createdInScope: scopeId("team", "ops") }),
     ["acme-data"],
-    "a personal grant, no grant, a flipped switch, or an unusable record never reaches an app",
+    "writers of the team the app was created in must be covered too",
   );
 });

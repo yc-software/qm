@@ -145,6 +145,7 @@ export interface AgentOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
+  sandboxImages?: string[];
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -383,6 +384,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
       sandboxResources: opts?.sandboxResources,
       ...(opts?.memorySizedBackends?.length ? { memorySizedBackends: opts.memorySizedBackends } : {}),
+      ...(opts?.sandboxImages?.length ? { sandboxImages: opts.sandboxImages } : {}),
     });
   }
   async function createTurnSession(

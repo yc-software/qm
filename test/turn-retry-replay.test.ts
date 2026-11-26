@@ -13,7 +13,7 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore, turnDeliveryProvenance } from "../src/delivery/delivery-store.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
-import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, personalScope } from "../src/types.ts";
 import { type Item, type NewItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -180,7 +180,7 @@ test("a repeated identical ask in its own run is answered, not mistaken for a re
 test("a retry does not claim a later message's answer as its own", async () => {
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const mine = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personalScope("U1"));
   const writer = { sessionId: session.id };
   const boundary = await sessions.append(writer, { kind: "UserMessage", text: ASK });
   await sessions.append(writer, { kind: "UserMessage", text: "a later ask" });
@@ -195,7 +195,7 @@ test("a retry does not claim a later message's answer as its own", async () => {
 });
 
 async function seedTurn(sessions: ReturnType<typeof buildScenario>["sessions"], items: NewItem[]): Promise<number> {
-  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+  const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personalScope("U1"));
   const writer = { sessionId: session.id };
   let first = -1;
   for (const item of items) {
@@ -453,7 +453,7 @@ test("a retried surface-tool turn whose model already posted does not deliver it
 });
 
 async function seedWebTurn(scenario: ReturnType<typeof buildScenario>, runId: string, items: NewItem[]) {
-  const session = await scenario.sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
+  const session = await scenario.sessions.getOrCreateByThread(conversation.threadRef, "dm", personalScope("U1"));
   const appended = await scenario.sessions.appendMany({ sessionId: session.id, turnId: runId }, items);
   await scenario.runs.noteTurnUserSeq(runId, appended[0]!.seq);
 }

@@ -51,10 +51,8 @@ const HARNESS = "QM, your agent harness.";
 export class OnboardingWelcome extends LitElement {
   static properties = {
     me: { attribute: false },
-    onMoreIdeas: { attribute: false },
     onIdea: { attribute: false },
     onConnected: { attribute: false },
-    ideasDisabled: { type: Boolean },
     animateWelcome: { type: Boolean },
     setupOnly: { type: Boolean },
     widget: {},
@@ -75,10 +73,8 @@ export class OnboardingWelcome extends LitElement {
     about: { state: true },
   };
   declare me: Me | null;
-  declare onMoreIdeas: (() => void) | undefined;
   declare onIdea: ((prompt: string) => void) | undefined;
   declare onConnected: ((name: string) => void) | undefined;
-  declare ideasDisabled: boolean;
   declare animateWelcome: boolean;
   declare setupOnly: boolean;
   declare widget: "all" | "apps" | "slack" | "slack-account";
@@ -109,7 +105,7 @@ export class OnboardingWelcome extends LitElement {
   private preview = connectionPreviewEnabled();
   private consent: PreviewAttempt | null = null;
   private returned: PreviewAttempt | null = null;
-  private pickerState: PickerState = { query: "", expanded: false };
+  private pickerState: PickerState = { query: "" };
   private retryService: PreviewAttempt["service"] | null = null;
   declare about: boolean;
   declare connectionOutcome: ConnectionOutcome;
@@ -119,7 +115,6 @@ export class OnboardingWelcome extends LitElement {
   constructor() {
     super();
     this.me = null;
-    this.ideasDisabled = false;
     this.animateWelcome = true;
     this.setupOnly = false;
     this.widget = "all";
@@ -264,6 +259,7 @@ export class OnboardingWelcome extends LitElement {
         (service) => this.authorize(service, this.staleAccount(service.id)),
         this.pickerState,
         !this.seeded,
+        this.seeded ? 15 : 6,
       );
   }
   disconnectedCallback(): void {
@@ -458,7 +454,8 @@ export class OnboardingWelcome extends LitElement {
     try {
       const asked = this.widget === "apps" ? this.toolkit : "";
       let services = asked ? await load(asked) : [];
-      if (!services.some((service) => service.id === asked)) services = await load("");
+      if (services.length === 1) this.toolkit = services[0]!.id;
+      else if (!services.some((service) => service.id === asked)) services = await load("");
       this.services = services;
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -571,40 +568,10 @@ export class OnboardingWelcome extends LitElement {
       </div>`;
   }
   private standardIntro(greeting: string) {
-    const cohort = this.me?.welcomeCohort;
     const purpose = `Use it to research customers, build tools, and automate the everyday work of running ${this.me?.companyName?.trim() || "your company"}.`;
     return html`${greeting ? html`<h1 class="welcome-beat" style="--welcome-delay:0ms">${greeting}</h1>` : nothing}
-    ${
-      cohort
-        ? html`<div class="welcome-cohort welcome-beat" style="--welcome-delay:700ms">
-            <span class="welcome-cohort-label">Welcome to ${cohort}!</span
-            ><span class="welcome-champagne" aria-hidden="true">🥂</span>
-            ${Array.from({ length: 18 }, (_, i) => {
-              const side = i % 2 ? 1 : -1;
-              const distance = 35 + ((i * 37) % 85);
-              const turn = side * (80 + ((i * 47) % 190));
-              return html`<span
-                aria-hidden="true"
-                class="welcome-flutter"
-                style=${`--flutter-color:${["#f26522", "#f5ad56", "#d5bb88", "#e8c899"][i % 4]};--flutter-delay:${1750 + (i % 6) * 65}ms;--flutter-mid:${side * distance * 0.7}px;--flutter-x:${side * distance}px;--flutter-peak:${-28 - ((i * 19) % 36)}px;--flutter-end:${15 + ((i * 11) % 20)}px;--flutter-turn:${turn}deg;--flutter-turn-end:${turn * 2}deg`}
-              ></span>`;
-            })}
-          </div>`
-        : nothing
-    }
-    ${
-      cohort
-        ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">And welcome to ${HARNESS}</p>
-            <p class="welcome-beat" style="--welcome-delay:2600ms">
-              ${purpose}
-              ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
-            </p>
-            <p class="welcome-beat" style="--welcome-delay:2800ms">
-              The more you use QM, the more context it has, and the more it can help.
-            </p>`
-        : html`<p class="welcome-beat" style="--welcome-delay:400ms">Welcome to ${HARNESS} ${purpose}</p>
-            <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
-    }`;
+      <p class="welcome-beat" style="--welcome-delay:400ms">Welcome to ${HARNESS} ${purpose}</p>
+      <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`;
   }
   protected render() {
     if (this.preview && previewParameters().has("connectionConsent")) {
@@ -637,9 +604,7 @@ export class OnboardingWelcome extends LitElement {
     if (this.about)
       return html`<qm-welcome-about .me=${this.me} .onBack=${() => void this.showAbout(false)}></qm-welcome-about>`;
     const name = firstName(this.me?.displayName);
-    const cohort = this.me?.welcomeCohort;
     const seeds = this.seeded;
-    const paced = Boolean(cohort) && !seeds;
     const serviceName = this.retryService?.name ?? "App";
     const connected = this.preview
       ? previewConnections(this.previewUser())
@@ -685,7 +650,7 @@ export class OnboardingWelcome extends LitElement {
         (this.me?.permissions?.includes("admin") || this.me?.permissions?.includes("owner"))
           ? html`<qm-onboarding-slack
               class="welcome-beat"
-              style=${`--welcome-delay:${paced ? 3050 : 900}ms`}
+              style="--welcome-delay:900ms"
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
               }}
@@ -694,13 +659,13 @@ export class OnboardingWelcome extends LitElement {
       }
       ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
-      <div class="welcome-beat" style=${`--welcome-delay:${paced ? 3250 : 1100}ms`}>
+      <div class="welcome-beat" style="--welcome-delay:1100ms">
         ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()} @slack-linked=${() => void this.refreshWorkspace()}></qm-slack-account>` : nothing}
       </div>
       ${
         card || ["slack", "slack-account"].includes(this.widget)
           ? (card ?? nothing)
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${paced ? 3450 : 1300}ms`}>
+          : html`<div class="welcome-beat welcome-apps" style="--welcome-delay:1300ms">
               ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error

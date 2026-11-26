@@ -8,6 +8,7 @@ import type { RunSignal, RunSignalStore } from "../src/runs/run-signal-store.ts"
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 type Sink = { entries: Item[] };
 
@@ -21,7 +22,7 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });

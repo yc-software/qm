@@ -9,8 +9,9 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
-const scope = "personal:goal@example.com" as ScopeId;
+const scope = personalScope("goal@example.com") as ScopeId;
 
 test("compaction leaves the session goal on its row and writes no goal entries", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());

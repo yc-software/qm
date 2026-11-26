@@ -316,7 +316,7 @@ async function saveBrainSecret(
   };
   const owner = canonicalPerson(drop.ownerId);
   const standing = await adminStanding(deps, tenantOf(ctx), owner);
-  const save = (record: MemoryRegistry) => {
+  const save = (record: MemoryRegistry, clientSecretRef?: string) => {
     const brain = record.brains.find(({ id }) => id === target.id);
     const refusal = brain && brainRefusal(record, brain, owner, standing);
     if (refusal) throw new MemoryRegistryError(403, lostBrainAccess(refusal));
@@ -325,10 +325,12 @@ async function saveBrainSecret(
       now: Date.now(),
       overlayIds: registry.overlayIds,
       key: registry.key,
+      ...(registry.secrets ? { secrets: registry.secrets } : {}),
+      ...(clientSecretRef ? { clientSecretRef } : {}),
     });
   };
   try {
-    await registry.update(save);
+    await registry.update(save, { brainId: target.id, value: secret });
     if (!(await take())) return;
   } catch (error) {
     if (!(error instanceof MemoryRegistryError)) throw error;

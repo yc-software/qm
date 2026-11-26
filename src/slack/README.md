@@ -39,14 +39,42 @@ Two caveats:
   the plugin acknowledges them as no-ops). Installs that don't update keep working
   exactly as before.
 
-### Thinking steps and activity cards
+### Activity cards
 
-Slack threads show live step progress while QM works and waiting cards while background work continues.
+Slack threads show a live activity card while QM works. The Slack app must support
+[`task_card`](https://docs.slack.dev/reference/block-kit/blocks/task-card-block) blocks and
+have `chat:write`.
 
-- **In-turn streaming:** streams live step progress and the final reply into one Slack thread message (`chat.startStream` / `appendStream` / `stopStream` with `task_display_mode: "plan"`), rolling over to `chat.update` at 9 minutes before Slack's 10-minute stream timeout. Slack `plan` blocks cap at 50 tasks (49 distinct + 1 overflow summary) and `markdown_text` caps at 12,000 characters (overflow above 11,000 closes the stream plan-only and posts below).
-- **Agent Sessions:** uses `agents.sessions.setStatus` and `agents.sessions.rename`, and listens to `agent_session_stopped` (cancels the in-flight run) and `agent_session_title_changed`. Confirm in Slack App Settings → **Agents & AI Apps** that the app is declared as an agent, and reinstall/reapprove after adding the new bot events.
-- **Post-turn waiting cards:** when background jobs, watches, or subagents continue after a turn finishes, a `plan` card tracks them until idle and is deleted once work completes.
-- **Visibility:** step titles and brief summaries are visible to everyone in the thread; no model reasoning is ever sent to Slack. External channels and external-access workspaces automatically use brief mode (static labels and counts only). Quiet ambient turns and top-level DMs stay unchanged.
+One flat task card shows what QM is doing and is updated in place. It appears once QM has
+been working for fifteen seconds without posting anything. When QM has already posted in the
+thread during the turn, the card is added to the bottom of its latest message and removed
+again when QM posts something new or the work ends; otherwise it is posted on its own under
+the conversation's persona and deleted at the same points.
+The card's title is **Still working:**
+followed by the current step's tool `purpose`; while subagents do the work, a subagent's latest
+step is used instead. Background jobs and watches show their own purpose. The card's details
+line is an "Open in QM" link to the exact web conversation with normal authorization,
+followed by the elapsed time after the first minute ("Open in QM · 2m"); without a
+configured web URL, it is the state in plain text (for example "Working on it · 2m").
+Quiet ambient turns, unthreaded DMs and work that ends within fifteen seconds of QM's last
+message do not create cards. Cards are visible to everyone in their thread; cards standing alone, and
+edits that only add, change or remove a card, are excluded from conversation history.
+
+Waiting cards survive turns and restarts. Only this conversation's registered background
+jobs and enabled, unexpired process monitors count, not recurring crons or agent prose.
+Unwatched exits become visible when checked, reconciled during sandbox setup, or expired.
+Commands and monitor instructions are never rendered.
+
+A five-second sweep refreshes activity and retries transient failures; a sweep that would
+render the same card writes nothing. Durable receipts and per-thread leases preserve card
+identity across workers; expired run leases are shown as waiting, not working. Slack has no
+conditional writes: late updates are repaired, and an ambiguous initial post can duplicate
+if Slack does not deduplicate `client_msg_id`. An outage can leave a stale card until
+recovery. Status calls have a separate five-second timeout and never delay reply delivery.
+
+Once no activity remains and the thread has no reply waiting in the delivery outbox, the
+card is deleted and no longer tracked. Later work creates a fresh card. Native session status
+and Stop events are not used.
 
 > **Running locally alongside another developer? Each dev needs their OWN app.**
 > See [Local dev with multiple developers](#local-dev-with-multiple-developers)

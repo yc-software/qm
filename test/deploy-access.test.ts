@@ -17,7 +17,7 @@ import {
   registerDeployAccessActions,
 } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
+import { scopeId, type ActorAssertion, type Permission, personalScope } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -125,7 +125,7 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     "{}",
     JSON.stringify({ ...request, permission: "write" }),
     JSON.stringify({ ...request, deploymentId: "mysite" }),
-    JSON.stringify({ ...request, requesterId: "personal:bob" }),
+    JSON.stringify({ ...request, requesterId: personalScope("bob") }),
     JSON.stringify({ ...request, requesterId: "<@everyone>" }),
     JSON.stringify({ ...request, requesterId: "bob\n" }),
     JSON.stringify({ ...request, requesterId: 42 }),
@@ -251,10 +251,13 @@ companyTest("notify:false grants access on every direct share path without a DM 
     emailProblem: "notify was false",
     appUrl: "https://acme1-mysite.apps.example.com/",
   });
-  assert.deepEqual(await f.deploy.appGrantees(f.d.id), [
-    { scope: person(requester), permission: "write" },
-    { scope: person("carol@example.com"), permission: "read" },
-  ]);
+  assert.deepEqual(
+    (await f.deploy.appGrantees(f.d.id)).sort((a, b) => a.scope.localeCompare(b.scope)),
+    [
+      { scope: person(requester), permission: "write" },
+      { scope: person("carol@example.com"), permission: "read" },
+    ].sort((a, b) => a.scope.localeCompare(b.scope)),
+  );
   assert.deepEqual(await f.notices(), []);
   assert.deepEqual(sent, []);
   await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap, approved);

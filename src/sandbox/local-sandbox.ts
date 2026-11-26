@@ -13,7 +13,8 @@ import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
-import { shortHash } from "../util/crypto.ts";
+import { hashId, shortHash } from "../util/crypto.ts";
+import { sandboxTenant } from "./tenant-sandbox-shape.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -24,6 +25,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
@@ -37,6 +39,7 @@ const PREP_TIMEOUT_SEC = 30;
 export type { DockerExec };
 
 export interface LocalSandboxOptions {
+  imageFor?: ImageFor;
   image?: string;
   dockerBin?: string;
   cpus?: number;
@@ -73,12 +76,15 @@ export async function computeSandboxImageFingerprint(repoRoot: string): Promise<
 }
 
 export const localContainerName = (scopeId: string): string => `qm-sbx-${localSlug(scopeId)}`;
-export const localVolumeName = (scopeId: string): string => `qm-home-${localSlug(scopeId)}`;
+const volumeForContainer = (name: string): string => name.replace("qm-sbx-", "qm-home-");
+export const localVolumeName = (scopeId: string): string => volumeForContainer(localContainerName(scopeId));
 export const localNetworkName = (containerName: string): string =>
   `qm-net-${containerName.replace(/^qm-(sbx|scratch)-/, "")}`;
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
+  const tenant = sandboxTenant();
+  if (tenant !== undefined) return hashId([tenant, id], 32);
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -97,7 +103,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
   const portByName = new Map<string, number>();
   const scopeByContainer = new Map<string, string>();
-  const scratchByKey = new Map<string, string>();
   const activeByContainer = new Map<string, number>();
 
   let preflightDone: Promise<string> | undefined;
@@ -109,6 +114,15 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       if (version.code !== 0) {
         preflightDone = undefined;
         throw new Error("SANDBOX_BACKEND=local requires a running Docker daemon (is Docker Desktop running?)");
+      }
+      if (opts.coreContainer) {
+        const forwarding = await dexec(["exec", opts.coreContainer, "cat", "/proc/sys/net/ipv4/ip_forward"]);
+        if (forwarding.code !== 0 || forwarding.stdout.trim() !== "0") {
+          preflightDone = undefined;
+          throw new Error(
+            `local sandboxes require net.ipv4.ip_forward=0 in the core container: ${forwarding.stderr.trim() || forwarding.stdout.trim()}`,
+          );
+        }
       }
       const img = await dexec(["image", "inspect", "-f", "{{.Id}}", image]);
       if (img.code !== 0) {
@@ -136,11 +150,27 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     return preflightDone;
   }
 
-  async function containerState(name: string): Promise<{ running: boolean; imageId: string } | null> {
-    const r = await dexec(["inspect", "-f", "{{.State.Running}} {{.Image}}", name]);
+  async function containerState(
+    name: string,
+  ): Promise<{ running: boolean; imageId: string; rawSocketsDisabled: boolean } | null> {
+    const r = await dexec([
+      "inspect",
+      "-f",
+      "[{{json .State.Running}},{{json .Image}},{{json .HostConfig.CapDrop}}]",
+      name,
+    ]);
     if (r.code !== 0) return null;
-    const [running = "", imageId = ""] = r.stdout.trim().split(/\s+/);
-    return { running: running === "true", imageId };
+    try {
+      const [running, imageId, droppedCapabilities] = JSON.parse(r.stdout) as [boolean, string, string[] | null];
+      return { running, imageId, rawSocketsDisabled: droppedCapabilities?.includes("CAP_NET_RAW") ?? false };
+    } catch (cause) {
+      throw new Error(`docker inspect ${name} returned invalid container state: ${r.stdout}`, { cause });
+    }
+  }
+
+  async function removeDockerResource(args: string[]): Promise<void> {
+    const result = await dexec(args);
+    if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
   }
 
   async function resolvePort(name: string): Promise<number> {
@@ -165,6 +195,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     timeoutMs?: number,
     signal?: AbortSignal,
   ): Promise<{ status: number; text: string }> {
+    await preflight();
     const base = opts.coreContainer
       ? `http://${name}:${AGENT_PORT}${path}`
       : `http://127.0.0.1:${await resolvePort(name)}${path}`;
@@ -204,6 +235,8 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   async function ensureRunning(name: string): Promise<void> {
     const state = await containerState(name);
     if (!state) throw new Error(`local sandbox container ${name} is gone`);
+    if (!state.rawSocketsDisabled)
+      throw new Error(`local sandbox container ${name} retains NET_RAW and must be provisioned again before use`);
     if (!state.running) await startContainer(name);
   }
 
@@ -234,6 +267,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
 
   async function connectCore(net: string): Promise<void> {
     if (!opts.coreContainer) return;
+    await preflight();
     const r = await dexec(["network", "connect", net, opts.coreContainer]);
     if (r.code !== 0 && !(await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(net)) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
@@ -252,6 +286,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     scope: string | undefined,
     withVolume: boolean,
     memoryGb?: number,
+    chosen?: string,
   ): Promise<void> {
     const net = await ensureNetwork(name);
     const args = [
@@ -268,12 +303,13 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
       "agent_env=dev",
       "--network",
       net,
+      "--cap-drop=CAP_NET_RAW",
       ...(withVolume && scope ? ["-v", `${localVolumeName(scope)}:${homeDir}`] : []),
       ...(opts.coreContainer ? [] : ["-p", `127.0.0.1:0:${AGENT_PORT}`]),
       "--add-host=host.docker.internal:host-gateway",
       ...(opts.cpus ? ["--cpus", String(opts.cpus)] : []),
       ...(memoryGb ? ["--memory", `${memoryGb}g`] : []),
-      image,
+      chosen ?? image,
     ];
     const r = await dexec(args, 120_000);
     if (r.code !== 0) throw new Error(`docker run ${name} failed: ${r.stderr.trim()}`);
@@ -283,54 +319,53 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
   }
 
   async function ensureContainer(scope: string, memoryGb?: number): Promise<{ name: string; coldStart: boolean }> {
-    return provisionQueue(scope, async () => {
-      const imageId = await preflight();
-      const name = localContainerName(scope);
+    const name = localContainerName(scope);
+    return provisionQueue(name, async () => {
+      let imageId = await preflight();
+      const chosen = await opts.imageFor?.(scope);
+      if (chosen) {
+        const inspected = await dexec(["image", "inspect", "-f", "{{.Id}}", chosen]);
+        if (inspected.code !== 0)
+          throw new Error(`local sandbox image ${chosen} not found: ${inspected.stderr.trim()}`);
+        imageId = inspected.stdout.trim();
+      }
       scopeByContainer.set(name, scope);
       const state = await containerState(name);
-      if (state && state.imageId === imageId) {
+      if (state && state.imageId === imageId && state.rawSocketsDisabled) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
-      if (state) await dexec(["rm", "-f", name]);
+      if (state) await removeDockerResource(["rm", "-f", name]);
       const volume = localVolumeName(scope);
       const hadVolume = (await dexec(["volume", "inspect", volume])).code === 0;
       if (!hadVolume) {
         const created = await dexec(["volume", "create", volume]);
         if (created.code !== 0) throw new Error(`docker volume create ${volume} failed: ${created.stderr.trim()}`);
       }
-      await runContainer(name, scope, true, memoryGb);
+      await runContainer(name, scope, true, memoryGb, chosen);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: !hadVolume };
     });
   }
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    return provisionQueue(`scratch:${key}`, async () => {
+    const name = localScratchName(key);
+    return provisionQueue(name, async () => {
       await preflight();
-      const name = localScratchName(key);
-      scratchByKey.set(key, name);
       const state = await containerState(name);
-      if (state) {
+      if (state?.rawSocketsDisabled) {
         if (!state.running) await startContainer(name);
         else await connectCore(await ensureNetwork(name));
         activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
         return { name, coldStart: false };
       }
+      if (state) await removeDockerResource(["rm", "-f", name]);
       await runContainer(name, undefined, false);
       activeByContainer.set(name, (activeByContainer.get(name) ?? 0) + 1);
       return { name, coldStart: true };
     });
-  }
-
-  function teardownQueueKey(handle: SandboxHandle): string {
-    if (handle.scratch) {
-      for (const [k, name] of scratchByKey) if (name === handle.id) return `scratch:${k}`;
-      return handle.id;
-    }
-    return scopeByContainer.get(handle.id) ?? handle.id;
   }
 
   const profile: AgentComputerProfile = {
@@ -456,21 +491,17 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     exportFiles: execExport.exportFiles,
 
     async destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, async () => {
-        const name = localContainerName(scopeId);
+      const name = localContainerName(scopeId);
+      return provisionQueue(name, async () => {
         const network = localNetworkName(name);
-        const remove = async (args: string[]) => {
-          const result = await dexec(args);
-          if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
-        };
-        await remove(["rm", "-f", name]);
+        await removeDockerResource(["rm", "-f", name]);
         if (opts.coreContainer) {
           const result = await dexec(["network", "disconnect", "-f", network, opts.coreContainer]);
           if (result.code !== 0 && (await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(network))
             throw new Error(`docker network disconnect ${network}: ${result.stderr.trim()}`);
         }
-        await remove(["network", "rm", "-f", network]);
-        await remove(["volume", "rm", "-f", localVolumeName(scopeId)]);
+        await removeDockerResource(["network", "rm", "-f", network]);
+        await removeDockerResource(["volume", "rm", "-f", localVolumeName(scopeId)]);
         activeByContainer.delete(name);
         scopeByContainer.delete(name);
         portByName.delete(name);
@@ -478,7 +509,7 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     },
 
     async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      return provisionQueue(teardownQueueKey(handle), async () => {
+      return provisionQueue(handle.id, async () => {
         const remaining = (activeByContainer.get(handle.id) ?? 1) - 1;
         if (remaining > 0) {
           activeByContainer.set(handle.id, remaining);
@@ -487,7 +518,6 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
         activeByContainer.delete(handle.id);
 
         if (handle.scratch) {
-          for (const [k, name] of scratchByKey) if (name === handle.id) scratchByKey.delete(k);
           if (tdOpts?.destroy) await dexec(["rm", "-f", handle.id]);
           else await dexec(["rm", "-f", handle.id]).catch(swallowAs("local-sandbox: scratch rm", undefined));
           await disconnectCore(localNetworkName(handle.id));
@@ -506,11 +536,9 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
           await dexec(["network", "rm", localNetworkName(handle.id)]).catch(
             swallowAs("local-sandbox: destroy network rm", undefined),
           );
-          const scope = scopeByContainer.get(handle.id);
-          if (scope)
-            await dexec(["volume", "rm", localVolumeName(scope)]).catch(
-              swallowAs("local-sandbox: destroy volume rm", undefined),
-            );
+          await dexec(["volume", "rm", volumeForContainer(handle.id)]).catch(
+            swallowAs("local-sandbox: destroy volume rm", undefined),
+          );
           scopeByContainer.delete(handle.id);
           portByName.delete(handle.id);
           return;

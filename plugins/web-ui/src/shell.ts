@@ -56,12 +56,7 @@ import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { reloadIntoServedRelease } from "./stale-release";
-import {
-  notificationPrompt,
-  onNotificationStateChange,
-  startNotifications,
-  stopPushNotifications,
-} from "./notifications";
+import { notificationPrompt, onNotificationStateChange, startNotifications } from "./notifications";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
@@ -164,7 +159,10 @@ function signOutFromMenu(): void {
   void signOut();
 }
 
-onCustomEmojiLoaded(() => renderSidebarTop());
+onCustomEmojiLoaded(() => {
+  renderSidebarTop();
+  for (const conversation of allConversations()) conversation.redraw();
+});
 
 function startHiddenChatFromMenu(): void {
   closeFormMenus();
@@ -308,7 +306,6 @@ const ICON = {
 };
 
 export async function signOut(): Promise<void> {
-  await stopPushNotifications().catch(swallowAs("web-ui: remove push subscription on sign-out", undefined));
   stopAnalytics();
   stopBrowserErrors();
   const portal = authMode === "portal";
@@ -736,7 +733,7 @@ export function renderSidebarTop(): void {
             personas.length
               ? html`
                   <div class="new-chat-menu-sep" role="separator"></div>
-                  <div class="new-chat-menu-head" role="presentation">Personas</div>
+                  <div class="new-chat-menu-head" role="presentation">Bots</div>
                   ${personas.map(
                     (persona) => html`
                       <button
@@ -1272,7 +1269,7 @@ export async function boot(): Promise<void> {
     return;
   }
   const sessions = refreshSessions({ showLoading: true });
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = appState.me.personalScope;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);

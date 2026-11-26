@@ -84,7 +84,7 @@ const surfaceBriefingSchema = z.object({
 export const CLIENT_RESULT_MAX_BODY_BYTES = 6_000_000;
 
 export const clientResultSchema = z.object({
-  callId: z.string().min(1).max(256),
+  callId: z.string().min(1),
   result: z.object({
     content: z.string(),
     structured: z.unknown().optional(),

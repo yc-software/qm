@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { recentPrincipalDeliveryNote } from "../src/core/orchestrator/turn-helpers.ts";
 import type { DeliveryProvenance } from "../src/types.ts";
+import { personalScope } from "../src/types.ts";
 
 async function deliveredNote(texts: string[], since?: number, provenance?: DeliveryProvenance): Promise<string> {
   const store = createDeliveryStore();
@@ -35,7 +36,7 @@ test("a short delivery stays verbatim and includes provenance", async () => {
     trigger: "cron",
     surface: "cron",
     fireKey: "cron:c1:1",
-    sourceScopeId: "personal:U-alice",
+    sourceScopeId: personalScope("U-alice"),
     sourceThreadRef: "cron:c1:1",
     sourceId: "c1",
     sourceTitle: "Digest",

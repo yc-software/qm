@@ -71,7 +71,7 @@ export function webTranscript(
             {
               kind: "AgentMessage" as const,
               text,
-              body: extra.supersedes === undefined ? {} : { supersedes: extra.supersedes },
+              body: extra.supersedes === undefined ? {} : { supersedes: [extra.supersedes] },
             },
           ]
         : []),

@@ -528,3 +528,20 @@ test("layer tools install outside /workspace by staging inside it", async () => 
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.trim(), "ok");
 });
+
+test("a computer's chosen image is the template its session is created from", async () => {
+  const templates: unknown[] = [];
+  const s = make({
+    imageFor: async (id: string) => (id === scope ? "toolchain" : undefined),
+    client: {
+      ...fake.client,
+      create: (opts: Parameters<typeof fake.client.create>[0]) => {
+        templates.push(opts.template);
+        return fake.client.create(opts);
+      },
+    },
+  });
+  await s.provision(scope);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(templates, ["toolchain", undefined]);
+});

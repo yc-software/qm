@@ -2,7 +2,7 @@ import { durableMapTenancy } from "../persistence/durable-map.ts";
 import type { PgMigrationDefinition, PgPool } from "../persistence/pg-pool.ts";
 import { fold } from "../identity/user-tenancy.ts";
 import { servingTenant } from "./claim.ts";
-import { withTenant } from "./context.ts";
+import { type Tenant, withTenant } from "./context.ts";
 
 const ACTIVE = `json->>'disabled' IS DISTINCT FROM 'true'`;
 
@@ -35,7 +35,7 @@ export function inboundTenancy(table: string): PgMigrationDefinition[] {
   return [...durableMapTenancy(table), inboundIndexes(table)];
 }
 
-export type TenantKey = keyof typeof KEYS | "slack_bridge" | "partner_chat" | "app_host";
+export type TenantKey = keyof typeof KEYS | "slack_bridge" | "app_host";
 
 const definer = (name: string, returns: string, body: string): string =>
   `CREATE OR REPLACE FUNCTION ${name}(key text) RETURNS ${returns}
@@ -180,18 +180,27 @@ export const GENERIC_CHAT_TENANT: PgMigrationDefinition = {
 
 export interface TenantLookup {
   tenantFor(key: TenantKey, value: string | undefined): Promise<string | undefined>;
+  externalOrgTenant(issuer: string, org: string): Promise<string | undefined>;
+  boundExternalOrg(tenant: Tenant, issuer: string): Promise<string | undefined>;
   gmailTenants(email: string): Promise<string[]>;
   slackTenants(): Promise<string[]>;
   exists(tenant: string): Promise<boolean>;
 }
 
-export function tenantLookup(pg: Pick<PgPool, "q">): TenantLookup {
+export function tenantLookup(pg: Pick<PgPool, "q" | "forTenant">): TenantLookup {
+  const tenantFrom = async (sql: string, params: string[]) => {
+    const tenant = (await pg.q(sql, params))[0]?.tenant;
+    return typeof tenant === "string" ? tenant : undefined;
+  };
   return {
     async tenantFor(key, value) {
-      if (!value) return undefined;
-      const rows = await pg.q(`SELECT qm_tenant_for_${key}($1)::text AS tenant`, [value]);
-      const tenant = rows[0]?.tenant;
-      return typeof tenant === "string" ? tenant : undefined;
+      return value ? tenantFrom(`SELECT qm_tenant_for_${key}($1)::text AS tenant`, [value]) : undefined;
+    },
+    externalOrgTenant: (issuer, org) =>
+      tenantFrom("SELECT qm_tenant_for_external_org($1, $2)::text AS tenant", [issuer, org]),
+    async boundExternalOrg(tenant, issuer) {
+      const org = (await pg.forTenant(tenant).q("SELECT qm_bound_external_org($1) AS org", [issuer]))[0]?.org;
+      return typeof org === "string" ? org : undefined;
     },
     async gmailTenants(email) {
       const rows = await pg.q("SELECT tenant::text AS tenant FROM qm_tenants_for_gmail($1) tenant", [email]);

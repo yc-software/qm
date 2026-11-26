@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
-import { type TurnRequest } from "../src/types.ts";
+import { type TurnRequest, personalScope } from "../src/types.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -32,7 +32,7 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
   const acl = wrapAcl?.(built.acl) ?? built.acl;
   const server = createInsecureTestServer(built.app, {
@@ -48,7 +48,7 @@ function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Bu
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function startBroker(brokerFetch: BrokerFetch): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
   );
@@ -67,7 +67,7 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
   );
@@ -88,7 +88,7 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Buil
 
 const brokerToken = (credentials: string[], aud: string = CREDENTIAL_BROKER_AUD) =>
   mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud, credentials, exp: Date.now() + CAPABILITY_TTL_MS },
+    { actorId: "U1", scopeId: personalScope("U1"), aud, credentials, exp: Date.now() + CAPABILITY_TTL_MS },
     SECRET,
   );
 
@@ -226,7 +226,7 @@ test("env-delivery accepts person/team grantees — grants now gate env injectio
       delivery: "env",
       envKey: "STEEL_API_KEY",
       secret: "s1",
-      grantees: ["personal:alice@default-org"],
+      grantees: [personalScope("alice@default-org")],
     });
     assert.equal(narrowed.status, 200, "a person grant on an env credential is allowed");
 
@@ -456,7 +456,7 @@ test("a partial ACL failure rolls a credential edit and its grants back to the v
       slug: "k",
       name: "Changed",
       host: "h.example",
-      grantees: ["personal:alice"],
+      grantees: [personalScope("alice")],
       expectedUpdatedAt: before.updatedAt,
     });
     assert.equal(edit.status, 500);
@@ -508,7 +508,7 @@ test("credential rollback preserves a concurrent credential update", async () =>
       slug: "k",
       name: "Changed",
       host: "h.example",
-      grantees: ["personal:alice"],
+      grantees: [personalScope("alice")],
       expectedUpdatedAt: before.updatedAt,
     });
     assert.equal(edit.status, 500);
@@ -633,7 +633,7 @@ test("credential rollback preserves a concurrent grant tuple instead of replacin
       slug: "k",
       name: "Changed",
       host: "h.example",
-      grantees: ["personal:alice"],
+      grantees: [personalScope("alice")],
       expectedUpdatedAt: before.updatedAt,
     });
     assert.equal(edit.status, 500);
@@ -693,20 +693,20 @@ test("parallel credential edits from one loaded revision allow one winner and on
         slug: "k",
         name: "Left",
         host: "h.example",
-        grantees: ["personal:left"],
+        grantees: [personalScope("left")],
         expectedUpdatedAt: version,
       }),
       putCred(srv.base, {
         slug: "k",
         name: "Right",
         host: "h.example",
-        grantees: ["personal:right"],
+        grantees: [personalScope("right")],
         expectedUpdatedAt: version,
       }),
     ]);
     assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
     const saved = (await getCfg(srv.base)).serviceCredentials[0]!;
-    assert.deepEqual(saved.grantees, [saved.name === "Left" ? "personal:left" : "personal:right"]);
+    assert.deepEqual(saved.grantees, [saved.name === "Left" ? personalScope("left") : personalScope("right")]);
   } finally {
     await srv.close();
   }
@@ -723,13 +723,13 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
       slug: "k",
       name: "K",
       host: "h.example",
-      grantees: ["personal:bob", "personal:alice"],
+      grantees: [personalScope("bob"), personalScope("alice")],
       expectedUpdatedAt: createdVersion,
     });
-    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), [
-      "personal:alice",
-      "personal:bob",
-    ]);
+    assert.deepEqual(
+      (await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(),
+      [personalScope("alice"), personalScope("bob")].sort(),
+    );
 
     const sharedVersion = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
     assert.equal((await putCred(srv.base, { slug: "k", delete: true, expectedUpdatedAt: sharedVersion })).status, 200);
@@ -750,11 +750,14 @@ test("a channel grantee is accepted and saved", async () => {
       slug: "k",
       name: "K",
       host: "h.example",
-      grantees: ["channel:C1", "personal:bob"],
+      grantees: ["channel:C1", personalScope("bob")],
       expectedUpdatedAt: version,
     });
     assert.equal(r.status, 200);
-    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(), ["channel:C1", "personal:bob"]);
+    assert.deepEqual(
+      (await getCfg(srv.base)).serviceCredentials[0]!.grantees.sort(),
+      ["channel:C1", personalScope("bob")].sort(),
+    );
   } finally {
     await srv.close();
   }
@@ -1077,7 +1080,7 @@ test("orchestrator vends a capability for only the requested org credential", as
     permission: "read",
     grantedBy: "admin",
   });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   await selectDefaultSandbox(built, "B-LEGACY", "channel:C1");
   await built.app.turn(dm("!run echo hi"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1125,11 +1128,11 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
-    granteeScopeId: "personal:U2",
+    granteeScopeId: personalScope("U2"),
     permission: "read",
     grantedBy: "admin",
   });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
 
   assert.match(
     await failedTurnError(built, dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
@@ -1169,7 +1172,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
     text: "!run echo hi",
   });
 
-  await selectDefaultSandbox(built, "U1", "channel:C1", "channel:C2", "personal:U1");
+  await selectDefaultSandbox(built, "U1", "channel:C1", "channel:C2", personalScope("U1"));
   await built.app.turn(channelTurn("C1"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   let res = await built.app.turn({
@@ -1205,7 +1208,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
   const { built, env } = buildWithCapture();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1248,7 +1251,7 @@ test("the system prompt does NOT advertise a credential the session isn't entitl
   await built.acl.grant(tenant, {
     ownerScopeId: "org:default-org",
     ref: "service-cred:x-firehose",
-    granteeScopeId: "personal:U2",
+    granteeScopeId: personalScope("U2"),
     permission: "read",
     grantedBy: "admin",
   });
@@ -1343,14 +1346,14 @@ test("usage summaries authorize before reads and include only the requested scop
     slug: "summary",
     host: "api.example.com",
     status: "ok",
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     principalId: "U1",
   });
   srv.built.credentialUsage.record(tenant, {
     slug: "unlisted",
     host: "api.example.com",
     status: "ok",
-    scopeLabel: "personal:U2",
+    scopeLabel: personalScope("U2"),
     principalId: "U2",
   });
   await settle(async () => (await srv.built.credentialUsage.list(tenant)).length >= 2);
@@ -1421,7 +1424,7 @@ test("broker accepts no-expiry sandbox tokens but still enforces credential disa
     await srv.built.serviceCreds.setServiceCredential("org:default-org", credential);
     const token = (exp: number) =>
       mintCapabilityToken(
-        { actorId: "U1", scopeId: "personal:U1", aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
+        { actorId: "U1", scopeId: personalScope("U1"), aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
         SECRET,
       );
     const request = { credential: "probe", method: "GET", url: "https://api.example.com/probe" };

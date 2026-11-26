@@ -493,7 +493,7 @@ export function createSkillScreen(turn: SkillScreenTurn) {
   } = turn;
   const carriedSkillScreens = new Map<string, Promise<boolean>>();
   const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
+    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { attributes: countSkills });
     const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
     const allowed: SkillResolution[] = [];
     for (const entry of resolved) {

@@ -79,7 +79,7 @@ async function withCanvas(
     const sessions = await vite.ssrLoadModule("/src/sessions.ts");
     const conversations = await vite.ssrLoadModule("/src/conversations.ts");
     const { contextsState } = await vite.ssrLoadModule("/src/contexts.ts");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
     document.body.append(appState.mainEl);

@@ -10,6 +10,9 @@ import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
 import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
 import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
 import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { movePersonalScope, PERSONAL_SCOPE_MIGRATIONS } from "./personal-scopes.ts";
+import { foundingUserId } from "../directory/person-refs.ts";
+import { scopeId } from "../types.ts";
 import { markBotWork, unlessSlackListsAPerson } from "../triggers/trigger-store.ts";
 import { holdBotLoopShips } from "../loops/loop-store.ts";
 
@@ -31,6 +34,7 @@ export interface UserRecord {
 }
 
 export interface UserLink {
+  userId: string;
   principalId: string;
   canonicalId: string;
   evidence: string;
@@ -50,7 +54,8 @@ export interface UserActivity {
 
 export interface UserLinkStore {
   links(): Promise<UserLink[]>;
-  link(link: UserLink): Promise<UserLink>;
+  ensure(alias: string): Promise<string>;
+  link(link: Omit<UserLink, "userId">): Promise<UserLink>;
   unlink(aliasId: string): Promise<UserLink | null>;
 }
 
@@ -254,6 +259,7 @@ export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
   ...USER_MIGRATIONS,
   ...TENANTED.after,
   ...PERSONA_TENANCY,
+  ...PERSONAL_SCOPE_MIGRATIONS,
   {
     id: "users/v2/0006-display-name",
     statements: [
@@ -351,7 +357,7 @@ const COLUMNS = `u.id, u.primary_alias, u.kind,
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
   (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
-const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
+const LINK_SELECT = `SELECT l.user_id, l.alias_id, u.primary_alias AS canonical_id, l.evidence,
     coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
   FROM user_links l JOIN users u ON u.id = l.user_id`;
@@ -371,6 +377,7 @@ function toRecord(r: Record<string, unknown>): UserRecord {
 
 function toLink(r: Record<string, unknown>): UserLink {
   return {
+    userId: r.user_id as string,
     principalId: r.alias_id as string,
     canonicalId: r.canonical_id as string,
     evidence: r.evidence as string,
@@ -432,12 +439,10 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   const q = onClient(client);
   const found = await findUser(q, alias);
   if (found) return found;
-  const created = (
-    await q(
-      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-      [alias],
-    )
-  )[0]?.id as string | undefined;
+  const insert = `INSERT INTO users(id, primary_alias) VALUES (coalesce($2::uuid, gen_random_uuid()), $1)
+                  ON CONFLICT DO NOTHING RETURNING id`;
+  const created = ((await q(insert, [alias, foundingUserId(alias)]))[0]?.id ??
+    (await q(insert, [alias, null]))[0]?.id) as string | undefined;
   if (created) {
     const linked = await q(
       `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
@@ -494,7 +499,7 @@ async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<str
   return rows.map((r) => r.alias as string);
 }
 
-async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
+async function linkInTransaction(client: PoolClient, link: Omit<UserLink, "userId">): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
   if ((await findBotSignIns(q, [link.principalId, link.canonicalId])).length)
@@ -530,6 +535,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
     await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
+    await movePersonalScope(client, source, scopeId("personal", target));
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
   await q(
@@ -683,8 +689,9 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       );
       return rows[0] ? toRecord(rows[0]) : null;
     },
+    ensure: ensureUser,
     async links() {
-      return (await q(`${LINK_SELECT} WHERE l.alias_id <> u.primary_alias`)).map(toLink);
+      return (await q(LINK_SELECT)).map(toLink);
     },
     async link(link) {
       return transaction((client) => linkInTransaction(client, link));

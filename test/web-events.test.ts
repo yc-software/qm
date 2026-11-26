@@ -10,10 +10,10 @@ import { installPrincipalLinks } from "../src/directory/person.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import type { OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Delivery } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
+import { personalScope } from "../src/types.ts";
 
 const config = testConfig({ signingSecret: "web-events-signing-secret-0123456789abc" });
 const built = stopAtEnd(buildApp(config));
@@ -23,7 +23,7 @@ after(() => events.stop());
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     web: { events, me: { suggestedActivities: [] }, shell: { release: async () => undefined } as never },
     ...deps,
@@ -140,7 +140,7 @@ test("a person sees their own deliveries, session states and inbox items and nob
   const { loop } = await built.loops.store.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "Triage",
     playbook: "triage",
     successCondition: "done",
@@ -323,9 +323,14 @@ test("a session state without participants goes to the web thread's owner, and r
 
 test("inbox items reach exactly the active watchers who can administer the loop, including group scopes and aliases", async (t) => {
   const world = fakeHub(t);
-  installPrincipalLinks({ canonical: (key) => (key === "bob-slack" ? "bob" : undefined), aliases: () => [] });
+  installPrincipalLinks({
+    canonical: (key) => (key === "bob-slack" ? "bob" : undefined),
+    aliases: () => [],
+    userId: () => undefined,
+    claim: () => {},
+  });
   t.after(() => installPrincipalLinks(null));
-  world.owners.set("mine", "personal:alice");
+  world.owners.set("mine", personalScope("alice"));
   world.owners.set("team", "group:core");
   world.managers.add("alice").add("bob").add("carol");
   const streams = Object.fromEntries(

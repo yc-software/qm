@@ -4,10 +4,11 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { createToolContext, NeedsApproval, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { intersectEgressPolicies } from "../src/resolution/egress-policy.ts";
 import type { SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { personalScope } from "../src/types.ts";
 
 function fixture(
   source = "group:project",
-  target = "personal:alice",
+  target = personalScope("alice"),
   authority = true,
   toolDeps: Partial<ToolContextDeps> = {},
 ) {
@@ -245,8 +246,11 @@ test("a one-shot command approval is consumed once after a pending provision set
 });
 
 test("Open continuity works from a DM into a currently joined shared scope, not another person's computer", async () => {
-  await fixture("personal:alice", "group:project").turn.provisionResource("personal-box");
-  await assert.rejects(fixture("group:project", "personal:bob").turn.provisionResource("personal-box"), /authorized/);
+  await fixture(personalScope("alice"), "group:project").turn.provisionResource("personal-box");
+  await assert.rejects(
+    fixture("group:project", personalScope("bob")).turn.provisionResource("personal-box"),
+    /authorized/,
+  );
 });
 
 test("Open continuity applies consistently to inventory and explicit management", async () => {
@@ -262,7 +266,7 @@ test("Open continuity applies consistently to inventory and explicit management"
 });
 
 test("Open personal credentials never flow into another shared computer", async () => {
-  const f = fixture("personal:alice", "group:project");
+  const f = fixture(personalScope("alice"), "group:project");
   await f.tools.execute("pwd", { sandboxId: "personal-box" });
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-own"), false);
   assert.equal(JSON.stringify(f.provisions).includes("synthetic-room"), false);
@@ -271,7 +275,7 @@ test("Open personal credentials never flow into another shared computer", async 
 test("background starts use the authorized personal target and recheck revocation", async () => {
   const f = fixture();
   await f.tools.backgroundStart("node work.js", { purpose: "Run background tests", sandboxId: "personal-box" });
-  assert.equal(f.starts[0]?.scopeId, "personal:alice");
+  assert.equal(f.starts[0]?.scopeId, personalScope("alice"));
   assert.equal(f.starts[0]?.env, undefined);
   f.state.member = false;
   await assert.rejects(
@@ -282,7 +286,7 @@ test("background starts use the authorized personal target and recheck revocatio
 
 test("untrusted background authority and copying room command credentials are refused", async () => {
   await assert.rejects(
-    fixture("group:project", "personal:alice", false).turn.provisionResource("personal-box"),
+    fixture("group:project", personalScope("alice"), false).turn.provisionResource("personal-box"),
     /authorized/,
   );
   const f = fixture();
@@ -325,7 +329,7 @@ test("cross-target egress policies narrow both provider policy and minted proxy 
 });
 
 test("cross-scope teardown preserves live jobs regardless of which conversation started them", async () => {
-  for (const jobScope of ["personal:alice", "group:project", "group:other"]) {
+  for (const jobScope of [personalScope("alice"), "group:project", "group:other"]) {
     const f = fixture();
     f.state.liveJobs = [{ sandboxId: "personal-box", scopeId: jobScope }];
     await f.turn.provisionResource("personal-box");
@@ -360,7 +364,11 @@ test("two requiring policies produce one target-qualified one-shot approval", as
         assert.ok(err instanceof NeedsApproval);
         assert.deepEqual(err.grantModes, { session: false, always: false });
         approvalKey = err.approvalKey!;
-        assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
+        assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), [
+          personalScope("alice"),
+          "protected",
+          "command",
+        ]);
         return true;
       },
     );
@@ -385,7 +393,7 @@ test("target denial wins before a source one-shot approval is consumed", async (
 
 test("cross-scope credential handles are refused without resolving or consuming grants", async () => {
   const events: string[] = [];
-  const f = fixture("group:project", "personal:alice", true, {
+  const f = fixture("group:project", personalScope("alice"), true, {
     commandCredentials: [
       {
         handle: "lazy",
@@ -413,7 +421,7 @@ test("cross-scope credential handles are refused without resolving or consuming 
 });
 
 test("source policy still restricts an explicit cross-scope target", async () => {
-  const f = fixture("group:project", "personal:alice", true, {
+  const f = fixture("group:project", personalScope("alice"), true, {
     commandPolicy: () => ({ mode: "denylist", rules: [{ pattern: "protected", decision: "deny" }] }),
   });
   await assert.rejects(f.tools.execute("protected", { sandboxId: "personal-box" }), /denied/);
@@ -421,7 +429,7 @@ test("source policy still restricts an explicit cross-scope target", async () =>
 });
 
 test("source approval intersects target policy without consuming approval on target denial", async () => {
-  const f = fixture("group:project", "personal:alice", true, {
+  const f = fixture("group:project", personalScope("alice"), true, {
     commandPolicy: () => ({
       mode: "denylist",
       rules: [{ pattern: "protected", decision: "require_approval" }],
@@ -437,7 +445,11 @@ test("source approval intersects target policy without consuming approval on tar
     assert.ok(error instanceof NeedsApproval);
     assert.deepEqual(error.grantModes, { session: false, always: false });
     approvalKey = error.approvalKey!;
-    assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), ["personal:alice", "protected", "command"]);
+    assert.deepEqual(JSON.parse(approvalKey.slice("sandbox:".length)), [
+      personalScope("alice"),
+      "protected",
+      "command",
+    ]);
     return true;
   });
   f.approve(approvalKey);

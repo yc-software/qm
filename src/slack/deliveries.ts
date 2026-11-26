@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
   originContext,
+  personaContinues,
   slackPersonaReplyArgs,
   createDeliveryTracker,
   createThreadTracker,
@@ -40,6 +41,7 @@ import { slackErrorCode } from "./payloads.ts";
 import { trimTrailingSlashes } from "../util/text.ts";
 import { SLACK_DELIVERY_CLAIM_MS } from "./delivery-jobs.ts";
 import { slackRetryAfterMs } from "./delivery.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 const PERMANENT_POST_ERRORS = new Set([
   "channel_not_found",
@@ -88,6 +90,7 @@ export function createSlackDeliverer(deps: {
   flow: TurnFlow;
   threads: ReturnType<typeof createThreadTracker>;
   clientForIdentity(identity: string): any;
+  card?: (channel: string, threadTs: string) => SlackStatusCard | undefined;
 }): { deliver(client: any, d: Delivery): Promise<void> } {
   const { core, flow, threads, clientForIdentity } = deps;
   const recoveredRow = (d: Delivery): boolean =>
@@ -97,7 +100,10 @@ export function createSlackDeliverer(deps: {
   const ackDelivery = (id: string, body?: unknown): Promise<void> =>
     core.ackDelivery(id, body as { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string } | undefined);
 
-  function deliveryFooter(d: Delivery): Array<Record<string, unknown>> {
+  async function deliveryFooter(
+    d: Delivery,
+    at: { channel: string; threadTs?: string; before?: string },
+  ): Promise<Array<Record<string, unknown>>> {
     const p = d.provenance;
     let source: { page: "crons" | "webhooks"; id: string; title?: string } | undefined;
     const cronId = p?.trigger === "cron" ? cronIdOf(p.sourceThreadRef) : null;
@@ -109,9 +115,9 @@ export function createSlackDeliverer(deps: {
       ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
       ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
     ];
+    const continues = await personaContinues(core.readSurfaceMessages?.bind(core), at, d.destination.persona);
     const origin = originContext({
-      persona: d.destination.persona,
-      project: d.destination.project,
+      ...(continues ? {} : { persona: d.destination.persona, project: d.destination.project }),
       webUiPublicUrl: deps.webUiPublicUrl,
       ...(source ? { source } : {}),
     });
@@ -192,9 +198,6 @@ export function createSlackDeliverer(deps: {
           }
           if (d.destination.react) {
             const { messageTs, emoji } = d.destination.react;
-            if (await core.thinkingStream?.queueIfStreaming(channel, messageTs, { kind: "react", emoji })) {
-              return { messageTs };
-            }
             const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
             if (failed.length)
               console.error(
@@ -219,9 +222,6 @@ export function createSlackDeliverer(deps: {
           }
           if (d.destination.delete) {
             const { messageTs } = d.destination.delete;
-            if (await core.thinkingStream?.queueIfStreaming(channel, messageTs, { kind: "delete" })) {
-              return { messageTs };
-            }
             try {
               await client.chat.delete({ channel, ts: messageTs });
             } catch (err) {
@@ -241,29 +241,20 @@ export function createSlackDeliverer(deps: {
               return undefined;
             }
             const footer = [
-              ...deliveryFooter(d),
+              ...(await deliveryFooter(d, { channel, threadTs, before: d.destination.edit.messageTs })),
               ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
             ];
             const unfurlLinks = d.destination.unfurlLinks;
-            const editBlocks = [
-              ...slackSectionBlocks(text),
-              ...(footer.length ? [{ type: "context", elements: footer }] : []),
-            ];
-            if (
-              await core.thinkingStream?.queueIfStreaming(channel, d.destination.edit.messageTs, {
-                kind: "edit",
-                text,
-                blocks: editBlocks,
-              })
-            ) {
-              return { messageTs: d.destination.edit.messageTs };
-            }
+            if (threadTs) await deps.card?.(channel, threadTs)?.release(d.destination.edit.messageTs);
             await client.chat
               .update({
                 channel,
                 ts: d.destination.edit.messageTs,
                 text,
-                blocks: editBlocks,
+                blocks: [
+                  ...slackSectionBlocks(text),
+                  ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                ],
                 ...botIdentityArgs(d.destination.persona),
                 ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
               })
@@ -288,8 +279,7 @@ export function createSlackDeliverer(deps: {
               editRef = placeholder.ts;
             }
           }
-          const rawCleaned = runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text);
-          let text = toSlackMrkdwn(rawCleaned);
+          let text = toSlackMrkdwn(runId ? cleanAgentReplyForSlack(d.text).text : stripSlackDirectives(d.text));
           const replayAttachments = async (root?: string): Promise<void> => {
             if (!d.attachments?.length) return;
             try {
@@ -307,7 +297,7 @@ export function createSlackDeliverer(deps: {
                 .catch(swallowAs("slack: post upload-failure note", undefined));
             }
           };
-          const messageFooter = deliveryFooter(d);
+          const messageFooter = await deliveryFooter(d, { channel, threadTs, ...(editRef ? { before: editRef } : {}) });
           if (!text.trim() && !messageFooter.length && d.attachments?.length) text = "Files attached.";
           const footer = [
             ...messageFooter,
@@ -332,38 +322,11 @@ export function createSlackDeliverer(deps: {
               d.idempotencyKey ?? d.id,
               verifyOldest ?? String(Date.now() / 1000 - 60),
             ).catch(swallowUnlessRateLimited("slack: delivered-marker probe"));
-          let skipEditRefUpdate = false;
-          if (core.thinkingStream && (runId || editRef)) {
-            const streamed = await core.thinkingStream.deliver(client, {
-              ...(runId ? { runId } : {}),
-              ...(editRef ? { editRef } : {}),
-              channel,
-              ...(threadTs ? { threadTs } : {}),
-              rawMarkdown: rawCleaned,
-              mrkdwnFallback: text,
-              ...(footer.length ? { footerBlocks: [{ type: "context", elements: footer }] } : {}),
-              idempotencyKey: d.idempotencyKey ?? d.id,
-              ...(() => {
-                if (runId) return { unfurlLinks: false };
-                if (d.destination.unfurlLinks !== undefined) return { unfurlLinks: d.destination.unfurlLinks };
-                return {};
-              })(),
-              finalize: Boolean(runId),
-            });
-            if (streamed.handled) {
-              if (threadTs) threads.mark(channel, threadTs, true);
-              const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
-              if (!alreadyDelivered) await replayAttachments(threadTs);
-              return { messageTs: streamed.messageTs };
-            }
-            if (streamed.closedStreamTs && streamed.closedStreamTs === editRef) {
-              skipEditRefUpdate = true;
-            }
-          }
-          if (editRef && !skipEditRefUpdate) {
+          if (editRef) {
             const unfurlLinks = runId ? false : d.destination.unfurlLinks;
             try {
               const alreadyDelivered = d.attachments?.length ? await deliveredMarker() : undefined;
+              if (threadTs) await deps.card?.(channel, threadTs)?.release(editRef);
               await client.chat.update({
                 channel,
                 ts: editRef,
@@ -395,6 +358,11 @@ export function createSlackDeliverer(deps: {
           );
           const root = threadTs ?? (res?.ts ? String(res.ts) : undefined);
           if (root) threads.mark(channel, root, true);
+          const by = d.provenance?.sourceRunId;
+          if (by && threadTs && res.ts && !res.parts)
+            void deps
+              .card?.(channel, threadTs)
+              ?.posted({ text, ...(footerBlocks ? { blocks: footerBlocks } : {}) }, res.ts, by);
           if (!res.reused) await replayAttachments(root);
           return res.ts === undefined ? undefined : { messageTs: String(res.ts) };
         } finally {
@@ -455,7 +423,7 @@ export function createSlackDeliverer(deps: {
           if (!text.trim() && !d.attachments?.length) return undefined;
           const channel = await openConversationFor(client, [d.destination.target]);
           const threadTs = d.destination.threadTs;
-          const footer = deliveryFooter(d);
+          const footer = await deliveryFooter(d, { channel, threadTs });
           if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
           const blocks = card?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
           let uploadError: unknown;

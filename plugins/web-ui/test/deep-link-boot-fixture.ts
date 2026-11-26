@@ -1,6 +1,7 @@
 import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
+import type { ActivitySeeds } from "../../chassis/src/suggested-activities.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
 
 export interface Harness {
@@ -52,6 +53,13 @@ interface HarnessOptions {
   returnReplaces?: string;
   openNewChat?: boolean;
 }
+
+export const welcomeSeeds: ActivitySeeds = {
+  activities: [
+    { id: "research", title: "Research a customer", prompt: "Research our biggest customer.", icon: "book" },
+  ],
+  apps: {},
+};
 
 export const SESSION = {
   id: "sess-deep",
@@ -156,21 +164,25 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path === "/me")
       return Response.json({
         user: "tester",
+        personalScope: "personal:tester",
         org: "test",
         permissions: [],
         chatSurfaces: [
           { kind: "slack", label: "Slack" },
           { kind: "partner-chat", label: "Community chat" },
         ],
-        ...(opts.welcome ? { welcomeCohort: "F26" } : {}),
+        ...(opts.welcome ? { welcome: welcomeSeeds } : {}),
       });
     if (path === "/api/composio/slack/complete")
       return Response.json({ connected: true, user: "Alice", workspace: "Acme" });
     if (path === "/api/composio/slack") return Response.json({ connected: false, workspaceInstalled: true });
     if (path.startsWith("/api/composio/connections"))
       return Response.json({ items: connectedItems, nextCursor: null }, { status: connectedStatus });
-    if (path.startsWith("/api/composio/toolkits"))
-      return Response.json({ items: [{ id: "gmail", name: "Gmail", description: "Email" }], nextCursor: null });
+    if (path.startsWith("/api/composio/toolkits")) {
+      const apps = Object.entries({ gmail: "Gmail", granola_mcp: "Granola MCP" }).map(([id, name]) => ({ id, name }));
+      const asked = new URL(path, "http://localhost").searchParams.get("toolkit") ?? "";
+      return Response.json({ items: apps.filter((app) => app.id.startsWith(asked)), nextCursor: null });
+    }
     if (path.startsWith("/api/runtime-config")) {
       if (opts.holdRuntimeConfig) await runtimeHeld;
       return Response.json({
