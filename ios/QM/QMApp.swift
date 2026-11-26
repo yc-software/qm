@@ -673,8 +673,8 @@ struct ShellNav: View {
   var body: some View {
     HStack(spacing: 24) {
       item(
-        .conversations, icon: "bubble.left.and.bubble.right",
-        filled: "bubble.left.and.bubble.right.fill", label: "Conversations")
+        .conversations, icon: "line.3.horizontal", filled: "line.3.horizontal",
+        label: "Conversations")
       item(.new, icon: "square.and.pencil", filled: "square.and.pencil", label: "New chat")
       item(.more, icon: "square.grid.2x2", filled: "square.grid.2x2.fill", label: "More")
     }
