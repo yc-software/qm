@@ -1,11 +1,11 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
+import { modelBudgetMessage } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import {
   noDefaultSandbox,
   selectComputer,
@@ -308,14 +308,15 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
 
   const refused = await app.turn(dm("!over-budget", { idempotencyKey: "over-budget-1" }));
   assert.equal(refused.status, "refused");
+  const expectedReason = modelBudgetMessage({ personalModelAuth: true });
   assert.equal(refused.refusalKind, "model_budget");
-  assert.equal(refused.reason, MODEL_BUDGET_TEXT);
+  assert.equal(refused.reason, expectedReason);
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
 
   const found = await app.getSession(t1.sessionId!);
   const failures = found!.items.filter((e) => turnFailure(e));
   assert.equal(failures.length, 1, "the explanation survives a reload");
-  assert.equal(turnFailure(failures[0]!)!, MODEL_BUDGET_TEXT);
+  assert.equal(turnFailure(failures[0]!)!, expectedReason);
   const logged = (await errors.list(tenant)).find((e) => e.category === "turn" && e.code === "model_budget");
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
@@ -368,13 +369,13 @@ test("activated resource defaults preserve an existing computer and stop eager p
   const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
-  await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
+  await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", personalScope("U1"));
   await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok", warm.reason);
   assert.equal(boxes.provisioned, 1);
-  await built.sandboxResources.setDefault("U1", "personal:U1", null);
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), null);
   const next = await built.app.turn(dm("hello after unset"));
   assert.equal(next.status, "ok", next.reason);
   assert.equal(boxes.provisioned, 1);
@@ -383,27 +384,9 @@ test("activated resource defaults preserve an existing computer and stop eager p
     dm("hello", { actor: { externalId: "new-user" }, conversation: { kind: "dm", threadRef: "dm:new:t1" } }),
   );
   assert.equal(newSession.status, "ok", newSession.reason);
-  assert.equal(await built.sandboxResources.resolve("personal:new-user"), null);
+  assert.equal(await built.sandboxResources.resolve(personalScope("new-user")), null);
   assert.equal(boxes.provisioned, 1);
 });
-
-for (const combined of [true, false]) {
-  test(`turn cleanup retains recent and malformed paths and removes stale files (combined=${combined})`, async () => {
-    const built = freshApp();
-    if (!combined) built.sandbox.removeDirAndList = undefined;
-    await selectComputer(built, "U1", scopeId("personal", "U1"));
-    const handle = await built.sandbox.provision(scopeId("personal", "U1"));
-    const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
-    const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
-    const malformed = ".agent-turn/owner/!invalid/file";
-    for (const path of [old, recent, malformed]) await built.sandbox.writeFile(handle, path, "retained");
-    const result = await built.app.turn(dm("!run true"));
-    assert.equal(result.status, "ok", result.reason);
-    assert.equal(await built.sandbox.readFile(handle, old), null);
-    assert.equal(await built.sandbox.readFile(handle, recent), "retained");
-    assert.equal(await built.sandbox.readFile(handle, malformed), "retained");
-  });
-}
 
 test("private session approval replay preserves restrictions even when the click omits them", async () => {
   const built = freshApp();
@@ -506,7 +489,7 @@ test("an isolated channel environment does not disclose the actor's private sand
     ],
   );
   const privateName = "PRIVATE-ACQUISITION-REVIEW";
-  const personal = await built.sandboxResources.create("U1", "personal:U1", "sprites", privateName);
+  const personal = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", privateName);
   await selectComputer(built, "U1", "channel:C1");
   const inventory = await built.sandboxResources.list("U1", "channel:C1");
   assert.ok(inventory.sandboxes.some((sandbox) => sandbox.id === personal.id));

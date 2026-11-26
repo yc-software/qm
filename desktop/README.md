@@ -25,7 +25,7 @@ The portal preserves the browser session's identity, original authentication tim
 
 On macOS, the window controls sit inside the sidebar header. With a single session open, drag its title bar to move the window; tab dragging remains available in multi-pane layouts. Hold Command to reveal shortcuts for the first nine sessions in expanded sidebar groups, then press 1–9 to switch. Windows and Linux use Control. Collapsed groups and a hidden sidebar are excluded.
 
-Remote content is sandboxed with no Node.js access. An isolated desktop preload adds window styling and session shortcuts with one sender-validated operation for opening a same-instance setup page in the browser. Off-origin links open in your browser. Microphone, camera, and notification permissions are disabled in this prototype.
+Remote content is sandboxed with no Node.js access. An isolated desktop preload adds window styling and session shortcuts with one sender-validated operation for opening a same-instance setup page in the browser. Off-origin links open in your browser. The instance may show notifications; microphone and camera permissions are disabled in this prototype.
 
 The welcome screen uses _Becalmed off Halfway Rock_ (Fitz Henry Lane, 1860), sourced from [Ève Bouffard’s QM brand board](https://www.evebouffard.com/qm-brand). [National Gallery of Art collection record](https://www.nga.gov/artworks/76213-becalmed-halfway-rock). The painting is in the public domain, and the National Gallery of Art releases its image as CC0. The server-rendered sign-in and portal pages show the same scene.
 
@@ -37,7 +37,7 @@ Same-instance links opened in a new tab use a separate sandboxed window sharing 
 
 ## Computer use
 
-On macOS the app can see and drive running Mac apps through [`desk`](desk/README.md), a Rust helper bundled at `QM.app/Contents/Resources/desk`. `npm run package` builds it with Cargo first, so install Rust (`rustup`) on the packaging Mac. Because QM launches it, grant **QM** Accessibility (and Screen Recording for screenshots) in System Settings > Privacy & Security, then relaunch QM. In development, `npm start` uses `desk/target/release/desk`; override with `QM_DESK_BIN`.
+On macOS the app can see and drive running Mac apps through [`desk`](desk/README.md), a Rust helper bundled at `QM.app/Contents/Resources/desk`. `npm run package` builds it with Cargo first, so install Rust (`rustup`) on the packaging Mac. Because QM launches it, grant **QM** Accessibility, Input Monitoring (for focus protection) and Screen Recording (for screenshots) in System Settings > Privacy & Security, then relaunch QM. In development, `npm start` uses `desk/target/release/desk`; override with `QM_DESK_BIN`.
 
 The workspace preload exposes `window.qmDesktop.computer.call`. The `desktop` tool accepts JavaScript with top-level await and preserves bindings within the initiating turn. A hidden, sandboxed Electron renderer evaluates code without Node.js or network access and forwards computer API requests to `desk serve` one at a time (see `desk/PROTOCOL.md`). Each request uses the originating turn's owner and absolute call deadline. The same sender check as browser handoff applies. All installed apps are available subject to macOS permissions.
 
@@ -63,15 +63,15 @@ Publish the verified ZIP and checksum as desktop-v<VERSION>, then upload RELEASE
 
 New chats started in desktop have a stable `desktop` tool. Send a request such as “Use Calculator to compute 17 × 23.” Only human-initiated turns submitted from the desktop app can execute it. Automatic openers, background automation, delegated turns, and retries cannot use computer access. The app must stay open and connected for that turn; switching chats is fine. Continuing the chat in a browser retains the tool definition but returns an unavailable result if it is called. Existing browser-created chats do not gain computer access: start a new desktop chat. Chats from the earlier computer-use trial retain their old tool schema and must also be replaced with a new chat.
 
-Computer requests are bound to the submitting desktop turn. Only one turn can control the computer at a time; other turns receive a busy result until it finishes. A closed window, disconnected stream, stopped run, or helper deadline cancels native execution; reconnecting does not replay actions. After an interrupted action, observe the app before retrying because it may have partially completed. Screenshots return as image content, without base64 duplicated in model-visible text.
+Computer requests are bound to the submitting desktop turn. Calls run one at a time; when a different turn calls, it takes over and starts with fresh JavaScript state. A closed window, disconnected stream, stopped run, or helper deadline cancels native execution; reconnecting does not replay actions. After an interrupted action, observe the app before retrying because it may have partially completed. Screenshots return as image content, without base64 duplicated in model-visible text.
 
 ### Guided computer access
 
 On macOS, missing computer permissions open a local setup window before the workspace.
-It checks Accessibility and Screen Recording automatically, opens their System Settings
+It checks Accessibility, Screen Recording and Input Monitoring automatically, opens their System Settings
 panes, and provides the installed app as a draggable icon with a Finder fallback.
 Choose **Enable computer access** to request the native prompts, then enable this app
-in both settings lists. **Continue to workspace** becomes available when both checks
+in all three settings lists. **Continue to workspace** becomes available when all checks
 pass and restarts the native helper to pick up the grants. **Not now** skips setup;
 **QM → Computer Access…** reopens it. A permission failure during a task reopens setup
 and reports the failure without replaying the action.

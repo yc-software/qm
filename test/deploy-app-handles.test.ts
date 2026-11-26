@@ -139,3 +139,105 @@ test("a <handle>-<app> host serves the handle's own app, refuses other companies
     await appPool.close();
   }
 });
+
+test("app hosts resolve by their full label, so a hyphenated company handle works and an address another company holds is refused", async () => {
+  const upstream = createHttpServer((_req, res) => res.end("UPSTREAM OK"));
+  upstream.listen(0);
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+  const backings = testDeployBackings();
+  const owner = createPgPool(ownerUrl(backings.databaseUrl).toString());
+  const appPool = createPgPool(backings.databaseUrl);
+  const stopLoad = onTenantLoad(() => loadTenantSettings(appPool));
+  const deployStore = createDeployStore(backings);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const directory = createPostgresDirectoryStore(backings.databaseUrl);
+  const deploy = createDeployService({
+    ...singleProcessDeps(),
+    externalSharingAllowed: async () => true,
+    deployStore,
+    provider: {
+      profile: { managedScaleToZero: false },
+      apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
+      destroy: async () => {},
+    },
+    auditLog,
+    acl,
+    deployDir: mkdtempSync(join(tmpdir(), "app-hosts-")),
+  });
+  const app = createApp({
+    deploy,
+    acl,
+    directory,
+    sessions: createPostgresSessionStore(backings.databaseUrl),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+  } as unknown as Parameters<typeof createApp>[0]);
+  const server = createInsecureTestServer(app, {
+    featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
+    deployAppsDomain: "apps.example.com",
+    deployGateSecret: "gate-secret",
+    deployAppsSessionSecret: SESSION_SECRET,
+    deployAppsLoginUrl: LOGIN_URL,
+  });
+  const other = randomUUID();
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  const mine = "acme";
+  const theirs = `acme-labs-${suffix}`;
+  const publish = (name: string) =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name,
+    });
+  const hostTenant = async (label: string) =>
+    (await owner.q(`SELECT qm_tenant_for_app_host($1)::text AS tenant`, [label]))[0]?.tenant;
+  try {
+    await owner.q(`UPDATE tenants SET settings = settings || jsonb_build_object('handle', $2::text) WHERE id = $1`, [
+      TEST_TENANT,
+      mine,
+    ]);
+    await owner.q(`INSERT INTO tenants(id, settings) VALUES ($1, jsonb_build_object('handle', $2::text))`, [
+      other,
+      theirs,
+    ]);
+    await loadTenant();
+    const board = await publish("board");
+    await owner.q(`INSERT INTO deployments(tenant_id, id, json) VALUES ($1, 'theirs', '{"name":"crm"}')`, [other]);
+    const taken = `the app address "${theirs}-crm" is already taken by another workspace's app; choose a different app name`;
+    await assert.rejects(publish(`labs-${suffix}-crm`), { message: taken });
+    await assert.rejects(app.renameApp(board.id, `labs-${suffix}-crm`), { message: taken });
+    assert.equal(await hostTenant(`${theirs}-crm`), other);
+    assert.equal(await hostTenant(`${mine}-board`), TEST_TENANT);
+    assert.equal(await hostTenant(`${mine}-crm`), null);
+
+    server.listen(0);
+    const port = (server.address() as AddressInfo).port;
+    const own = await get(port, `${mine}-board.apps.example.com`, "/", portalSession({ t: TEST_TENANT }));
+    assert.equal(own.status, 200);
+    assert.equal(own.body, "UPSTREAM OK");
+    assert.equal(
+      (await get(port, `${theirs}-crm.apps.example.com`, "/", portalSession({ t: TEST_TENANT }))).status,
+      404,
+    );
+
+    await deployStore.setName(board.id, `${suffix}-crm`);
+    assert.equal(await directory.setAppHandle!(theirs), "taken");
+    assert.equal(await directory.setAppHandle!("acme-labs"), "app_taken");
+    assert.equal(await hostTenant(`${mine}-${suffix}-crm`), TEST_TENANT);
+    await owner.q(`DELETE FROM deployments WHERE tenant_id = $1 AND id = 'theirs'`, [other]);
+    assert.equal(await hostTenant(`${theirs}-crm`), null);
+    assert.equal(await directory.setAppHandle!("acme-labs"), "ok");
+    assert.equal(await hostTenant(`${theirs}-crm`), TEST_TENANT);
+    assert.equal(await hostTenant(`${mine}-${suffix}-crm`), null);
+  } finally {
+    server.close();
+    upstream.close();
+    stopLoad();
+    await owner.q(`UPDATE tenants SET settings = settings - 'handle' WHERE id = $1`, [TEST_TENANT]);
+    await owner.q(`DELETE FROM deployments WHERE tenant_id = $1`, [other]);
+    await owner.q(`DELETE FROM tenants WHERE id = $1`, [other]);
+    await owner.close();
+    await appPool.close();
+  }
+});

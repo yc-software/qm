@@ -2,8 +2,10 @@ import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
-import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
-import { shownFacts } from "../memory/recall-delta.ts";
+import { readNotebook, recallAcrossScopes, recallLabel, searchNotebooks } from "../memory/cross-scope.ts";
+import { deliveredCards, shownFacts } from "../memory/recall-delta.ts";
+import { brainCards } from "../memory/brain-card.ts";
+import type { Item } from "../sessions/items.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
@@ -13,7 +15,14 @@ import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
+import {
+  brainActsAsPerson,
+  turnAuthority,
+  type BoundBrain,
+  type MemoryRecallContext,
+  type MemoryService,
+} from "../memory/memory-service.ts";
+import { connectorTool, type McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
@@ -35,6 +44,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   botActor: boolean;
   ownScopeBotWork: boolean;
   notebookOnly?: boolean;
+  sharedNotebook?: ScopeId;
   memory: MemoryService;
   files: FileArtifactStore;
   skills?: SkillStore;
@@ -44,14 +54,47 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   projects?: Pick<ProjectStore, "recognizes" | "name">;
 };
 
+const BRAIN_ABOUT =
+  "The person's brains here are read as them: check them before saying you don't know someone or something.";
+
+export function withBrainTools(
+  connectors: McpToolDescriptor[] | undefined,
+  brains: readonly BoundBrain[],
+): McpToolDescriptor[] | undefined {
+  const taken = new Set(connectors?.map((tool) => tool.serverId));
+  const listed = brains.filter((brain) => {
+    if (!taken.has(brain.id)) return brain.tools.length > 0;
+    console.warn(`[memory] brain ${brain.id} is hidden because an MCP connector has the same id`);
+    return false;
+  });
+  if (!listed.length) return connectors;
+  const seen = new Set(connectors?.map(({ name }) => name));
+  return [
+    ...(connectors ?? []),
+    ...listed
+      .flatMap((brain, index) =>
+        brain.tools.map((tool) => ({
+          ...connectorTool(
+            { id: brain.id, name: recallLabel(brain.label), readOnly: true },
+            index === 0 ? BRAIN_ABOUT : undefined,
+            tool,
+          ),
+          brain: true as const,
+        })),
+      )
+      .filter((tool) => (seen.has(tool.name) ? false : (seen.add(tool.name), true))),
+  ];
+}
+
 export async function resolveTurnContext(input: ContextInput) {
   const { resolution, memoryPolicy, useMemory } = input;
   const sharingSources = input.external
     ? []
     : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = resolution.writableScopeId;
+  const notebookScopeId = input.sharedNotebook ?? memoryScopeId;
   const baseRecallScopes = useMemory
-    ? recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds)
+    ? recallMemoryScopes(memoryPolicy, notebookScopeId, resolution.readOnlyScopeIds)
     : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
@@ -59,7 +102,7 @@ export async function resolveTurnContext(input: ContextInput) {
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
       ? {
-          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          ...(useMemory && memoryPolicy.capture !== "off" ? { write: notebookScopeId } : {}),
           read,
           ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
         }
@@ -91,27 +134,42 @@ export async function resolveTurnContext(input: ContextInput) {
     actorId: input.actor.id,
     ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}),
   };
+  const brainAuthority = (personAuthority: boolean) => {
+    const by = turnAuthority(input.actor.id, memoryAccess, personAuthority);
+    return !input.external &&
+      read.includes(memoryScopeId) &&
+      brainActsAsPerson(by, memoryScopeId, input.audienceScopeId)
+      ? by
+      : undefined;
+  };
+  const listBrains = async () =>
+    (await memory.brains?.(memoryScopeId, reader).catch(swallowAs("turn context: brains", []))) ?? [];
+  let listedBrains: Promise<BoundBrain[]> | undefined;
+  const boundBrains = () => (listedBrains ??= listBrains());
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
   const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
   return {
     sharingSources,
     memoryScopeId,
+    notebookScopeId,
     baseRecallScopes,
     memoryAccess,
     memory,
     memoryLabels,
+    mcpTools: async (personAuthority: boolean, connectors: Promise<McpToolDescriptor[]> | undefined) => {
+      const [listed, bound] = await Promise.all([connectors, brainAuthority(personAuthority) ? boundBrains() : []]);
+      return withBrainTools(listed, bound);
+    },
     memorySnapshot: async () => {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",
         () => Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) }))),
-        { counts: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
+        { attributes: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
       );
       for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
-        facts: notebooks.flatMap(({ facts }) => facts ?? []),
-        complete: notebooks.every(({ facts }) => !!facts),
       };
     },
     recallMemory: (
@@ -138,8 +196,23 @@ export async function resolveTurnContext(input: ContextInput) {
             },
             memoryLabels,
           ),
-        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
+        { attributes: (recalled) => ({ "qm.recalled": recalled.length }) },
       ),
+    recallCards: async (text: string | undefined, personAuthority: boolean, history: readonly Item[]) => {
+      const startedAt = Date.now();
+      const by = brainAuthority(personAuthority);
+      if (!by || !text || memoryPolicy.card === "off") return [];
+      return brainCards({
+        memory,
+        brains: await boundBrains(),
+        scopeId: memoryScopeId,
+        message: text,
+        delivered: deliveredCards(history),
+        directory: input.directory,
+        by,
+        context: { ...(input.audienceScopeId ? { audienceScopeId: input.audienceScopeId } : {}), startedAt },
+      });
+    },
     searchMemory: async (
       query: string,
       limit = 20,

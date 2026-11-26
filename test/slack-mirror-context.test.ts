@@ -420,13 +420,19 @@ for (const source of ["mirror", "explicit-live"] as const) {
       { user: "UBOT", ts: "2", text: "Working", blocks: [{ type: "task_card", task_id: "qm_status:test" }] },
       { user: "UBOT", ts: "3", text: "ordinary answer" },
       { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
+      {
+        user: "UBOT",
+        ts: "5",
+        text: "On it.",
+        blocks: [{ type: "section" }, { type: "task_card", task_id: "qm_status:t" }],
+      },
     ];
     const read = createSlackHistoryReader({ core: f.core, ids });
     const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
     const result = await read(client, "C1", "1", undefined, false, source === "explicit-live");
     assert.deepEqual(
       result.raw.map((m) => m.ts),
-      ["1", "3", "4"],
+      ["1", "3", "4", "5"],
     );
     assert.ok(!(await f.cache.readMessages("C1", { limit: 100 })).some((m) => m.ts === "2"));
     const expanded = await read(client, "C1", undefined, undefined, true, source === "explicit-live");

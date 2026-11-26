@@ -8,7 +8,6 @@ import type {
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
-import { boundWebhook } from "../turn-origin.ts";
 import { isAgentReply, isHidden, isOverheard, isUserItem, type Item, proseText } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -159,13 +158,22 @@ export async function recentPrincipalDeliveryNote(
   if (!recent.length) return "";
   const lines = recent.map((d) => {
     const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
-    const trigger = d.provenance?.trigger ? ` [${d.provenance.trigger}]` : "";
+    const p = d.provenance;
+    const title = p?.sourceTitle?.trim();
+    const meta = [
+      p?.trigger,
+      p?.sourceId ? `id=${p.sourceId}` : undefined,
+      title ? `title=${JSON.stringify(title)}` : undefined,
+      p?.sourceSessionId ? `session=${p.sourceSessionId}` : undefined,
+      p?.fireKey ? `fire=${p.fireKey}` : undefined,
+    ].filter(Boolean);
+    const tag = meta.length ? ` [${meta.join(" ")}]` : "";
     const flattened = d.text.trim().replace(/\s+/g, " ");
     const text =
       flattened.length > DELIVERY_NOTE_ITEM_MAX_CHARS
         ? `${flattened.slice(0, DELIVERY_NOTE_ITEM_MAX_CHARS)}…`
         : flattened;
-    return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${trigger}${from}: ${text}`;
+    return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${tag}${from}: ${text}`;
   });
   return ["Delivered here since the user's last message (delivery events, not your turns):", ...lines].join("\n");
 }
@@ -188,7 +196,6 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),
     actor: principalAssertion(input.actor),
     conversation: {
@@ -289,14 +296,10 @@ export function replaceThreadSegment(target: string, threadTs: string): string {
 }
 
 export function deliveryCandidatesFor(
-  request: Pick<
-    Partial<TurnRequest>,
-    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin" | "approval"
-  >,
+  request: Pick<Partial<TurnRequest>, "surface" | "deliveryTarget" | "deliveryCandidates">,
   sessionScopeId: ScopeId,
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
   const { surface, deliveryTarget, deliveryCandidates: surfaceCandidates } = request;
-  const deliveryWebhook = boundWebhook(request)?.webhook;
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
   if (surfaceCandidates && surfaceCandidates.length > 0) raw = surfaceCandidates;
@@ -308,12 +311,11 @@ export function deliveryCandidatesFor(
     if (seen.has(key)) continue;
     seen.add(key);
     candidates.push({
-      type: deliveryWebhook ? "webhook" : surface,
+      type: surface,
       target: c.target,
       audienceScopeId: sessionScopeId,
       key,
       label: c.label,
-      ...(deliveryWebhook ? { webhook: deliveryWebhook } : {}),
     });
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
@@ -335,7 +337,6 @@ export function resolveTurnDelivery(turn: {
   let defaultDestination: Destination | undefined;
   if (defaultCandidate) {
     defaultDestination = {
-      ...(defaultCandidate.webhook ? { webhook: defaultCandidate.webhook } : {}),
       type: defaultCandidate.type,
       target: defaultCandidate.target,
       ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),

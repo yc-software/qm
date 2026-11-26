@@ -1,3 +1,4 @@
+import { settingsSection as titledSection } from "./settings-layout";
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
@@ -17,7 +18,8 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
+import { notificationsSettingsRow, onNotificationStateChange } from "./notifications";
+import { ADMIN_SECTIONS, OWNER_VIEWS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setGroupByActivity, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -29,8 +31,6 @@ const THEME_KEY = "theme";
 const CUSTOM_THEME_KEY = "theme:custom";
 const CUSTOM_THEME_STYLE_ID = "custom-theme";
 const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
-
-const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode }> = [
   { value: "light", label: "Light", glyph: Sun },
@@ -527,7 +527,12 @@ function desktopRow(): TemplateResult {
         <div class="settings-row-title">Desktop app</div>
         <div class="settings-row-note">QM for Mac. Requires Apple Silicon and macOS 13 or later.</div>
       </div>
-      <a class="btn settings-row-action" href=${QM_MAC_DOWNLOAD_URL} target="_blank" rel="noreferrer noopener">
+      <a
+        class="btn settings-row-action"
+        href=${withBase("/api/desktop/download")}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
         ${icon(Download, 15)}<span>Download for Mac</span>
       </a>
     </div>
@@ -557,10 +562,12 @@ let adminHost: HTMLElement | null = null;
 let adminView = "";
 
 const PERSONAL_SECTIONS = ["general", "my-spend"];
+const NAV_VIEWS = new Set([...PERSONAL_SECTIONS, ...ADMIN_SECTIONS.flatMap((group) => group.views)]);
 
 function settingsSection(): string {
   const view = settingsRoute(SETTINGS_BASE).view;
-  return can("admin") || PERSONAL_SECTIONS.includes(view) ? view : "general";
+  if (PERSONAL_SECTIONS.includes(view) || can("admin")) return view;
+  return can("owner") && OWNER_VIEWS.has(view) ? view : "general";
 }
 
 function settingsGo(url: string, replace = false): void {
@@ -580,6 +587,7 @@ const mountAdmin = adminMounter({
   base: SETTINGS_BASE,
   apiBase: withBase("/api/admin"),
   org: () => appState.me?.org ?? "",
+  fullAdmin: () => can("admin"),
   go: settingsGo,
   host: (view) => {
     if (view !== adminView || !adminHost) {
@@ -618,7 +626,7 @@ function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
       ${PERSONAL_SECTIONS.map((view) => navItem(view, section))}
-      ${(can("admin") ? ADMIN_SECTIONS : []).map(
+      ${(can("admin") ? ADMIN_SECTIONS : ADMIN_SECTIONS.slice(0, can("owner") ? 1 : 0)).map(
         (group) => html`
           <div class="settings-nav-label">${group.label}</div>
           ${group.views.map((view) => navItem(view, section))}
@@ -630,21 +638,28 @@ function settingsNav(section: string): TemplateResult {
 
 function generalPane(): TemplateResult {
   return html`
-    <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${sidebarGroupingRow()} ${desktopRow()} ${accountRow()}
-      <div class="settings-row settings-slack-account">
-        <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
-      </div>
-      <div class="settings-row">
-        <qm-onboarding-welcome
-          .me=${appState.me}
-          .setupOnly=${true}
-          .widget=${"apps"}
-          .returnKey=${"settings"}
-          .base=${withBase("")}
-        ></qm-onboarding-welcome>
-      </div>
+    <div class="settings-general">
+      ${titledSection("Plan", aiAccountsRow())} ${titledSection("Appearance", themeRow())}
+      ${titledSection("Chat", html`${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}`)}
+      ${titledSection("Sidebar", html`${sidebarSurfaceRow()} ${sidebarGroupingRow()}`)}
+      ${titledSection("Desktop", html`${notificationsSettingsRow()} ${desktopRow()}`)}
+      ${titledSection(
+        "Connections",
+        html`<div class="settings-connections">
+          <div class="settings-slack-account">
+            <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
+          </div>
+          <qm-onboarding-welcome
+            .me=${appState.me}
+            .setupOnly=${true}
+            .widget=${"apps"}
+            .returnKey=${"settings"}
+            .base=${withBase("")}
+          ></qm-onboarding-welcome>
+        </div>`,
+        { card: false },
+      )}
+      ${titledSection("Account", accountRow())}
     </div>
   `;
 }
@@ -652,19 +667,23 @@ function generalPane(): TemplateResult {
 function settingsPane(): TemplateResult {
   const section = settingsSection();
   const general = section === "general";
+  const titled = NAV_VIEWS.has(section) && !settingsRoute(SETTINGS_BASE).session;
   return html`
     <h1 class="settings-page-title">Settings</h1>
-    ${
-      can("admin")
-        ? html`<p class="settings-tip">
-            Tip: the easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
-            you and confirm what changed.
-          </p>`
-        : nothing
-    }
     <div class="settings-layout with-nav">
-      ${settingsNav(section)}
+      <div class="settings-side">
+        ${settingsNav(section)}
+        ${
+          can("admin") || can("owner")
+            ? html`<p class="settings-tip">
+                The easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
+                you and confirm what changed.
+              </p>`
+            : nothing
+        }
+      </div>
       <div class="settings-content" @click=${followSettingsLink}>
+        ${titled ? html`<h2 class="settings-page-head">${VIEW_TITLE[section]}</h2>` : nothing}
         ${general ? generalPane() : (adminHost ?? nothing)}
       </div>
     </div>
@@ -680,6 +699,8 @@ function drawSettings(): void {
   }
   render(settingsPane(), settingsHost);
 }
+
+onNotificationStateChange(drawSettings);
 
 export function renderSettings(): void {
   const section = settingsSection();

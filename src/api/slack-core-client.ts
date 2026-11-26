@@ -7,7 +7,6 @@ import {
   type SlackSessionStatus,
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
-import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideAppAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
@@ -97,14 +96,17 @@ export interface SlackCoreClient {
   noteSurfaceHistoryGap?(container: string, note: string): Promise<void>;
   readSurfaceMessages?(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   ingestSurfaceEvents(events: IngestEvent[], self?: { name?: string; mentionId?: string }): Promise<void>;
-  submitTurn(body: Omit<TurnRequest, "surface">): Promise<TurnResult>;
+  submitTurn(body: Omit<TurnRequest, "surface"> & { surface?: string }): Promise<TurnResult>;
   waitRun(runId: string, hooks?: RunHooks): Promise<TurnResult | null>;
   ackRunDelivery(runId: string): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   registerGroupRoster(groupId: string, principalIds: readonly string[]): Promise<void>;
-  ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
+  ackDelivery(
+    id: string,
+    body?: { recipientThreadRef?: string; slackApiMs?: number; messageTs?: string },
+  ): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
   failDelivery(id: string, reason: string): Promise<void>;
 
@@ -146,7 +148,6 @@ export interface SlackCoreClientDeps {
   taskAcknowledgements?: DurableMap<TaskAckState>;
   sessionStatus?: DurableMap<SlackSessionStatusState>;
   statusActivity?: SlackStatusActivity;
-  featureFlags?: FeatureFlagStore;
   app: App;
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
@@ -185,16 +186,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           }),
         }
       : {}),
-    ...(deps.sessionStatus && deps.featureFlags
+    ...(deps.sessionStatus
       ? {
-          sessionStatus: createSlackSessionStatus(
-            deps.sessionStatus,
-            lease,
-            deps.runs,
-            deps.featureFlags,
-            Date.now,
-            deps.statusActivity,
-          ),
+          sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, Date.now, {
+            ...deps.statusActivity,
+            persona: (runId) => deps.turnStream.persona(runId),
+          }),
         }
       : {}),
     async externalSlackParticipants() {
@@ -286,7 +283,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     submitTurn(body) {
-      return deps.app.turn({ ...body, surface: "slack" });
+      return deps.app.turn({ ...body, surface: body.surface ?? "slack" });
     },
 
     waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),
@@ -359,7 +356,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async ackDelivery(id, body) {
       if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
-      await deps.app.ackDelivery(id, body?.slackApiMs);
+      await deps.app.ackDelivery(id, body?.slackApiMs, body?.messageTs);
     },
 
     async reportDeliveryUndeliverable(id, reason) {

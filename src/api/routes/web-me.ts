@@ -12,37 +12,38 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
+import { webNotificationsOn } from "../../notifications/reply-notifications.ts";
+import { personalScope } from "../../types.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
   browserErrors?: ReturnType<typeof browserErrorConfig>;
-  welcomeCohort?: string;
   suggestedActivities: SuggestedActivity[];
 }
 
 export function webMeConfig(env: NodeJS.ProcessEnv): WebMeConfig {
-  const welcomeCohort = env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
   const { analytics } = analyticsHookConfig(env.WEB_UI_ANALYTICS);
   const browserErrors = browserErrorConfig(env);
   return {
     ...(analytics ? { analytics } : {}),
     ...(browserErrors ? { browserErrors } : {}),
-    ...(welcomeCohort ? { welcomeCohort } : {}),
     suggestedActivities: parseSuggestedActivities(env.WEB_UI_SUGGESTED_ACTIVITIES),
   };
 }
 
 async function permissionsOf(ctx: ApiCtx, user: string): Promise<string[]> {
-  const [admin, preview] = await Promise.all([
+  const [admin, preview, notifications] = await Promise.all([
     ctx.actor?.imp
       ? null
       : adminPermissions(ctx.deps, tenantOf(ctx), { id: user, type: "internal" }).catch(
           swallowAs("web: /me admin status", null),
         ),
     inboxPreviewEnabled(ctx.deps, user).catch(swallowAs("web: /me inbox preview flag", false)),
+    webNotificationsOn(ctx.deps, user).catch(swallowAs("web: /me notifications flag", false)),
   ]);
   const permissions = [...(admin?.permissions ?? [])];
   if (preview) permissions.push("loops", "inbox");
+  if (notifications) permissions.push("notifications");
   return permissions;
 }
 
@@ -51,16 +52,18 @@ async function me(ctx: ApiCtx): Promise<void> {
   const config = deps.web?.me;
   if (!actor || !config) return sendJson(res, 404, { error: "not_found" });
   const user = actor.p;
-  const [permissions, slack, auth, branding, starters] = await Promise.all([
+  const [permissions, slack, auth, branding, starters, teammate] = await Promise.all([
     permissionsOf(ctx, user),
     app.directoryMeta().catch(swallowAs("web: /me directory meta", { workspaceUrl: null, appIconUrl: null })),
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
+    deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
     user,
+    personalScope: personalScope(user),
     org: orgId(),
     companyName: branding.orgName?.trim() || null,
     workspace: tenancyBooted() && !bootTenant() ? branding.orgName?.trim() || null : null,
@@ -76,7 +79,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     ),
     impersonatedBy: actor.imp ?? null,
     displayName: actor.n?.trim() || null,
-    ...(config.welcomeCohort ? { welcomeCohort: config.welcomeCohort } : {}),
+    ...(teammate ? { teammate } : {}),
     ...(generated ? { suggestedActivitiesGeneration: true } : {}),
     ...(starters.welcome ? { welcome: starters.welcome } : {}),
     ...(starters.activities.length && !generated ? { suggestedActivities: starters.activities } : {}),

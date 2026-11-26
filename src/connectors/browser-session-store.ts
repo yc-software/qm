@@ -1,5 +1,10 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { encryptSecret, decryptSecret, type SecretKey } from "./connector-client-store.ts";
+import type { SecretKey } from "./connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import { swallow } from "../util/errors.ts";
 
 export interface BrowserSessionStore {
@@ -16,26 +21,27 @@ export interface StoredBrowserSession {
 export function createBrowserSessionStore(deps: {
   sessions: DurableMap<StoredBrowserSession>;
   key: SecretKey;
+  secrets?: SecretStoreFactory;
   now?: () => number;
 }): BrowserSessionStore {
   const now = deps.now ?? Date.now;
+  const secrets = (deps.secrets ?? createEncryptedSecretStore)(deps.key);
   return {
     async get(principalId) {
       const rec = await deps.sessions.get(principalId);
       if (!rec) return null;
       try {
-        return decryptSecret(rec.stateEnc, deps.key);
+        return await secrets.get(rec.stateEnc);
       } catch (e) {
         swallow(`browser-session decrypt ${principalId}`, e);
         return null;
       }
     },
     async put(principalId, storageStateJson) {
-      await deps.sessions.put(principalId, {
-        principalId,
-        stateEnc: encryptSecret(storageStateJson, deps.key),
-        updatedAt: now(),
-      });
+      const previous = await deps.sessions.get(principalId);
+      const stateEnc = await secrets.put(`browser-sessions/${principalId}`, storageStateJson);
+      await deps.sessions.put(principalId, { principalId, stateEnc, updatedAt: now() });
+      await deleteReplacedSecrets(secrets, [previous?.stateEnc], [stateEnc]);
     },
   };
 }

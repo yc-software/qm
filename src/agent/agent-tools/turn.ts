@@ -94,7 +94,7 @@ export function turnTools(kit: ToolKit) {
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, effort and fast mode. get: active runtime and choices, with the account each model bills. set: change it (omitted settings kept). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
+      "Inspect or change your model, effort and fast mode. get: active runtime and choices, with the account each model bills. set: change it (omitted settings kept). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need the authority of the person this turn acts for, and are refused while a goal is open. Check here before claiming you cannot switch.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set")]),
       model: Type.Optional(Type.String({ description: "Model ID or exact display name from get." })),
@@ -105,7 +105,9 @@ export function turnTools(kit: ToolKit) {
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),
-      lifetime: Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
+      lifetime: opts?.ephemeral
+        ? Type.Optional(Type.Literal("task"))
+        : Type.Optional(Type.Union([Type.Literal("task"), Type.Literal("scope")])),
     }),
     async execute(callId, params) {
       const request = params as RuntimeRequest;
@@ -120,10 +122,15 @@ export function turnTools(kit: ToolKit) {
           true,
         );
       }
+      const runtimeReq =
+        opts?.ephemeral && request.action === "set" ? { ...request, lifetime: "task" as const } : request;
       const result =
         opts?.readOnly && request.action !== "get"
           ? { ok: false as const, error: "read_only" }
-          : ((await ref.current?.runtime?.(request, ref.abortSignal)) ?? { ok: false, error: "runtime_unavailable" });
+          : ((await ref.current?.runtime?.(runtimeReq, ref.abortSignal)) ?? {
+              ok: false,
+              error: "runtime_unavailable",
+            });
       const handoff = result.ok ? result.handoff : undefined;
       const ret = await recordCoreAuthoredResult(
         callId,

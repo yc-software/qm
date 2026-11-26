@@ -5,13 +5,14 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -19,11 +20,11 @@ const CAP = "core-only-capability-secret-for-tests-01";
 describe("capability tokens verify under the core-only capability secret, not the shared source-auth secret", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = async (secret: string) =>
     mintCapabilityToken(
-      { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
+      { actorId: "U1", scopeId: personalScope("U1"), aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
       secret,
     );
 
@@ -55,7 +56,7 @@ describe("capability tokens verify under the core-only capability secret, not th
 });
 
 describe("createServer refuses to boot enforcement that a surface could bypass", () => {
-  let built: BuiltApp;
+  let built: Core;
   before(() => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cap-failclosed-")), signingSecret: SOURCE }));
   });

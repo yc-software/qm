@@ -8,6 +8,7 @@ struct Identity: Decodable {
   var suggestedActivitiesGeneration: Bool? = nil
   var permissions: [String]? = nil
   var slackWorkspaceUrl: String? = nil
+  var slackAppIconUrl: String? = nil
 }
 
 struct Conversation: Codable, Identifiable, Hashable {
@@ -161,6 +162,31 @@ struct Transcript: Decodable {
   let pins: [NativeConversationPin]?
   let session: Conversation?
   let goal: Conversation.Goal?
+
+  private enum CodingKeys: String, CodingKey {
+    case latestPromptAt, items, earlierItems, pins, session, goal
+  }
+  private struct LossyItem: Decodable {
+    let item: Item?
+    init(from decoder: Decoder) throws {
+      do {
+        item = try Item(from: decoder)
+      } catch {
+        Log.decoding.failure("Decoding transcript item", error)
+        item = nil
+      }
+    }
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    latestPromptAt = try c.decodeIfPresent(Double.self, forKey: .latestPromptAt)
+    items = try c.decode([LossyItem].self, forKey: .items).compactMap(\.item)
+    earlierItems = try c.decodeIfPresent(Int.self, forKey: .earlierItems)
+    pins = try c.decodeIfPresent([NativeConversationPin].self, forKey: .pins)
+    session = try c.decodeIfPresent(Conversation.self, forKey: .session)
+    goal = try c.decodeIfPresent(Conversation.Goal.self, forKey: .goal)
+  }
 }
 
 struct NativeConversationPin: Decodable, Identifiable {
@@ -408,6 +434,7 @@ struct ChatMessage: Identifiable {
   var referencedFiles: [DeliveredFile] = []
   var playgrounds: [NativePlayground] = []
   var speaker: String?
+  var speakerID: String?
   var runID: String?
   var sequence: Int?
   var createdAt: Double?
@@ -503,8 +530,8 @@ private struct ChatMessageBuilder {
       messages.append(
         ChatMessage(
           id: entry.id, role: "user", text: text, files: entry.body?.attachments ?? [],
-          speaker: entry.body?.name, steered: entry.steered == true,
-          slackTimestamp: entry.messageTs))
+          speaker: entry.body?.name, speakerID: entry.details?["speakerId"]?.string,
+          steered: entry.steered == true, slackTimestamp: entry.messageTs))
     }
   }
 

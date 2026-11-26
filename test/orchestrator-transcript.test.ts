@@ -77,7 +77,7 @@ test("inbound file problems reach the model in the environment footer, not a log
   const user = items.find((item) => item.kind === "UserMessage");
   assert.match(
     String(user!.body.environment),
-    /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
+    /<environment>[\s\S]*did not receive[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
 
   const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;
@@ -242,7 +242,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const latest = reqs.at(-1) as any;
   const footer = latest.promptEnvelope.messages.at(-1).content;
   assert.match(footer, /Delivered here since the user's last message/);
-  assert.match(footer, /\[cron\] from U-carol: /);
+  assert.match(footer, /\[cron id=\S+ session=\S+ fire=\S+\] from U-carol: /);
   assert.match(footer, /…$/m);
   assert.doesNotMatch(footer, /deploy digest ready/);
 });

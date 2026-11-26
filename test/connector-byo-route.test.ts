@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -19,7 +19,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(socketAppId = "A-ACME", managed = false): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
   const server = createInsecureTestServer(built.app, {
     oauthStateSecret: "byo-route-oauth-state-secret",
@@ -33,6 +33,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             token: "test-token",
             appId: "A123",
             store: built.slackInstallation,
+            fetchImpl: async () => new Response("", { status: 404 }),
           }),
         }
       : {}),
@@ -71,11 +72,10 @@ const putConnector = (base: string, b: object) =>
 test("the slack-installation createUrl adopts the live branding label", async () => {
   const srv = start();
   try {
-    const nameFrom = async (): Promise<string> => {
-      const r = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
-        createUrl: string;
-      };
-      const manifest = JSON.parse(new URL(r.createUrl).searchParams.get("manifest_json") ?? "{}") as {
+    const nameFrom = async (query = ""): Promise<string> => {
+      const response = await fetch(`${srv.base}/v1/admin/slack-installation${query}`, { headers: ADMIN });
+      const { createUrl } = (await response.json()) as { createUrl: string };
+      const manifest = JSON.parse(new URL(createUrl).searchParams.get("manifest_json") ?? "{}") as {
         display_information?: { name?: string };
       };
       return manifest.display_information?.name ?? "";
@@ -91,6 +91,8 @@ test("the slack-installation createUrl adopts the live branding label", async ()
       ).status,
       200,
     );
+    assert.equal(await nameFrom("?name=%20my%2Bbot%20"), "my+bot");
+    assert.equal(await nameFrom("?name=%20"), "straylight");
     assert.equal(await nameFrom(), "straylight");
   } finally {
     await srv.close();

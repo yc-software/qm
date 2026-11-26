@@ -1,3 +1,4 @@
+import type { ClientSurface } from "../../../plugins/chassis/src/client-surface.ts";
 import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
 import { retainedSnapshot } from "../../agent/context-snapshot.ts";
@@ -26,7 +27,7 @@ export function renderSandboxProviders(
   ];
   const behindProxy = names.filter((name) => proxied.includes(name)).toSorted();
   const network = behindProxy.length
-    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node with NODE_USE_ENV_PROXY=1.`
+    ? `\nComputers on ${behindProxy.join(", ")} reach the network only through the egress proxy in $HTTPS_PROXY. If it is https://, Python's urllib and http.client fail there (BadStatusLine, RemoteDisconnected); use curl, git, Python requests, or Node's fetch.`
     : "";
   return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}${network}`;
 }
@@ -125,11 +126,6 @@ function guidanceOf(item: Item): GuidanceSnapshot | undefined {
     : undefined;
 }
 
-export function webSurfaceLabel(botName: string, relayed: boolean): string {
-  if (!relayed) return `the ${botName} web app`;
-  return `another app that relays this chat to ${botName} and shows ordinary Markdown, not the ${botName} web UI or its widgets, so skills' non-web paths apply, such as an ordinary authorization link`;
-}
-
 function trimmedEntries(record: Record<string, string> | undefined) {
   const entries = Object.entries(record ?? {})
     .map(([k, v]) => [k.trim(), String(v).trim()] as const)
@@ -147,7 +143,18 @@ export function shownPlace(surface: string | undefined, ctx: GatewayContext | un
   };
 }
 
-export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
+const CLIENT_LINES: Record<ClientSurface, string> = {
+  desktop: "Sent from the QM desktop app.",
+  browser: "Sent from a web browser.",
+  ios: "Sent from the QM iOS app.",
+};
+
+export function renderGatewayContext(
+  surface: string | undefined,
+  ctx?: GatewayContext,
+  dmWith?: string,
+  client?: ClientSurface,
+): string {
   const gateway = (surface ?? "").trim();
   const { location } = shownPlace(surface, ctx, dmWith !== undefined);
   const details = trimmedEntries({ ...ctx?.hostIds, ...ctx?.details });
@@ -160,6 +167,7 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   else if (place && location) lines.push(`${place}, in ${location}.`);
   else if (place) lines.push(`${place} conversation.`);
   else if (location) lines.push(`In ${location}.`);
+  if (client) lines.push(CLIENT_LINES[client]);
   if (details.length) {
     lines.push("Identifiers for this conversation (use these if you need to act on it directly):");
     for (const [k, v] of details) lines.push(`- ${k}: ${v}`);
@@ -227,8 +235,11 @@ function shortCron(expression: string): string {
   const pattern = new CronPattern(expression);
   const [minute, ...moreMinutes] = setIndexes(pattern.minute);
   const weekdays = setIndexes(pattern.dayOfWeek);
+  const hours = setIndexes(pattern.hour);
+  const listedHours = expression.trim().split(" ")[1]?.split(",").length;
   const plain =
     minute !== undefined &&
+    hours.length === listedHours &&
     !moreMinutes.length &&
     setIndexes(pattern.second).join() === "0" &&
     pattern.starDOM &&
@@ -239,9 +250,7 @@ function shortCron(expression: string): string {
     weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
   if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
   const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
-  return `${setIndexes(pattern.hour)
-    .map((hour) => clockTime(hour, minute))
-    .join(", ")} ${days}`;
+  return `${hours.map((hour) => clockTime(hour, minute)).join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {
@@ -285,11 +294,11 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
   const schedules = crons
     .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map((c) => ({ title: c.title || "Untitled scheduled task", ...scheduleLabel(c) }));
+    .map((c) => ({ title: summary(c.title || "Untitled scheduled task"), ...scheduleLabel(c) }));
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
     ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
-    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.title || w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
@@ -322,6 +331,7 @@ export function currentTimeBlock(timezone: string, nowMs: number): string {
 
 const SYSTEM_CONTEXT_ORDER = [
   "Where you are",
+  "Ephemeral session",
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",

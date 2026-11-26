@@ -47,7 +47,7 @@ export function createSessionAdminReads(
         `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.origin, s.created_at, s.messages, s.turns,
                 ${lastActivityExpr("s")} AS last_activity, s.first_user_preview, s.last_user_preview, s.title
            FROM sessions s
-          WHERE ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${cronClause}${keysetClause}
+          WHERE NOT s.ephemeral AND ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${cronClause}${keysetClause}
           ORDER BY ${lastActivityExpr("s")} DESC, s.id DESC
           LIMIT $${params.length}`,
         params,
@@ -69,9 +69,10 @@ export function createSessionAdminReads(
     },
 
     async scopeConversationCount(scope): Promise<number> {
-      const rows = await q("SELECT COUNT(*) AS n FROM sessions WHERE scope_id = $1 AND origin = 'conversation'", [
-        scope,
-      ]);
+      const rows = await q(
+        "SELECT COUNT(*) AS n FROM sessions WHERE NOT ephemeral AND scope_id = $1 AND origin = 'conversation'",
+        [scope],
+      );
       return Number(rows[0]?.n ?? 0);
     },
 
@@ -83,6 +84,7 @@ export function createSessionAdminReads(
                 COUNT(*) FILTER (WHERE origin NOT IN ('conversation', 'cron')) AS background,
                 MAX(${lastActivityExpr("sessions")}) AS last_activity
            FROM sessions
+          WHERE NOT ephemeral
           GROUP BY scope_id`,
         [],
         { timeoutMs: ADMIN_READ_TIMEOUT_MS },

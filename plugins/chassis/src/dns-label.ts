@@ -12,8 +12,8 @@ export function isDnsName(name: string): boolean {
 
 const APP_HANDLE_MIN = 2;
 export const APP_HANDLE_MAX = DNS_LABEL_MAX - "-a".length;
-export const APP_HANDLE_CHARS = `${APP_HANDLE_MIN}–${APP_HANDLE_MAX} lowercase letters or digits, with no hyphens`;
+export const APP_HANDLE_CHARS = `${APP_HANDLE_MIN}–${APP_HANDLE_MAX} lowercase letters, digits or hyphens, not starting or ending with a hyphen`;
 
 export function isAppHandleShape(handle: string): boolean {
-  return handle.length >= APP_HANDLE_MIN && handle.length <= APP_HANDLE_MAX && /^[a-z0-9]+$/.test(handle);
+  return handle.length >= APP_HANDLE_MIN && handle.length <= APP_HANDLE_MAX && LABEL_CHARS.test(handle);
 }

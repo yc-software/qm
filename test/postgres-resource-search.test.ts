@@ -3,6 +3,7 @@ import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -56,7 +57,13 @@ test(
       ] as const) {
         await pg.q(`INSERT INTO ${table} (id, json) VALUES ($1, $2)`, [
           "hit",
-          JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
+          JSON.stringify({
+            id: "hit",
+            ...record,
+            owner: "U1",
+            ownerScopeId: personalScope("U1"),
+            scopeId: personalScope("U1"),
+          }),
         ]);
         const kind = table === "deployments" ? "apps" : table;
         const rows = await store.search(kind, "zanz release", 50);

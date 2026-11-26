@@ -26,7 +26,7 @@ export function createRunWaiter(deps: {
     const signalFirstBlock = (text: string): void => {
       if (firstBlockSignaled || !text.trim()) return;
       firstBlockSignaled = true;
-      hooks.onFirstBlock?.(text);
+      hooks.onFirstBlock?.(text, deps.turnStream.persona(runId) ?? undefined);
     };
     const signalSurface = (): void => {
       if (surfaceSignaled) return;

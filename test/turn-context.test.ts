@@ -13,6 +13,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
@@ -21,7 +22,7 @@ async function fixture() {
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   let member = true;
   const resolution = {
-    writableScopeId: "personal:alice",
+    writableScopeId: personalScope("alice"),
     readOnlyScopeIds: ["org:test"],
     orgScopeId: "org:test",
     sharingPosture: "open",
@@ -35,14 +36,13 @@ async function fixture() {
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],
     acl,
-    targetScope: "personal:alice",
-    origin: { kind: "human" },
-    trustedLiveHuman: true,
+    targetScope: personalScope("alice"),
+    personAuthority: true,
     sessions: { listByParticipant: async () => [{ scopeId: "channel:eng", createdAt: 1 }] as Session[] },
     isCurrentSharedScopeMember: async (actor, scope) => member && actor === "alice" && scope === "channel:eng",
     config,
     resolution,
-    memoryPolicy: { recall: "visible", capture: "writable" },
+    memoryPolicy: { recall: "visible", capture: "writable", card: "on" },
     useMemory: true,
     botActor: false,
     ownScopeBotWork: false,
@@ -50,7 +50,7 @@ async function fixture() {
     files,
     auditLog,
   };
-  await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
+  await memory.capture(personalScope("alice"), ["LOCAL_FACT"], Date.now());
   await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
   await files.put({
     id: "1".repeat(32),
@@ -89,15 +89,19 @@ test("one context recalls capped, source-labelled memory and shares authority wi
     (await context.searchMemory("SHARED_FACT", 20, "channel:eng"))!.join(),
     /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) SHARED_FACT$/,
   );
-  assert.equal(await context.readMemory("personal:other"), null);
-  assert.equal(await context.searchMemory("SHARED_FACT", 20, "personal:other"), null);
+  assert.equal(await context.readMemory(personalScope("other")), null);
+  assert.equal(await context.searchMemory("SHARED_FACT", 20, personalScope("other")), null);
   assert.match(
     (await context.searchMemory("LAST_FACT"))!.join(),
     /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
   );
-  assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
-  assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
-  assert.equal(context.memoryAccess?.write, "personal:alice");
+  assert.deepEqual(context.memoryAccess?.read, [personalScope("alice"), "org:test", "channel:eng"]);
+  assert.deepEqual(
+    context.baseRecallScopes,
+    [personalScope("alice"), "org:test"],
+    "reusable tokens exclude carried sources",
+  );
+  assert.equal(context.memoryAccess?.write, personalScope("alice"));
   const handle = context.listFiles().find((h) => h.ownerScopeId === "channel:eng")!;
   const result = await context.readFile(handle.handlePath);
   assert.ok(result && "bytes" in result);
@@ -113,7 +117,7 @@ for (const mode of [
   "source-veto",
   "removed",
   "speaker-switch",
-  "automation",
+  "no-authority",
   "memory-off",
   "memory-writable",
   "memory-skip",
@@ -124,7 +128,7 @@ for (const mode of [
     if (mode === "source-veto") await config.setSharingPosture("channel:eng", "isolated");
     if (mode === "removed") removeMember();
     if (mode === "speaker-switch") input.actor = { id: "bob", type: "internal" };
-    if (mode === "automation") input.trustedLiveHuman = false;
+    if (mode === "no-authority") input.personAuthority = false;
     if (mode === "memory-off") input.memoryPolicy.recall = "off";
     if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
     if (mode === "memory-skip") input.useMemory = false;
@@ -155,9 +159,9 @@ test("skill discovery uses the same included scopes and audience-filtered explic
   await acl.grant(
     tenant,
     {
-      ownerScopeId: "personal:owner",
+      ownerScopeId: personalScope("owner"),
       ref: "skill:explicit",
-      granteeScopeId: "personal:alice",
+      granteeScopeId: personalScope("alice"),
       permission: "read",
       grantedBy: "owner",
     },
@@ -172,21 +176,21 @@ test("skill discovery uses the same included scopes and audience-filtered explic
   } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
   await (await resolveTurnContext(input)).listSkills();
   assert.deepEqual(seen[0], {
-    scopes: ["personal:alice", "channel:eng", "org:test"],
-    grants: [{ id: "explicit", ownerScopeId: "personal:owner" }],
+    scopes: [personalScope("alice"), "channel:eng", "org:test"],
+    grants: [{ id: "explicit", ownerScopeId: personalScope("owner") }],
   });
   input.audience.push({ id: "bob", type: "internal" });
   input.targetScope = "channel:other";
   removeMember();
   await (await resolveTurnContext(input)).listSkills();
-  assert.deepEqual(seen[1], { scopes: ["personal:alice", "org:test"], grants: [] });
+  assert.deepEqual(seen[1], { scopes: [personalScope("alice"), "org:test"], grants: [] });
 });
 
 test("ambiguous file aliases fail closed in the shared reader", async () => {
   const { input } = await fixture();
   input.resolution.grantedHandles = [
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: personalScope("alice"), fileId: "1".repeat(32), permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: personalScope("alice"), fileId: "2".repeat(32), permission: "read" },
   ];
   const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
   assert.ok(result && "error" in result);
@@ -207,20 +211,20 @@ test("skill discovery refreshes carried membership and explicit grants in the sa
   await acl.grant(
     tenant,
     {
-      ownerScopeId: "personal:owner",
+      ownerScopeId: personalScope("owner"),
       ref: "skill:new",
-      granteeScopeId: "personal:alice",
+      granteeScopeId: personalScope("alice"),
       permission: "read",
       grantedBy: "owner",
     },
     "owner",
   );
   await context.listSkills();
-  assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
-  await acl.revoke(tenant, "personal:owner", "skill:new", "personal:alice", "owner");
+  assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: personalScope("owner") }]);
+  await acl.revoke(tenant, personalScope("owner"), "skill:new", personalScope("alice"), "owner");
   removeMember();
   assert.deepEqual((await context.listSkills()).sharingSources, []);
-  assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
+  assert.deepEqual(seen[2], { scopes: [personalScope("alice"), "org:test"], grants: [] });
 });
 
 test("source selection precedes name shadowing and preserves skill-level grants", async () => {
@@ -228,9 +232,9 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   await acl.grant(
     tenant,
     {
-      ownerScopeId: "personal:owner",
+      ownerScopeId: personalScope("owner"),
       ref: "skill:one",
-      granteeScopeId: "personal:alice",
+      granteeScopeId: personalScope("alice"),
       permission: "read",
       grantedBy: "owner",
     },
@@ -246,9 +250,9 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   const context = await resolveTurnContext(input);
   await context.listSkills(["org:test"]);
   assert.deepEqual(seen[0], { scopes: ["org:test"], grants: [] });
-  await context.listSkills(["personal:owner"]);
-  assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
-  await context.listSkills(["personal:stranger"]);
+  await context.listSkills([personalScope("owner")]);
+  assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: personalScope("owner") }] });
+  await context.listSkills([personalScope("stranger")]);
   assert.deepEqual(seen[2], { scopes: [], grants: [] });
 });
 
@@ -271,7 +275,7 @@ test("semantic recall reuses the turn's memory snapshot instead of reloading not
   );
   const context = await resolveTurnContext(input);
   const snapshot = await context.memorySnapshot();
-  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
+  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", personalScope("alice")]);
   loads.length = 0;
   const recalled = await context.recallMemory("anything", Promise.resolve(snapshot.loaded));
   assert.deepEqual(

@@ -31,7 +31,7 @@ import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
 import { chatSurfaceMark } from "./surface-mark";
 import { icon } from "./icons";
-import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
+import { appState, renderSidebarTop, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, renderList, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
@@ -131,6 +131,7 @@ async function fetchContexts(): Promise<CoreContext[]> {
   contextsState.list = result.contexts ?? [];
   contextsState.loaded = true;
   contextsState.loadedAt = Date.now();
+  renderSidebarTop();
   return contextsState.list;
 }
 
@@ -187,15 +188,13 @@ export async function renderContexts(): Promise<void> {
     contextsNotice = errMessage(e, "Failed to load contexts.");
   }
   contextsLoading = false;
-  if (
-    contextsState.selected &&
-    contextsState.list.some((c) => c.scopeId === contextsState.selected) &&
-    contextsState.resourcesScope !== contextsState.selected
-  ) {
-    void loadScopeResources(contextsState.selected);
-    void loadAmbientPolicy(contextsState.selected, drawContexts);
+  if (contextsState.selected && contextsState.list.some((c) => c.scopeId === contextsState.selected)) {
+    if (contextsState.resourcesScope !== contextsState.selected) {
+      void loadScopeResources(contextsState.selected);
+      void loadAmbientPolicy(contextsState.selected, drawContexts);
+      void loadChannelHeader(contextsState.selected, drawContexts);
+    }
     void loadContextModel(contextsState.selected, drawContexts);
-    void loadChannelHeader(contextsState.selected, drawContexts);
   }
   drawContexts();
 }
@@ -244,12 +243,11 @@ export function resolveProjectScope(contexts: readonly CoreContext[], slug: stri
   if (isSharedScopeId(slug)) {
     return contexts.some((context) => context.scopeId === slug) ? slug : null;
   }
-  const normalized = slug.toLowerCase();
-  const matches = contexts.filter((context) => {
-    const match = /^personal:([^@]+)@/.exec(context.scopeId);
-    return match?.[1]?.toLowerCase() === normalized;
-  });
-  return matches.length === 1 ? matches[0]!.scopeId : null;
+  const me = appState.me;
+  const own = me && contexts.some((context) => context.scopeId === me.personalScope);
+  return own && me.user.includes("@") && me.user.split("@")[0]!.toLowerCase() === slug.toLowerCase()
+    ? me.personalScope
+    : null;
 }
 
 function metaForScope(scopeId: string | null, fallbackName?: string | null): { title: string; glyph: IconNode } {
@@ -1201,6 +1199,7 @@ function upsertProject(project: CoreProject): CoreContext {
   contextsState.list = [next, ...contextsState.list.filter((context) => context.scopeId !== scopeId)];
   contextsState.loaded = loaded;
   if (loaded) contextsState.loadedAt = Date.now();
+  renderSidebarTop();
   return next;
 }
 

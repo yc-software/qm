@@ -37,7 +37,6 @@ export function readConnectionAttempt(user: string, state: string, path: string)
       typeof attempt.service?.id !== "string" ||
       typeof attempt.service.name !== "string" ||
       typeof attempt.picker?.query !== "string" ||
-      typeof attempt.picker.expanded !== "boolean" ||
       !Number.isFinite(attempt.scrollTop) ||
       attempt.scrollTop < 0
     )

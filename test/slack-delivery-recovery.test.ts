@@ -29,6 +29,8 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
     },
   };
   const acknowledgements: string[] = [];
+  const released: Array<{ at: string[]; before: string[] }> = [];
+  const posted: unknown[][] = [];
   const checkpoints: Array<[string, string]> = [];
   const core = {
     reportRunEditRef: async (runId: string, editRef: string) => {
@@ -43,10 +45,19 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => {} } as never,
     clientForIdentity: () => client,
+    card: (...thread) => ({
+      posted: async (...message) => void posted.push([...thread, ...message]),
+      release: async (ts) => {
+        released.push({ at: [...thread, ts], before: calls.map((call) => call.method) });
+        return undefined;
+      },
+    }),
   });
   return {
     calls,
     acknowledgements,
+    released,
+    posted,
     checkpoints,
     methods: () => calls.map((c) => c.method),
     deliver: async (row: {
@@ -54,6 +65,7 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
       idempotencyKey?: string;
       text?: string;
       ageMs?: number;
+      run?: string;
     }) => {
       await deliverer.deliver(client, {
         id: "D1",
@@ -61,6 +73,7 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
         text: row.text ?? "",
         destination: { type: "slack", target: "C1:100.200", ...row.destination },
         createdAt: Date.now() - (row.ageMs ?? 0),
+        ...(row.run ? { provenance: { sourceRunId: row.run } } : {}),
       } as never);
     },
   };
@@ -122,6 +135,15 @@ test("a recorded editRef skips the placeholder probe", async () => {
     ageMs: RECOVERED_AGE_MS,
   });
   assert.deepEqual(h.methods(), ["chat.update"]);
+  assert.deepEqual(h.released, [{ at: ["C1", "100.200", "100.300"], before: [] }]);
+});
+
+test("a threaded post from a run is offered to the status card", async () => {
+  const h = agent({});
+  await h.deliver({ destination: {}, idempotencyKey: "cron:k1", text: "On it." });
+  assert.deepEqual(h.posted, []);
+  await h.deliver({ destination: {}, idempotencyKey: "post:k2", text: "On it.", run: "r1" });
+  assert.deepEqual(h.posted, [["C1", "100.200", { text: "On it." }, "900.100", "r1"]]);
 });
 
 for (const [label, destination, method, error] of [

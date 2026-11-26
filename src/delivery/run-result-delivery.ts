@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
+import { automationDestination, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -39,18 +39,19 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const origin = run.request.origin;
   const surfaceOrigin = run.request.surfaceOrigin;
-  const bound = boundWebhook(run.request);
-  const webhook = bound?.webhook;
-  const target = bound?.target ?? run.request.deliveryTarget;
+  const target = run.request.deliveryTarget;
   const surface = run.request.surface;
-  if (!target || !surface) return null;
+  const autoDest =
+    run.request.approval?.approved === true && !(origin.kind === "automation" && origin.fire)
+      ? automationDestination(run.request)
+      : undefined;
+  if (!autoDest && (!target || !surface)) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  const webTranscript = webTranscriptNote(run, surface, failed);
-  const destination: Destination = {
-    type: webhook ? "webhook" : surface,
-    ...(webhook ? { webhook } : {}),
-    target,
+  const webTranscript = autoDest ? undefined : webTranscriptNote(run, surface!, failed);
+  const destination: Destination = autoDest ?? {
+    type: surface!,
+    target: target!,
     ...(surfaceOrigin
       ? {
           account: {
@@ -71,6 +72,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
     sourceScopeId: conversationScope(run.request.conversation, run.request.actor.id),
     sourceThreadRef: run.request.conversation.threadRef,
     ...(run.result?.sessionId ? { sourceSessionId: run.result.sessionId } : {}),
+    sourceRunId: run.id,
     ...(run.result?.sourceUserSeq !== undefined ? { sourceUserSeq: run.result.sourceUserSeq } : {}),
     ...(run.result?.sourceAssistantEntrySeq !== undefined
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
@@ -78,13 +80,6 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   });
   const noticeText = notice?.(run);
   if (noticeText) return { destination, text: noticeText, provenance, idempotencyKey };
-  if (
-    webhook &&
-    run.request.idempotencyKey &&
-    (run.request.approval || (origin.kind === "human" && !isSessionTurn(run.request)))
-  )
-    provenance.sourceRequestId = run.request.idempotencyKey;
-  if (webhook) provenance.sourceRunId = run.id;
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&
@@ -112,9 +107,6 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
       idempotencyKey,
     };
   }
-  const nothingToShow = !provenance.sourceRequestId && (run.result?.status === "ok" || run.result?.status === "silent");
-  if (webhook && run.result && !nothingToShow)
-    return { destination, text: standaloneFailureText(run.result) ?? "", provenance, idempotencyKey };
   return null;
 }
 

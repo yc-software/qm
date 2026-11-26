@@ -26,6 +26,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -107,6 +108,7 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     ],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /valid HTTP header value/],
     [[{ ...entry, displayName: "" }], /displayName/],
+    [[{ slug: "c", secretEnv: "SEARCH_KEY", composio: true, host: "x.example" }], /host does not apply/],
   ];
   for (const [list, pattern, extra] of cases) {
     assert.throws(
@@ -220,7 +222,8 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
 }
 
 test("admin settings show a deployment credential read-only and refuse to edit, delete or shadow it", async () => {
-  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true);
+  const composio = { slug: "composio", name: "C", host: "", secret: KEY, composio: true as const };
+  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true, [...deploymentCreds(), composio]);
   try {
     const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${ORG}`, { headers: ADMIN })).json()) as {
       serviceCredentials: Array<{ slug: string; source?: string; hasSecret: boolean; maxRequestsPerDay?: number }>;
@@ -246,6 +249,26 @@ test("admin settings show a deployment credential read-only and refuse to edit, 
       assert.equal(json.error, "deployment_credential");
       assert.match(String(json.message), /supplied by this deployment/);
     }
+    const own = {
+      slug: "composio",
+      name: "Own",
+      delivery: "env",
+      envKey: "COMPOSIO_API_KEY",
+      secret: "s",
+      grantees: [ORG],
+    };
+    const put = (body: object) =>
+      fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put(own)).status, 200);
+    const { updatedAt } = (await srv.built.serviceCreds.listServiceCredentials(ORG)).find(
+      (c) => c.slug === "composio",
+    )!;
+    assert.equal((await put({ slug: "composio", delete: true, expectedUpdatedAt: updatedAt })).status, 200);
+    assert.equal((await srv.built.acl.grantsFor(tenant, ORG, "service-cred:composio")).length, 1);
   } finally {
     await srv.close();
   }
@@ -261,7 +284,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     const token = await mintCapabilityToken(
       {
         actorId: "U1",
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         aud: CREDENTIAL_BROKER_AUD,
         credentials: ["search"],
         exp: Date.now() + CAPABILITY_TTL_MS,
@@ -318,7 +341,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
     if (command === "echo hi") executed = handle.env;
     return realRun(handle, command, opts);
   };
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   const prompt = await built.app.turn(dm("!sysprompt"));
   assert.match(prompt.reply ?? "", /`search` — Web search; proxy api\.search\.example/);
   const res = await built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`));
@@ -374,7 +397,7 @@ test("the broker adds a deployment credential's fixed headers, which callers can
     const token = await mintCapabilityToken(
       {
         actorId: "U1",
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         aud: CREDENTIAL_BROKER_AUD,
         credentials: ["versioned"],
         exp: Date.now() + CAPABILITY_TTL_MS,

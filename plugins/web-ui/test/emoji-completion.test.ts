@@ -71,7 +71,13 @@ test("emoji completion converts names and accepts suggestions without sending", 
     assert.equal(root.querySelector('[role="listbox"]'), null);
     type(":sweat_smile:", 13, true);
     assert.equal(draft, ":sweat_smile:");
-    for (const value of [":unknown:", "https://example.com/:smile:", "`code:smile:", "12:30", ":"]) {
+    type("hi :");
+    assert.ok(root.querySelector('[role="listbox"]'));
+    key("Enter");
+    assert.equal(input.value, "hi :");
+    assert.equal(sends, 1);
+    assert.equal(root.querySelector('[role="listbox"]'), null);
+    for (const value of [":unknown:", "https://example.com/:smile:", "`code:smile:", "12:30"]) {
       type(value);
       assert.equal(draft, value);
       assert.equal(root.querySelector('[role="listbox"]'), null);

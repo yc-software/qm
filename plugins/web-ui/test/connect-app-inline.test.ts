@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
-test("an app-scoped picker shows only the requested app and continues the chat after a verified return", async () => {
+test("a card for one app shows only that app and continues the chat after a verified return", async () => {
   const h = await harness({
     path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
     connectionReturn: true,
@@ -35,15 +35,22 @@ test("an app-scoped picker shows only the requested app and continues the chat a
       returnKey: "reply:1:0:0",
       onConnected: (name: string) => connected.push(`twin:${name}`),
     });
-    document.querySelector(".message-stack")!.append(other, scoped, twin);
+    const g = Object.assign(document.createElement("qm-onboarding-welcome"), { widget: "apps", toolkit: "granola" });
+    document.querySelector(".message-stack")!.append(other, scoped, twin, g);
     for (let i = 0; i < 100 && sessionStorage.getItem("qm-connection-return:test:tester"); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(connected, ["Gmail"]);
-    assert.match(scoped.querySelector("h3")?.textContent ?? "", /Connect Gmail/);
+    assert.equal(scoped.querySelector(".connection-card strong")?.textContent, "Gmail");
+    assert.equal(scoped.querySelector(".connection-card-status")?.textContent?.trim(), "Connected");
+    assert.deepEqual(
+      [...scoped.querySelectorAll(".connection-card button")].map((button) => button.getAttribute("aria-label")),
+      ["Reconnect Gmail", "Disconnect Gmail"],
+    );
     assert.equal(scoped.querySelector('input[type="search"]'), null);
-    assert.equal(scoped.querySelectorAll(".connection-picker-app").length, 1);
-    assert.match(scoped.textContent ?? "", /Gmail connected/);
+    assert.equal(scoped.querySelector(".connection-picker"), null);
+    assert.equal(g.querySelector(".connection-card strong")?.textContent, "Granola MCP");
+    assert.ok(other.querySelector(".connection-picker"), "an app the catalog does not have falls back to the picker");
   } finally {
     await h.close();
   }

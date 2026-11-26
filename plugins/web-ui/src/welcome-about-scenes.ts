@@ -61,7 +61,6 @@ export const DEMO = {
   app: {
     ask: "make me an app that tracks claims by carrier",
     title: "Claims tracker",
-    host: "claims.tidewater.apps",
     chart: "Claims by carrier",
     bars: [
       ["Atlas", 88],
@@ -83,6 +82,19 @@ export const DEMO = {
   },
 };
 
+export const firstName = (name: string | null | undefined) => name?.trim().split(" ")[0] || undefined;
+let cast = { company: DEMO.company, maya: DEMO.people.maya.name, dev: DEMO.people.dev.name };
+
+export function castAs(names: { company?: string | null; you?: string | null; teammate?: string | null }): void {
+  cast = {
+    company: names.company?.trim() || DEMO.company,
+    maya: firstName(names.you) ?? DEMO.people.maya.name,
+    dev: firstName(names.teammate) ?? DEMO.people.dev.name,
+  };
+}
+
+const appHost = () => `claims.${cast.company.toLowerCase().replaceAll(" ", "")}.apps`;
+
 type Who = keyof typeof DEMO.people | "qm";
 interface Cue {
   at?: number;
@@ -98,13 +110,15 @@ const timing = ({ at, out, mark }: Cue) =>
     out === undefined ? "" : `--out:${out};`,
     mark === undefined ? "" : `--mark:${mark};`,
   ].join("");
-const nameOf = (who: Who) => (who === "qm" ? "QM" : DEMO.people[who].name);
+const nameOf = (who: Who) => (who === "qm" ? "QM" : cast[who]);
 
 function avatar(who: Who, size: number, round = false): TemplateResult {
   const shape = round ? " round" : "";
-  if (who === "qm") return html`<span class="ava${shape}" style="--s:${size}px">${brandMark()}</span>`;
-  const person = DEMO.people[who];
-  return html`<span class="ava pale${shape}" style="--s:${size}px;background:${person.tint}">${person.name[0]}</span>`;
+  if (who === "qm")
+    return html`<span class="ava qm${shape}" style="--s:${size}px">${nameOf("qm")}${brandMark()}</span>`;
+  return html`<span class="ava pale${shape}" style="--s:${size}px;background:${DEMO.people[who].tint}"
+    >${nameOf(who)[0]}</span
+  >`;
 }
 
 const mention = html`<span class="mention">@qm</span>`;
@@ -194,7 +208,7 @@ export function webFrame(frame: WebFrame = {}): TemplateResult {
   const title = frame.title ?? "New chat";
   return html`<section class="wb-main">
     <header class="wb-head">
-      ${frame.chat ? html`<span class="rs-crumb">${DEMO.company} /</span>` : nothing}
+      ${frame.chat ? html`<span class="rs-crumb">${cast.company} /</span>` : nothing}
       <b>${frame.retitle ? swap(title, frame.retitle.text, frame.retitle.at) : title}</b>
       ${frame.from ? html`<span class="from">${slackMark(10)} from #${frame.from}</span>` : nothing}<span class="people"
         >${frame.people ?? nothing}</span
@@ -331,7 +345,7 @@ function appScene(): TemplateResult {
       swap(
         html`<span class="wb-work"><i class="spin"></i> Building it on my computer</span>`,
         html`Live, and shared with ${nameOf("dev")}.<span class="link-pill"
-            >${app.host} ${icon(ArrowUpRight, 11)}</span
+            >${appHost()} ${icon(ArrowUpRight, 11)}</span
           >`,
         4700,
       ),
@@ -339,7 +353,7 @@ function appScene(): TemplateResult {
     )}`,
     app: html`<div class="wb-app" style=${timing({ mark: 3400 })}>
       <div class="wb-app-in">
-        <div class="app-url"><i></i>${app.host}</div>
+        <div class="app-url"><i></i>${appHost()}</div>
         <div class="app-card">
           <b>${app.chart}</b>
           <div class="bars">

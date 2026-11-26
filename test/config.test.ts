@@ -174,14 +174,16 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
     proxied.porterSandbox,
     proxied.agent37Sandbox,
     proxied.renderSandbox,
+    proxied.managedAgentsSandbox,
   ])
     assert.equal(provider.egressProxyUrl, "https://egress.test");
   const exempted = loadConfig({
     EGRESS_PROXY_URL: "https://egress.test",
-    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, smolmachines, do-managed-agents",
   });
   assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.managedAgentsSandbox.egressProxyUrl, undefined);
   assert.equal(exempted.modalSandbox.egressProxyUrl, "https://egress.test");
   assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
 });
@@ -201,8 +203,8 @@ test("a retired per-provider egress proxy setting stops boot only when EGRESS_PR
     /No longer read: SMOLMACHINES_EGRESS_PROXY_URL\./,
   );
   assert.throws(
-    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_URL: "https://egress.test" }),
-    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\. DigitalOcean Managed Agents can't be forced/,
+    () => loadConfig({ DO_AGENTS_EGRESS_PROXY_URL: "https://egress.test" }),
+    /No longer read: DO_AGENTS_EGRESS_PROXY_URL\..*Set EGRESS_PROXY_URL/,
   );
   const warnings: string[] = [];
   const original = console.warn;
@@ -997,6 +999,21 @@ test("Render app publishing needs a complete source, project, and environment", 
     /requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA/,
   );
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
+});
+
+test("SANDBOX_IMAGES maps image names to each provider's image reference and refuses what cannot boot", () => {
+  const images = (value: unknown) => loadConfig({ SANDBOX_IMAGES: JSON.stringify(value) }).sandboxImages;
+  assert.deepEqual(loadConfig({}).sandboxImages, {});
+  assert.deepEqual(images({ toolchain: { e2b: " toolchain ", render: RENDER_IMAGE } }), {
+    toolchain: { e2b: "toolchain", render: RENDER_IMAGE },
+  });
+  assert.throws(
+    () => images({ toolchain: { sprites: "x" } }),
+    /SANDBOX_IMAGES.toolchain.sprites: that provider cannot boot/,
+  );
+  assert.throws(() => images({ toolchain: ["x"] }), /must be a named object/);
+  assert.throws(() => images({ toolchain: { e2b: "" } }), /must be an image reference/);
+  assert.throws(() => images({ toolchain: { render: "repo:tag" } }), /Render sandbox image must be/);
 });
 
 test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {

@@ -89,21 +89,28 @@ test("slack dedup key is the signed body's event_id, not the unsigned x-slack-ev
   );
 });
 
-test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id for dedup", () => {
+test("stripe verifier validates t=…,v1=… over `t.body`, enforces replay window, and dedups by id", (ctx) => {
+  const now = 1_800_000_000;
+  ctx.mock.method(Date, "now", () => now * 1000);
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_123", type: "charge.failed" });
-  const t = "1700000000";
-  const v1 = hmac(`${t}.${rawBody}`);
-  const input = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody };
-  assert.equal(v.verify(input), true);
-  assert.equal(v.deliveryId(input), "evt_123");
-  assert.equal(v.verify({ ...input, headers: { "stripe-signature": `t=${t},v1=deadbeef` } }), false);
+  const signed = (ts: string) => ({
+    secret: SECRET,
+    headers: { "stripe-signature": `t=${ts},v1=${hmac(`${ts}.${rawBody}`)}` },
+    rawBody,
+  });
+  assert.equal(v.verify(signed(String(now))), true);
+  assert.equal(v.deliveryId(signed(String(now))), "evt_123");
+  assert.equal(v.verify({ secret: SECRET, headers: { "stripe-signature": `t=${now},v1=deadbeef` }, rawBody }), false);
+  for (const offset of [-300, 300, -301, 301])
+    assert.equal(v.verify(signed(String(now + offset))), Math.abs(offset) <= 300);
+  assert.equal(v.verify(signed("nonsense")), false);
 });
 
 test("stripe verifier accepts any valid v1 signature during key rotation", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_rot" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const valid = hmac(`${t}.${rawBody}`);
   const rotated = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=${valid}` }, rawBody };
   assert.equal(v.verify(rotated), true);

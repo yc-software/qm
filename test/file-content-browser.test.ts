@@ -9,11 +9,11 @@ import { createServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import type { Tenant } from "../src/tenants/context.ts";
+import type { ByteRange } from "../src/files/durable-byte-store.ts";
 
 const SIGNING = "file-content-browser-signing-secret-0123";
 const config = testConfig({ signingSecret: SIGNING });
@@ -46,6 +46,7 @@ async function put(
 await put("html", "alice", "x.html", "text/html", "<script>fetch('/api/keychain')</script>");
 await put("pdf", "alice", "x.pdf", "application/pdf", "%PDF-1.4 fake");
 await put("png", "alice", "pic.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+await put("clip", "alice", "clip.mp4", "video/mp4", "0123456789");
 await put("bobs", "bob", "bob.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 await put("olderCsv", "alice", "interview-list.csv", "text/csv", "old", Date.now() - 60_000);
 await put("csv", "alice", "interview-list.csv", "text/csv", "new");
@@ -58,7 +59,13 @@ await put("playground", "alice", "pg.html", "text/html", PLAYGROUND_HTML);
 
 const app = {
   ...built.app,
-  openFileForViewer: async (tenant: Tenant, id: string, viewer: string) =>
+  openFileForViewer: async (
+    tenant: Tenant,
+    id: string,
+    viewer: string,
+    _ownScopeBotWork: boolean,
+    range?: (sizeBytes: number) => ByteRange | undefined,
+  ) =>
     id === "cut-off"
       ? {
           name: "cut.pdf",
@@ -72,11 +79,11 @@ const app = {
             })(),
           ),
         }
-      : built.app.openFileForViewer(tenant, id, viewer, false),
+      : built.app.openFileForViewer(tenant, id, viewer, false, range),
 };
 
 async function frontDoor(t: TestContext, deps: Partial<ServerDeps> = {}): Promise<string> {
-  const core = createServer(app, { ...serverDeps(config, built), ...browserSessionDeps, ...deps });
+  const core = createServer(app, { ...built, ...browserSessionDeps, ...deps });
   const portal = createHttpServer((req, res) => {
     res.setHeader("x-frame-options", "DENY");
     core.emit("request", req, res);
@@ -121,6 +128,27 @@ test("every non-PDF type is sandboxed, including a stored mimetype that names se
   await pool.end();
   const smuggled = await fetch(`${base}/api/files/${ids.smuggled}/content`, asAlice);
   assert.match(smuggled.headers.get("content-security-policy") ?? "", /^sandbox\b/);
+});
+
+test("media content answers byte ranges so players can seek", async (t) => {
+  const base = await frontDoor(t);
+  const url = `${base}/api/files/${ids.clip}/content`;
+  const range = (value: string) => fetch(url, { headers: { ...asAlice.headers, range: value } });
+  const full = await fetch(url, asAlice);
+  assert.equal(full.status, 200);
+  assert.equal(full.headers.get("accept-ranges"), "bytes");
+  assert.equal(await full.text(), "0123456789");
+  const middle = await range("bytes=2-5");
+  assert.equal(middle.status, 206);
+  assert.equal(middle.headers.get("content-range"), "bytes 2-5/10");
+  assert.equal(middle.headers.get("content-length"), "4");
+  assert.equal(await middle.text(), "2345");
+  const tail = await range("bytes=7-");
+  assert.equal(tail.headers.get("content-range"), "bytes 7-9/10");
+  assert.equal(await tail.text(), "789");
+  const unsatisfiable = await range("bytes=50-60");
+  assert.equal(unsatisfiable.status, 200);
+  assert.equal(await unsatisfiable.text(), "0123456789");
 });
 
 test("a cosmetic trailing filename on the content URL serves the same file", async (t) => {

@@ -1,8 +1,10 @@
+import { LRUCache } from "lru-cache";
 import { hasSlackAccount } from "./slack-composio.ts";
+import { actionApproved } from "../action-approval.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
-import { isBackendCredential } from "../../credentials/keychain.ts";
-import { livePersonCapability, personAtKeyboard } from "../artifact-share.ts";
+import { COMPOSIO_ENV_KEY, isBackendCredential, isUsableComposioKey } from "../../credentials/keychain.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
@@ -11,12 +13,12 @@ import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { externalOrgId } from "../../tenants/external-org.ts";
-import { entitledScopes } from "../../resolution/context-filter.ts";
-import { refuseImpersonated, refuseWithoutPerson, sendJson } from "../http.ts";
+import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
-import { activePrincipal, activeRun, audit } from "./shared.ts";
+import { errMessage, httpFailure, reportFailure, swallow } from "../../util/errors.ts";
+import { activePrincipal, audit, requirePersonAuthority } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
 
@@ -49,7 +51,6 @@ export async function credential(
   ctx: ApiCtx,
   optional = false,
 ): Promise<{ key: string | null; principal: string } | null> {
-  if (!(await activeRun(ctx))) return null;
   const principal = ctx.capability?.actorId ?? ctx.actor?.p;
   if (!principal) {
     sendJson(ctx.res, 401, { error: "unauthorized" });
@@ -68,13 +69,12 @@ export async function credential(
       cap.deployment ||
       cap.botActor ||
       (shared &&
-        livePersonCapability(cap) &&
+        carriesPersonAuthority(cap) &&
         (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
     ) {
       sendJson(ctx.res, 403, {
         error: "private_connections",
-        message:
-          "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+        message: "Use your connected apps in your own conversation, or explicitly open sharing to this conversation.",
       });
       return null;
     }
@@ -113,16 +113,18 @@ export async function credential(
       entitledScopes(false),
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
+  const orgWide = entitledOrgWide(audience, ctx.capability?.scopeId ?? personal, org);
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
-    (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
+    (c) => isUsableComposioKey(c) && (allowed.has(c.slug) || (orgWide && c.source === "deployment")),
   );
+
   if (!records.length && optional) return { key: null, principal };
   if (records.length !== 1) {
     composioUnavailable(ctx, records.length ? 409 : 403);
     return null;
   }
   const record = await ctx.deps.serviceCreds!.getServiceCredentialSecret(org, records[0]!.slug);
-  if (!record?.enabled || record.delivery !== "env" || record.envKey !== "COMPOSIO_API_KEY" || !record.secret) {
+  if (!record?.enabled || record.delivery !== "env" || record.envKey !== COMPOSIO_ENV_KEY || !record.secret) {
     sendJson(ctx.res, 403, { error: "composio_unavailable" });
     return null;
   }
@@ -201,6 +203,17 @@ export async function externalApps(ctx: ApiCtx): Promise<ConnectorApp[]> {
   return connectorApps((await ctx.deps.mcpServers?.list()) ?? []);
 }
 
+function nullIfNotFound(key: string, lookup: string): (error: unknown) => null {
+  return (error) => {
+    if (!(error instanceof ComposioHttpError) || error.status !== 404) throw error;
+    swallow(
+      `composio: ${lookup} not found`,
+      new Error(createExactSecretValueMasker([key])(redactSecrets(error.message))),
+    );
+    return null;
+  };
+}
+
 async function catalog(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx, true);
   if (!access) return;
@@ -208,10 +221,20 @@ async function catalog(ctx: ApiCtx): Promise<void> {
   if (!access.key && !apps.length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
+  const only = ctx.url.searchParams.get("toolkit");
+  if (only !== null && !isToolkitId(only)) return sendJson(ctx.res, 400, { error: "bad_toolkit" });
   const query = new URLSearchParams({ sort_by: "usage", limit: "1000" });
   if (cursor) query.set("cursor", cursor);
   try {
-    const data = access.key ? await request(ctx, access.key, `/toolkits?${query}`) : NO_COMPOSIO;
+    let data = NO_COMPOSIO;
+    if (access.key && only) {
+      data = await request(ctx, access.key, "/toolkits/multi", { toolkits: [only] });
+      const missing = !apps.some((app) => app.toolkit === only) && Array.isArray(data.items) && !data.items.length;
+      const found = missing
+        ? await request(ctx, access.key, `/toolkits?${new URLSearchParams({ search: only })}`)
+        : NO_COMPOSIO;
+      if (Array.isArray(found.items) && found.items.length === 1) data = found;
+    } else if (access.key) data = await request(ctx, access.key, `/toolkits?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid catalog");
     const items = data.items.flatMap((item) => {
       if (
@@ -231,8 +254,8 @@ async function catalog(ctx: ApiCtx): Promise<void> {
       ];
     });
     return sendJson(ctx.res, 200, {
-      items: withConnectorApps(items, apps, !cursor),
-      nextCursor: typeof data.next_cursor === "string" ? data.next_cursor : null,
+      items: withConnectorApps(items, only ? apps.filter((app) => app.toolkit === only) : apps, !cursor),
+      nextCursor: !only && typeof data.next_cursor === "string" ? data.next_cursor : null,
     });
   } catch {
     return sendJson(ctx.res, 502, { error: "composio_unavailable", message: "Could not load apps. Please try again." });
@@ -260,39 +283,57 @@ export async function activeOwnedAccount(
   access: { key: string; principal: string },
   accountId: string,
 ): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
-  const owned = await ownedAccount(ctx, access, accountId);
+  const owned = await ownedAccount(ctx, access, accountId).catch(nullIfNotFound(access.key, `account ${accountId}`));
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
-const SCOPES_TTL_MS = 5 * 60_000;
-const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+type Scopes = { scopes: string[]; updatedAt: number };
+const NO_SCOPES: Scopes = { scopes: [], updatedAt: Number.NaN };
+const scopeCache = new LRUCache<string, Promise<Scopes>>({ ttl: 5 * 60_000, ttlAutopurge: true });
 
-async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cacheKey = JSON.stringify([tenantOf(ctx).id, authConfigId]);
+function scopesOf(
+  ctx: ApiCtx,
+  key: string,
+  path: "auth_configs" | "connected_accounts",
+  id: string,
+  listed: (body: Record<string, unknown>) => unknown,
+): Promise<Scopes> {
+  const cacheKey = JSON.stringify([tenantOf(ctx).id, id]);
   const cached = scopeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.scopes;
-  try {
-    const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
-    const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
-    const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
-    return scopes;
-  } catch (error) {
-    const mask = createExactSecretValueMasker([key]);
-    reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
-    return [];
-  }
+  if (cached) return cached;
+  const found = request(ctx, key, `/${path}/${encodeURIComponent(id)}`)
+    .then((body) => {
+      const scopes = listed(body);
+      return {
+        scopes: Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [],
+        updatedAt: Date.parse(String(body.last_updated_at)),
+      };
+    })
+    .catch((error: unknown) => {
+      scopeCache.delete(cacheKey);
+      const mask = createExactSecretValueMasker([key]);
+      reportFailure(`composio: ${path} scopes`, new Error(mask(redactSecrets(errMessage(error)))), id);
+      return NO_SCOPES;
+    });
+  scopeCache.set(cacheKey, found);
+  return found;
 }
 
 function scopeName(scope: string): string {
   return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
-function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
-  const granted = account.state?.val?.scope;
-  if (typeof granted !== "string" || !granted.trim()) return [];
-  const held = new Set(granted.split(/[\s,]+/).map(scopeName));
-  return configured.filter((scope) => !held.has(scopeName(scope)));
+async function missingScopes(
+  ctx: ApiCtx,
+  key: string,
+  account: { id: string; created_at?: unknown },
+  config: Scopes,
+): Promise<string[]> {
+  if (!config.scopes.length || config.updatedAt <= Date.parse(String(account.created_at))) return [];
+  const asked = await scopesOf(ctx, key, "connected_accounts", account.id, (body) => body.requested_scopes);
+  if (!asked.scopes.length) return [];
+  const names = new Set(asked.scopes.map(scopeName));
+  return config.scopes.filter((scope) => !names.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
@@ -319,16 +360,32 @@ async function connections(ctx: ApiCtx): Promise<void> {
           .filter((id): id is string => typeof id === "string" && /^ac_[a-zA-Z0-9_-]+$/.test(id)),
       ),
     ];
-    const scopes = new Map(
-      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key!, id)] as const)),
+    const configs = new Map(
+      await Promise.all(
+        configIds.map(
+          async (id) =>
+            [
+              id,
+              await scopesOf(
+                ctx,
+                access.key!,
+                "auth_configs",
+                id,
+                (body) => (body.credentials as { scopes?: unknown } | undefined)?.scopes,
+              ),
+            ] as const,
+        ),
+      ),
     );
     const items = [
-      ...accounts.map((item) => ({
-        id: item.id,
-        toolkit: item.toolkit.slug,
-        userId: item.user_id,
-        missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
-      })),
+      ...(await Promise.all(
+        accounts.map(async (item) => ({
+          id: item.id,
+          toolkit: item.toolkit.slug,
+          userId: item.user_id,
+          missingScopes: await missingScopes(ctx, access.key!, item, configs.get(item.auth_config?.id) ?? NO_SCOPES),
+        })),
+      )),
       ...external
         .filter((app) => app.connected)
         .map((app) => ({ id: "", toolkit: app.toolkit, connector: app.connector, missingScopes: [] })),
@@ -348,7 +405,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
 
 async function disconnect(ctx: ApiCtx): Promise<void> {
   if (ctx.actor?.imp) return refuseImpersonated(ctx.res);
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (!requirePersonAuthority(ctx)) return;
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
@@ -358,7 +415,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
     const owned = await ownedAccount(ctx, access, accountId);
     if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     const { toolkit } = owned;
-    if (!(await activeRun(ctx))) return;
+    if (!(await actionApproved(ctx, { summary: `Disconnect ${toolkit} account ${accountId}` }))) return;
     await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
     audit(ctx, {
       principalId: access.principal,
@@ -443,14 +500,18 @@ async function execute(ctx: ApiCtx): Promise<void> {
       ctx,
       access.key,
       `/tools/${body.tool}?${new URLSearchParams({ toolkit_versions: body.version })}`,
-    );
+    ).catch(nullIfNotFound(access.key, `tool ${resource}`));
+    if (!tool)
+      return sendJson(ctx.res, 404, {
+        error: "tool_not_found",
+        message: "No such tool at this version. Search the toolkit's tools for its current slug and version.",
+      });
     if (
       tool.slug !== body.tool ||
       (tool.toolkit as { slug?: string } | undefined)?.slug !== toolkit ||
       tool.version !== body.version
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
-    if (!(await activeRun(ctx))) return;
     if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx, {
@@ -683,7 +744,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
       const projectKeys = new Set([access.key]);
       const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
       for (const candidate of companyCredentials) {
-        if (candidate.envKey !== "COMPOSIO_API_KEY" || !candidate.hasSecret) continue;
+        if (candidate.envKey !== COMPOSIO_ENV_KEY || !candidate.hasSecret) continue;
         const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
         if (!material?.secret) throw Error("Could not inspect existing connections");
         projectKeys.add(material.secret);

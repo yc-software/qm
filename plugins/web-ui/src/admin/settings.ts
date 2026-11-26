@@ -9,7 +9,7 @@ import {
   credentialsCard,
   keychainCard,
   loadCredentials,
-  addCredential,
+  credentialActions,
   credentialState,
 } from "./settings-credentials.ts";
 import { providersCard, useProviders, loadProviders } from "./settings-providers.ts";
@@ -18,6 +18,7 @@ import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
 import { appHandleCard, appHandleError } from "./settings-app-handle.ts";
 import { runtimesCard } from "./settings-runtimes.ts";
+import { errMessage } from "../../../chassis/src/errors.ts";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
@@ -169,7 +170,10 @@ async function saveSetting(s: SettingsState) {
   try {
     body = s.collect();
   } catch (err) {
-    return Object.assign(s, { message: err instanceof Error ? err.message : "Could not save.", tone: "err" }).render();
+    return Object.assign(s, {
+      message: errMessage(err, "Could not save."),
+      tone: "err",
+    }).render();
   }
   const view = page;
   const branding = s.key === "branding" ? { ...savedBranding, ...body } : body;
@@ -307,9 +311,9 @@ function template() {
       decisionsCard(),
     ],
   };
-  return html`${pageHeader({ actions: view === "credentials" ? addCredential() : nothing })}
+  return html`${pageHeader({ actions: view === "credentials" ? credentialActions() : nothing })}
     <div id="view-governance">
-      <div class="governance-content">
+      <div class=${view === "credentials" ? "settings-sections" : "governance-content"}>
         ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}
       </div>
     </div>`;

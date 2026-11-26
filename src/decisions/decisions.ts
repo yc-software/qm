@@ -2,18 +2,14 @@ import type { Tenant } from "../tenants/context.ts";
 const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
-  turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
-  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident", keepOnError: true },
-  persona: { actions: ["keep", "use_persona"], decide: "most_confident", keepOnError: true },
+  turn_start: { actions: ["keep", "use_runtime", "use_persona"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "retry", "prod"], decide: "most_confident" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
-} as const satisfies Record<
-  string,
-  { actions: readonly string[]; decide: "most_restrictive" | "most_confident"; keepOnError?: true }
->;
+} as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end", "persona"];
+const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end"];
 const rank = (hook: DecisionHook, action: string) =>
   (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
 
@@ -90,6 +86,7 @@ const MAX_OPTIONS = 8;
 const MAX_TEXT_CHARS = 500;
 const MAX_STATE_CHARS = 8_000;
 const MAX_RULE_TEXT_CHARS = 16_000;
+const WILDCARD_PERSONA = "*";
 
 export function parseDecisionProvider(raw: unknown): { provider: DecisionProvider } | { error: string } {
   const r = (raw ?? {}) as Record<string, unknown>;
@@ -152,8 +149,8 @@ export function parseDecisionRule(
       return { error: `${r.id}.${key}: runtime is required with use_runtime and only allowed there` };
     if ((o.action === "use_persona") !== (o.persona !== undefined))
       return { error: `${r.id}.${key}: persona is required with use_persona and only allowed there` };
-    if (o.persona !== undefined && (typeof o.persona !== "string" || !ID.test(o.persona)))
-      return { error: `${r.id}.${key}: persona must be a persona id` };
+    const persona = typeof o.persona === "string" ? o.persona.trim() : undefined;
+    if (o.persona !== undefined && !persona) return { error: `${r.id}.${key}: persona must be a persona id or "*"` };
     if ((o.action === "retry" || o.action === "prod") && !(typeof o.message === "string" && o.message.trim()))
       return { error: `${r.id}.${key}: ${String(o.action)} needs a message telling the agent what to do` };
     if (
@@ -181,15 +178,19 @@ export function parseDecisionRule(
             },
           }
         : {}),
-      ...(o.persona ? { persona: o.persona as string } : {}),
+      ...(persona ? { persona } : {}),
     };
   }
   const count = Object.keys(options).length;
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
+  if (Object.values(options).filter((o) => o.persona === WILDCARD_PERSONA).length > 1)
+    return { error: `${r.id}: at most one wildcard persona option` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
-  if ("keepOnError" in DECISION_HOOK_POINTS[r.hook as DecisionHook] && options[r.onError]!.action !== "keep")
-    return { error: `${r.id}: onError must name a keep option; a classifier failure must not change the turn` };
+  if (options[r.onError]!.persona === WILDCARD_PERSONA)
+    return { error: `${r.id}: onError cannot name a wildcard persona option` };
+  if (r.hook === "turn_end" && options[r.onError]!.action !== "keep")
+    return { error: `${r.id}: onError must name a keep option; a classifier failure must not change the reply` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))
     return { error: `${r.id}: model.provider must name a configured decision provider` };
@@ -210,14 +211,15 @@ export function parseDecisionRule(
 export function checkRuleSet(all: readonly DecisionRule[]): string | undefined {
   const rules = all.filter((r) => r.mode !== "off");
   if (rules.length > MAX_RULES) return `at most ${MAX_RULES} active decision rules`;
-  const confidentHook = rules.find(
-    (r, i) =>
-      r.mode === "enforce" &&
-      DECISION_HOOK_POINTS[r.hook].decide === "most_confident" &&
-      rules.some((o, j) => j < i && o.hook === r.hook && o.mode === "enforce"),
-  );
-  if (confidentHook)
-    return `${confidentHook.id}: ${confidentHook.hook} allows one enforcing rule; set the others to observe`;
+  const acts = (r: DecisionRule) =>
+    r.mode === "enforce" && DECISION_HOOK_POINTS[r.hook].decide === "most_confident"
+      ? Object.values(r.options).flatMap((o) => (rank(r.hook, o.action) > 0 ? [o.action] : []))
+      : [];
+  for (const [i, r] of rules.entries()) {
+    const clash = acts(r).find((a) => rules.some((o, j) => j < i && o.hook === r.hook && acts(o).includes(a)));
+    if (clash)
+      return `${r.id}: ${r.hook} allows one enforcing rule per action, and another already uses ${clash}; set one to observe`;
+  }
   const text = rules.reduce(
     (n, r) => n + r.question.length + Object.values(r.options).reduce((m, o) => m + o.description.length, 0),
     0,
@@ -256,7 +258,7 @@ function errorChain(error: unknown): string {
   return parts.join(" <- ").slice(0, 2_000);
 }
 
-function settle(rule: DecisionRule, answer: Record<string, number> | Error | undefined): DecisionResult {
+export function settle(rule: DecisionRule, answer: Record<string, number> | Error | undefined): DecisionResult {
   let error: string | undefined;
   if (answer instanceof Error) error = errorChain(answer);
   else if (!answer) error = "classifier returned no answer";
@@ -319,6 +321,31 @@ export const asError = (error: unknown): Error =>
         })()}`,
         { cause: error },
       );
+
+export const hasWildcardPersona = (rule: DecisionRule): boolean =>
+  Object.values(rule.options).some((o) => o.persona === WILDCARD_PERSONA);
+
+export function expandPersonaRule(
+  rule: DecisionRule,
+  personas: readonly { id: string; name: string; description: string }[],
+): DecisionRule | undefined {
+  if (!hasWildcardPersona(rule)) return rule;
+  const options: Record<string, DecisionOption> = {};
+  const fixed = new Set<string>();
+  for (const [key, opt] of Object.entries(rule.options)) {
+    if (opt.persona === WILDCARD_PERSONA) continue;
+    options[key] = opt;
+    if (opt.persona) fixed.add(opt.persona);
+  }
+  let n = 1;
+  for (const { id, name, description } of personas) {
+    if (fixed.has(id)) continue;
+    while (Object.hasOwn(options, `p${n}`)) n++;
+    const desc = description.trim();
+    options[`p${n++}`] = { description: desc ? `${name}: ${desc}` : name, action: "use_persona", persona: id };
+  }
+  return Object.keys(options).length >= 2 ? { ...rule, options } : undefined;
+}
 
 export const classifierKey = (rule: DecisionRule): string => JSON.stringify([rule.model.provider, rule.model.model]);
 

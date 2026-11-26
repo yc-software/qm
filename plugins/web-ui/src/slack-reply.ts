@@ -1,16 +1,21 @@
-import { composerInput, resizeComposerInput } from "./composer-input";
-import { ArrowUp } from "lucide";
-import { icon } from "./icons";
-import { tip } from "./tooltip";
 import { LitElement, html, nothing } from "lit";
-import { withBase } from "./core-bridge";
+import { api, withBase, type CoreAttachment } from "./core-bridge";
+import { embeddedComposer } from "./embedded-composer";
+import type { MentionRow } from "./emoji-completion";
 import { reportHandledError } from "./browser-errors.ts";
 import "./slack-account";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
+import { avatarTpl } from "./ui";
 import "./slack-reply.css";
+import { toSlackWire } from "./mention-wire";
+import type { SlackSending } from "./slack-outbox";
 
 const FOCUS_REFRESH_MS = 60_000;
 const KNOWN_KEY = "qm-slack-reply-known";
 type Known = { user: string; connected: boolean; label: string };
+type Participant = { name: string; id: string };
+const SLACK_USER = /^[UW][A-Z0-9]{6,}$/;
+const BROADCASTS = ["here", "channel"];
 
 function remembered(user: string): Known | null {
   try {
@@ -32,24 +37,24 @@ export class SlackReply extends LitElement {
   static properties = {
     sessionId: {},
     user: {},
+    participants: { attribute: false },
     connected: { state: true },
     linkAvailable: { state: true },
-    sending: { state: true },
     error: { state: true },
     text: { state: true },
     label: { state: true },
   };
   sessionId = "";
   user = "";
+  participants: Participant[] = [];
+  private wires = new Map<string, string>();
   private connected: boolean | null = null;
   private linkAvailable = false;
   private checkedAt = 0;
-  private sending = false;
   private error = "";
   private text = "";
   private label = "";
-  private inputObserver: ResizeObserver | null = null;
-  private observedInput: HTMLTextAreaElement | null = null;
+  private stopAvatars: (() => void) | null = null;
 
   protected createRenderRoot(): HTMLElement {
     return this;
@@ -57,33 +62,14 @@ export class SlackReply extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("focus", this.refreshOnFocus);
+    this.stopAvatars = onSpeakerAvatars(() => this.requestUpdate());
     this.requestUpdate();
   }
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("focus", this.refreshOnFocus);
-    this.inputObserver?.disconnect();
-    this.inputObserver = null;
-    this.observedInput = null;
-  }
-  protected updated(): void {
-    const input = this.querySelector<HTMLTextAreaElement>(".composer-input");
-    if (input !== this.observedInput) {
-      this.inputObserver?.disconnect();
-      this.inputObserver = null;
-      this.observedInput = input;
-    }
-    if (!input) return;
-    resizeComposerInput(input);
-    if (!this.inputObserver && typeof ResizeObserver !== "undefined") {
-      let width = input.clientWidth;
-      this.inputObserver = new ResizeObserver(() => {
-        if (width === input.clientWidth) return;
-        width = input.clientWidth;
-        resizeComposerInput(input);
-      });
-      this.inputObserver.observe(input);
-    }
+    this.stopAvatars?.();
+    this.stopAvatars = null;
   }
   protected willUpdate(changed: Map<string, unknown>): void {
     if (!changed.has("user") || this.connected !== null) return;
@@ -122,7 +108,10 @@ export class SlackReply extends LitElement {
       if (explicit) this.error = "Could not check your Slack connection.";
     }
   }
-  private request(action: string, message?: { text: string; clientMessageId: string }): Promise<Response> {
+  private request(
+    action: string,
+    message?: { text: string; clientMessageId: string; attachments?: CoreAttachment[] },
+  ): Promise<Response> {
     return fetch(withBase(`/api/composio/slack/${action}`), {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -130,64 +119,83 @@ export class SlackReply extends LitElement {
       signal: AbortSignal.timeout(60_000),
     });
   }
-  private async send(event: Event): Promise<void> {
-    event.preventDefault();
-    if (this.connected === false || this.sending || !this.text.trim()) return;
-    this.sending = true;
-    this.error = "";
-    try {
-      const response = await this.request("reply", { text: this.text, clientMessageId: crypto.randomUUID() });
-      const result = await response.json();
-      if (!response.ok || !result.sent) {
+  private mentions = async (query: string): Promise<MentionRow[]> => {
+    const q = query.toLowerCase();
+    const rows = new Map<string, MentionRow & { wire: string }>();
+    const add = (label: string, wire: string, key: string, avatar?: string) => {
+      if (!label.toLowerCase().includes(q) || rows.has(label)) return;
+      const lead = BROADCASTS.includes(label) ? "📣" : avatarTpl({ key, name: label, avatarUrl: avatar });
+      rows.set(label, { key, label, lead, wire });
+    };
+    for (const p of this.participants) if (SLACK_USER.test(p.id)) add(p.name, `<@${p.id}>`, p.id, speakerAvatar(p.id));
+    if (q)
+      try {
+        const found = await api<{ matches?: Array<{ displayName: string; slackId?: string; avatarUrl?: string }> }>(
+          `/api/directory/resolve?q=${encodeURIComponent(q)}`,
+        );
+        for (const m of found.matches ?? [])
+          if (m.slackId) add(m.displayName, `<@${m.slackId}>`, m.slackId, m.avatarUrl);
+      } catch (error) {
+        reportHandledError("web:slack_mention_search", error);
+      }
+    for (const b of BROADCASTS) add(b, `<!${b}>`, b);
+    for (const row of rows.values()) this.wires.set(row.label, row.wire);
+    return [...rows.values()];
+  };
+
+  private submit =
+    () =>
+    async (draft: string, options: { attachments?: CoreAttachment[] }): Promise<void> => {
+      const text = toSlackWire(draft, this.wires);
+      const id = crypto.randomUUID();
+      this.error = "";
+      const sending: SlackSending = {
+        id,
+        sessionId: this.sessionId,
+        text: text || options.attachments?.map((a) => a.name).join(", ") || "",
+        speaker: this.label || this.user,
+        speakerId: this.user,
+      };
+      this.dispatchEvent(new CustomEvent("slack-sending", { bubbles: true, detail: sending }));
+      let message = "The send outcome is unknown. Check Slack before trying again.";
+      try {
+        const response = await this.request("reply", {
+          text,
+          clientMessageId: id,
+          ...(options.attachments ? { attachments: options.attachments } : {}),
+        });
+        const result = await response.json();
+        if (response.ok && result.sent) {
+          this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true, detail: { id, ts: result.ts } }));
+          return;
+        }
         if (result.connected === false) {
           this.connected = false;
           this.linkAvailable = true;
           remember({ user: this.user, connected: false, label: this.label });
         }
-        this.error = result.message ?? "Could not send your Slack message.";
-        return;
+        message = result.message ?? "Could not send your Slack message.";
+      } catch (error) {
+        reportHandledError("web:slack_reply_send", error);
       }
-      this.text = "";
-      this.dispatchEvent(new CustomEvent("slack-sent", { bubbles: true }));
-    } catch {
-      this.error = "The send outcome is unknown. Check Slack before trying again.";
-    } finally {
-      this.sending = false;
-    }
-  }
+      this.dispatchEvent(new CustomEvent("slack-failed", { bubbles: true, detail: { id } }));
+      throw new Error(message);
+    };
+
   protected render() {
     if (this.connected !== false)
-      return html`<form class="composer-wrap" @submit=${(e: Event) => void this.send(e)}>
-        ${composerInput({
-          value: this.text,
-          placeholder: `Reply in Slack as ${this.label || "yourself"}`,
-          label: `Reply in Slack as ${this.label || "yourself"}`,
-          disabled: this.sending,
-          maxLength: 4000,
-          onInput: (e) => {
-            this.text = (e.target as HTMLTextAreaElement).value;
-          },
-          onKeydown: (e) => {
-            if (e.isComposing || e.keyCode === 229 || e.key !== "Enter" || e.shiftKey) return;
-            void this.send(e);
+      return html`<div class="slack-reply-box">
+        ${embeddedComposer(`slack-reply:${this.sessionId}`, {
+          prepareSubmit: this.submit,
+          slack: {
+            label: this.label || "yourself",
+            mentions: this.mentions,
+            avatar: () =>
+              avatarTpl({ key: this.user, name: this.label || this.user, avatarUrl: speakerAvatar(this.user) }),
           },
         })}
-        <div class="composer-toolbar">
-          <div class="composer-left"></div>
-          <div class="composer-right">
-            <button
-              class="send-btn"
-              type="submit"
-              aria-label="Send to Slack"
-              ${tip("Send to Slack")}
-              ?disabled=${this.sending || !this.text.trim()}
-            >
-              ${icon(ArrowUp, 16)}
-            </button>
-          </div>
-        </div>
         ${this.error ? html`<div class="composer-error" role="alert">${this.error}</div>` : nothing}
-      </form>`;
+      </div>`;
     return html`<div class="slack-reply-box">
       ${this.linkAvailable ? html`<qm-slack-account .user=${this.user} .reply=${true} @slack-linked=${this.refresh}></qm-slack-account>` : nothing}
       ${this.error ? html`<p class="slack-account-error" role="alert">${this.error} <button class="btn" @click=${this.refresh}>Check connection</button></p>` : nothing}

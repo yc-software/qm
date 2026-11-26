@@ -7,7 +7,6 @@ export interface Me {
   analytics?: { module: string; options?: unknown };
   companyName?: string | null;
   workspace?: string | null;
-  welcomeCohort?: string;
   welcome?: ActivitySeeds;
   suggestedActivities?: SuggestedActivity[];
   suggestedActivitiesGeneration?: boolean;
@@ -15,12 +14,14 @@ export interface Me {
   modelAuthConnected?: boolean;
   mode?: AuthMode;
   user: string;
+  personalScope: string;
   org: string;
   slackWorkspaceUrl?: string | null;
   slackAppIconUrl?: string | null;
   chatSurfaces?: { kind: string; label: string; mark?: string }[];
   impersonatedBy?: string | null;
   displayName?: string | null;
+  teammate?: string;
   permissions?: string[];
 }
 
@@ -65,4 +66,4 @@ export function canView(view: View): boolean {
   return true;
 }
 
-export const hasWelcomeScreen = (me: Me | null | undefined): boolean => Boolean(me?.welcomeCohort || me?.welcome);
+export const hasWelcomeScreen = (me: Me | null | undefined): boolean => Boolean(me?.welcome);

@@ -1,10 +1,11 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -48,6 +49,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const WORKSPACE_ROOT = "/workspace";
@@ -55,12 +57,38 @@ const HOME_DIR = `${WORKSPACE_ROOT}/home`;
 const TRANSFER_RELAY_BASENAME = ".qm-transfer.";
 const WORKSPACE_BASENAME = "workspace";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
+const EGRESS_FORWARD_DIR = `${WORKSPACE_ROOT}/.qm-egress`;
+const EGRESS_FORWARD_PORT = 3129;
+const EGRESS_FORWARD_READY_POLLS = 100;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 const CHECKPOINT_LABEL = "qm teardown";
 
 export const QM_TEMPLATE_TOOLS = ["jq", "rg", "unzip", "wget"];
+
+const EGRESS_FORWARDER = readFileSync(new URL("./managed-agents-egress-forward.mjs", import.meta.url));
+const FORWARD_DIR = shq(EGRESS_FORWARD_DIR);
+const FORWARD_SCRIPT = `forward-${createHash("sha256").update(EGRESS_FORWARDER).digest("hex").slice(0, 16)}.mjs`;
+const FORWARD_RUNNING = `grep -qs ${FORWARD_SCRIPT} "/proc/$(cat ${FORWARD_DIR}/pid 2>/dev/null)/cmdline"`;
+
+function egressForwardInstallScript(egressProxyUrl: string): string {
+  return [
+    `mkdir -p ${FORWARD_DIR}`,
+    `{ [ -f ${FORWARD_DIR}/${FORWARD_SCRIPT} ] || { printf '%s' ${shq(EGRESS_FORWARDER.toString("base64"))} | base64 -d > ${FORWARD_DIR}/.forward.tmp && mv -f ${FORWARD_DIR}/.forward.tmp ${FORWARD_DIR}/${FORWARD_SCRIPT}; }; }`,
+    `printf '%s' ${shq(new URL(egressProxyUrl).origin)} > ${FORWARD_DIR}/.proxy.$$ && mv -f ${FORWARD_DIR}/.proxy.$$ ${FORWARD_DIR}/proxy`,
+  ].join(" && ");
+}
+
+const EGRESS_FORWARD_ENSURE = [
+  `if [ -z "\${HTTPS_PROXY:-\${https_proxy:-}}" ]; then echo "egress: this computer was created before the egress proxy was required, so its traffic can't be forced through it. Retire it and create a new one (export any files you need first)." >&2; exit 1; fi;`,
+  `if ! ${FORWARD_RUNNING}; then`,
+  `old=$(cat ${FORWARD_DIR}/pid 2>/dev/null); grep -qs forward- "/proc/$old/cmdline" && ! grep -qs ${FORWARD_SCRIPT} "/proc/$old/cmdline" && kill "$old" && sleep 0.2;`,
+  `(setsid nohup node ${FORWARD_DIR}/${FORWARD_SCRIPT} ${FORWARD_DIR} ${EGRESS_FORWARD_PORT} >${FORWARD_DIR}/log 2>&1 </dev/null &);`,
+  `i=0; until ${FORWARD_RUNNING} || [ $i -ge ${EGRESS_FORWARD_READY_POLLS} ]; do sleep 0.1; i=$((i+1)); done;`,
+  `${FORWARD_RUNNING} || { echo "egress forwarder did not start: $(tail -c 1000 ${FORWARD_DIR}/log 2>/dev/null)" >&2; exit 1; };`,
+  "fi; ",
+].join(" ");
 
 function transfersDirectly(absPath: string): boolean {
   return (absPath === WORKSPACE_ROOT || absPath.startsWith(`${WORKSPACE_ROOT}/`)) && !hasParentPathSegment(absPath);
@@ -79,10 +107,12 @@ export interface StoredManagedAgentsSandbox extends SnapshotBookkeeping {
 }
 
 export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: ManagedAgentsClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
   snapshotIntervalMs?: number;
+  egressProxyUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
@@ -232,7 +262,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       }
 
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ name });
+      const template = await opts.imageFor?.(scope);
+      const session = await client.create({ name, ...egressAllow, ...(template ? { template } : {}) });
       sessionByName.set(name, session);
       await recordSession(scope, session, Date.now());
       let hydrated: boolean;
@@ -261,7 +292,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
       if (active === 0 && !sessionByName.has(name)) {
-        sessionByName.set(name, await client.create({ name }));
+        sessionByName.set(name, await client.create({ name, ...egressAllow }));
       }
       activeScratch.set(name, active + 1);
       return { name, coldStart: active === 0 };
@@ -273,7 +304,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
 
     const reviveScratch = async (): Promise<ManagedAgentsSession> => {
-      const session = await client.create({ name });
+      const session = await client.create({ name, ...egressAllow });
       sessionByName.set(name, session);
       return session;
     };
@@ -295,9 +326,10 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     }
   }
 
-  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
+  async function execRaw(name: string, script: string, timeoutSec: number, guard = ""): Promise<ExecResult> {
     return withSession(name, async (session) => {
-      const r = await session.runCommand(`sh -c ${shq(`timeout -k 5 ${timeoutSec} sh -c ${shq(script)}; exit $?`)}`, {
+      const guarded = `${guard}timeout -k 5 ${timeoutSec} sh -c ${shq(script)}; exit $?`;
+      const r = await session.runCommand(`sh -c ${shq(guarded)}`, {
         timeoutMs: timeoutSec * 1000 + 30_000,
       });
       return {
@@ -309,12 +341,19 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     });
   }
 
+  const egressAllow = opts.egressProxyUrl
+    ? { egressAllow: [new URL(opts.egressProxyUrl).hostname.replace(/^\[|\]$/g, "")] }
+    : {};
+  const egressGuard = opts.egressProxyUrl ? EGRESS_FORWARD_ENSURE : "";
+  const execNetworked = (name: string, script: string, timeoutSec: number): Promise<ExecResult> =>
+    execRaw(name, script, timeoutSec, egressGuard);
+
   const profile: AgentComputerProfile = {
     backend: "do-managed-agents",
     writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
     processSessions: true,
     parksOnTeardown: true,
-    egressEnforcement: "none",
+    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
       os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
@@ -335,7 +374,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
   const procIo: ExecProcessIo = {
     async run(handle, command, execOpts): Promise<ExecResult> {
       const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      return execRaw(handle.id, command, timeoutSec);
+      return execNetworked(handle.id, command, timeoutSec);
     },
   };
   const procSessions = createExecProcessSessions(procIo);
@@ -383,7 +422,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
   });
 
-  const blobStaging = createBackendBlobStaging("do-managed-agents", (id, script, t) => execRaw(id, script, t), opts);
+  const blobStaging = createBackendBlobStaging("do-managed-agents", execNetworked, opts);
 
   async function destroyStoredScope(scope: string): Promise<void> {
     const name = sandboxScopeName(prefix, scope);
@@ -429,7 +468,13 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
-      const env = Object.fromEntries(Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)));
+      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
+      const turnEnv = Object.fromEntries(
+        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
+      );
+      const env = forceEgress
+        ? forceThroughProxyEnv(`http://127.0.0.1:${EGRESS_FORWARD_PORT}`, provOpts!.egressToken!, turnEnv)
+        : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,
@@ -441,7 +486,8 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
 
       try {
         const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
+        const forward = opts.egressProxyUrl ? ` && ${egressForwardInstallScript(opts.egressProxyUrl)}` : "";
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}${forward}`, 60);
         if (prep.code !== 0)
           throw new Error(`do-managed-agents provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 
@@ -464,7 +510,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
         .join("; ");
       const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
       const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
+      if (!signal) return execNetworked(handle.id, script, timeoutSec);
       const killUid = randomUUID();
       const fireKill = (): void => {
         execRaw(handle.id, killScript(killUid), 15).catch(
@@ -475,7 +521,7 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       const onAbort = (): void => fireKill();
       signal.addEventListener("abort", onAbort, { once: true });
       try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
+        return await execNetworked(handle.id, killableScript(script, killUid), timeoutSec);
       } finally {
         signal.removeEventListener("abort", onAbort);
       }

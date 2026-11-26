@@ -9,9 +9,10 @@ import type { RuntimeChoice } from "../src/agent/agent.ts";
 import { randomUUID } from "node:crypto";
 import { storedItem } from "../src/sessions/items.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const ORG = "org:default-org";
-const SCOPE = "personal:alice";
+const SCOPE = personalScope("alice");
 const fallback: RuntimeChoice = { modelId: "claude-opus-5" };
 const category: RuntimeChoice = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
@@ -30,13 +31,13 @@ test("unset categories preserve legacy conversation, child, and cron behavior", 
     await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"),
     await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
   );
-  assert.deepEqual(turnModelOptions({ triggered: true }), { thinkingLevel: "xhigh", fastMode: false });
+  assert.deepEqual(turnModelOptions({ automated: true }), { thinkingLevel: "xhigh", fastMode: false });
 });
 
 test("cron and loop entry points defer legacy injections until runtime resolution", () => {
   for (const surface of ["cron", "loop"]) {
-    assert.deepEqual(turnModelOptions({ triggered: true, surface }), {});
-    assert.deepEqual(turnModelOptions({ triggered: true, surface, thinkingLevel: "low", fastMode: false }), {
+    assert.deepEqual(turnModelOptions({ automated: true, surface }), {});
+    assert.deepEqual(turnModelOptions({ automated: true, surface, thinkingLevel: "low", fastMode: false }), {
       thinkingLevel: "low",
       fastMode: false,
     });
@@ -142,7 +143,7 @@ test("runtime get uses job execution defaults, and handoffs survive retries", as
       authorizesCapabilityScope: async () => true,
     },
   );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, triggered: true } as const;
+  const claims = { actorId: "alice", scopeId: SCOPE, personAuthority: true, exp: Date.now() + 60_000 } as const;
   const explicit = { fastMode: false };
   const get = await service(claims, fallback, { action: "get" }, undefined, false, undefined, true, "cron", explicit);
   assert.ok(get.ok);
@@ -189,7 +190,7 @@ test("explicit choices outside the conversation picker stay restricted for confi
     { config, baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },
   );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, triggered: true } as const;
+  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000 } as const;
   const denied = await service(
     claims,
     category,

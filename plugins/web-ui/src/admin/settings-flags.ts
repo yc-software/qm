@@ -26,10 +26,10 @@ export async function loadFlags(data: any, scope: string) {
     state.message = "";
   }
   state.scope = scope;
-  state.available = scope.startsWith("org:") && "featureFlags" in data;
+  state.available = page.fullAdmin && scope.startsWith("org:") && "featureFlags" in data;
   state.rows = data.featureFlags || [];
   redraw();
-  if (!state.available) return;
+  if (!state.available || !page.fullAdmin) return;
   const r = await page.api("GET", "/api/scopes");
   if (state.scope !== scope || !r.ok) return;
   state.choices = (r.data.scopes || []).map((row: any) => ({ scopeId: row.scopeId, label: row.label || row.scopeId }));

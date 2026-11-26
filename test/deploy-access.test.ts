@@ -17,7 +17,7 @@ import {
   registerDeployAccessActions,
 } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
+import { scopeId, type ActorAssertion, type Permission, personalScope } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
@@ -125,7 +125,7 @@ test("malformed or scope-injecting button payloads are rejected", () => {
     "{}",
     JSON.stringify({ ...request, permission: "write" }),
     JSON.stringify({ ...request, deploymentId: "mysite" }),
-    JSON.stringify({ ...request, requesterId: "personal:bob" }),
+    JSON.stringify({ ...request, requesterId: personalScope("bob") }),
     JSON.stringify({ ...request, requesterId: "<@everyone>" }),
     JSON.stringify({ ...request, requesterId: "bob\n" }),
     JSON.stringify({ ...request, requesterId: 42 }),
@@ -196,11 +196,13 @@ test("direct share paths notify only after successful grants; org, self and revo
   await f.share("read", person(owner));
   await f.share("read", scopeId("org", "acme"));
   const control = createControlService(f.app);
-  const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
+  const cap = (actorId: string) =>
+    ({ actorId, scopeId: person(actorId), internalAudience: true, personAuthority: true }) as CapabilityClaims;
   const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };
-  assert.equal((await control.shareArtifact(request, cap(requester))).ok, false);
+  const approved = async () => true;
+  assert.equal((await control.shareArtifact(request, cap(requester), approved)).ok, false);
   assert.deepEqual(await f.notices(), []);
-  assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
+  assert.equal((await control.shareArtifact(request, cap(owner), approved)).ok, true);
   await f.share("read");
   assert.equal((await f.notices()).length, 1);
   f.deliveries.enqueue = async () => {
@@ -225,16 +227,23 @@ companyTest("notify:false grants access on every direct share path without a DM 
     inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
   } as unknown as Parameters<typeof createApp>[0]);
   const control = createControlService(app);
-  const cap = { actorId: owner, scopeId: person(owner), liveActor: true } as CapabilityClaims;
+  const cap = {
+    actorId: owner,
+    scopeId: person(owner),
+    internalAudience: true,
+    personAuthority: true,
+  } as CapabilityClaims;
   const quiet = { notify: false };
+  const approved = async () => true;
   assert.equal(
-    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
+    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap, approved)).ok,
     true,
   );
   await app.shareApp(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
   const invited = await control.shareArtifact(
     { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
     cap,
+    approved,
   );
   assert.ok(invited.ok);
   assert.deepEqual(invited.invitation, {
@@ -242,13 +251,16 @@ companyTest("notify:false grants access on every direct share path without a DM 
     emailProblem: "notify was false",
     appUrl: "https://acme1-mysite.apps.example.com/",
   });
-  assert.deepEqual(await f.deploy.appGrantees(f.d.id), [
-    { scope: person(requester), permission: "write" },
-    { scope: person("carol@example.com"), permission: "read" },
-  ]);
+  assert.deepEqual(
+    (await f.deploy.appGrantees(f.d.id)).sort((a, b) => a.scope.localeCompare(b.scope)),
+    [
+      { scope: person(requester), permission: "write" },
+      { scope: person("carol@example.com"), permission: "read" },
+    ].sort((a, b) => a.scope.localeCompare(b.scope)),
+  );
   assert.deepEqual(await f.notices(), []);
   assert.deepEqual(sent, []);
-  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap);
+  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap, approved);
   assert.equal((await f.notices()).length, 1);
 });
 

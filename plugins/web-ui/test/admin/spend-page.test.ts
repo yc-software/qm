@@ -41,3 +41,11 @@ test("spend: custom window query, chart, rows linking to user and cron runs, and
   assert.equal(page.location(), "/settings/spend?from=2026-09-05&to=2026-09-11");
   page.close();
 });
+
+test("spend as owner hides user-detail and history drill-down links", async () => {
+  const page = await mountPage("/settings/spend", { "GET /spend": DATA }, { fullAdmin: false });
+  await page.settle();
+  assert.equal(page.host.querySelector('a[href*="/settings/user"]'), null);
+  assert.equal(page.host.querySelector('a[href*="/settings/history"]'), null);
+  assert.ok(page.host.textContent?.includes("alex@example.com"));
+});

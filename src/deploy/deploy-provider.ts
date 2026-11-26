@@ -9,7 +9,7 @@ export interface DeployProfile {
 }
 
 interface DeployLiveEdit {
-  files: Array<{ path: string; data: Uint8Array }>;
+  files: Array<{ path: string; data: Uint8Array; mode?: "100644" | "100755" }>;
   deletedPaths: string[];
   restart: boolean;
 }

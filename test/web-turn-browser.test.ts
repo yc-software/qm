@@ -8,7 +8,6 @@ import type { App } from "../src/api/app-types.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import type { RunSignal } from "../src/runs/run-signal-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -30,6 +29,7 @@ const stored: TurnRequest = {
 };
 const swarm = { ...stored, surface: "swarm", conversation: { kind: "dm" as const, threadRef: "swarm:root:worker" } };
 const child = { ...stored, conversation: { kind: "dm" as const, threadRef: "agent:main:subagent:c1" } };
+const cron = { ...stored, surface: "cron", conversation: { kind: "dm" as const, threadRef: "cron:c1:1" } };
 const inbox = (threadRef: string, kind: "dm" | "channel" = "dm"): TurnRequest => ({
   ...stored,
   conversation: kind === "dm" ? { kind, threadRef } : { kind, threadRef, channelRef: "C1" },
@@ -47,6 +47,7 @@ const approvals: Record<string, { sessionId: string; request: TurnRequest }> = {
   "a-sub": { sessionId: "child", request: child },
   "a-sub-hidden": { sessionId: "hidden", request: child },
   "a-sub-mismatch": { sessionId: "child-mismatch", request: child },
+  "a-cron": { sessionId: "cron-s", request: cron },
   "a-inbox": { sessionId: "inbox", request: inbox("web:alice:inbox") },
   "a-inbox-other": { sessionId: "inbox", request: inbox("web:bob:inbox") },
   "a-inbox-channel": { sessionId: "inbox", request: inbox("web:alice:inbox", "channel") },
@@ -57,6 +58,7 @@ const sessions: Record<string, { surface: string; threadRef: string }> = {
   "wrong-surface": { surface: "web", threadRef: "swarm:root:worker" },
   child: { surface: "web", threadRef: "agent:main:subagent:c1" },
   "child-mismatch": { surface: "web", threadRef: "agent:main:subagent:other" },
+  "cron-s": { surface: "cron", threadRef: "cron:c1:1" },
 };
 
 const app = {
@@ -86,7 +88,7 @@ const admin = {
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     portalSession,
     admin,
@@ -350,6 +352,7 @@ test("worker and subagent approvals replay onto their own thread only when that 
   for (const [id, threadRef, surface] of [
     ["a-swarm", "swarm:root:worker", "swarm"],
     ["a-sub", "agent:main:subagent:c1", "web"],
+    ["a-cron", "cron:c1:1", "cron"],
   ] as const) {
     assert.equal((await post(`/api/approvals/${id}`, { approved: true, scope: "once" })).status, 202);
     const turn = turns.at(-1)!;

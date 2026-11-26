@@ -18,6 +18,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -65,8 +66,9 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
       trigger: "conversation",
       surface: "slack",
       fireKey: "run:r-1",
-      sourceScopeId: "personal:internal:U1",
+      sourceScopeId: personalScope("internal:U1"),
       sourceThreadRef: "t",
+      sourceRunId: "r-1",
     },
     idempotencyKey: "run:r-1",
   });
@@ -348,7 +350,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
 
 const failureSessions = async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
+  const scope = personalScope("u1@example.test") as import("../src/types.ts").ScopeId;
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
 };
@@ -533,130 +535,34 @@ for (const surface of ["slack", "web"] as const) {
   }
 }
 
-test("webhook run delivery correlates with the original caller request", () => {
-  const request = {
-    ...turn("hi", "web:alice:conversation"),
-    surface: "web",
-    origin: { kind: "human" as const },
-    idempotencyKey: "external-request-123",
-    deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
-  };
-  const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
-  assert.equal(delivery?.destination.type, "webhook");
-  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
-  assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
-});
-
-test("bound webhook results identify every terminal outcome for native receiver handling", () => {
-  const results: TurnResult[] = [
-    {
-      status: "pending_approval",
-      pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
-    },
-    { status: "react", reactions: ["thumbsup"] },
-    { status: "refused", reason: "not permitted" },
-    { status: "failed", reason: "connection failed" },
-  ];
-  for (const result of results) {
-    const request = {
-      ...turn("hi", "web:alice:conversation"),
-      surface: "web",
-      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
-    };
-    const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
-    assert.equal(delivery?.provenance.sourceRunId, "r-1");
-    assert.equal(delivery?.text, "");
-    assert.equal(delivery?.destination.type, "webhook");
-  }
-  for (const result of [{ status: "silent" }, { status: "ok", reply: "" }] as TurnResult[]) {
-    const bound = {
-      ...turn("hi", "web:alice:conversation"),
-      surface: "web",
-      deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
-    };
-    assert.equal(
-      runResultDelivery(run({ request: bound, result })),
-      null,
-      "a background run with nothing to show sends nothing",
-    );
-    const waiting = { ...bound, origin: { kind: "human" as const }, idempotencyKey: "external-request-123" };
-    const closing = runResultDelivery(run({ request: waiting, result, dedupKey: "external-request-123" }));
-    assert.equal(
-      closing?.provenance.sourceRequestId,
-      "external-request-123",
-      "a waiting caller still gets its terminal delivery",
-    );
-    assert.equal(closing?.text, "");
-  }
-  const failed = runResultDelivery(
-    run({
-      status: "failed",
-      request: {
-        ...turn("hi", "web:alice:conversation"),
-        surface: "web",
-        deliveryWebhook: { binding: "binding", url: "https://receiver.example/qm" },
-      },
-      result: { status: "failed", reason: "connection failed", sessionId: "s-1" },
-    }),
-    () => "https://portal.example.com/admin",
-  );
-  assert.match(failed?.text ?? "", /couldn't finish that turn.*portal\.example\.com/);
-  assert.equal(failed?.provenance.sourceRunId, "r-1");
-});
-
-test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const deliveries = createDeliveryStore();
-  const target = "web:alice:conversation";
-  const request: OrchestratorInput = {
-    ...turn("scheduled update", target),
-    surface: "cron",
-    origin: {
-      kind: "automation",
-      destination: { type: "webhook", target, webhook: { binding: "binding", url: "https://receiver.example/qm" } },
-    },
-  };
-  const submitted = (await runs.enqueue({ sessionId: "scheduled", request })).run;
-  const claim = (await runs.claim("worker", 5_000))[0];
-  await runs.complete(submitted.id, claim!.leaseToken!, { status: "ok", reply: "Recovered update" });
-  assert.deepEqual(await deliveries.pending("webhook"), []);
-  const recovery = wireRunResultDeliveries(runs, deliveries);
-  assert.equal(await recovery.sweep(Date.now() + 61_000), 1);
-  const delivered = (await deliveries.pending("webhook"))[0]!;
-  assert.equal(delivered.idempotencyKey, `run:${submitted.id}`);
-  assert.equal(delivered.provenance?.sourceRunId, submitted.id);
-  assert.equal(delivered.provenance?.sourceRequestId, undefined);
-  assert.equal(await recovery.sweep(Date.now() + 61_000), 0);
-  const { deliveryTarget: _, ...withoutAuthorization } = request;
-  assert.equal(runResultDelivery(run({ request: withoutAuthorization })), null);
-});
-
-test("a scheduled approval continuation correlates with the receiver's action request", () => {
-  const request = {
-    ...turn("scheduled update"),
-    surface: "cron",
-    origin: {
-      kind: "automation" as const,
-      destination: {
-        type: "webhook" as const,
-        target: "web:alice:conversation",
-        webhook: { binding: "binding", url: "https://receiver.example/qm" },
-      },
-    },
-    idempotencyKey: "receiver-approval-1",
-    approval: { requestId: "approval-1", approved: true },
-  };
-  const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
-  assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
-  assert.equal(delivery?.provenance.sourceRunId, "r-1");
-  assert.equal(delivery?.destination.target, "web:alice:conversation");
-  assert.deepEqual(delivery?.destination.webhook, { binding: "binding", url: "https://receiver.example/qm" });
-});
-
 test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
   const d = runResultDelivery(
     run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
   );
   assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
   assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});
+
+test("an approved automation replay delivers its result to origin.destination unless surfaceTools handled it", () => {
+  const destination = { type: "slack", target: "C1" };
+  const req = {
+    ...turn("digest"),
+    surface: "cron",
+    origin: { kind: "automation" as const, destination },
+    approval: { requestId: "a-1", approved: true, scope: "once" as const },
+  };
+  assert.deepEqual(runResultDelivery(run({ request: req }))?.destination, destination);
+  assert.equal(runResultDelivery(run({ request: { ...req, surfaceTools: true } })), null);
+  assert.equal(runResultDelivery(run({ request: { ...req, approval: undefined } })), null);
+});
+
+test("an approval continuation started by a trigger leaves its reply to the trigger's own delivery", () => {
+  const destination = { type: "slack", target: "D1" };
+  const req = {
+    ...turn("set it"),
+    surface: "approval",
+    origin: { kind: "automation" as const, fire: true as const, destination },
+    approval: { requestId: "a-2", approved: true, scope: "once" as const },
+  };
+  assert.equal(runResultDelivery(run({ request: req, result: { status: "ok", reply: "done" } })), null);
 });

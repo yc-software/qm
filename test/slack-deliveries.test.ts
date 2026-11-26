@@ -23,6 +23,8 @@ async function deliver(
     loseAck?: boolean;
     approval?: unknown;
     updateError?: string;
+    provenance?: Record<string, unknown>;
+    readSurfaceMessages?: (container: string, opts: Record<string, unknown>) => Promise<unknown[]>;
   } = {},
 ) {
   const delivery = {
@@ -32,6 +34,7 @@ async function deliver(
     ...(sourceThreadRef
       ? { provenance: { trigger: "cron", sourceThreadRef, sourceTitle: "Weekly <project> & check-in" } }
       : {}),
+    ...(row.provenance ? { provenance: row.provenance } : {}),
     destination: { type: "slack", target: "C1:100.200", ...destination },
     attachments: mixedFiles,
     createdAt: row.createdAt ?? Date.now(),
@@ -51,13 +54,16 @@ async function deliver(
       messages: history,
     };
   };
+  const ackBodies: Array<Record<string, unknown>> = [];
   const core = {
+    ...(row.readSurfaceMessages ? { readSurfaceMessages: row.readSurfaceMessages } : {}),
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
     failDelivery: async (id: string, code: string) => void failures.push([id, code]),
-    ackDelivery: async (id: string) => {
+    ackDelivery: async (id: string, body?: Record<string, unknown>) => {
       if (row.loseAck) throw new Error("acknowledgement lost");
       acknowledgements.push(id);
+      ackBodies.push({ id, ...body });
     },
   };
   const client = {
@@ -103,8 +109,22 @@ async function deliver(
   });
 
   await deliverer.deliver(client, delivery as never);
-  return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
+  return { acknowledgements, ackBodies, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
+
+test("webhook deliveries link their title to the webhook's settings, defaulting to Webhook", async () => {
+  const footer = async (provenance: Record<string, unknown>) => {
+    const { posts } = await deliver({}, undefined, "https://agent.example", "done", { provenance });
+    const blocks = posts[0]!.blocks as Array<{ type: string; elements?: Array<{ text: string }> }>;
+    return blocks.at(-1)?.elements?.[0]?.text;
+  };
+  const base = { trigger: "webhook", sourceThreadRef: "webhook:wh-1:d1", sourceId: "wh-1" };
+  assert.equal(
+    await footer({ ...base, sourceTitle: "PR review" }),
+    "PR review · <https://agent.example/webhooks/wh-1|Settings>",
+  );
+  assert.equal(await footer(base), "Webhook · <https://agent.example/webhooks/wh-1|Settings>");
+});
 
 for (const type of ["slack", "group", "principal"]) {
   test(`${type} cron deliveries include settings below the complete message and preserve attachments`, async () => {
@@ -213,34 +233,54 @@ for (const type of ["slack", "group", "principal"]) {
   });
 }
 
-for (const [label, sourceThreadRef, webUiPublicUrl, footer] of [
+for (const [label, destination, sourceThreadRef, webUiPublicUrl, footer] of [
   [
     "a persona post",
+    { persona: { id: "p 1", name: "Ada <&>" } },
     undefined,
     "https://agent.example/web-ui/",
-    "Persona: <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
+    "Answered as <https://agent.example/web-ui/personas/p%201|Ada &lt;&amp;&gt;>",
   ],
-  ["a persona post without a web UI", undefined, undefined, "Persona: Ada &lt;&amp;&gt;"],
   [
-    "a persona's cron post",
+    "a persona post without a web UI",
+    { persona: { id: "p 1", name: "Ada <&>" } },
+    undefined,
+    undefined,
+    "Answered as Ada &lt;&amp;&gt;",
+  ],
+  [
+    "a persona's project cron post",
+    { persona: { id: "p 1", name: "Ada <&>" }, project: { id: "j1", name: "Launch" } },
     "cron:c1:fire:123",
     "https://agent.example",
-    "Persona: <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
+    "Answered as <https://agent.example/personas/p%201|Ada &lt;&amp;&gt;> in <https://agent.example/contexts?scope=group%3Aweb-project-j1|Launch> · Weekly &lt;project&gt; &amp; check-in · <https://agent.example/crons/c1|Settings>",
   ],
 ] as const) {
-  test(`${label} names the persona in the footer`, async () => {
-    const { posts } = await deliver(
-      { persona: { id: "p 1", name: "Ada <&>" } },
-      sourceThreadRef,
-      webUiPublicUrl,
-      "Hello",
-    );
+  test(`${label} names where it came from in the footer`, async () => {
+    const { posts } = await deliver(destination, sourceThreadRef, webUiPublicUrl, "Hello");
     assert.deepEqual((posts[0]!.blocks as unknown[]).at(-1), {
       type: "context",
       elements: [{ type: "mrkdwn", text: footer, verbatim: true }],
     });
   });
 }
+
+test("a persona post drops its origin when the thread's previous own message wore the same persona", async () => {
+  const reads: unknown[] = [];
+  const footer = async (authorName: string) => {
+    const readSurfaceMessages = async (container: string, opts: Record<string, unknown>) => {
+      reads.push({ container, sub: opts.sub, self: opts.self });
+      return [{ authorName }];
+    };
+    const { posts } = await deliver({ persona: { id: "a", name: "Ada" } }, undefined, undefined, "Hi", {
+      readSurfaceMessages,
+    });
+    return (posts[0]!.blocks as Array<{ elements?: Array<{ text: string }> }> | undefined)?.at(-1)?.elements?.[0]?.text;
+  };
+  assert.equal(await footer("Ada"), undefined);
+  assert.equal(await footer("Bo"), "Answered as Ada");
+  assert.deepEqual(reads[0], { container: "C1", sub: "100.200", self: true });
+});
 
 test("ordinary deliveries omit cron settings even with a configured web UI", async () => {
   const { posts } = await deliver({ unfurlLinks: false }, "dm:D1", "https://agent.example/web-ui");
@@ -520,4 +560,16 @@ test("a reply revised by the reply check carries a plain-text edit note footer",
     type: "context",
     elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
   });
+});
+
+test("a posted delivery acks with the Slack ts of the message it created", async () => {
+  const { ackBodies } = await deliver();
+  assert.equal(ackBodies.length, 1);
+  assert.equal(ackBodies[0]!.messageTs, "separate-message", "the ack carries the new message's ts");
+});
+
+test("an edited delivery acks with the ts it rewrote", async () => {
+  const { ackBodies, updates } = await deliver({ edit: { messageTs: "77.88" } }, undefined, undefined, "revised");
+  assert.equal(updates.length, 1);
+  assert.equal(ackBodies[0]!.messageTs, "77.88", "the ack echoes the edited message's ts");
 });

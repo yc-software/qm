@@ -115,6 +115,7 @@ test(
             menu = template;
           },
         },
+        powerMonitor: new EventEmitter(),
         shell: {
           openExternal: async (url) => {
             opened.push(url);
@@ -139,7 +140,8 @@ test(
         ["clipboard-sanitized-write", undefined, false],
         ["clipboard-read", "https://old.example/", false],
         ["media", "https://old.example/", false],
-        ["notifications", "https://old.example/", false],
+        ["notifications", "https://old.example/", true],
+        ["notifications", "https://evil.example/", false],
       ]) {
         assert.equal(session.checkPermission(windows[0].webContents, permission, requestingUrl), allowed);
         let granted;
@@ -283,6 +285,21 @@ test(
       );
       assert.equal(blockedChild, true);
       assert.equal(active.isDestroyed(), false);
+      active.webContents.emit("did-finish-load");
+      let reloads = 0;
+      const origLoad = active.loadURL.bind(active);
+      active.loadURL = async (u) => {
+        reloads++;
+        return origLoad(u);
+      };
+      active.webContents.emit("did-fail-load", {}, -106, "ERR_INTERNET_DISCONNECTED", "https://new.example/s/1", true);
+      active.webContents.emit("did-finish-load");
+      active.emit("focus");
+      assert.equal(reloads, 1);
+      assert.equal(active.url, "https://new.example/s/1");
+      active.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+      active.emit("focus");
+      assert.equal(reloads, 2);
       active.webContents.emit("will-redirect", { preventDefault() {} }, "https://new.example/auth/login");
       assert.equal(child.isDestroyed(), true);
       const cancelled = windows.at(-1);

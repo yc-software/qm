@@ -42,6 +42,11 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
       );
     },
 
+    async deleteForRuns(tenant, runIds) {
+      if (!runIds.length) return;
+      await pg.forTenant(tenant).query("DELETE FROM run_activity WHERE run_id = ANY($1::text[])", [[...runIds]]);
+    },
+
     async close() {
       await pg.close();
     },

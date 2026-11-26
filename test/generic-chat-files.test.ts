@@ -13,7 +13,7 @@ import { withTenant } from "../src/tenants/context.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
-const tenantFor = async () => TEST_TENANT;
+const accountTenant = async () => TEST_TENANT;
 
 function chatHost(respond: (path: string, body: Record<string, unknown>) => Response) {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -29,7 +29,8 @@ function chatHost(respond: (path: string, body: Record<string, unknown>) => Resp
   return { client, calls };
 }
 
-test("files attached to a chat message reach the turn as staged attachments, and unreadable ones as notes", async () => {
+test("files attached to a chat message reach the turn as staged attachments, and unreadable ones as logged notes", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
   const { client, calls } = chatHost((_path, body) =>
     Response.json({ url: `https://storage.example/${String(body.file_id)}` }),
   );
@@ -37,13 +38,13 @@ test("files attached to a chat message reach the turn as staged attachments, and
   const inbound = createGenericChatInbound({
     registerGroup: async () => {},
     secret: SECRET,
+    accountTenant,
     client,
     onAction: async () => {},
     stageBlob: async (bytes) => ({ blobId: `blob-${Buffer.from(bytes).toString()}` }),
     storageFetch: async (url) =>
       String(url).endsWith("/31") ? new Response("deck bytes") : new Response("gone", { status: 403 }),
     app: {
-      tenantFor,
       ingestSurfaceEvents: async () => ({ upserted: 1 }),
       onContextRequestCreated: () => () => {},
       turn: async (request: TurnRequest) => (turns.push(request), { runId: "r1" }),
@@ -92,15 +93,19 @@ test("files attached to a chat message reach the turn as staged attachments, and
     },
   ]);
   assert.deepEqual(turns[0]?.inboundNotes, [`I couldn't read "notes.txt" (HTTP 403)`]);
+  assert.equal(
+    logged.mock.calls[0]?.arguments[0],
+    '[generic-chat] attachment unreadable account=7001 chat=88 file="notes.txt" type=text/plain reason=HTTP 403',
+  );
 });
 
 function sending(respond: Parameters<typeof chatHost>[0]) {
   const host = chatHost(respond);
   const stored: Array<{ url: string; fields: Record<string, string> }> = [];
   const send = genericChatSender({
+    accountTenant,
     client: host.client,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async () => ({ upserted: 1 }),
@@ -178,7 +183,8 @@ test("a delivery's attachments are uploaded to storage and posted on one message
   ]);
 });
 
-test("a delivery whose files cannot be uploaded still posts its text and says the files are missing", async () => {
+test("a delivery whose files cannot be uploaded still posts its text, says the files are missing and logs why", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
   const { calls, deliver } = sending((path) =>
     path === "/agent_app/files/upload"
       ? Response.json({ error: "file too large" }, { status: 413 })
@@ -194,9 +200,13 @@ test("a delivery whose files cannot be uploaded still posts its text and says th
       body: "Here you go.\n\nI couldn't attach the file(s). Try again in a moment.",
     },
   });
+  assert.match(
+    String(logged.mock.calls[0]?.arguments[0]),
+    /^\[generic-chat\] attachment upload failed account=7001 chat=88 files="huge.bin":application\/zip reason=generic-chat 413/,
+  );
 });
 
-test("a live turn shows typing, posts its status, then posts the reply with its files once and adds the reaction it asked for", async () => {
+test("a live turn names unread files, shows typing, posts its status, then the reply with its files once and its reaction", async () => {
   const { client, calls } = chatHost((path, body) =>
     Response.json(
       path === "/agent_app/files/upload"
@@ -235,7 +245,7 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
       trigger: "1793649600.00000000000000001001",
       where: "test",
       ackEmoji: { candidates: () => ["eyes"], pick: async () => undefined },
-      prepare: async () => ({ text: "chart please" }) as never,
+      prepare: async () => ({ text: "chart please", inboundNotes: [`I couldn't read "scan.pdf" (HTTP 403)`] }) as never,
     },
   );
   assert.deepEqual(
@@ -244,6 +254,7 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
       body.client_message_id ?? body.typing ?? body.name,
     ]),
     [
+      ["messages", "inbound-files:1793649600.00000000000000001001"],
       ["typing", true],
       ["messages", "status:run:r1"],
       ["typing", false],
@@ -252,12 +263,16 @@ test("a live turn shows typing, posts its status, then posts the reply with its 
       ["reactions/add", "tada"],
     ],
   );
-  assert.deepEqual(calls[4]!.body, {
+  assert.equal(
+    calls[0]!.body.body,
+    `Some of your files didn't come through, so I haven't read them: I couldn't read "scan.pdf" (HTTP 403).`,
+  );
+  assert.deepEqual(calls[5]!.body, {
     client_message_id: "run:r1",
     chat_id: "88",
     body: "Here is the chart.",
     file_ids: ["61"],
   });
-  assert.deepEqual(calls[5]!.body, { chat_id: "88", message_id: "1001", name: "tada" });
+  assert.deepEqual(calls[6]!.body, { chat_id: "88", message_id: "1001", name: "tada" });
   assert.deepEqual([acked, editRefs.map(([runId]) => runId)], [["r1"], ["r1"]]);
 });

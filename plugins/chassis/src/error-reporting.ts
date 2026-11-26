@@ -40,16 +40,24 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.tenant",
+  "qm.started_by",
   "qm.cancelled",
   "qm.facts",
   "qm.recalled",
   "qm.skills",
+  "qm.exec.provider",
+  "qm.exec.background",
+  "qm.exec.exit_code",
+  "qm.exec.timed_out",
+  "qm.exec.stdout_bytes",
+  "qm.exec.stderr_bytes",
   "service.name",
   "deployment",
   "time_to_model_request",
   "time_to_first_text",
 ]);
-const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin"];
+const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin", "qm.tenant"];
 const SENT_ROOTS = new Set(["http.server", "queue.process"]);
 const SQL_VERBS = new Set(
   "SELECT INSERT UPDATE DELETE WITH BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE CREATE ALTER DROP TRUNCATE SET RESET SHOW LISTEN UNLISTEN NOTIFY COPY LOCK VACUUM ANALYZE EXPLAIN DO CALL PREPARE EXECUTE DEALLOCATE DISCARD".split(
@@ -200,6 +208,7 @@ export function initializeErrorReporting(
       sdk.onUncaughtExceptionIntegration(),
       sdk.linkedErrorsIntegration(),
       sdk.extraErrorDataIntegration({ depth: 8 }),
+      sdk.anrIntegration({ pollInterval: 1000, anrThreshold: 5000, captureStackTrace: true }),
       ...(traced
         ? [
             sdk.httpIntegration({
@@ -350,19 +359,34 @@ export function traceQueued<T>(
     : sdk.startNewTrace(begin);
 }
 
+export function setRunAttribute(key: string, value: string | undefined): void {
+  if (!client || !tracing || value === undefined) return;
+  try {
+    const active = client.getActiveSpan();
+    if (!active) return;
+    client.getRootSpan(active).setAttribute(key, value);
+  } catch (error) {
+    swallow("tracing", error);
+  }
+}
+
 export type Phase = Sentry.Span;
 
 export function tracePhase<T>(
   op: string,
   work: () => Promise<T>,
-  opts: { counts?: (result: T) => Record<string, number>; name?: string; parent?: Phase } = {},
+  opts: {
+    attributes?: (result: T) => Record<string, string | number | boolean | undefined>;
+    name?: string;
+    parent?: Phase;
+  } = {},
 ): Promise<T> {
   if (!client || !tracing || !(opts.parent ?? client.getActiveSpan())) return work();
   return client.startSpan(
     { op, name: opts.name ?? op, onlyIfParent: true, ...(opts.parent ? { parentSpan: opts.parent } : {}) },
     async (span) => {
       const result = await work();
-      if (opts.counts) span.setAttributes(opts.counts(result));
+      if (opts.attributes) span.setAttributes(opts.attributes(result));
       return result;
     },
   );
@@ -373,30 +397,33 @@ export function startPhase(op: string): Phase | undefined {
   return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
 }
 
+export function traceElapsed(op: string, ms: number, opts: { name?: string; failed?: boolean } = {}): void {
+  if (!client || !tracing || !client.getActiveSpan()) return;
+  try {
+    const end = Date.now() / 1000;
+    const span = client.startInactiveSpan({
+      op,
+      name: opts.name ?? op,
+      startTime: end - ms / 1000,
+      onlyIfParent: true,
+    });
+    if (opts.failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
+    span.end(end);
+  } catch (error) {
+    swallow("tracing", error);
+  }
+}
+
 export function untraced<T>(work: () => T): T {
   return client && tracing ? client.suppressTracing(work) : work();
 }
 
 export async function tracePoolCheckout<T>(checkout: () => Promise<T>): Promise<T> {
   if (!client || !tracing || !client.getActiveSpan()) return checkout();
-  const sdk = client;
   const started = performance.now();
   const record = (failed: boolean): void => {
-    try {
-      const seconds = (performance.now() - started) / 1000;
-      if (!failed && seconds < IDLE_CHECKOUT_SECONDS) return;
-      const end = Date.now() / 1000;
-      const span = sdk.startInactiveSpan({
-        op: "db",
-        name: POOL_CHECKOUT,
-        startTime: end - seconds,
-        onlyIfParent: true,
-      });
-      if (failed) span.setStatus({ code: SPAN_STATUS_ERROR, message: "internal_error" });
-      span.end(end);
-    } catch (error) {
-      swallow("tracing", error);
-    }
+    const ms = performance.now() - started;
+    if (failed || ms >= IDLE_CHECKOUT_SECONDS * 1000) traceElapsed("db", ms, { name: POOL_CHECKOUT, failed });
   };
   try {
     const checkedOut = await checkout();

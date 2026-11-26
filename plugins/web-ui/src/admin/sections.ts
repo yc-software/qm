@@ -10,6 +10,8 @@ export const ADMIN_SECTIONS = [
   { label: "Artifacts", views: ["files", "skills", "memory", "apps", "crons"] },
 ];
 
+export const OWNER_VIEWS = new Set([...ADMIN_SECTIONS[0]!.views, "onboarding"]);
+
 const ADMIN_VIEWS = new Set([
   ...ADMIN_SECTIONS.flatMap((section) => section.views),
   "my-spend",
@@ -84,6 +86,7 @@ export interface AdminPage {
   session: string | null;
   params: URLSearchParams;
   apiBase: string;
+  fullAdmin: boolean;
   api: <T = any>(method: string, path: string, body?: unknown) => Promise<AdminResponse<T>>;
   href: (view: string, params?: Record<string, string | number | null | undefined>, path?: string) => string;
   go: (url: string, replace?: boolean) => void;
@@ -160,6 +163,7 @@ export function adminMounter(options: {
   base: string;
   apiBase: string;
   org: () => string;
+  fullAdmin?: () => boolean;
   host: (view: string) => HTMLElement;
   go: (url: string, replace?: boolean) => void;
 }): () => Promise<void> {
@@ -180,6 +184,7 @@ export function adminMounter(options: {
       session: route.session,
       params: route.params,
       apiBase: options.apiBase,
+      fullAdmin: options.fullAdmin ? options.fullAdmin() : true,
       api: (method, path, body) => adminApi(options.apiBase, method, path, body),
       href: (view, params, path) => settingsHref(options.base, view, params, path),
       go: options.go,

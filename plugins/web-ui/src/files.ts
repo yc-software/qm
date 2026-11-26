@@ -1,4 +1,5 @@
 import { previewFile } from "./file-open.ts";
+import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
   File,
@@ -17,13 +18,14 @@ import {
 } from "lucide";
 import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, fieldSelect, formatBytes, relTime } from "./ui";
+import { formatBytes, relTime } from "./ui";
+import { browserRenderableImage } from "./media-layout";
 import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
 import { fileListNeedsAllPages } from "./file-list";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
-import { listGroupsTpl, listRowsTpl } from "./list-page";
+import { listGroupsTpl, listRowsTpl, listSelect } from "./list-page";
 import { isTouch } from "./viewport";
 
 interface FileItem {
@@ -56,25 +58,12 @@ let filesHost: HTMLElement | null = null;
 let filesRequestSeq = 0;
 let filesLoadAllQueued = false;
 const FILES_LAYOUT_KEY = "qm.files.layout";
-type FilesLayout = "list" | "grid";
-let filesLayout: FilesLayout = readFilesLayout();
+let filesLayout: ListLayout = readListLayout(FILES_LAYOUT_KEY);
 
-function readFilesLayout(): FilesLayout {
-  try {
-    return localStorage.getItem(FILES_LAYOUT_KEY) === "grid" ? "grid" : "list";
-  } catch {
-    return "list";
-  }
-}
-
-function setFilesLayout(layout: FilesLayout): void {
+function setFilesLayout(layout: ListLayout): void {
   if (filesLayout === layout) return;
   filesLayout = layout;
-  try {
-    localStorage.setItem(FILES_LAYOUT_KEY, layout);
-  } catch {
-    void 0;
-  }
+  saveListLayout(FILES_LAYOUT_KEY, layout);
   drawFiles();
 }
 
@@ -127,22 +116,6 @@ function groupFilesByScope(files: FileRow[]): Array<{ scope: string | null; file
   return [...groups.values()];
 }
 
-function selectControl(
-  label: string,
-  value: string,
-  options: Array<[string, string]>,
-  onChange: (value: string) => void,
-) {
-  return html`<label class="list-select"
-    ><span>${label}</span>${fieldSelect({
-      compact: true,
-      value,
-      onChange,
-      options: options.map(([v, text]) => html`<option value=${v}>${text}</option>`),
-    })}</label
-  >`;
-}
-
 function visibleFiles(): FileRow[] {
   const q = filesQuery.trim().toLowerCase();
   return fileRows
@@ -189,7 +162,7 @@ function drawFiles(loading = false): void {
         /></label>
       </div>
       <div class="list-toolbar">
-        ${selectControl(
+        ${listSelect(
           "Ownership",
           filesOwnership,
           [
@@ -203,7 +176,7 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
-        ${selectControl(
+        ${listSelect(
           "Type",
           filesType,
           [
@@ -218,15 +191,7 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
-        ${selectControl(
-          "View",
-          filesLayout,
-          [
-            ["list", "List"],
-            ["grid", "Grid"],
-          ],
-          (v) => setFilesLayout(v as FilesLayout),
-        )}
+        ${listLayoutSelect(filesLayout, setFilesLayout)}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button

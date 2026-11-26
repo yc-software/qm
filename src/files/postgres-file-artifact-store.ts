@@ -175,10 +175,10 @@ export function createPostgresFileArtifactStore(
       return r;
     },
 
-    async open(id) {
+    async open(id, range) {
       const r = await getRow(id);
       if (!r || !r.enabled || !r.blobKey) return null;
-      const bytes = await byteStore.open(r.blobKey);
+      const bytes = await byteStore.open(r.blobKey, range);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },

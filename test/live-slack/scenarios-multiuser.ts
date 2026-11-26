@@ -194,7 +194,7 @@ export const multiUserScenarios: Scenario[] = [
       const marker = ctx.marker();
       const root = await ch
         .as(carol)
-        .mention(`only I need this: summarize in one word why tests matter. include ${marker}.`);
+        .mention(`quick question: summarize in one word why tests matter. include ${marker}.`);
       const reply = await ch.waitForBotReply(root, { match: new RegExp(marker) });
       await ctx.judge(
         `Does this reply answer the question that was actually asked (one word on why tests matter, e.g. "confidence"/"safety") rather than greeting the room?`,

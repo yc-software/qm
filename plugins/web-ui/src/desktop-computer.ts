@@ -1,21 +1,25 @@
-import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
-import { activityItems, type RunActivityEntry } from "./items.ts";
+import { reportHandledError } from "./browser-errors.ts";
 
 type Result = {
   content: string;
   isError?: boolean;
   images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
 };
-type Desk = {
-  call(args: unknown, clientId?: string, deadline?: number): Promise<Result>;
+export type Desk = {
+  call(args: unknown, clientId: string, deadline: number): Promise<Result>;
   stop?(clientId: string): Promise<unknown>;
 };
-export type DesktopRun = {
-  desktopClientId?: string;
-  status?: string;
-  alive?: boolean;
-  activity?: RunActivityEntry[];
+type Claim = { runId: string; args: unknown; deadline: number };
+type Post = (path: string, body: unknown) => Promise<unknown>;
+
+const windowId = crypto.randomUUID();
+const running = new Map<string, string>();
+const claiming = new Set<string>();
+const stopped = new Set<string>();
+const unlessGone = (error: unknown) => {
+  if ((error as { status?: number }).status === 404) return null;
+  throw error;
 };
 
 function desktop(): Desk | undefined {
@@ -34,126 +38,50 @@ export function webClientSurface(): "desktop" | "browser" {
 }
 
 export function desktopTurnId(): string | undefined {
-  return desktop() ? crypto.randomUUID() : undefined;
+  return desktop() ? windowId : undefined;
 }
 
-async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
-  try {
-    return await desk.call(raw, undefined, deadline);
-  } catch (error) {
-    return { content: errMessage(error), isError: true };
+export async function answerDesktopCall(callId: string, post: Post, desk = desktop()): Promise<void> {
+  if (!desk || claiming.has(callId) || running.has(callId)) return;
+  const path = `/api/desktop/calls/${encodeURIComponent(callId)}`;
+  claiming.add(callId);
+  const claim = (await post(`${path}/claim`, { desktopClientId: windowId })
+    .catch(unlessGone)
+    .finally(() => claiming.delete(callId))) as Claim | null;
+  const stop = stopped.delete(callId);
+  if (!claim) return;
+  if (stop) {
+    await post(`${path}/result`, {
+      desktopClientId: windowId,
+      result: { content: "The turn was stopped before the call started, so nothing ran on the Mac.", isError: true },
+    }).catch(unlessGone);
+    return;
   }
-}
-
-export function createDesktopExecutor(
-  clientId: string,
-  desk: Desk,
-  send: (callId: string, result: Result) => Promise<unknown>,
-) {
-  const handled = new Set<string>();
-  return async (run: DesktopRun): Promise<void> => {
-    if (run.desktopClientId !== clientId || run.status !== "running" || !run.alive) return;
-    const items = activityItems(run.activity ?? []);
-    const complete = new Set(items.filter((item) => item.kind === "ToolResult").map((item) => item.callId));
-    for (const item of items) {
-      const callId = item.callId;
-      if (
-        item.kind !== "ToolCall" ||
-        item.body.client !== true ||
-        item.tool !== "desktop" ||
-        !callId ||
-        complete.has(callId) ||
-        handled.has(callId)
-      )
-        continue;
-      handled.add(callId);
-      if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
-      const result = await executeComputer(desk, item.body.args, item.createdAt + 50_000);
-      await send(callId, result);
-    }
-  };
-}
-
-export async function serveDesktopRun(
-  runId: string,
-  clientId: string,
-  base: (path: string) => string,
-  send: (path: string, init: RequestInit) => Promise<unknown>,
-): Promise<void> {
-  const desk = desktop();
-  if (!desk) return;
-  const controller = new AbortController();
-  const stop = () => {
-    controller.abort();
-    void desk.stop?.(clientId);
-  };
-  window.addEventListener("pagehide", stop, { once: true });
-  const scopedDesk: Desk = {
-    call: (args, _client, deadline) => desk.call(args, clientId, deadline),
-  };
-  let failure: unknown;
-  const execute = createDesktopExecutor(clientId, scopedDesk, (callId, result) =>
-    send(`/api/runs/${encodeURIComponent(runId)}/signal`, {
-      method: "POST",
-      body: JSON.stringify({ kind: "client_result", desktopClientId: clientId, callId, result }),
-    }),
-  );
-  try {
-    let connected = false;
-    let active = false;
-    const transport = fetchServerSentEvents(base(`/api/runs/${encodeURIComponent(runId)}/events`), {
-      credentials: "same-origin",
-      fetchClient: async (input, init) => {
-        if (connected) {
-          stop();
-          throw new Error("Desktop connection ended; submit a new turn to reconnect.");
-        }
-        connected = true;
-        const response = await fetch(input, init);
-        const reader = response.body?.getReader();
-        if (!reader) {
-          stop();
-          throw new Error("Desktop connection has no stream");
-        }
-        const body = new ReadableStream<Uint8Array>({
-          async pull(output) {
-            try {
-              const item = await reader.read();
-              if (item.done) {
-                stop();
-                output.close();
-              } else output.enqueue(item.value);
-            } catch (error) {
-              stop();
-              output.error(error);
-            }
-          },
-          cancel: () => reader.cancel(),
-        });
-        return new Response(body, { status: response.status, headers: response.headers });
+  running.set(callId, claim.runId);
+  const result = await desk
+    .call(claim.args, claim.runId, claim.deadline)
+    .catch((error: unknown): Result => ({ content: errMessage(error), isError: true }))
+    .finally(() => running.delete(callId));
+  await post(`${path}/result`, { desktopClientId: windowId, result }).catch(async (error: unknown) => {
+    reportHandledError("desktop-computer", error);
+    await post(`${path}/result`, {
+      desktopClientId: windowId,
+      result: {
+        content: `The desktop app ran the call but couldn't send its result: ${errMessage(error)}`,
+        isError: true,
       },
     });
-    for await (const event of transport.joinRun(runId, controller.signal)) {
-      if (event.type !== "CUSTOM" || event.name !== "run") continue;
-      const run = event.value as DesktopRun;
-      if (
-        run.desktopClientId !== clientId ||
-        run.status === "done" ||
-        run.status === "failed" ||
-        (active && (run.status !== "running" || !run.alive))
-      )
-        return;
-      if (run.status === "running" && run.alive) active = true;
-      void execute(run).catch((error) => {
-        failure = error;
-        stop();
-      });
-    }
-  } catch (error) {
-    if (!controller.signal.aborted) throw error;
-  } finally {
-    stop();
-    window.removeEventListener("pagehide", stop);
-  }
-  if (failure) throw failure;
+  });
+}
+
+export function stopDesktopCall(callId: string, desk = desktop()): void {
+  const runId = running.get(callId);
+  if (runId) void desk?.stop?.(runId);
+  else if (claiming.has(callId)) stopped.add(callId);
+}
+
+export function handleDesktopSignal(ui: { callId?: string; stop?: boolean }, post: Post): void {
+  if (!ui.callId) return;
+  if (ui.stop) return stopDesktopCall(ui.callId);
+  void answerDesktopCall(ui.callId, post).catch((error: unknown) => reportHandledError("desktop-computer", error));
 }

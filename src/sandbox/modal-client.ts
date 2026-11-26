@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
-import { swallow } from "../util/errors.ts";
+import { errText, swallow } from "../util/errors.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -21,7 +21,7 @@ export interface ModalSession {
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }>;
   restoreHome(imageId: string): Promise<void>;
-  terminate(): Promise<void>;
+  terminate(opts?: { wait?: boolean }): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
   constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
@@ -40,6 +40,7 @@ interface ModalCreateOpts {
   name?: string;
   tags?: Record<string, string>;
   memoryGb?: number;
+  image?: string;
 }
 
 export interface ModalClient {
@@ -77,10 +78,6 @@ const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
 
 function wholeSeconds(ms: number): number {
   return Math.max(1000, Math.ceil(ms / 1000) * 1000);
-}
-
-function errText(err: unknown): string {
-  return String((err as Error)?.message ?? err);
 }
 
 type ModalSdk = typeof import("modal");
@@ -227,8 +224,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const { client } = await loadCtx();
       await sbx.mountImage("/root", await client.images.fromId(imageId));
     },
-    async terminate(): Promise<void> {
-      await sbx.terminate().catch((err) => {
+    async terminate(opts): Promise<void> {
+      await (opts?.wait ? sbx.terminate({ wait: true }) : sbx.terminate()).catch((err) => {
         if (!isSandboxGoneError(sdk, err)) throw err;
       });
     },
@@ -237,8 +234,9 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   return {
     lifetimeMs: sandboxTimeoutMs,
     async create(createOpts): Promise<ModalSession> {
-      const { sdk, client, app, image } = await loadCtx();
+      const { sdk, client, app, image: defaultImage } = await loadCtx();
       try {
+        const image = createOpts.image ? await resolveModalImage(client, createOpts.image) : defaultImage;
         const sbx = await client.sandboxes.create(app, image, {
           ...(createOpts.name ? { name: createOpts.name } : {}),
           ...(createOpts.tags ? { tags: createOpts.tags } : {}),

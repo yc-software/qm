@@ -40,6 +40,7 @@ export async function browserEnv(
     navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement,
     HTMLAnchorElement: dom.window.HTMLAnchorElement,
+    HTMLDetailsElement: dom.window.HTMLDetailsElement,
     Element: dom.window.Element,
     Node: dom.window.Node,
     Event: dom.window.Event,

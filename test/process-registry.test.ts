@@ -10,6 +10,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { Principal } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
   return [{ name: "memory", make: () => createPostgresProcessRegistry(testDatabaseUrl()) }];
@@ -20,7 +21,7 @@ for (const b of backends()) {
     const reg = b.make();
     const rec = await reg.register({
       processId: id(1),
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       sandboxId: "sandbox-1",
       kind: "build",
       command: "aws-sso: aws sso login",
@@ -29,10 +30,10 @@ for (const b of backends()) {
     assert.equal(rec.status, "running");
     assert.ok(rec.expiresAt > rec.startedAt);
 
-    const live = await reg.liveByScope("personal:U1");
+    const live = await reg.liveByScope(personalScope("U1"));
     assert.equal(live.length, 1);
     assert.equal(live[0]!.processId, id(1));
-    assert.equal((await reg.liveByScope("personal:U2")).length, 0);
+    assert.equal((await reg.liveByScope(personalScope("U2"))).length, 0);
   });
 
   test(`[${b.name}] expired running sessions are not live; claimExpired surfaces them WITHOUT flipping status`, async () => {
@@ -106,7 +107,7 @@ for (const b of backends()) {
     const before = Date.now();
     const rec = await reg.register({
       processId: id(7),
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       sandboxId: "sandbox-1",
       kind: "background",
       command: "bg: npm test",
@@ -116,7 +117,7 @@ for (const b of backends()) {
     assert.equal(rec.kind, "background");
     assert.ok(rec.expiresAt >= before + 1_800_000);
     assert.ok(rec.expiresAt <= Date.now() + 1_800_000);
-    assert.equal((await reg.liveByScope("personal:U1")).length, 1);
+    assert.equal((await reg.liveByScope(personalScope("U1"))).length, 1);
   });
 }
 
@@ -178,7 +179,7 @@ for (const [name, make] of [
     try {
       await reg.register({
         processId,
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         sandboxId: "sandbox-1",
         kind: "background",
         command: "x",
@@ -209,7 +210,7 @@ test("registry preserves purpose without replacing the command and accepts legac
   for (const purpose of [undefined, "Preview app server"]) {
     const row = await registry.register({
       processId: purpose ?? "legacy",
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       sandboxId: "sandbox-1",
       kind: "background",
       command: "bg: node server.js",

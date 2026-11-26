@@ -1,6 +1,6 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
@@ -21,10 +21,12 @@ import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
+import type { SandboxImages } from "./sandbox-settings.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
+import { errMessage, errText } from "../util/errors.ts";
 
 export interface SandboxResource {
   id: string;
@@ -43,6 +45,7 @@ export interface SandboxResource {
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  image?: string;
   swarmId?: string;
   personUsed?: true;
 }
@@ -64,6 +67,7 @@ interface SandboxProviderProfile {
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
   sizesMemory?: boolean;
+  images?: string[];
   actions: string[];
 }
 
@@ -87,7 +91,7 @@ export interface SandboxResources {
     name?: string,
     reservationId?: string,
     jobOnly?: boolean,
-    memoryGb?: number,
+    machine?: { memoryGb?: number; image?: string },
     swarmId?: string,
     personUsed?: boolean,
   ): Promise<SandboxResource>;
@@ -96,9 +100,10 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
+  imageFor(backingScopeId: string): Promise<string | undefined>;
   retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
-  use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  use<T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
@@ -187,6 +192,7 @@ export function createSandboxResources(opts: {
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
+  images?: SandboxImages;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
@@ -241,13 +247,15 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
+  const use = async <T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T> => {
     const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
     };
-    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
+    if (!lock) return guarded();
+    const key = `sandbox-resource:${id}`;
+    return lock === "shared" ? opts.lock.withSharedLock(key, guarded) : opts.lock.withLock(key, guarded);
   };
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
@@ -257,19 +265,39 @@ export function createSandboxResources(opts: {
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         ...(backend.profile.sizesMemory ? { sizesMemory: true } : {}),
+        ...(offered(name).length ? { images: offered(name) } : {}),
         actions: actionsFor(backend),
       }));
+  const images = opts.images ?? {};
+  const offered = (backend: SandboxBackendName): string[] =>
+    Object.keys(images).filter((name) => images[name]![backend]);
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
     if (memoryGb === undefined) return;
     if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
   };
+  const imageRef = ({ backend, image }: Pick<SandboxResource, "backend" | "image">): string | undefined => {
+    if (image === undefined) return undefined;
+    if (!Object.hasOwn(images, image))
+      throw new Error(`unknown image ${image}; configured images: ${Object.keys(images).join(", ") || "none"}`);
+    if (offered(backend).includes(image)) return images[image]![backend];
+    const elsewhere = (Object.keys(opts.backends) as SandboxBackendName[]).filter((name) =>
+      offered(name).includes(image),
+    );
+    const where = elsewhere.length ? `; it is available on ${elsewhere.join(", ")}` : "";
+    throw new Error(`image ${image} is not set up for ${backend}${where}`);
+  };
   return {
     profiles,
+    async imageFor(backingScopeId) {
+      const prefix = ["sandbox-", JOB_COMPUTER_SCOPE_PREFIX].find((p) => backingScopeId.startsWith(p));
+      const record = prefix ? await opts.records.get(backingScopeId.slice(prefix.length)) : null;
+      return record?.backingScopeId === backingScopeId ? imageRef(record) : undefined;
+    },
     forTurn: (turn) =>
       createSandboxResources({
         ...opts,
         canUseScope: async (actorId, scopeId) =>
-          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+          withSpeakerMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     async defaultBackend() {
       const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
@@ -362,7 +390,7 @@ export function createSandboxResources(opts: {
           await backend.restartComputer!(record.backingScopeId, memoryGb ?? record.memoryGb);
           if (memoryGb !== undefined) await opts.records.update(id, (current) => ({ ...current, memoryGb }));
         },
-        true,
+        "exclusive",
       );
     },
     async resolve(scopeId) {
@@ -390,12 +418,14 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, machine, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
+      const { memoryGb, image } = machine ?? {};
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
+      imageRef({ backend: backend as SandboxBackendName, image });
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(
           `background jobs with private credentials need a computer that ${backend} can retire; run the command in the foreground`,
@@ -414,6 +444,7 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(image ? { image } : {}),
         ...(swarmId ? { swarmId } : {}),
         ...(personUsed ? { personUsed } : {}),
       };
@@ -445,10 +476,11 @@ export function createSandboxResources(opts: {
             spec: sandbox.profile.spec,
           })))!;
         } catch (error) {
+          console.error("%s", `[sandbox] resource ${id} failed:`, errMessage(error));
           await opts.records.update(id, (current) => ({
             ...current,
             state: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: errText(error),
           }));
           throw error;
         }

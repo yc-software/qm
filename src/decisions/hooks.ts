@@ -2,14 +2,20 @@ import { marked } from "marked";
 import type { ReplyVerdict } from "../agent/agent.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
+  asError,
   classifierKey,
+  expandPersonaRule,
+  hasWildcardPersona,
   runHook,
+  settle,
   type DecisionBackend,
   type DecisionHook,
   type DecisionResult,
   type DecisionRule,
 } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
+import type { PersonaSummary } from "../personas/persona-store.ts";
+import type { ScopeId } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { Tenant } from "../tenants/context.ts";
 
@@ -23,6 +29,8 @@ export function turnStartState(turn: {
   runtimePinned?: boolean;
   continueTurn?: boolean;
   scopeLabel: string;
+  conversation?: string;
+  context?: string;
 }): string {
   const requested = turn.runtime?.modelId ? turn.runtime.modelId : "none (org default applies)";
   return [
@@ -30,21 +38,12 @@ export function turnStartState(turn: {
     `- surface: ${turn.surfaceName ?? "unknown"}`,
     `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
     `- scope: ${turn.scopeLabel.split(":")[0]}`,
+    ...(turn.conversation ? [`- conversation: ${turn.conversation}`] : []),
     `- requested runtime: ${requested}`,
     `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
     `- continued turn: ${turn.continueTurn ? "yes, resuming an interrupted turn" : "no"}`,
     "",
-    "Latest message:",
-    turn.input,
-  ].join("\n");
-}
-
-function personaTurnState(turn: { input: string; surfaceName: string; conversation: string }): string {
-  return [
-    "Turn context:",
-    `- surface: ${turn.surfaceName}`,
-    `- conversation: ${turn.conversation}`,
-    "",
+    ...(turn.context ? ["Conversation so far:", turn.context, ""] : []),
     "Latest message:",
     turn.input,
   ].join("\n");
@@ -99,11 +98,29 @@ export interface DecisionTurn {
   cancel?: AbortSignal;
 }
 
-export function createDecisionHooks(store: DecisionStore | undefined, backend: DecisionBackend, audit: AuditLog) {
+export function createDecisionHooks(
+  store: DecisionStore | undefined,
+  backend: DecisionBackend,
+  audit: AuditLog,
+  personas?: (tenant: Tenant, actorId: string, scope: ScopeId) => Promise<readonly PersonaSummary[]>,
+) {
   const run = async (rules: readonly DecisionRule[], hook: DecisionHook, state: string, turn: DecisionTurn) => {
-    if (!rules.length) return undefined;
+    if (!rules.length) return [];
     const signal = AbortSignal.any([AbortSignal.timeout(HOOK_TIMEOUT_MS), ...(turn.cancel ? [turn.cancel] : [])]);
-    const { decisive, results } = await runHook(turn.tenant, rules, hook, state, backend, signal);
+    let active = rules;
+    let failed: DecisionResult[] = [];
+    if (rules.some(hasWildcardPersona)) {
+      try {
+        const list =
+          turn.actorId && personas ? await personas(turn.tenant, turn.actorId, turn.scopeLabel as ScopeId) : [];
+        active = rules.map((r) => expandPersonaRule(r, list)).filter((r): r is DecisionRule => r !== undefined);
+      } catch (error) {
+        failed = rules.filter(hasWildcardPersona).map((r) => settle(r, asError(error)));
+        active = rules.filter((r) => !hasWildcardPersona(r));
+      }
+    }
+    const { results } = await runHook(turn.tenant, active, hook, state, backend, signal);
+    results.push(...failed);
     for (const result of results)
       audit.record(turn.tenant, {
         at: Date.now(),
@@ -119,10 +136,17 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
           ...result,
         }),
       });
-    return decisive;
+    const confidence = (r: DecisionResult) => (r.error ? -1 : (r.probabilities[r.option] ?? 0));
+    return results.filter((r) => r.mode === "enforce").sort((a, b) => confidence(b) - confidence(a));
   };
-  return async (hook: DecisionHook, state: string, turn: DecisionTurn) => {
+  return async (
+    hook: DecisionHook,
+    describe: string | (() => Promise<string>),
+    turn: DecisionTurn,
+  ): Promise<DecisionResult[]> => {
     const rules = (await store?.rules(turn.tenant, hook)) ?? [];
+    if (!rules.length) return [];
+    const state = typeof describe === "string" ? describe : await describe();
     const enforced = new Set(rules.filter((rule) => rule.mode === "enforce").map(classifierKey));
     const awaited = (rule: DecisionRule) => enforced.has(classifierKey(rule));
     void run(
@@ -155,7 +179,9 @@ export function createReplyCheck(
     return {
       enforce: rules.some((rule) => rule.mode === "enforce"),
       check: async (draft) => {
-        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+        const verdict = (
+          await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn)
+        ).find((r) => r.action === "retry" || r.action === "prod");
         return (verdict?.action === "retry" || verdict?.action === "prod") && verdict.message
           ? {
               action: verdict.action,
@@ -168,15 +194,16 @@ export function createReplyCheck(
   };
 }
 
-export type PersonaRouter = (
-  turn: DecisionTurn & { input: string; surfaceName: string; conversation: string },
-) => Promise<{ personaId: string; ruleId: string } | undefined>;
-
-export function createPersonaRouter(decide: ReturnType<typeof createDecisionHooks>): PersonaRouter {
-  return async (turn) => {
-    const decision = await decide("persona", personaTurnState(turn), turn);
-    return decision?.persona ? { personaId: decision.persona, ruleId: decision.ruleId } : undefined;
-  };
+export function turnStartOnce(
+  decide: (hook: DecisionHook, describe: () => Promise<string>, turn: DecisionTurn) => Promise<DecisionResult[]>,
+  facts: () => Promise<Parameters<typeof turnStartState>[0]>,
+  turn: DecisionTurn,
+): () => Promise<DecisionResult[]> {
+  let results: Promise<DecisionResult[]> | undefined;
+  return () =>
+    (results ??= decide("turn_start", async () => turnStartState(await facts()), turn).catch(
+      swallowAs("decisions: turn_start", []),
+    ));
 }
 
 export async function routeTurnRuntime<C extends { modelId: string }>(

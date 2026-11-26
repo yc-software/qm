@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
+import { personalScope } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -302,9 +303,14 @@ class FakeCore implements SlackCoreClient {
     }
     return this.result;
   }
-  async waitRun(runId: string, hooks?: { onReplying?(): void }): Promise<TurnResult | null> {
+  firstBlock?: { text: string; persona?: TurnResult["persona"] };
+  async waitRun(
+    runId: string,
+    hooks?: { onReplying?(): void; onFirstBlock?(text: string, persona?: TurnResult["persona"]): void },
+  ): Promise<TurnResult | null> {
     this.polled.push(runId);
     if (this.engageRun) hooks?.onReplying?.();
+    if (this.firstBlock) hooks?.onFirstBlock?.(this.firstBlock.text, this.firstBlock.persona);
     if (this.runGate) await this.runGate;
     return this.result;
   }
@@ -647,6 +653,28 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
   }
 });
 
+test("a DM reply wearing a persona posts under its name and icon", async () => {
+  const f = await fixture();
+  try {
+    f.core.queuedRunId = "R-persona";
+    const persona = { id: "p1", name: "Ada", icon: { kind: "emoji" as const, value: "🎨" } };
+    f.core.firstBlock = { text: "Checking now.", persona };
+    f.core.result = { status: "ok", reply: "on it", persona };
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hi", ts: "100.1" });
+    assert.equal(f.client.posts.length, 2);
+    for (const post of f.client.posts) {
+      assert.equal(post.username, "Ada");
+      assert.equal(post.icon_emoji, ":art:");
+      assert.deepEqual(post.blocks?.at(-1), {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "Answered as Ada", verbatim: true }],
+      });
+    }
+  } finally {
+    await f.stop();
+  }
+});
+
 test("a forwarded Slack message reaches the turn with labeled nested content and files", async (t) => {
   const fetchMock = t.mock.method(
     globalThis,
@@ -875,7 +903,7 @@ test("a human's DM sets the conversation header to the serving model + web surfa
     assert.deepEqual(f.client.topics, [
       {
         channel: "D1",
-        topic: "Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=personal%3AU1|More settings>",
+        topic: `Using Claude Opus 4.8 here. <https://claw.example.dev/contexts?scope=${encodeURIComponent(personalScope("U1"))}|More settings>`,
       },
     ]);
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "again", ts: "100.2" });
@@ -975,7 +1003,7 @@ test("a scope's model change rewrites its channel's pinned header without waitin
       ],
     );
     for (const listener of f.core.modelChangeListeners)
-      withTenant(TENANT, () => listener("personal:alice@example.com"));
+      withTenant(TENANT, () => listener(personalScope("alice@example.com")));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(f.client.topics, [], "a DM's topic settles on the person's next message, not on a push");
   } finally {
@@ -1698,14 +1726,13 @@ test("thread status is detached from reply delivery and steering cannot take own
   const network = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const emojis: unknown[] = [];
   f.core.sessionStatus = {
     start: async (...args) => {
       starts.push(args.slice(1, 5));
-      emojis.push(await args[5]);
       await network;
     },
     reconcile: async () => {},
+    card: () => ({ posted: async () => {}, release: async () => {} }),
   };
   f.core.engageRun = true;
   f.core.holdRun("r1");
@@ -1724,8 +1751,6 @@ test("thread status is detached from reply delivery and steering cannot take own
     await original;
     assert.ok(f.client.posts.some((post) => post.text === "finished" && post.thread_ts === "700.1"));
     assert.equal(starts.length, 1);
-    await waitFor(() => emojis.length === 1, 5_000);
-    assert.equal(typeof emojis[0], "string");
   } finally {
     release();
     await f.stop();
@@ -1740,6 +1765,7 @@ test("top-level DM replies remain top-level and never start native thread status
       starts++;
     },
     reconcile: async () => {},
+    card: () => ({ posted: async () => {}, release: async () => {} }),
   };
   f.core.engageRun = true;
   f.core.holdRun("r1");
@@ -1789,9 +1815,10 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "200.4",
       blocks: [
         {
-          type: "plan",
-          title: "Waiting on subagents",
-          tasks: [{ task_id: "qm_status:test:child", title: "Child", status: "in_progress" }],
+          type: "task_card",
+          task_id: "qm_status:test",
+          title: "Still working: reading Slack docs",
+          status: "in_progress",
         },
       ],
     });
@@ -1827,6 +1854,22 @@ test("own task-card status events never enter the mirror, but ordinary bot edits
       ts: "202.1",
     });
     assert.ok(f.core.ingests.flat().some((event: any) => event.ts === "202.1"));
+    const ack = { user: "UBOT", bot_id: "BBOT", text: "On it.", ts: "203.1", blocks: [{ type: "section" }] };
+    const carrying = { ...ack, blocks: [...ack.blocks, ...status.blocks] };
+    const changed = (message: object, previous_message: object, ts: string) =>
+      f.app.emitMessage({
+        channel: "C1",
+        channel_type: "channel",
+        subtype: "message_changed",
+        message,
+        previous_message,
+        ts,
+      });
+    await changed(carrying, ack, "203.2");
+    await changed(ack, carrying, "203.3");
+    assert.equal(f.core.ingests.flat().filter((event: any) => event.ts === "203.1").length, 0);
+    await changed({ ...carrying, text: "The answer." }, carrying, "203.4");
+    assert.equal(f.core.ingests.flat().find((event: any) => event.ts === "203.1")?.text, "The answer.");
   } finally {
     await f.stop();
   }

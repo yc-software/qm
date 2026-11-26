@@ -30,14 +30,23 @@ export function rowForName(name: string): EmojiRow | null {
   return names.get(normalizeName(name)) ?? null;
 }
 
-function matchesQuery(row: EmojiRow, needle: string): boolean {
-  return [row.n, ...row.a].some((name) => normalizeName(name).includes(normalizeName(needle)));
+function needleOf(query: string): string {
+  return normalizeName(query.trim().replace(/^:+/, "").replace(/:+$/, ""));
+}
+
+function matchesNeedle(row: EmojiRow, needle: string): boolean {
+  return [row.n, ...row.a].some((name) => normalizeName(name).includes(needle));
 }
 
 export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[] {
-  const needle = query.trim().toLowerCase().replace(/^:+/, "").replace(/:+$/, "");
-  if (!needle) return [...rows];
-  return rows.filter((row) => matchesQuery(row, needle));
+  const needle = needleOf(query);
+  return needle ? rows.filter((row) => matchesNeedle(row, needle)) : [...rows];
+}
+
+export function emojiMatches(query: string, limit: number): EmojiRow[] {
+  const exact = rowForName(needleOf(query));
+  const rest = filterEmoji(EMOJI_ROWS, query).filter((row) => row !== exact);
+  return (exact ? [exact, ...rest] : rest).slice(0, limit);
 }
 
 export function charForName(name: string): string | null {

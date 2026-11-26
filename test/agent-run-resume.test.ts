@@ -8,6 +8,7 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId } from "../src/types.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
@@ -36,7 +37,7 @@ function textReplyEvents(text: string): Array<Record<string, unknown>> {
   ];
 }
 
-const scope = "personal:tester" as ScopeId;
+const scope = personalScope("tester") as ScopeId;
 const NOTE = "(system note: your previous attempt at the request above was paused mid-turn and has resumed.)";
 
 function retriedTurn(history: ToolContext["history"], entries: Item[] = [], prior: Item[] = []): AgentTurnInput {

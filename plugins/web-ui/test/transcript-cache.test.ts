@@ -57,7 +57,7 @@ beforeEach(async () => {
   sessions = await env.vite.ssrLoadModule("/src/sessions.ts");
   cache = await env.vite.ssrLoadModule("/src/transcript-cache.ts");
   conversations = await env.vite.ssrLoadModule("/src/conversations.ts");
-  shell.appState.me = { user: "tester", org: "test" };
+  shell.appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   shell.appState.currentView = "chats";
   shell.appState.mainEl = document.querySelector("main");
   requests.length = 0;
@@ -220,19 +220,4 @@ test("a burst of nudges for a cached chat refreshes its tail once, a second late
     cache.cachedTranscript("a").items.map((e: { seq: number }) => e.seq),
     [0, 1, 2, 3],
   );
-});
-
-test("a stream resync drops the cache and refetches only the open chat", async () => {
-  transcripts.set("a", [entry(0, "first question"), entry(1, "first answer")]);
-  await visitThenLeave("a");
-
-  cache.resyncTranscriptCache(["other"]);
-  assert.equal(cache.cachedTranscript("a"), undefined);
-  await settle();
-
-  assert.deepEqual(
-    requests.filter((path) => path.startsWith("/api/sessions/")),
-    ["/api/sessions/other?tailTurns=25"],
-  );
-  assert.ok(cache.cachedTranscript("other"));
 });

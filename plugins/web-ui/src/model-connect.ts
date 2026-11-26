@@ -713,7 +713,7 @@ function view(): TemplateResult {
               </button>`
             : nothing
         }
-        ${s.mode === "gate" ? html`<div class="signin-brand">${brandMark()}<span>${brandName()}</span></div>` : nothing}
+        ${s.mode === "gate" ? html`<div class="signin-brand">${brandMark()}<span class="brand-name">${brandName()}</span></div>` : nothing}
         <h1 id="mc-title">${title}</h1>
         <p class="signin-body">${subCopy}</p>
         ${body}

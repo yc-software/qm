@@ -50,6 +50,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const HOME_DIR = "/home/user";
@@ -73,6 +74,7 @@ export interface StoredE2bSandbox extends SnapshotBookkeeping {
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
 export interface E2bSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   advisoryLock: AdvisoryLock;
   client: E2bClient;
   namePrefix?: string;
@@ -207,7 +209,8 @@ export function createE2bSandbox(opts: E2bSandboxOptions): Sandbox {
         return adopt(session, { sandboxId: session.sandboxId, createdAtMs: Date.now(), recoveryError: undefined });
       }
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ metadata: { name }, autoPause: true });
+      const template = await opts.imageFor?.(scope);
+      const session = await client.create({ metadata: { name }, autoPause: true, ...(template ? { template } : {}) });
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,

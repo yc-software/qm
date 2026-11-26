@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { swallowAs } from "../../../chassis/src/errors.ts";
+import { errMessage, swallowAs } from "../../../chassis/src/errors.ts";
 import type { AdminPage } from "./sections.ts";
 type Data = Record<string, any>;
 type Context = Pick<AdminPage, "api" | "orgScope" | "host" | "href" | "current">;
@@ -25,10 +25,15 @@ const flagLabels: Record<string, string> = {
   fastMode: "Model supports the Anthropic fast tier",
   auxiliary: "Eligible for auxiliary tasks",
 };
-const errorText = (error: unknown) => (error instanceof Error ? error.message : "Request failed.");
-function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }) {
-  if (!modelId) return "Key saved. The base model is unchanged.";
-  if (selected.ok) return "Key and base model saved.";
+const errorText = (error: unknown) => errMessage(error, "Request failed.");
+function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }, moved: Data[] = []) {
+  const switched = moved.length
+    ? " Defaults that used the model gateway now use this key: " +
+      moved.map((m) => (m.label || m.setting) + " " + m.from + " → " + m.to).join(", ") +
+      "."
+    : "";
+  if (!modelId) return (moved.length ? "Key saved." : "Key saved. The base model is unchanged.") + switched;
+  if (selected.ok) return "Key and base model saved." + switched;
   return "Key saved, but the base model could not be changed: " + (selected.data?.message || "the server rejected it.");
 }
 
@@ -267,7 +272,7 @@ export class Onboarding {
         : { ok: true };
       this.apiKey = "";
       await this.load();
-      return [providerSavedMessage(modelId, selected), selected.ok ? "ok" : "err"];
+      return [providerSavedMessage(modelId, selected, saved.data?.moved), selected.ok ? "ok" : "err"];
     });
   }
   async disableProvider() {

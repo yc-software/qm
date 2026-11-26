@@ -36,7 +36,8 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
   remember.
 
 The notebook you write is this conversation's own (your personal one in a DM, the
-channel's in a channel). Other authorized notebooks can be searched/read, not rewritten here.
+channel's in a channel), unless the persona block says a pinned persona's notebook takes
+its place. Other authorized notebooks can be searched/read, not rewritten here.
 
 The org-admin write path uses the self-API instead, called with
 `$AGENT_API_URL` and `$AGENT_API_TOKEN` (both already in your environment on every turn —
@@ -58,16 +59,14 @@ curl -sS --fail-with-body -X POST "$AGENT_API_URL/v1/memory/facts" \
 with `{"facts":[{"id","text"}]}` or `DELETE /v1/memory/facts` with `{"ids":[…]}` to curate.)
 Those writes land in the notebook every conversation in the org recalls, so confirm the
 wording with the admin before writing and keep personal facts out of it. A `403 org
-memory writes need an org admin's own turn while it is still running` means the user isn't
-an org admin (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively) or this isn't
-their own running turn: a scheduled or triggered turn, or one that has ended, as a
-background job's has. Say which rather than retrying, and make org writes from a command
-that runs while the turn does.
+memory writes need an org admin's own authority` means the user isn't an org admin
+(`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively) or this turn carries no
+person's authority (a bot's work or an external audience). Say which rather than retrying.
 
 ## A member's own memory brain
 
-A member who runs their own gbrain can make it their personal memory, on a turn they sent
-(triggered turns are refused). Call the self-API as them:
+A member who runs their own gbrain can make it their personal memory. Call the self-API as
+them:
 
 1. `GET $AGENT_API_URL/v1/memory/brain` returns what they have connected and `principalId`,
    the id their gbrain must link to their gbrain member. On their gbrain they also need a

@@ -110,6 +110,12 @@ CREATE FUNCTION public.claim_approvals_tenants() RETURNS TABLE(tenant_id uuid, i
     SET search_path TO 'public', 'pg_temp'
     AS $$ SELECT DISTINCT tenant_id, 'approvals'::text FROM approvals WHERE true AND tenant_id IN (SELECT qm_serving_tenants()) $$;
 
+CREATE FUNCTION public.claim_approvals_tenants_by_cardto(value text) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$ SELECT DISTINCT tenant_id, 'approvals'::text FROM approvals
+                WHERE lower(json->>'cardTo') = lower(value) AND tenant_id IN (SELECT qm_serving_tenants()) $$;
+
 CREATE FUNCTION public.claim_approvals_tenants_by_sessionid(value text) RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
@@ -301,7 +307,7 @@ CREATE FUNCTION public.claim_deliveries(text, bigint) RETURNS TABLE(tenant_id uu
                     WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
                       AND o.destination->>'target' = d.destination->>'target'
                       AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                      AND (o.claim_expires_at > (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT OR (o.created_at, o.id) < (d.created_at, d.id)))
+                      AND (o.claim_expires_at > (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT OR (o.created_at, o.seq, o.id) < (d.created_at, d.seq, d.id)))
                ORDER BY created_at
                FOR UPDATE SKIP LOCKED)
             RETURNING tenant_id, id::text $_$;
@@ -380,6 +386,13 @@ CREATE FUNCTION public.claim_egress_policies_tenants() RETURNS TABLE(tenant_id u
     LANGUAGE sql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$ SELECT DISTINCT tenant_id, 'egress_policies'::text FROM egress_policies WHERE true AND tenant_id IN (SELECT qm_serving_tenants()) $$;
+
+CREATE FUNCTION public.claim_expired_ephemeral_sessions(cutoff bigint, lim integer, after_id text DEFAULT ''::text) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$ SELECT tenant_id, id FROM sessions
+        WHERE ephemeral = true AND COALESCE(last_activity, created_at) < $1 AND id > $3
+        ORDER BY id LIMIT $2 $_$;
 
 CREATE FUNCTION public.claim_expired_file_uploads(bigint) RETURNS TABLE(tenant_id uuid, id text)
     LANGUAGE sql SECURITY DEFINER
@@ -1334,12 +1347,27 @@ CREATE FUNCTION public.pending_delivery_heads(text[]) RETURNS TABLE(tenant_id uu
              FROM deliveries
             WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = ANY($1) AND tenant_id IN (SELECT qm_serving_tenants()) $_$;
 
+CREATE FUNCTION public.qm_app_host_label(settings jsonb, name text) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+  SELECT qm_tenant_handle(settings) || '-' || name
+$$;
+
 CREATE FUNCTION public.qm_boot_tenant() RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'pg_catalog', 'public'
     AS $$
       SELECT CASE WHEN count(*) = 1 THEN (array_agg(id))[1] END FROM (SELECT id FROM public.tenants LIMIT 2) one
     $$;
+
+CREATE FUNCTION public.qm_bound_external_org(issuer text) RETURNS text
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  SELECT o.org_id FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.tenant = nullif(current_setting('qm.tenant_id', true), '')::uuid
+  $_$;
 
 CREATE FUNCTION public.qm_bound_tenant() RETURNS uuid
     LANGUAGE plpgsql STABLE PARALLEL SAFE
@@ -1352,6 +1380,241 @@ BEGIN
   END IF;
   RETURN bound::uuid;
 END $$;
+
+CREATE FUNCTION public.qm_external_org_account_check() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+  DECLARE bound uuid;
+  BEGIN
+    IF TG_TABLE_NAME = 'tenants' THEN
+      bound := NEW.id;
+    ELSE
+      bound := NEW.tenant;
+    END IF;
+    IF qm_external_org_account_differs(bound) THEN
+      RAISE EXCEPTION 'tenant % partnerChatAccount differs from its external organization id', bound USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+  END $$;
+
+CREATE FUNCTION public.qm_external_org_account_differs(tenant uuid) RETURNS boolean
+    LANGUAGE sql STABLE
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  SELECT EXISTS (SELECT 1 FROM tenants t JOIN tenant_external_orgs o ON o.tenant = t.id
+    WHERE t.id = $1 AND t.settings ? 'partnerChatAccount' AND t.settings->>'partnerChatAccount' IS DISTINCT FROM o.org_id)
+  $_$;
+
+CREATE FUNCTION public.qm_move_exact_personal_scopes() RETURNS TABLE(scope_table text, scope_tenant uuid, moved_rows bigint, dropped_rows bigint)
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+  target record;
+  hit record;
+  swap record;
+  body text;
+  rewritten jsonb;
+  found boolean;
+BEGIN
+  CREATE TEMP TABLE IF NOT EXISTS personal_scope_tally(tbl text, tenant_id uuid, moved bigint, dropped bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS personal_scope_dropped(tbl text, tenant_id uuid, row_data jsonb) ON COMMIT DROP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl, c.column_name::text AS col,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+   WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.data_type = 'text'
+     AND (c.column_name LIKE '%scope_id' OR c.column_name = 'created_in_scope'
+          OR (c.column_name = 'id' AND EXISTS (SELECT 1 FROM information_schema.columns j
+                                                WHERE j.table_schema = c.table_schema AND j.table_name = c.table_name
+                                                  AND j.column_name = 'json' AND j.data_type = 'jsonb')))
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %1$I t JOIN personal_scope_moves m ON t.%2$I = ''personal:'' || m.alias %3$s)',
+      target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END) INTO found;
+    CONTINUE WHEN NOT found;
+    BEGIN
+      EXECUTE format(
+        'WITH moved AS (UPDATE %1$I t SET %2$I = m.to_scope FROM personal_scope_moves m WHERE t.%2$I = ''personal:'' || m.alias %3$s RETURNING %4$s AS tenant)
+         INSERT INTO personal_scope_tally SELECT %1$L, tenant, count(*), 0 FROM moved GROUP BY 2',
+        target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END);
+    EXCEPTION WHEN unique_violation THEN
+      FOR hit IN EXECUTE format(
+        'SELECT t.ctid AS row_id, m.to_scope, %4$s AS tenant FROM %1$I t JOIN personal_scope_moves m ON t.%2$I = ''personal:'' || m.alias %3$s',
+        target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END)
+      LOOP
+        BEGIN
+          EXECUTE format('UPDATE %I SET %I = $1 WHERE ctid = $2', target.tbl, target.col) USING hit.to_scope, hit.row_id;
+          INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 1, 0);
+        EXCEPTION WHEN unique_violation THEN
+          EXECUTE format('INSERT INTO personal_scope_dropped SELECT %1$L, $2, to_jsonb(t) FROM %1$I t WHERE ctid = $1',
+            target.tbl) USING hit.row_id, hit.tenant;
+          EXECUTE format('DELETE FROM %I WHERE ctid = $1', target.tbl) USING hit.row_id;
+          INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 0, 1);
+        END;
+      END LOOP;
+    END;
+  END LOOP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl, c.column_name::text AS col,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+   WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.udt_name = '_text'
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %1$I t CROSS JOIN LATERAL unnest(t.%2$I) u(e)
+                      JOIN personal_scope_moves m ON u.e = ''personal:'' || m.alias %3$s)', target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END) INTO found;
+    CONTINUE WHEN NOT found;
+    EXECUTE format(
+      'WITH moved AS (UPDATE %1$I t SET %2$I = ARRAY(
+           SELECT coalesce((SELECT m.to_scope FROM personal_scope_moves m WHERE u.e = ''personal:'' || m.alias %3$s LIMIT 1), u.e)
+             FROM unnest(t.%2$I) WITH ORDINALITY u(e, n) ORDER BY u.n)
+         WHERE EXISTS (SELECT 1 FROM unnest(t.%2$I) u(e) JOIN personal_scope_moves m ON u.e = ''personal:'' || m.alias %3$s)
+         RETURNING %4$s AS tenant)
+       INSERT INTO personal_scope_tally SELECT %1$L, tenant, count(*), 0 FROM moved GROUP BY 2',
+      target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END);
+  END LOOP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.columns i ON i.table_schema = c.table_schema AND i.table_name = c.table_name
+                                     AND i.column_name = 'id' AND i.data_type = 'text'
+   WHERE c.table_schema = current_schema() AND c.column_name = 'json' AND c.data_type = 'jsonb'
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    FOR hit IN EXECUTE format(
+      'SELECT t.ctid AS row_id, %2$s AS tenant, t.json FROM %1$I t WHERE t.json::text LIKE ''%%"personal:%%''',
+      target.tbl, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END)
+    LOOP
+      body := hit.json::text;
+      FOR swap IN SELECT DISTINCT v.s, mv.to_scope
+                 FROM (SELECT x #>> '{}' AS s FROM jsonb_path_query(hit.json, 'strict $.** ? (@.type() == "string" && @ starts with "personal:")') x) v
+                 JOIN personal_scope_moves mv ON mv.alias = CASE WHEN position('@' IN btrim(substr(v.s, 10))) > 0 THEN lower(btrim(substr(v.s, 10))) ELSE btrim(substr(v.s, 10)) END AND (hit.tenant IS NULL OR mv.tenant_id = hit.tenant)
+      LOOP
+        body := replace(body, to_jsonb(swap.s)::text, to_jsonb(swap.to_scope)::text);
+      END LOOP;
+      CONTINUE WHEN body = hit.json::text;
+      rewritten := body::jsonb;
+      IF hit.json ? 'backingScopeId' THEN rewritten := jsonb_set(rewritten, '{backingScopeId}', hit.json -> 'backingScopeId'); END IF;
+      EXECUTE format('UPDATE %I SET json = $1 WHERE ctid = $2', target.tbl) USING rewritten, hit.row_id;
+      INSERT INTO personal_scope_tally VALUES (target.tbl || '.json', hit.tenant, 1, 0);
+    END LOOP;
+  END LOOP;
+  RETURN QUERY SELECT t.tbl, t.tenant_id, sum(t.moved)::bigint, sum(t.dropped)::bigint
+                 FROM personal_scope_tally t GROUP BY 1, 2;
+  DELETE FROM personal_scope_tally;
+END $_$;
+
+CREATE FUNCTION public.qm_move_personal_scopes() RETURNS TABLE(scope_table text, scope_tenant uuid, moved_rows bigint, dropped_rows bigint)
+    LANGUAGE plpgsql
+    AS $_$
+DECLARE
+  target record;
+  hit record;
+  swap record;
+  body text;
+  rewritten jsonb;
+  found boolean;
+BEGIN
+  CREATE TEMP TABLE IF NOT EXISTS personal_scope_tally(tbl text, tenant_id uuid, moved bigint, dropped bigint) ON COMMIT DROP;
+  CREATE TEMP TABLE IF NOT EXISTS personal_scope_dropped(tbl text, tenant_id uuid, row_data jsonb) ON COMMIT DROP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl, c.column_name::text AS col,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+   WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.data_type = 'text'
+     AND (c.column_name LIKE '%scope_id' OR c.column_name = 'created_in_scope'
+          OR (c.column_name = 'id' AND EXISTS (SELECT 1 FROM information_schema.columns j
+                                                WHERE j.table_schema = c.table_schema AND j.table_name = c.table_name
+                                                  AND j.column_name = 'json' AND j.data_type = 'jsonb')))
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %1$I t JOIN personal_scope_moves m ON t.%2$I LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(t.%2$I, 10))) > 0 THEN lower(btrim(substr(t.%2$I, 10))) ELSE btrim(substr(t.%2$I, 10)) END %3$s)',
+      target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END) INTO found;
+    CONTINUE WHEN NOT found;
+    BEGIN
+      EXECUTE format(
+        'WITH moved AS (UPDATE %1$I t SET %2$I = m.to_scope FROM personal_scope_moves m WHERE t.%2$I LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(t.%2$I, 10))) > 0 THEN lower(btrim(substr(t.%2$I, 10))) ELSE btrim(substr(t.%2$I, 10)) END %3$s RETURNING %4$s AS tenant)
+         INSERT INTO personal_scope_tally SELECT %1$L, tenant, count(*), 0 FROM moved GROUP BY 2',
+        target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END);
+    EXCEPTION WHEN unique_violation THEN
+      FOR hit IN EXECUTE format(
+        'SELECT t.ctid AS row_id, m.to_scope, %4$s AS tenant FROM %1$I t JOIN personal_scope_moves m ON t.%2$I LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(t.%2$I, 10))) > 0 THEN lower(btrim(substr(t.%2$I, 10))) ELSE btrim(substr(t.%2$I, 10)) END %3$s',
+        target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END)
+      LOOP
+        BEGIN
+          EXECUTE format('UPDATE %I SET %I = $1 WHERE ctid = $2', target.tbl, target.col) USING hit.to_scope, hit.row_id;
+          INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 1, 0);
+        EXCEPTION WHEN unique_violation THEN
+          EXECUTE format('INSERT INTO personal_scope_dropped SELECT %1$L, $2, to_jsonb(t) FROM %1$I t WHERE ctid = $1',
+            target.tbl) USING hit.row_id, hit.tenant;
+          EXECUTE format('DELETE FROM %I WHERE ctid = $1', target.tbl) USING hit.row_id;
+          INSERT INTO personal_scope_tally VALUES (target.tbl, hit.tenant, 0, 1);
+        END;
+      END LOOP;
+    END;
+  END LOOP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl, c.column_name::text AS col,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+   WHERE c.table_schema = current_schema() AND t.table_type = 'BASE TABLE' AND c.udt_name = '_text'
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %1$I t CROSS JOIN LATERAL unnest(t.%2$I) u(e)
+                      JOIN personal_scope_moves m ON u.e LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(u.e, 10))) > 0 THEN lower(btrim(substr(u.e, 10))) ELSE btrim(substr(u.e, 10)) END %3$s)', target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END) INTO found;
+    CONTINUE WHEN NOT found;
+    EXECUTE format(
+      'WITH moved AS (UPDATE %1$I t SET %2$I = ARRAY(
+           SELECT coalesce((SELECT m.to_scope FROM personal_scope_moves m WHERE u.e LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(u.e, 10))) > 0 THEN lower(btrim(substr(u.e, 10))) ELSE btrim(substr(u.e, 10)) END %3$s LIMIT 1), u.e)
+             FROM unnest(t.%2$I) WITH ORDINALITY u(e, n) ORDER BY u.n)
+         WHERE EXISTS (SELECT 1 FROM unnest(t.%2$I) u(e) JOIN personal_scope_moves m ON u.e LIKE ''personal:%%'' AND m.alias = CASE WHEN position(''@'' IN btrim(substr(u.e, 10))) > 0 THEN lower(btrim(substr(u.e, 10))) ELSE btrim(substr(u.e, 10)) END %3$s)
+         RETURNING %4$s AS tenant)
+       INSERT INTO personal_scope_tally SELECT %1$L, tenant, count(*), 0 FROM moved GROUP BY 2',
+      target.tbl, target.col, CASE WHEN target.tenanted THEN 'AND m.tenant_id = t.tenant_id' ELSE '' END, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END);
+  END LOOP;
+  FOR target IN 
+  SELECT c.table_name::text AS tbl,
+         EXISTS (SELECT 1 FROM information_schema.columns k
+                  WHERE k.table_schema = c.table_schema AND k.table_name = c.table_name
+                    AND k.column_name = 'tenant_id') AS tenanted
+    FROM information_schema.columns c
+    JOIN information_schema.columns i ON i.table_schema = c.table_schema AND i.table_name = c.table_name
+                                     AND i.column_name = 'id' AND i.data_type = 'text'
+   WHERE c.table_schema = current_schema() AND c.column_name = 'json' AND c.data_type = 'jsonb'
+     AND c.table_name::text <> ALL (ARRAY['sprites_initialization', 'smolmachines_sandbox_bodies', 'e2b_sandbox_bodies', 'modal_sandbox_bodies', 'aws_sandbox_bodies', 'render_sandbox_bodies', 'render_scratch_bodies', 'render_sandbox_cleanup', 'render_sandbox_namespace', 'do_managed_agents_sandbox_bodies', 'superserve_sandbox_bodies', 'sandbox_routing', 'sandbox_loads']) LOOP
+    FOR hit IN EXECUTE format(
+      'SELECT t.ctid AS row_id, %2$s AS tenant, t.json FROM %1$I t WHERE t.json::text LIKE ''%%"personal:%%''',
+      target.tbl, CASE WHEN target.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END)
+    LOOP
+      body := hit.json::text;
+      FOR swap IN SELECT DISTINCT v.s, mv.to_scope
+                 FROM (SELECT x #>> '{}' AS s FROM jsonb_path_query(hit.json, 'strict $.** ? (@.type() == "string" && @ starts with "personal:")') x) v
+                 JOIN personal_scope_moves mv ON mv.alias = CASE WHEN position('@' IN btrim(substr(v.s, 10))) > 0 THEN lower(btrim(substr(v.s, 10))) ELSE btrim(substr(v.s, 10)) END AND (hit.tenant IS NULL OR mv.tenant_id = hit.tenant)
+      LOOP
+        body := replace(body, to_jsonb(swap.s)::text, to_jsonb(swap.to_scope)::text);
+      END LOOP;
+      CONTINUE WHEN body = hit.json::text;
+      rewritten := body::jsonb;
+      IF hit.json ? 'backingScopeId' THEN rewritten := jsonb_set(rewritten, '{backingScopeId}', hit.json -> 'backingScopeId'); END IF;
+      EXECUTE format('UPDATE %I SET json = $1 WHERE ctid = $2', target.tbl) USING rewritten, hit.row_id;
+      INSERT INTO personal_scope_tally VALUES (target.tbl || '.json', hit.tenant, 1, 0);
+    END LOOP;
+  END LOOP;
+  RETURN QUERY SELECT t.tbl, t.tenant_id, sum(t.moved)::bigint, sum(t.dropped)::bigint
+                 FROM personal_scope_tally t GROUP BY 1, 2;
+  DELETE FROM personal_scope_tally;
+END $_$;
 
 CREATE FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) RETURNS void
     LANGUAGE plpgsql SECURITY DEFINER
@@ -1406,6 +1669,44 @@ CREATE FUNCTION public.qm_set_tenant_handle(handle text) RETURNS void
     UPDATE tenants SET settings = jsonb_set(settings, '{handle}', to_jsonb(handle)) WHERE id = qm_bound_tenant();
   END $$;
 
+CREATE FUNCTION public.qm_sync_app_host() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+  BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.json->>'name' IS NOT DISTINCT FROM NEW.json->>'name' THEN RETURN NULL; END IF;
+    DELETE FROM app_hosts h WHERE h.tenant = NEW.tenant_id AND h.deployment_id = NEW.id;
+    INSERT INTO app_hosts(label, tenant, deployment_id)
+      SELECT label, NEW.tenant_id, NEW.id
+        FROM (SELECT qm_app_host_label(t.settings, coalesce(NEW.json->>'name', NEW.id)) AS label
+                FROM tenants t WHERE t.id = NEW.tenant_id) found
+       WHERE label IS NOT NULL;
+    RETURN NULL;
+  END $$;
+
+CREATE FUNCTION public.qm_sync_tenant_app_hosts() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+  BEGIN
+    IF qm_tenant_handle(NEW.settings) IS DISTINCT FROM qm_tenant_handle(OLD.settings) THEN
+      PERFORM qm_sync_tenant_app_hosts(NEW.id);
+    END IF;
+    RETURN NULL;
+  END $$;
+
+CREATE FUNCTION public.qm_sync_tenant_app_hosts(tenant uuid) RETURNS void
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  DELETE FROM app_hosts h WHERE h.tenant = $1;
+  INSERT INTO app_hosts(label, tenant, deployment_id)
+    SELECT label, $1, id
+      FROM (SELECT qm_app_host_label(t.settings, coalesce(d.json->>'name', d.id)) AS label, d.id
+              FROM deployments d JOIN tenants t ON t.id = d.tenant_id WHERE d.tenant_id = $1) found
+     WHERE label IS NOT NULL;
+$_$;
+
 CREATE FUNCTION public.qm_tenant_for_app_handle(handle text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
@@ -1416,15 +1717,13 @@ $$;
 CREATE FUNCTION public.qm_tenant_for_app_host(label text) RETURNS uuid
     LANGUAGE plpgsql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
-    AS $$
+    AS $_$
   DECLARE found uuid;
   BEGIN
-    IF strpos(label, '-') > 1 THEN
-      found := qm_tenant_for_app_handle(split_part(label, '-', 1));
-      IF found IS NOT NULL THEN RETURN found; END IF;
-    END IF;
-    RETURN qm_tenant_for_deployment(label);
-  END $$;
+    SELECT h.tenant INTO found FROM app_hosts h WHERE h.label = lower($1);
+    IF found IS NOT NULL THEN RETURN found; END IF;
+    RETURN qm_tenant_for_deployment($1);
+  END $_$;
 
 CREATE FUNCTION public.qm_tenant_for_consent_link(key text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
@@ -1435,6 +1734,14 @@ CREATE FUNCTION public.qm_tenant_for_deployment(key text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $_$ SELECT (array_agg(DISTINCT tenant_id))[1] FROM (SELECT tenant_id FROM deployments WHERE id = $1 OR json->>'name' = $1) found HAVING count(DISTINCT tenant_id) = 1 $_$;
+
+CREATE FUNCTION public.qm_tenant_for_external_org(issuer text, org text) RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$
+  SELECT o.tenant FROM tenant_external_orgs o
+    WHERE o.issuer = $1 AND o.org_id = $2 AND o.tenant IN (SELECT qm_serving_tenants())
+  $_$;
 
 CREATE FUNCTION public.qm_tenant_for_loop_ingress(key text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
@@ -1479,9 +1786,9 @@ CREATE FUNCTION public.qm_tenant_for_webhook(key text) RETURNS uuid
 CREATE FUNCTION public.qm_tenant_handle(settings jsonb) RETURNS text
     LANGUAGE sql IMMUTABLE PARALLEL SAFE
     AS $_$
-      SELECT CASE WHEN h ~ '^[a-z0-9]{2,61}$' AND h <> ALL (ARRAY['auth', 'slack', 'mt', 'www', 'api', 'docs', 'apps', 'admin']) THEN h END
+      SELECT CASE WHEN h ~ '^[a-z0-9][a-z0-9-]{0,59}[a-z0-9]$' AND h <> ALL (ARRAY['auth', 'slack', 'mt', 'www', 'api', 'docs', 'apps', 'admin']) THEN h END
         FROM (SELECT coalesce(settings->>'handle',
-          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9]', '', 'g')) AS h) picked
+          regexp_replace(lower(coalesce(settings->>'orgSlug', '')), '[^a-z0-9-]', '', 'g')) AS h) picked
     $_$;
 
 CREATE FUNCTION public.qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
@@ -1660,6 +1967,12 @@ CREATE SEQUENCE public.ambient_judgments_id_seq
 
 ALTER SEQUENCE public.ambient_judgments_id_seq OWNED BY public.ambient_judgments.id;
 
+CREATE TABLE public.app_hosts (
+    label text NOT NULL,
+    tenant uuid NOT NULL,
+    deployment_id text NOT NULL
+);
+
 CREATE TABLE public.app_page_views (
     id bigint NOT NULL,
     deployment_id text NOT NULL,
@@ -1710,7 +2023,8 @@ CREATE TABLE public.audit_log (
     status text,
     detail text,
     idempotency_key text,
-    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL
+    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    impersonated_by text
 );
 
 CREATE SEQUENCE public.audit_log_id_seq
@@ -1842,7 +2156,8 @@ CREATE TABLE public.channel_messages (
     raw jsonb,
     surface text DEFAULT 'slack'::text NOT NULL,
     account text DEFAULT ''::text NOT NULL,
-    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL
+    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    ambient_claimed boolean DEFAULT true NOT NULL
 );
 
 CREATE TABLE public.channel_policy (
@@ -2025,7 +2340,18 @@ CREATE TABLE public.deliveries (
     expired_at bigint,
     source_cron_id text,
     failed_reason text,
-    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL
+    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    message_ts text,
+    seq bigint NOT NULL
+);
+
+ALTER TABLE public.deliveries ALTER COLUMN seq ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.deliveries_seq_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 CREATE TABLE public.deploy_git_repos (
@@ -2357,6 +2683,7 @@ CREATE TABLE public.items (
     CONSTRAINT items_text_check CHECK ((text <> ''::text)),
     CONSTRAINT items_text_kind CHECK (((text IS NULL) OR (kind = ANY (ARRAY['UserMessage'::public.item_kind, 'SteeringMessage'::public.item_kind, 'AgentMessage'::public.item_kind, 'Reasoning'::public.item_kind, 'ToolResult'::public.item_kind, 'Error'::public.item_kind, 'ContextCompaction'::public.item_kind])))),
     CONSTRAINT items_through_seq_kind CHECK (((through_seq IS NULL) OR (kind = 'ContextCompaction'::public.item_kind))),
+    CONSTRAINT items_tool_call_id_present CHECK (((call_id IS NOT NULL) OR (kind <> ALL (ARRAY['ToolCall'::public.item_kind, 'ToolResult'::public.item_kind])))),
     CONSTRAINT items_tool_check CHECK ((tool <> ''::text)),
     CONSTRAINT items_tool_kind CHECK (((tool IS NULL) OR (kind = ANY (ARRAY['ToolCall'::public.item_kind, 'ToolResult'::public.item_kind])))),
     CONSTRAINT items_variant_check CHECK ((variant = ANY (ARRAY['narration'::text, 'files_delivered'::text]))),
@@ -2512,7 +2839,8 @@ CREATE TABLE public.participants (
     pinned boolean DEFAULT false NOT NULL,
     color text,
     read_at bigint,
-    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL
+    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    notified_at bigint
 );
 
 CREATE TABLE public.persona_access (
@@ -2862,6 +3190,7 @@ CREATE TABLE public.sessions (
     persona_id text,
     tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
     bot_work boolean GENERATED ALWAYS AS (public.session_bot_work(spawn_meta)) STORED NOT NULL,
+    ephemeral boolean DEFAULT false NOT NULL,
     CONSTRAINT sessions_fork_provenance_pair CHECK (((forked_from_session_id IS NULL) = (fork_boundary_seq IS NULL)))
 )
 WITH (fillfactor='70');
@@ -3125,6 +3454,12 @@ ALTER TABLE ONLY public.ambient_cursors
 ALTER TABLE ONLY public.ambient_judgments
     ADD CONSTRAINT ambient_judgments_pkey PRIMARY KEY (tenant_id, id);
 
+ALTER TABLE ONLY public.app_hosts
+    ADD CONSTRAINT app_hosts_deployment UNIQUE (tenant, deployment_id);
+
+ALTER TABLE ONLY public.app_hosts
+    ADD CONSTRAINT app_hosts_pkey PRIMARY KEY (label);
+
 ALTER TABLE ONLY public.app_page_views
     ADD CONSTRAINT app_page_views_pkey PRIMARY KEY (tenant_id, id);
 
@@ -3168,13 +3503,13 @@ ALTER TABLE ONLY public.budget_spend
     ADD CONSTRAINT budget_spend_pkey PRIMARY KEY (tenant_id, id);
 
 ALTER TABLE ONLY public.channel_files
-    ADD CONSTRAINT channel_files_pkey PRIMARY KEY (tenant_id, org_id, container, ts, file_id);
+    ADD CONSTRAINT channel_files_pkey PRIMARY KEY (tenant_id, org_id, surface, account, container, ts, file_id);
 
 ALTER TABLE ONLY public.channel_header_pin_flag
     ADD CONSTRAINT channel_header_pin_flag_pkey PRIMARY KEY (tenant_id, id);
 
 ALTER TABLE ONLY public.channel_messages
-    ADD CONSTRAINT channel_messages_pkey PRIMARY KEY (tenant_id, org_id, container, ts);
+    ADD CONSTRAINT channel_messages_pkey PRIMARY KEY (tenant_id, org_id, surface, account, container, ts);
 
 ALTER TABLE ONLY public.channel_policy_history
     ADD CONSTRAINT channel_policy_history_pkey PRIMARY KEY (tenant_id, id);
@@ -3183,7 +3518,7 @@ ALTER TABLE ONLY public.channel_policy
     ADD CONSTRAINT channel_policy_pkey PRIMARY KEY (tenant_id, org_id, container);
 
 ALTER TABLE ONLY public.channel_state
-    ADD CONSTRAINT channel_state_pkey PRIMARY KEY (tenant_id, org_id, container);
+    ADD CONSTRAINT channel_state_pkey PRIMARY KEY (tenant_id, org_id, surface, account, container);
 
 ALTER TABLE ONLY public.command_policies
     ADD CONSTRAINT command_policies_pkey PRIMARY KEY (tenant_id, id);
@@ -3629,6 +3964,10 @@ CREATE INDEX approval_grants_actorid_fold ON public.approval_grants USING hash (
 
 CREATE INDEX approval_grants_actorid_unicode ON public.approval_grants USING btree (id) WHERE ((json ->> 'actorId'::text) ~ '[^\x01-\x7f]'::text);
 
+CREATE INDEX approvals_cardto_fold ON public.approvals USING hash (lower((json ->> 'cardTo'::text)));
+
+CREATE INDEX approvals_cardto_unicode ON public.approvals USING btree (id) WHERE ((json ->> 'cardTo'::text) ~ '[^\x01-\x7f]'::text);
+
 CREATE INDEX approvals_sessionid_fold ON public.approvals USING hash (lower((json ->> 'sessionId'::text)));
 
 CREATE INDEX approvals_sessionid_unicode ON public.approvals USING btree (id) WHERE ((json ->> 'sessionId'::text) ~ '[^\x01-\x7f]'::text);
@@ -3647,8 +3986,6 @@ CREATE INDEX auth_broker_sessions_expiry ON public.auth_broker_sessions USING bt
 
 CREATE INDEX budget_spend_by_principal_at ON public.budget_spend USING btree (principal_id, at);
 
-CREATE UNIQUE INDEX channel_files_surface_key ON public.channel_files USING btree (tenant_id, org_id, surface, account, container, ts, file_id);
-
 CREATE INDEX channel_messages_by_container ON public.channel_messages USING btree (org_id, container, ts);
 
 CREATE INDEX channel_messages_by_sub ON public.channel_messages USING btree (org_id, container, sub, ts);
@@ -3659,13 +3996,9 @@ CREATE INDEX channel_messages_edited_by_container ON public.channel_messages USI
 
 CREATE INDEX channel_messages_live_by_container ON public.channel_messages USING btree (org_id, container) WHERE (deleted = false);
 
-CREATE UNIQUE INDEX channel_messages_surface_key ON public.channel_messages USING btree (tenant_id, org_id, surface, account, container, ts);
-
 CREATE INDEX channel_messages_tsv ON public.channel_messages USING gin (tsv);
 
 CREATE INDEX channel_policy_history_container ON public.channel_policy_history USING btree (org_id, container, id DESC);
-
-CREATE UNIQUE INDEX channel_state_surface_key ON public.channel_state USING btree (tenant_id, org_id, surface, account, container);
 
 CREATE INDEX consent_links_inbound_id ON public.consent_links USING btree (id);
 
@@ -3774,6 +4107,8 @@ CREATE INDEX idx_runs_status_created ON public.runs USING btree (status, created
 CREATE INDEX idx_runs_status_created_seq ON public.runs USING btree (status, created_at, seq);
 
 CREATE INDEX idx_runs_terminal_finished ON public.runs USING btree (finished_at, id) WHERE (status = ANY (ARRAY['done'::text, 'failed'::text]));
+
+CREATE INDEX idx_sessions_ephemeral_created ON public.sessions USING btree (id) WHERE (ephemeral = true);
 
 CREATE INDEX idx_sessions_parent_session_id ON public.sessions USING btree (parent_session_id) WHERE (parent_session_id IS NOT NULL);
 
@@ -3907,6 +4242,8 @@ CREATE INDEX webhooks_resource_search_gin ON public.webhooks USING gin (to_tsvec
 
 CREATE STATISTICS public.approval_grants_actorid_stats ON (json ->> 'actorId'::text) FROM public.approval_grants;
 
+CREATE STATISTICS public.approvals_cardto_stats ON (json ->> 'cardTo'::text) FROM public.approvals;
+
 CREATE STATISTICS public.approvals_sessionid_stats ON (json ->> 'sessionId'::text) FROM public.approvals;
 
 CREATE STATISTICS public.crons_ownerscopeid_stats ON (json ->> 'ownerScopeId'::text) FROM public.crons;
@@ -3939,6 +4276,10 @@ CREATE STATISTICS public.webhooks_ownerscopeid_stats ON (json ->> 'ownerScopeId'
 
 CREATE TRIGGER acl_grants_bump AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.acl_grants FOR EACH STATEMENT EXECUTE FUNCTION public.acl_grants_bump_version();
 
+CREATE TRIGGER app_hosts_sync AFTER INSERT OR UPDATE OF json ON public.deployments FOR EACH ROW EXECUTE FUNCTION public.qm_sync_app_host();
+
+CREATE TRIGGER app_hosts_sync AFTER UPDATE OF settings ON public.tenants FOR EACH ROW EXECUTE FUNCTION public.qm_sync_tenant_app_hosts();
+
 CREATE TRIGGER blobs_immutable BEFORE DELETE OR UPDATE ON public.blobs FOR EACH ROW EXECUTE FUNCTION public.forbid_mutation();
 
 CREATE TRIGGER blobs_no_truncate BEFORE TRUNCATE ON public.blobs FOR EACH STATEMENT EXECUTE FUNCTION public.forbid_mutation();
@@ -3954,6 +4295,10 @@ CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON public.
 CREATE TRIGGER session_llm_requests_spend_dirty AFTER INSERT OR DELETE OR UPDATE OF created_at, session_id, model, usage_json ON public.session_llm_requests FOR EACH ROW EXECUTE FUNCTION public.invalidate_request_spend();
 
 CREATE TRIGGER sessions_spend_dirty AFTER INSERT OR DELETE OR UPDATE OF id, scope_id, origin, thread_ref, parent_session_id ON public.sessions FOR EACH ROW EXECUTE FUNCTION public.invalidate_session_spend();
+
+CREATE CONSTRAINT TRIGGER tenant_external_orgs_account AFTER INSERT OR UPDATE ON public.tenant_external_orgs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.qm_external_org_account_check();
+
+CREATE CONSTRAINT TRIGGER tenants_external_org_account AFTER INSERT OR UPDATE OF settings ON public.tenants DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.qm_external_org_account_check();
 
 ALTER TABLE ONLY public.ack_emoji_picks
     ADD CONSTRAINT ack_emoji_picks_tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
@@ -3978,6 +4323,9 @@ ALTER TABLE ONLY public.ambient_cursors
 
 ALTER TABLE ONLY public.ambient_judgments
     ADD CONSTRAINT ambient_judgments_tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
+
+ALTER TABLE ONLY public.app_hosts
+    ADD CONSTRAINT app_hosts_deployment_fkey FOREIGN KEY (tenant, deployment_id) REFERENCES public.deployments(tenant_id, id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY public.app_page_views
     ADD CONSTRAINT app_page_views_deployment_id_fkey FOREIGN KEY (tenant_id, deployment_id) REFERENCES public.deployments(tenant_id, id);
@@ -4480,6 +4828,8 @@ ALTER TABLE public.admin_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ambient_cursors ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.ambient_judgments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.app_hosts ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.app_page_views ENABLE ROW LEVEL SECURITY;
 
@@ -5074,6 +5424,10 @@ ALTER TABLE public.webhook_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.webhooks ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.webui_model_configs ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON FUNCTION public.qm_external_org_account_check() FROM PUBLIC;
+
+REVOKE ALL ON FUNCTION public.qm_external_org_account_differs(tenant uuid) FROM PUBLIC;
 
 REVOKE ALL ON FUNCTION public.qm_self_serve_provisioned(tenant uuid, key text) FROM PUBLIC;
 

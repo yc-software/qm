@@ -4,6 +4,7 @@ import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
 import { offboardingCard } from "./offboarding.ts";
 import { pageHeader, card, table, badge, stacked, subline } from "./shared.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 
 export const userHref = (page: AdminPage, row: { userId?: string | null; principalId?: string | null }) =>
   page.href("user", { user: row.userId || row.principalId });
@@ -28,7 +29,7 @@ async function openWebUiAs(target: string) {
       return alert("Couldn't start impersonation: " + (j?.message || "Failed (" + res.status + ")"));
     }
   } catch (e) {
-    return alert("Couldn't start impersonation: " + ((e as Error)?.message || e));
+    return alert("Couldn't start impersonation: " + errChain(e));
   }
   window.open(withBase("/"), "_blank", "noopener");
 }
@@ -55,7 +56,7 @@ export async function detail(page: AdminPage) {
   const d = r.data || {};
   const principal = d.principalId || requested;
   const aliases: string[] = d.user?.aliases || [];
-  const personalScope = d.scopeId || "personal:" + principal;
+  const personalScope = d.scopeId;
   let [onboarding, busy, hint, resetHint] = [d.onboarding || "not_started", false, "", ""];
   const creds = kc.data?.credentials || [];
   const credName = (id: string) => {

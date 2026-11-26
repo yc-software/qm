@@ -46,7 +46,7 @@ test("type-only imports load nothing, while a named type specifier and a dynamic
   assert.deepEqual(run("src/lazy.ts").core, ["test/dynamic.test.ts"]);
 });
 
-test("dependencies, CI, runners and runtime files under src run everything", () => {
+test("dependencies, CI, runners, runtime files under src and startup skills run everything", () => {
   for (const path of [
     "package-lock.json",
     "tsconfig.json",
@@ -55,6 +55,8 @@ test("dependencies, CI, runners and runtime files under src run everything", () 
     "db/schema.sql",
     "src/prompt.md",
     "src/tenants/context.ts",
+    "skills-seed/brief/SKILL.md",
+    "plugins/web-ui/skills/brief/SKILL.md",
   ])
     assert.deepEqual(run(path), { core: "all", webUi: true, cli: true, coreImage: true }, path);
 });
@@ -65,6 +67,25 @@ test("files no suite can reach select nothing, and suites run on their own paths
   assert.deepEqual(run("cli/src/cli.ts"), { core: [], webUi: false, cli: true, coreImage: false });
   assert.deepEqual(run("deploy/core/Dockerfile"), { core: [], webUi: false, cli: false, coreImage: true });
   assert.deepEqual(run(), { core: [], webUi: false, cli: false, coreImage: false });
+});
+
+test("tests reach what they list, name from the root, fill into a path or copy into the image", () => {
+  const inputs: Record<string, string> = {
+    ...tree,
+    ".env.example": "PORT=\n",
+    "src/vendor/bar.js": "export {};\n",
+    "src/asset.ts": "readFileSync(new URL(`./vendor/bar.${name}`, import.meta.url));\n",
+    "src/config.ts": 'readdirSync("./plugins");\n',
+    "test/boot.test.ts": 'import "../src/config.ts";\nreaddirSync(`docs/drafts/${name}`);\n',
+    "test/brand.test.ts": 'execSync("git ls-files -z");\n',
+    "test/child.test.ts": 'spawn("node", ["-e", "import(\'./src/asset.ts\')"]);\nreadFileSync(".env.example");\n',
+    "test/image.test.ts": 'readFileSync("deploy/core/Dockerfile");\n',
+  };
+  const reach = (path: string) => select([path], Object.keys(inputs), (file) => inputs[file]!).core;
+  assert.deepEqual(reach("docs/guide.md"), ["test/brand.test.ts"]);
+  assert.deepEqual(reach(".env.example"), ["test/brand.test.ts", "test/child.test.ts"]);
+  assert.deepEqual(reach("src/vendor/bar.js"), ["test/brand.test.ts", "test/child.test.ts", "test/image.test.ts"]);
+  assert.deepEqual(reach("plugins/web-ui/src/view.ts"), ["test/brand.test.ts", "test/image.test.ts"]);
 });
 
 test("shards scale with the selected test time", () => {

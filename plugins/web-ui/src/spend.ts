@@ -172,10 +172,7 @@ export async function mount(page: AdminPage): Promise<void> {
     Date.now(),
     MAX_DAYS,
   );
-  const header = pageHeader({
-    context: "What QM's model calls cost for you and the spaces you can see.",
-    tabs: spendWindowTabs(page, w),
-  });
+  const header = pageHeader({ tabs: spendWindowTabs(page, w) });
   render(
     html`${header}
       <p class="subline">Loading…</p>`,

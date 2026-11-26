@@ -39,13 +39,15 @@ class ModalInvalidError extends Error {}
 class ModalTimeoutError extends Error {}
 let modalFault: { exec?: Error; read?: Error; write?: Error; create?: Error; terminate?: Error } = {};
 let modalPoll: number | null | Error = null;
+const modalTerminations: unknown[] = [];
 const modalSandbox = {
   sandboxId: "sb-native",
   async poll() {
     if (modalPoll instanceof Error) throw modalPoll;
     return modalPoll;
   },
-  async terminate() {
+  async terminate(params?: unknown) {
+    modalTerminations.push(params);
     if (modalFault.terminate) throw modalFault.terminate;
   },
   async exec(args: string[], params: Record<string, unknown>) {
@@ -362,6 +364,8 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
   await assert.rejects(client.create({ name: "taken" }), ModalNameConflictError);
   modalFault = { terminate: Object.assign(new Error("x"), { code: 5 }) };
   await session.terminate();
+  await session.terminate({ wait: true });
+  assert.deepEqual(modalTerminations.slice(-2), [undefined, { wait: true }]);
   await client.terminate("sb-native");
   modalPoll = new ModalInvalidError("malformed sandbox id");
   await assert.rejects(client.fromId("not-a-sandbox"), ModalSandboxGoneError, "an unknown id is a gone sandbox");

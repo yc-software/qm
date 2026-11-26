@@ -3,8 +3,11 @@ import type { DirectoryMember, DirectoryStore } from "../../directory/directory-
 import { renderKeychainManifest, type KeychainAsk } from "../../credentials/keychain.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
 import { isolationBrief } from "../../sessions/child-isolation.ts";
-import { isPollSurface } from "../../triggers/run-trigger.ts";
-import type { ScopeId, Session } from "../../types.ts";
+import { firedByPoll } from "../../triggers/run-trigger.ts";
+import { personalScope, type ScopeId, type Session } from "../../types.ts";
+import { isAgentReply, isNarration, isShownReply, typedBy, type Item, type NewItem } from "../../sessions/items.ts";
+import type { FeatureName } from "../../feature-flags.ts";
+import { snippet } from "../../util/text.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "../side-chat-context.ts";
@@ -35,9 +38,9 @@ export async function appendTurnGuidance(turn: {
   conversation: OrchestratorInput["conversation"];
   tenant: TurnCapabilities["tenant"];
   actorIsOrgAdmin: TurnCapabilities["actorIsOrgAdmin"];
+  actorAdminRole?: TurnCapabilities["actorAdminRole"];
   orgMemoryWritable: TurnCapabilities["orgMemoryWritable"];
-  automatedTurn: boolean;
-  childWake: boolean;
+  ephemeral?: boolean;
 }): Promise<string> {
   const {
     deps,
@@ -51,9 +54,8 @@ export async function appendTurnGuidance(turn: {
     conversation,
     tenant,
     actorIsOrgAdmin,
+    actorAdminRole,
     orgMemoryWritable,
-    automatedTurn,
-    childWake,
   } = turn;
   let { systemPrompt } = turn;
   if (appConnections)
@@ -63,7 +65,18 @@ export async function appendTurnGuidance(turn: {
     deps.admin && !external && !strictReadOnly && deps.signingSecret && deps.apiBaseUrl
       ? await deps.admin.listGrants(tenant).catch(swallowAs("orchestrator: admin grants", []))
       : [];
-  if (conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).isAdmin)) {
+  const hasOrgAdmin = conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).role === "org_admin");
+  const hasOwner =
+    !hasOrgAdmin && conversation.audience.some((p) => adminStatusFromGrants(adminGrants, p.id).role === "owner");
+  if (hasOwner) {
+    systemPrompt +=
+      "\n\n## Acting for an org owner\n" +
+      "When a turn's context says the sender is an org owner, your token inherits that for that turn: you can inspect or configure org-wide settings, models, connectors, org memory, org memory registry, spend, and the user roster/external invites through the admin tool and API" +
+      (orgMemoryWritable
+        ? ', and for plain "remember this org-wide" requests the lighter path is `"scope":"org"` on the memory self-API (memory skill)'
+        : "") +
+      ". Confirm before any mutation, and say exactly what you changed. Owners cannot read other people's private content (sessions, transcripts, personal memory, files, logs, keychain, sandboxes, or impersonation) — those require org_admin. Role changes and teammate invitations are portal-only.";
+  } else if (hasOrgAdmin) {
     systemPrompt +=
       "\n\n## Acting for an org admin\n" +
       "When a turn's context says the sender is an org admin, your token inherits that for that turn: anything they could do in the admin dashboard — inspect or govern any scope's config/SOUL, memory, transcripts, files, audit — they can do through you. The admin skill documents the whole API surface; read it before acting" +
@@ -73,7 +86,11 @@ export async function appendTurnGuidance(turn: {
       ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
       " System administration is not limited to the admin dashboard. Use the admin's independently authorized infrastructure or provider access to diagnose, repair, and manage this instance, including resources owned by other users. Ordinary resource-owner restrictions do not by themselves prohibit that administrative work or require the resource owner to do it. An owner-only API denial is not a denial of separately authorized system administration; verify that authority before taking another route. Using that independently authorized access as the admin is not impersonation or circumvention. Credential grants, provider permissions, explicit restrictions (including the portal-only actions above), mutation approvals, and audience privacy still apply. Keep actions attributed to the admin; never borrow another user's identity or credentials without authorization. Follow the admin and cloud-cli skills.";
   }
-  if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
+  if (turn.ephemeral) {
+    turnContextBlocks["Ephemeral session"] =
+      "## Ephemeral session\nThis is a temporary chat: nothing from it is saved to history, memory, or files. Keep deliverables inline in your reply.";
+  }
+  if (!turn.ephemeral && deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
     const nowMs = Date.now();
     const obligations = await Promise.all([
       deps.crons?.ownedBy(scopeId) ?? [],
@@ -99,24 +116,71 @@ export async function appendTurnGuidance(turn: {
       obligations ??
       "## Crons scheduled here\nScheduled-work status is unavailable; check the live inventories before scheduling.";
   }
-  if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
+  if (actorAdminRole === "owner") turnEvents.push("The sender is an org owner.");
+  else if (actorIsOrgAdmin) turnEvents.push("The sender is an org admin.");
   if (input.origin.kind === "automation" && input.origin.destination && !input.surfaceTools) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger with a platform-managed destination. " +
         "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.",
     );
   }
-  if (automatedTurn && input.surface && isPollSurface(input.surface)) {
+  if (firedByPoll(input)) {
     turnEvents.push(
       "This turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call `finish_silently` to end the turn without sending anything.",
     );
   }
-  if (childWake) {
-    turnEvents.push(
-      "This turn was started by one of your subagents, not a person typing. To end it without posting, call `finish_silently` and write no text; anything you write is shown to the person.",
-    );
-  }
   return systemPrompt;
+}
+
+const isSpoken = (item: Item): boolean => isShownReply(item) || (isNarration(item) && !!item.text?.trim());
+
+const supersededIn = (items: readonly Item[]): Set<number> =>
+  new Set(items.flatMap((item) => (Array.isArray(item.body.supersedes) ? item.body.supersedes : []))) as Set<number>;
+
+export async function rewriteTargets(
+  deps: Pick<OrchestratorDeps, "featureFlags" | "runs">,
+  tenant: TurnCapabilities["tenant"],
+  personId: string,
+  history: readonly Item[],
+  flag: FeatureName = "wake_reply_rewrite",
+): Promise<Item[] | undefined> {
+  if (!(await deps.featureFlags?.enabled(flag, personalScope(personId)))) return undefined;
+  const since = history.slice(history.findLastIndex(typedBy) + 1);
+  const replaced = supersededIn(since);
+  const spoken = since.filter((item) => isSpoken(item) && !!item.turnId && !replaced.has(item.seq));
+  if (!spoken.length) return [];
+  const sources = await deps.runs?.requestSources(tenant, [...new Set(spoken.map((item) => item.turnId!))]);
+  return spoken.filter((item) => {
+    const source = sources?.get(item.turnId!);
+    return !!source && samePerson(source.actorId, personId) && !firedByPoll(source);
+  });
+}
+
+export async function replyToRewrite(...args: Parameters<typeof rewriteTargets>): Promise<Item | undefined> {
+  return (await rewriteTargets(...args))?.findLast(isShownReply);
+}
+
+export function supersedeMarker(prior: readonly Item[], emitted: readonly Item[]): Record<string, unknown> {
+  const own = emitted.filter(isSpoken);
+  const replaced = supersededIn(own);
+  const targets = [...prior, ...own].filter((item) => !replaced.has(item.seq)).map((item) => item.seq);
+  return targets.length ? { supersedes: targets } : {};
+}
+
+export const replacesReply = (entry: NewItem): boolean =>
+  isAgentReply(entry) && !!entry.text?.trim() && !entry.body?.stopped;
+
+export function wakeTurnEvent(childWake: boolean, replies: readonly Item[]): string {
+  const started = `This turn was started by ${childWake ? "one of your subagents" : "another conversation"}, not a person typing.`;
+  const rewrites = replies.at(-1);
+  if (!rewrites)
+    return `${started} To end it without posting, call \`finish_silently\` and write no text; anything you write is shown to the person.`;
+  return (
+    `${started} Your reply replaces ${replies.length > 1 ? `your ${replies.length} messages to the person since they last wrote, the latest` : "your last message to the person, the one"} beginning "${snippet(rewrites.text ?? "", 60)}"; they will see only the new one. ` +
+    "Write it as your answer to what they asked, as you would give it had you had every result from the start: each result stated as a fact about what they asked about, not as news about the work (which worker found it, how many are back, when, how, or whether it finished, or what it took to get). " +
+    "Anything not yet known is simply still to come, and anything waiting on them stays." +
+    (childWake ? " To leave that message as it is, call `finish_silently` and write no text." : "")
+  );
 }
 
 export async function addConversationBlocks(turn: {
@@ -128,7 +192,7 @@ export async function addConversationBlocks(turn: {
   strictReadOnly: boolean;
   turnContextBlocks: SystemContextBlocks;
   credentialDescriptions: CredentialCatalog["credentialDescriptions"];
-  openSpeakerKeychain: CredentialCatalog["openSpeakerKeychain"];
+  openOwnerKeychain: CredentialCatalog["openOwnerKeychain"];
   scopeKeychainGrants: () => Promise<Parameters<typeof renderKeychainManifest>[0]["scopeGrants"]>;
   directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   rosterMembers: DirectoryMember[] | undefined;
@@ -143,7 +207,7 @@ export async function addConversationBlocks(turn: {
     strictReadOnly,
     turnContextBlocks,
     credentialDescriptions,
-    openSpeakerKeychain,
+    openOwnerKeychain,
     scopeKeychainGrants,
     directoryIndexFor,
   } = turn;
@@ -185,7 +249,7 @@ export async function addConversationBlocks(turn: {
     const keychainBlock = renderKeychainManifest({
       scopeId,
       conversationKind: conversation.kind,
-      openSpeakerKeychain,
+      openOwnerKeychain,
       actorId: actor.id,
       members,
       entriesByOwner,

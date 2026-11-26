@@ -16,7 +16,7 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Config } from "../src/config.ts";
 import type { Session } from "../src/types.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
@@ -315,7 +315,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   await built.app.ingestSurfaceEvents([
     { container: "C2", ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
   ]);
-  await built.app.judgeAmbientContainer("slack", "C2");
+  await settle(async () => Boolean(sent("ambient_judge")));
   assert.deepEqual(sent("ambient_judge"), { "x-qm-scope": "channel:C2", "x-qm-purpose": "ambient_judge" });
 
   const cron = await built.sessions.getOrCreateByThread("agent:main:cron:nightly", "dm", session.scopeId);
@@ -343,8 +343,8 @@ test("app turns and their helper calls tell the gateway which session they serve
 });
 
 test("API work carries its token's turn, the admin replaying screens, or the memory writer", async (t) => {
-  const { config, built, sent } = await gatewayApp(t);
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const { built, sent } = await gatewayApp(t);
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

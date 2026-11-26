@@ -10,19 +10,27 @@ export const BOT_REQUESTER_APPROVAL_NOTE =
 export const BOT_REQUESTER_REFUSAL =
   "This request came from a bot or app, and the next step needs a person's approval. A person has to ask for it directly.";
 
-export function botApprovalRefusal(
+export function unavailableApprovalRefusal(
   audit: (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) => void,
   sessionId: string,
   command: string,
   reason: string,
+  botRequester: boolean,
 ): TurnResult {
   audit({
     action: "command_approval.unavailable",
     resource: command,
     status: "refused",
-    detail: JSON.stringify({ approvalOutcome: "requester_is_bot", reason }),
+    detail: JSON.stringify({ approvalOutcome: botRequester ? "requester_is_bot" : "no_approver", reason }),
   });
-  return { status: "refused", sessionId, reason: BOT_REQUESTER_REFUSAL, refusalKind: "approval_denied" };
+  return {
+    status: "refused",
+    sessionId,
+    reason: botRequester
+      ? BOT_REQUESTER_REFUSAL
+      : `This step needs approval (${reason}) and has no person who can approve it, so it did not run.`,
+    ...(botRequester ? { refusalKind: "approval_denied" as const } : {}),
+  };
 }
 
 export const undeliverableApprovalNote = (failure: string): string =>
@@ -52,7 +60,12 @@ async function recordDeclined(
     elicitId: requestId,
     approved: false,
     author,
-    body: { command: record.command, ...body },
+    body: {
+      command: record.command,
+      ...(record.purpose ? { purpose: record.purpose } : {}),
+      ...(record.summary && record.call ? { summary: record.summary } : {}),
+      ...body,
+    },
   });
   if (record.kind === "input") return;
   await sessions.append(writer, {

@@ -1,8 +1,8 @@
-import { ownerAuthored, cronTriggerAuthority } from "./authority.ts";
+import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
 import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronOrigin, CronScript } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
@@ -34,6 +34,8 @@ const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean };
 
+export type ScriptTrialCron = Pick<Cron, "owner" | "ownerScopeId" | "botActor">;
+
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
   | { started: false; reason: "unavailable" }
@@ -58,6 +60,7 @@ export function describeRunNowRefusal(
 export interface Scheduler {
   tick(now?: number): Promise<void>;
   runNow(cronId: string): Promise<RunNowResult>;
+  trialScript(cron: ScriptTrialCron, script: CronScript): Promise<TurnResult>;
   notifyChanged(cronId: string): void;
   start(intervalMs: number): void;
   ready(): Promise<void>;
@@ -84,9 +87,8 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  sessions?: NonNullable<TriggerDeps["sessions"]> & {
-    getByThread(threadRef: string): Promise<{ personaId?: string } | null>;
-  };
+  sessions?: NonNullable<TriggerDeps["sessions"]>;
+  cronOrigin?: (cron: Cron) => Promise<CronOrigin>;
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
@@ -215,6 +217,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease;
+  const triggerDeps: Omit<TriggerDeps, "run"> = {
+    deliveries: deps.deliveries,
+    idempotency: deps.idempotency,
+    identity: deps.identity,
+    ...(deps.directory ? { directory: deps.directory } : {}),
+    ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+    ...(deps.sessions ? { sessions: deps.sessions } : {}),
+    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
+  };
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
     if (scheduled) {
@@ -296,7 +307,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
-      const personaId = cron.sessionRef ? (await deps.sessions?.getByThread(cron.sessionRef))?.personaId : undefined;
+      const { personaId, project, persona } = (await deps.cronOrigin?.(cron)) ?? {};
+      const destination =
+        cron.destination && (project || persona)
+          ? { ...cron.destination, ...(project ? { project } : {}), ...(persona ? { persona } : {}) }
+          : cron.destination;
       const refusedDelivery =
         previous && cron.destination
           ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
@@ -305,16 +320,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           : undefined;
       const notebookOnly = await deps.notebookOnlyMemory?.(cron);
       outcome = await runTrigger(
-        {
-          deliveries: deps.deliveries,
-          idempotency: deps.idempotency,
-          identity: deps.identity,
-          run: deps.run,
-          ...(deps.directory ? { directory: deps.directory } : {}),
-          ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-          ...(deps.sessions ? { sessions: deps.sessions } : {}),
-          ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
-        },
+        { ...triggerDeps, run: deps.run },
         {
           ...cronTriggerAuthority(cron),
           input: (homeRoster) =>
@@ -322,7 +328,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
-          ownerFire: ownerAuthored(cron),
+          sourceId: cron.id,
           redrivesHandOff: true,
           ...(firesAtMostDaily(cron.schedule, scheduledAt ?? t) ? { infrequentCron: true } : {}),
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
@@ -334,7 +340,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             await deps.crons.beginFire(cron.id, runningEntry);
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
-          ...(cron.destination ? { destination: cron.destination } : {}),
+          ...(destination ? { destination } : {}),
           ...(failingAlready
             ? {}
             : {
@@ -650,6 +656,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
         throw error;
       }
+    },
+    async trialScript(cron, script) {
+      let result: TurnResult | undefined;
+      const outcome = await runTrigger(
+        { ...triggerDeps, run: async (req) => (result = await deps.run(req)) },
+        {
+          ...cronTriggerAuthority(cron),
+          input: script.command,
+          fireKey: `cron:trial-${randomUUID()}`,
+          surface: "cron",
+          cronScript: script,
+          cronScriptTrial: true,
+        },
+      );
+      return result ?? { status: "refused", reason: outcome.note ?? "it did not run" };
     },
     notifyChanged(cronId) {
       if (!deps.jobQueue) return;

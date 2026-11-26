@@ -64,7 +64,10 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **Linking merges the users row.** If the linked sign-in already has its own
   user (it is that user's only sign-in), linking folds it into the canonical
   person's user in the same transaction (earliest first-seen time, earliest
-  offboarding, and the person's kind) and deletes it.
+  offboarding, and the person's kind) and deletes it. When the user it joins
+  is an app, the work the sign-in already made becomes bot work in the same
+  transaction: its loops are marked as a bot's and their automatic ship gates
+  are held, the same as when QM first marks a user as an app.
 - **Links are reversible.** Deleting a link restores two separate principals.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only
@@ -105,7 +108,25 @@ links have no `linked_by`. Sign-ins are stored folded: emails lower-cased.
 
 Memory providers with `attestActor` and attested MCP connectors receive the
 canonical id in the `x-qm-actor` header, so every linked sign-in reaches them
-as one person. QM attests only ids of 1 to 256 visible ASCII characters (`!`
+as one person. Actor-attested MCP and broker requests also carry
+`x-qm-actor-aliases`: a JSON array of the person's other linked sign-ins (visible
+ASCII, excluding the actor itself). For example, an invented actor
+`old@example.test` can carry `["provider:stable-7"]`. Only QM supplies these
+headers. Consumers can resolve a provider identity without treating the canonical
+email as the provider's account id. Audience checks are unchanged; aliases are
+sent only to the same destination already trusted to receive the attested actor.
+No identity records are changed.
+
+The attestation category covers shared-credential MCP discovery, probes and tool
+calls; MCP memory reads, writes and forgets (including registry brains); and broker
+calls with `injection.actor`, from turns and permitted deployments. Each of those
+recipients intentionally receives the linked sign-ins as part of the person
+attestation. `attestAudience: "any"` retains its existing person-turn requirement.
+Unattested requests and per-user MCP authentication send neither attestation
+header. The MCP admin route, memory provider parser/brain registry and credential
+injection validator remain the configuration owners; there is no separate alias
+mode. Enabling actor attestation now trusts that destination with the linked
+identities as well as the canonical one. QM attests only ids of 1 to 256 visible ASCII characters (`!`
 through `~`), the rule the credential broker also applies to its actor; the
 broker checks the turn's own principal id and sends it unchanged. Slack
 ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email

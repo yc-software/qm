@@ -111,6 +111,10 @@ export {
 export {
   botIdentityFromEnv,
   botIdentityArgs,
+  originContext,
+  personaContinues,
+  type SurfaceMessageReader,
+  slackPersonaReplyArgs,
   slackReplyArgs,
   channelSurfaceUrl,
   channelWelcomeMessage,
@@ -128,6 +132,7 @@ export {
   deliveryCandidatesFor,
   createDeliveryTracker,
   deliverWithRetry,
+  batchPostMessageArgs,
   postWithVerify,
   findPostedByKey,
   recoveryVerifyOldest,

@@ -7,6 +7,9 @@ import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { personalScope } from "../src/types.ts";
+
 const SECRET = "super-secret-bearer";
 
 function reader(rec: Partial<DecryptedServiceCredential> & { slug: string }): ServiceCredentialReader {
@@ -24,8 +27,8 @@ function reader(rec: Partial<DecryptedServiceCredential> & { slug: string }): Se
 
 const claims = (credentials: string[]): CapabilityClaims => ({
   actorId: "U1",
-  scopeId: "personal:U1",
-  audienceScopeId: "personal:U1",
+  scopeId: personalScope("U1"),
+  audienceScopeId: personalScope("U1"),
   aud: "credential-broker",
   credentials,
   exp: Date.now() + 60_000,
@@ -324,7 +327,14 @@ test("a missing slug or url is a 400 bad_request", async () => {
   assert.equal((await brokerCredentialCall(base({ body: { credential: "x-firehose" } }))).status, 400);
 });
 
-test("actor attestation is opt-in and taken from capability claims", async () => {
+test("actor attestation is opt-in and taken from capability claims", async (t) => {
+  installPrincipalLinks({
+    canonical: () => undefined,
+    aliases: (id) => (id === "actor-42" ? ["provider:stable-7"] : []),
+    userId: () => undefined,
+    claim: () => {},
+  });
+  t.after(() => installPrincipalLinks(null));
   for (const actor of [undefined, false, true]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall(
@@ -332,8 +342,8 @@ test("actor attestation is opt-in and taken from capability claims", async () =>
         claims: {
           ...claims(["x-firehose"]),
           actorId: "actor-42",
-          scopeId: "personal:actor-42",
-          audienceScopeId: "personal:actor-42",
+          scopeId: personalScope("actor-42"),
+          audienceScopeId: personalScope("actor-42"),
         },
         reader: reader({ slug: "x-firehose", injection: actor === undefined ? {} : { actor } }),
         fetchImpl: cap.fetch,
@@ -341,13 +351,17 @@ test("actor attestation is opt-in and taken from capability claims", async () =>
     );
     assert.equal(result.status, 200);
     assert.equal(cap.calls[0]!.headers["x-qm-actor"], actor ? "actor-42" : undefined);
+    assert.equal(
+      cap.calls[0]!.headers["x-qm-actor-aliases"],
+      actor ? JSON.stringify(["provider:stable-7"]) : undefined,
+    );
     assert.equal(cap.calls[0]!.headers.Authorization, `Bearer ${SECRET}`);
   }
 });
 
 test("callers cannot supply an actor header even when attestation is disabled", async () => {
   for (const actor of [false, true]) {
-    for (const key of ["x-qm-actor", "X-QM-Actor"]) {
+    for (const key of ["x-qm-actor", "X-QM-Actor", "x-qm-actor-aliases", "X-QM-Actor-Aliases"]) {
       const cap = captureFetch();
       const result = await brokerCredentialCall(
         base({
@@ -357,7 +371,7 @@ test("callers cannot supply an actor header even when attestation is disabled", 
         }),
       );
       assert.equal(result.status, 400);
-      assert.deepEqual(result.json, { error: "reserved_header", message: "x-qm-actor is set only by the broker" });
+      assert.deepEqual(result.json, { error: "reserved_header", message: "actor headers are set only by the broker" });
       assert.equal(cap.calls.length, 0);
     }
   }
@@ -379,7 +393,13 @@ test("actor attestation fails closed for malformed identities and injection conf
     assert.equal(denial.error, "invalid_actor");
     assert.match(denial.message, /1 to 256 visible ASCII characters with POST \/v1\/admin\/principal-links/);
   }
-  for (const injection of [{ actor: "yes" }, { header: "X-QM-Actor" }, { scheme: "Bearer\n" }]) {
+  for (const injection of [
+    { actor: "yes" },
+    { header: "X-QM-Actor" },
+    { header: "X-QM-Actor-Aliases" },
+    { headers: { "x-qm-actor-aliases": "[]" } },
+    { scheme: "Bearer\n" },
+  ]) {
     const cap = captureFetch();
     const result = await brokerCredentialCall(
       base({
@@ -446,10 +466,10 @@ test("an actor-attested credential answers only to its person in their own priva
     return { result, calls: cap.calls };
   };
   const refused: Array<[string, Partial<CapabilityClaims>]> = [
-    ...["channel:C1", "group:G1", "team:T1", "org:default-org", "personal:U2"].map(
+    ...["channel:C1", "group:G1", "team:T1", "org:default-org", personalScope("U2")].map(
       (audienceScopeId): [string, Partial<CapabilityClaims>] => [audienceScopeId, {}],
     ),
-    ["personal:system:ambient:default-org", { actorId: "system:ambient:default-org" }],
+    [personalScope("system:ambient:default-org"), { actorId: "system:ambient:default-org" }],
   ];
   for (const [audienceScopeId, extra] of refused) {
     const { result, calls } = await call(audienceScopeId, extra);
@@ -457,13 +477,13 @@ test("an actor-attested credential answers only to its person in their own priva
     assert.equal((result.json as { error: string }).error, "private_only");
     assert.equal(calls.length, 0, "nothing reaches the upstream");
   }
-  const own = await call("personal:U1");
+  const own = await call(personalScope("U1"));
   assert.equal(own.result.status, 200);
   assert.equal(own.calls[0]!.headers["x-qm-actor"], "U1");
   const published = {
     ...claims(["x-firehose"]),
     actorId: "publisher",
-    scopeId: "personal:publisher",
+    scopeId: personalScope("publisher"),
     deployment: "dpl-1",
   };
   delete published.audienceScopeId;

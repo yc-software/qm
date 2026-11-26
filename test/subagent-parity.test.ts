@@ -291,7 +291,7 @@ test("human-descended tasks can change their runtime but not scope defaults", as
   assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
   assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {
     ok: false,
-    error: "live_actor_required",
+    error: "authority_required",
   });
   assert.equal((await parent.runtime!(active, { action: "set", model: "Astra", lifetime: "scope" })).ok, true);
 });

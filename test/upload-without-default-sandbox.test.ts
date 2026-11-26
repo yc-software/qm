@@ -34,6 +34,6 @@ test("an upload in a scope without a default sandbox still reaches the agent", a
   const entries = await built.sessions.getItems(sessionId);
   const text = JSON.stringify(entries.filter((e) => e.kind === "UserMessage"));
   assert.match(text, /sample\.txt/);
-  assert.match(text, /not yet on a computer/);
+  assert.match(text, /Files ID [0-9a-f]+\)/);
   assert.match(text, /\/v1\/files\/[^/]+\/content/);
 });

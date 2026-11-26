@@ -42,10 +42,16 @@ interface NewProcessRecord {
   credentialFiles?: ProcessCredentialFiles;
 }
 
+export type JobStarter = { tenant: Tenant; actorId: string; botActor: boolean };
+
 export interface ProcessRegistry {
   register(rec: NewProcessRecord): Promise<ProcessRecord>;
   get(processId: string): Promise<ProcessRecord | null>;
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
+  runningJobStartedBy(
+    starter: JobStarter,
+    job: { scopeId: string; sandboxId: string; command: string },
+  ): Promise<string | null>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
   getMany(tenant: Tenant, processIds: readonly string[]): Promise<ProcessRecord[]>;
@@ -136,6 +142,16 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async listByScope(scopeId) {
       return (await q("SELECT * FROM process_sessions WHERE scope_id = $1", [scopeId])).map(pgRowToRecord);
+    },
+    async runningJobStartedBy({ tenant, actorId, botActor }, { scopeId, sandboxId, command }) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT p.process_id FROM process_sessions p JOIN runs r ON r.tenant_id = p.tenant_id AND r.id = p.run_id
+          WHERE p.tenant_id = $1 AND p.scope_id = $2 AND p.sandbox_id = $3 AND p.command = $4 AND p.kind = 'background'
+            AND p.status = 'running' AND pg_input_is_valid(r.request, 'jsonb') AND r.request::jsonb -> 'actor' ->> 'id' = $5
+            AND (r.bot_limited OR coalesce(r.request::jsonb ->> 'botActor' = 'true', false)) = $6 LIMIT 1`,
+        [tenant.id, scopeId, sandboxId, command, actorId, botActor],
+      );
+      return (rows[0]?.process_id as string | undefined) ?? null;
     },
     async liveByScope(scopeId, now = Date.now()) {
       const rows = await q(

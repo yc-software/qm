@@ -8,6 +8,7 @@ import { brokerGitHttp } from "../src/api/git-http-broker.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
+import { personalScope } from "../src/types.ts";
 
 function req(headers: Record<string, string>, body: string | Buffer = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;
@@ -64,7 +65,7 @@ function ctx(
     params: {},
     capability: {
       actorId: "U1",
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       aud: CREDENTIAL_BROKER_AUD,
       credentials: ["gitlab"],
       exp: Date.now() + CAPABILITY_TTL_MS,

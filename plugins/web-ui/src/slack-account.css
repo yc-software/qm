@@ -54,6 +54,81 @@ qm-onboarding-slack {
   color: var(--success);
   flex: none;
 }
+.welcome-slack.slack-installed {
+  cursor: default;
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  animation: slack-installed-card 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.welcome-slack.slack-installed:hover {
+  background: var(--background);
+}
+.welcome-slack > .slack-installed-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.slack-installed-mark::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--success);
+  opacity: 0;
+  animation: slack-installed-ring 0.7s ease-out 0.15s both;
+}
+.slack-installed-check {
+  position: absolute;
+  right: -6px;
+  bottom: -5px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--success);
+  color: var(--background);
+  box-shadow: 0 0 0 2px var(--background);
+  animation: slack-installed-check 0.4s cubic-bezier(0.3, 1.6, 0.5, 1) 0.25s both;
+}
+.slack-installed small {
+  animation: slack-installed-text 0.35s ease-out 0.35s both;
+}
+@keyframes slack-installed-card {
+  from {
+    transform: scale(0.97);
+    border-color: var(--border);
+  }
+}
+@keyframes slack-installed-ring {
+  from {
+    opacity: 0.7;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+@keyframes slack-installed-check {
+  from {
+    transform: scale(0);
+  }
+}
+@keyframes slack-installed-text {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcome-slack.slack-installed,
+  .slack-installed-mark::after,
+  .slack-installed-check,
+  .slack-installed small {
+    animation: none;
+  }
+}
 .slack-link-icon {
   position: relative;
   width: 44px;

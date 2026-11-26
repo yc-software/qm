@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { page, draw as redraw } from "./settings.ts";
+import { errChain } from "../../../chassis/src/errors.ts";
 const NEW_PROVIDER = { id: "", protocol: "chat-completions", baseUrl: "", credential: "", editing: false };
 const state = {
   scope: "",
@@ -87,7 +88,7 @@ async function send(body: any, done: () => void) {
     if (result.ok) done();
     state.message = result.ok ? "Saved." : result.data?.message || "Save failed.";
   } catch (error) {
-    state.message = `Could not save: ${error instanceof Error ? error.message : String(error)}`;
+    state.message = `Could not save: ${errChain(error)}`;
   } finally {
     state.saving = false;
     redraw();
@@ -175,7 +176,7 @@ function optionFields(d: any, o: any, i: number) {
             >`
         : ""
     }
-    ${o.action === "use_persona" ? field("Persona id", o.persona, (v) => (o.persona = v)) : ""}
+    ${o.action === "use_persona" ? field("Bot id", o.persona, (v) => (o.persona = v)) : ""}
     <button class="btn danger" @click=${() => (d.options.splice(i, 1), redraw())}>Remove option</button>
   </fieldset>`;
 }

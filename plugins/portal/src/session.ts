@@ -59,7 +59,6 @@ export interface TmpClaims {
   nonce: string;
   pkceVerifier: string;
   returnTo: string;
-  workspace?: string;
   iat: number;
   exp: number;
 }
@@ -118,8 +117,7 @@ export function openTmp(token: string | null, key: Buffer, now: number): TmpClai
     typeof p.state !== "string" ||
     typeof p.nonce !== "string" ||
     typeof p.pkceVerifier !== "string" ||
-    typeof p.exp !== "number" ||
-    (p.workspace !== undefined && typeof p.workspace !== "string")
+    typeof p.exp !== "number"
   )
     return null;
   if (now >= p.exp * 1000) return null;

@@ -51,22 +51,44 @@ spec:
       {{- end }}
       terminationGracePeriodSeconds: {{ add 30 (ceil (maxf 0 (divf (float64 ($drainMs | default "30000")) 1000))) }}
       {{- end }}
-      {{- if and (eq $name "core") $svc.persistence.enabled }}
+      {{- $persistent := and (eq $name "core") $svc.persistence.enabled }}
+      {{- $vaultToken := and (eq $name "core") $root.Values.vault.addr $root.Values.vault.auth.tokenAudience }}
+      {{- if $persistent }}
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch
+      {{- end }}
+      {{- if or $persistent $vaultToken }}
       volumes:
+        {{- if $persistent }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ $svc.persistence.existingClaim | default (printf "%s-core-data" (include "qm.fullname" $root)) | quote }}
+        {{- end }}
+        {{- if $vaultToken }}
+        - name: vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ $root.Values.vault.auth.tokenAudience | quote }}
+                  expirationSeconds: 600
+                  path: token
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ include "qm.image" (dict "root" $root "name" $name "service" $svc) | quote }}
-          {{- if and (eq $name "core") $svc.persistence.enabled }}
+          {{- if or $persistent $vaultToken }}
           volumeMounts:
+            {{- if $persistent }}
             - name: data
               mountPath: /data
+            {{- end }}
+            {{- if $vaultToken }}
+            - name: vault-token
+              mountPath: /var/run/secrets/qm-vault
+              readOnly: true
+            {{- end }}
           {{- end }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           {{- with $svc.command }}
@@ -123,6 +145,19 @@ spec:
           {{- end }}
           {{- if eq (toString $svc.port) (toString $svc.publicPort) }}
           {{- fail "services.core.port and services.core.publicPort must differ: core serves its API and the public front door on separate listeners" }}
+          {{- end }}
+          {{- with $root.Values.vault }}
+          {{- if .addr }}
+          {{- $_ := set $env "VAULT_ADDR" .addr }}
+          {{- range $key, $value := dict "VAULT_KV_MOUNT" .kvMount "VAULT_NAMESPACE" .namespace "VAULT_AUTH_METHOD" .auth.method "VAULT_AUTH_MOUNT" .auth.mount "VAULT_AUTH_ROLE" .auth.role }}
+          {{- if $value }}
+          {{- $_ := set $env $key $value }}
+          {{- end }}
+          {{- end }}
+          {{- if .auth.tokenAudience }}
+          {{- $_ := set $env "VAULT_AUTH_JWT_FILE" "/var/run/secrets/qm-vault/token" }}
+          {{- end }}
+          {{- end }}
           {{- end }}
           {{- if $svc.persistence.enabled }}
           {{- if and (hasKey $env "DATA_DIR") (ne (index $env "DATA_DIR") "/data") }}

@@ -3,7 +3,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
@@ -27,7 +27,7 @@ describe("POST /v1/emoji", async () => {
   let bare: Server;
   let base: string;
   let bareBase: string;
-  let built: BuiltApp;
+  let built: Core;
   let sessions: BrowserSessionStore;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
@@ -108,5 +108,19 @@ describe("POST /v1/emoji", async () => {
     const got = (await res.json()) as any;
     assert.equal(got.ok, false);
     assert.match(got.error, /session .* has expired/i);
+    assert.match(got.error, /PUT \/v1\/emoji\/session/);
+  });
+
+  it("PUT /v1/emoji/session: 400 without cookies, 422 when they hold no Slack sign-in", async () => {
+    const put = async (body: unknown) =>
+      fetch(`${base}/v1/emoji/session`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-agent-capability": await capFor(ACTOR) },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await put({})).status, 400);
+    const res = await put({ cookies: [{ name: "x", value: "y", domain: ".slack.com" }] });
+    assert.equal(res.status, 422);
+    assert.match(((await res.json()) as any).error, /isn't signed in to Slack yet/);
   });
 });

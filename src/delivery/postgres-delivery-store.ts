@@ -28,6 +28,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     ...(r.recipient_thread_ref != null ? { recipientThreadRef: r.recipient_thread_ref as string } : {}),
     ...(r.deliver_latency_ms != null ? { deliverLatencyMs: Number(r.deliver_latency_ms) } : {}),
     ...(r.slack_api_ms != null ? { slackApiMs: Number(r.slack_api_ms) } : {}),
+    ...(r.message_ts != null ? { messageTs: r.message_ts as string } : {}),
   };
 }
 
@@ -71,6 +72,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
                created_at = EXCLUDED.created_at,
+               seq = DEFAULT,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
                claim_expires_at = NULL
@@ -102,7 +104,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
             AND ($2::text IS NULL OR provenance->>'sourceThreadRef' = $2)
-          ORDER BY created_at`,
+          ORDER BY created_at, seq, id`,
         [type, sourceThreadRef ?? null],
       );
       return rows.map(rowToDelivery);
@@ -110,14 +112,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async claimPending(type, ttlMs) {
       await expireOveraged();
       const rows = await q(
-        `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
-          WHERE id IN (
-            SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
-             ORDER BY created_at FOR UPDATE SKIP LOCKED)
-          RETURNING *`,
+        `WITH claimed AS (
+           UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE id IN (
+              SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
+               ORDER BY created_at, seq, id FOR UPDATE SKIP LOCKED)
+            RETURNING *)
+         SELECT * FROM claimed ORDER BY created_at, seq, id`,
         [type, ttlMs],
       );
-      return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
+      return rows.map(rowToDelivery);
     },
     async claimDue(type, ttlMs) {
       for (const d of await claimThenLoad(() => claimRows(pg, "expire_deliveries", [maxAgeMs]), load))
@@ -130,7 +134,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `WITH head AS (
            SELECT id, claim_expires_at FROM deliveries
             WHERE tenant_id = $1 AND ${PENDING} AND destination->>'type' = $2 AND destination->>'target' = $3
-            ORDER BY created_at, id LIMIT 1 FOR UPDATE)
+            ORDER BY created_at, seq, id LIMIT 1 FOR UPDATE)
          UPDATE deliveries d
             SET claim_expires_at = CASE WHEN head.claim_expires_at > ${NOW_MS_SQL}
               THEN head.claim_expires_at ELSE ${NOW_MS_SQL} + $4 END
@@ -160,21 +164,22 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
-        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC LIMIT $1",
+        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC, seq DESC LIMIT $1",
         [limit],
       );
       return rows.map(rowToDelivery);
     },
-    async ack(id, at, slackApiMs) {
+    async ack(id, at, slackApiMs, messageTs) {
       await query(
         `UPDATE deliveries
             SET delivered_at = $2,
                 expired_at = NULL,
                 failed_reason = NULL,
                 deliver_latency_ms = GREATEST(0, $2 - created_at),
-                slack_api_ms = COALESCE($3, slack_api_ms)
+                slack_api_ms = COALESCE($3, slack_api_ms),
+                message_ts = COALESCE($4, message_ts)
           WHERE id = $1 AND delivered_at IS NULL`,
-        [id, at, slackApiMs ?? null],
+        [id, at, slackApiMs ?? null, messageTs ?? null],
       );
     },
     async fail(id, reason, at) {
@@ -229,7 +234,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE recipient_thread_ref = $1 AND destination->>'type' = 'principal'
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $2`,
         [recipientThreadRef, limit],
       );
@@ -240,7 +245,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE provenance->>'sourceSessionId' = $1 OR provenance->>'sourceThreadRef' = $2
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $3`,
         [sourceSessionId, sourceThreadRef, limit],
       );

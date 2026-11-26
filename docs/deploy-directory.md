@@ -102,7 +102,7 @@ Deployment-specific safety belongs here too. For example, an ambiently authentic
 
 ## Delivery and pins
 
-When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned skills are archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
+When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, loads them into the deployment's shared skill catalog before serving and on every core when they change, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Every tenant reads layer-owned skills from that catalog, so a removed skill disappears everywhere at once; a tenant keeps its own rows only for skills it edited or archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
 
 The sandbox handoff is a layer content hash. Sprites boxes boot the platform's stock image; the layer's tool descriptors and skills arrive through the deployment-layer sync. AWS with `sandbox.backend: "aws"` (or no sandbox block) uses `infra build-image` to package the guest agent as a Lambda MicroVM image and records its immutable image version and execution role. Service task definitions use immutable pins, not mutable tags.
 
@@ -187,13 +187,16 @@ A publisher can let their app call any of their connected apps (mail, calendar, 
 files, and so on) as them, the same way apps use org credentials through the broker.
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
 `POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
-withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
+withdraws. Only the publisher may call it; an agent's call raises an approval card to them, and
 sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
 same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When
 anyone other than the publisher publishes, pushes or rolls back a version, the loan is
 withdrawn before that version runs. Moving the app out of the publisher's own library, to
-a teammate or a shared home, withdraws it as the app moves. While the app borrows
+a teammate or a shared home, withdraws it as the app moves, and an app outside that library
+can't borrow again until it moves back; `[]` still withdraws. The broker checks the app's
+home on every call too, so a loan still recorded on an app outside that library is refused
+and the app lists no connectors. While the app borrows
 connectors, only the publisher can share it with anyone else. The token comes from the
 publisher's personal connection, else their default, else their company one.
 
@@ -243,7 +246,7 @@ services' private network, so it relays audit records through `apiUrl` (or
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
 port and leaves TLS to the operator. Then set `env.core.EGRESS_PROXY_URL` to
-`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS` (DigitalOcean Managed Agents is never proxied, see [do-managed-agents.md](do-managed-agents.md)). Update vendored Terraform from the current scaffold
+`https://<proxy hostname>`; every sandbox provider that can force traffic through it does, except those listed in `env.core.EGRESS_PROXY_EXEMPT_BACKENDS`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations
@@ -259,7 +262,7 @@ An exact `--candidate` deployment consumes its digest-pinned images without chan
 When `securityScreen.mode` is not `off`, the classifier screens external content — inbound data, attachments and documents, shared skills, steering context, and external tool output — under every security posture. Posture only caps enforcement: Dangerous scopes observe, and Auto and Strict follow the deployment mode. Scope posture changes cannot turn screening off; they keep their own tool approvals and private-network policy.
 
 - `observe` classifies in the background and never delays a turn, quarantines, prompts, or adds untrusted-content markers. Each observation is bounded by `SECURITY_SCREEN_TIMEOUT_MS`, the same deadline enforce uses; there is no separate concurrency cap. Observed model screens are not charged to the user's budget.
-- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. A triggered run with no webhook receiver for its approvals, such as a cron, monitor or loop stage, fails closed instead, and the run's note gives the approval's reason, for flagged input as well as input too long to read. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
+- `enforce` waits for the verdict. Flagged content is quarantined pending release approval. Content too long for the screen to read does not pass through: a message waits for a once-only approval and then runs with the untrusted-content marker, and a file or document is withheld with a notice that says why. Human-owned background runs (crons, loops, webhooks, monitors, and credential resumes) surface their approval card to the owner via Slack DM (or generic chat when targeted there) and on the session's web page, while runs on a web or swarm thread keep their approval inline on that thread. Runs without a human approver — bot-authored triggers and scope-actor runs — fail closed instead. Loop triage is the exception for a long backlog: each fire screens and sorts as many items as fit, and later fires take the rest. Outages, timeouts, and other unscreenable content fail open with an untrusted-content marker and an audit record.
 
 Every classification writes one `security_screen.classify` audit record with status `allow`, `block`, `would_block`, or `error`. Its detail carries the hook, source labels, surface, origin, session, run and thread identifiers, request ID, attempt count, and any score, threshold, or outcome — enough to find the transcript behind a would-block. It never includes the screened text.
 

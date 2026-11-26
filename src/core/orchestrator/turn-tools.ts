@@ -16,6 +16,7 @@ type TurnResolution = Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve
 type TurnSandboxes = ReturnType<typeof createTurnSandboxes>;
 
 export function createTurnBrokers(turn: {
+  tenant: Tenant;
   deps: OrchestratorDeps;
   input: OrchestratorInput;
   actor: OrchestratorInput["actor"];
@@ -23,7 +24,6 @@ export function createTurnBrokers(turn: {
   session: Session;
   scopeId: ScopeId;
   memoryScopeId: ScopeId;
-  livePersonTurn: boolean;
   defaultDestination: Destination | undefined;
   provision: TurnSandboxes["provision"];
   provisionJobSandbox: TurnSandboxes["provisionJobSandbox"];
@@ -31,6 +31,7 @@ export function createTurnBrokers(turn: {
   assertDefaultUsable: TurnSandboxes["assertDefaultUsable"];
 }) {
   const {
+    tenant,
     deps,
     input,
     actor,
@@ -38,7 +39,6 @@ export function createTurnBrokers(turn: {
     session,
     scopeId,
     memoryScopeId,
-    livePersonTurn,
     defaultDestination,
     provision,
     provisionJobSandbox,
@@ -53,9 +53,9 @@ export function createTurnBrokers(turn: {
           provisionSandbox: provisionJobSandbox,
           onExit: finishProcess,
           scopeId: memoryScopeId,
-          livePersonTurn,
           sessionRef: conversation.threadRef,
           ...(input.runId ? { runId: input.runId } : {}),
+          starter: { tenant, actorId: actor.id, botActor: input.botActor === true },
           ttlMs: deps.backgroundJobTtlMs,
           ttlMaxMs: deps.backgroundJobTtlMaxMs,
           assertComputerUsable: assertDefaultUsable,

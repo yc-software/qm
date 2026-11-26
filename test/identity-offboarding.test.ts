@@ -6,7 +6,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -23,7 +23,7 @@ const member = (principalId: string) => ({ principalId, displayName: principalId
 describe("offboarding: directory sync and the /v1/principals routes drive deactivation (§3)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const signedPost = (path: string) => {
     const ts = Math.floor(Date.now() / 1000);
@@ -80,6 +80,19 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
         (e) => e.action === "principal.reactivate" && e.principalId === "U-leave",
       ),
     );
+  });
+
+  it("a message to a person no chat surface knows lands in a web conversation of their own", async () => {
+    await built.app.upsertDirectory([member("U-stay")]);
+    const send = (recipient: string) =>
+      built.app.reachNow({ senderId: "U-stay", senderScope: scopeId("personal", "U-stay"), recipient, text: "hi" });
+    const offChat = await send("allowed@example.com");
+    assert.ok(offChat.ok, JSON.stringify(offChat));
+    assert.equal(offChat.delivery.destination.type, "web");
+    assert.equal(offChat.delivery.destination.target, "web:allowed@example.com:direct");
+    const onChat = await send("U-stay");
+    assert.ok(onChat.ok, JSON.stringify(onChat));
+    assert.equal(onChat.delivery.destination.type, "principal");
   });
 
   it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {

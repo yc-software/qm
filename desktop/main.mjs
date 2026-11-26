@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, session as electronSession } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, shell, session as electronSession } from "electron";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -147,6 +147,8 @@ async function finishBrowserSignIn(url) {
   }
 }
 
+const ALLOWED_PERMISSIONS = new Set(["clipboard-sanitized-write", "notifications"]);
+
 async function showInstance(url) {
   pendingLogin?.controller.abort();
   pendingLogin = undefined;
@@ -171,20 +173,47 @@ async function showInstance(url) {
   mainWindow = window;
   const origin = new URL(url).origin;
   const session = window.webContents.session;
-  const canWriteClipboard = (permission, requestingUrl) =>
-    permission === "clipboard-sanitized-write" && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
+  const allowed = (permission, requestingUrl) =>
+    ALLOWED_PERMISSIONS.has(permission) && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
   session.setPermissionRequestHandler((_contents, permission, callback, details) =>
-    callback(canWriteClipboard(permission, details.requestingUrl)),
+    callback(allowed(permission, details.requestingUrl)),
   );
-  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
-    canWriteClipboard(permission, requestingOrigin),
-  );
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) => allowed(permission, requestingOrigin));
   let handedOff = false;
   const children = new Set();
   const configureNavigation = (page) => {
     workspaceWindows.add(page);
-    page.on("closed", () => workspaceWindows.delete(page));
+    let loaded = false;
+    let loadFailed = false;
+    let retryTimer;
+    let retryUrl;
+    let retryDelay = 1000;
     const active = () => !page.isDestroyed() && !window.isDestroyed() && mainWindow === window;
+    const retryLoad = () => {
+      if (!retryUrl || !active() || quitting) return;
+      const next = retryUrl;
+      retryUrl = undefined;
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+      void page.loadURL(next).catch((error) => console.error("QM desktop reload failed", next, error));
+    };
+    const scheduleRetry = (destination) => {
+      if (!active() || quitting || retryTimer) return;
+      retryUrl = destination && destination !== "about:blank" && internalUrl(destination, origin) ? destination : url;
+      const delay = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, 15_000);
+      retryTimer = setTimeout(retryLoad, delay);
+      retryTimer.unref?.();
+    };
+    page.on("focus", retryLoad);
+    powerMonitor.on("resume", retryLoad);
+    page.on("closed", () => {
+      workspaceWindows.delete(page);
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+      retryUrl = undefined;
+      powerMonitor.off("resume", retryLoad);
+    });
     const signIn = (destination) => {
       handedOff = true;
       void beginBrowserSignIn(loginDestination(destination, url, page.webContents.getURL()), destination);
@@ -201,9 +230,31 @@ async function showInstance(url) {
         openExternal(destination);
       }
     };
-    page.webContents.on("render-process-gone", () => stopComputer());
+    page.webContents.on("render-process-gone", (_event, details) => {
+      stopComputer();
+      console.error("QM desktop renderer gone", details);
+      if (details?.reason !== "clean-exit") scheduleRetry(page.webContents.getURL());
+    });
     page.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
-      if (mainFrame && !inPlace) stopComputer();
+      if (mainFrame && !inPlace) {
+        loadFailed = false;
+        retryUrl = undefined;
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+        stopComputer();
+      }
+    });
+    page.webContents.on("did-fail-load", (_event, errorCode, description, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3 || !loaded) return;
+      console.error("QM desktop load failed", errorCode, description, validatedURL);
+      loadFailed = true;
+      scheduleRetry(validatedURL);
+    });
+    page.webContents.on("did-finish-load", () => {
+      if (loadFailed) return;
+      loaded = true;
+      retryUrl = undefined;
+      retryDelay = 1000;
     });
     page.webContents.on("will-navigate", navigate);
     page.webContents.on("will-redirect", navigate);

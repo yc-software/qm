@@ -6,6 +6,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
+import { personalScope } from "../src/types.ts";
 
 const url = process.env.DATABASE_URL;
 const ids = (facts: readonly MemoryFact[]) => facts.map((fact) => fact.id);
@@ -92,7 +93,7 @@ test("native cosine returns one stable ranking and excludes other scopes/models"
   const facts = await base.facts!(scope);
   await write(index, scope, facts, "rank-model", () => [3, 4]);
   await write(index, scope, facts, "other-model", () => [1, 0]);
-  await write(index, "personal:other", facts, "rank-model", () => [1, 0]);
+  await write(index, personalScope("other"), facts, "rank-model", () => [1, 0]);
   const ranked = await index.search({ scope, model: "rank-model", vector: [2, 0], ids: ids(facts), limit: 10 });
   assert.ok(ranked.every((row) => Math.abs(row.score - 0.6) < 1e-6));
   assert.deepEqual(

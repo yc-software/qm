@@ -1,14 +1,15 @@
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { scopeId, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
 import { NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
-import { appHostLabel } from "../tenants/app-handle.ts";
+import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/app-handle.ts";
 import {
   createDeployGitStore,
+  type DeployGitBlobRef,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
@@ -100,6 +101,16 @@ export interface PublishedApp {
   versions: AppVersion[];
 }
 
+export function inPublisherLibrary(d: Pick<PublishedApp, "ownerScopeId" | "createdBy">): boolean {
+  return d.ownerScopeId === scopeId("personal", d.createdBy);
+}
+
+export function lentConnectors(
+  d: Pick<PublishedApp, "ownerScopeId" | "createdBy" | "connectors" | "public">,
+): string[] {
+  return !d.public && inPublisherLibrary(d) ? (d.connectors ?? []) : [];
+}
+
 export interface AppDraft {
   deploymentId: string;
   commit: string;
@@ -159,7 +170,7 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(id: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;
@@ -222,9 +233,9 @@ export function deployTouchDebounceMs(reapTtlMs?: number): number {
   return Math.min(TOUCH_DEBOUNCE_MS, Math.floor(reapTtlMs / 4));
 }
 
-function isNameConflict(e: unknown): boolean {
+function conflictOn(e: unknown): string | undefined {
   const err = e as { code?: string; constraint?: string } | null;
-  return err?.code === "23505" && err?.constraint === NAME_INDEX;
+  return err?.code === "23505" ? err.constraint : undefined;
 }
 
 export function createDeployStore(backing: DeployStoreBackings): DeployStore {
@@ -242,7 +253,10 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     try {
       await write();
     } catch (e) {
-      if (isNameConflict(e)) throw new Error(`app name taken: ${name}`, { cause: e });
+      const constraint = conflictOn(e);
+      if (constraint === NAME_INDEX) throw new Error(`app name taken: ${name}`, { cause: e });
+      if (constraint === APP_HOSTS_KEY)
+        throw new Error(appAddressTakenError(appHostLabel(tenantAppHandle() ?? "", name ?? "")), { cause: e });
       throw e;
     }
   }
@@ -301,7 +315,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
         endpoint: null,
         versions: [v],
       };
-      await writeNamed(d.name, () => backingMap.put(d.id, d));
+      await writeNamed(d.name ?? d.id, () => backingMap.put(d.id, d));
       await updateVersionRef(d.id, v);
       return d;
     },

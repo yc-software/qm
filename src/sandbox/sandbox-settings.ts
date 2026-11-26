@@ -18,6 +18,7 @@ export interface SandboxSettings {
   e2bSandbox: E2bSandboxEnv;
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
   modalSandbox: ModalSandboxEnv;
+  sandboxImages: SandboxImages;
   porterSandbox: PorterSandboxEnv;
   renderSandbox: RenderSandboxEnv;
 }
@@ -124,13 +125,10 @@ const retiredEgressProxyKeys = {
   SMOLMACHINES_EGRESS_PROXY_URL: "smolmachines",
   PORTER_SANDBOX_EGRESS_PROXY_URL: "porter",
   AGENT37_EGRESS_PROXY_URL: "agent37",
+  DO_AGENTS_EGRESS_PROXY_URL: "do-managed-agents",
 };
 
 function checkRetiredEgressProxyKeys(env: NodeJS.ProcessEnv): void {
-  if (env.DO_AGENTS_EGRESS_PROXY_URL)
-    throw new Error(
-      "No longer read: DO_AGENTS_EGRESS_PROXY_URL. DigitalOcean Managed Agents can't be forced through the QM egress proxy (docs/do-managed-agents.md), so its sessions keep open egress. Remove the setting.",
-    );
   const set = Object.entries(retiredEgressProxyKeys).filter(([key]) => env[key]);
   const uncovered = set.filter(([, backend]) => !egressProxyFor(env, backend).egressProxyUrl).map(([key]) => key);
   if (uncovered.length)
@@ -224,6 +222,7 @@ interface ManagedAgentsSandboxEnv {
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
 }
 
 function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEnv {
@@ -233,6 +232,7 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(env.DO_AGENTS_TEMPLATE ? { template: env.DO_AGENTS_TEMPLATE } : {}),
     ...(env.DO_AGENTS_NAME_PREFIX ? { namePrefix: env.DO_AGENTS_NAME_PREFIX } : {}),
     ...(env.DO_AGENTS_SIZE_SLUG ? { sizeSlug: env.DO_AGENTS_SIZE_SLUG } : {}),
+    ...egressProxyFor(env, "do-managed-agents"),
     ...optNum(env, "DO_AGENTS_IDLE_TIMEOUT_SEC", "idleTimeoutSec"),
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...optNum(env, "DO_AGENTS_SNAPSHOT_INTERVAL_SEC", "snapshotIntervalSec"),
@@ -441,6 +441,43 @@ export function superserveGenerationKey(
     .slice(0, 32);
 }
 
+export type SandboxImages = Record<string, Partial<Record<SandboxBackendName, string>>>;
+
+const IMAGE_BACKENDS: Record<Exclude<SandboxBackendName, "sprites">, true> = {
+  aws: true,
+  local: true,
+  smolmachines: true,
+  e2b: true,
+  modal: true,
+  porter: true,
+  agent37: true,
+  superserve: true,
+  "do-managed-agents": true,
+  render: true,
+};
+
+function sandboxImagesEnv(raw: string | undefined): SandboxImages {
+  if (!raw?.trim()) return {};
+  const parsed: unknown = JSON.parse(raw);
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  if (!isObject(parsed)) throw new Error("SANDBOX_IMAGES must be an object of image names");
+  const images: SandboxImages = {};
+  for (const [name, refs] of Object.entries(parsed)) {
+    if (!name.trim() || !isObject(refs))
+      throw new Error(`SANDBOX_IMAGES.${name} must be a named object mapping providers to image references`);
+    for (const [backend, ref] of Object.entries(refs)) {
+      if (!Object.hasOwn(IMAGE_BACKENDS, backend))
+        throw new Error(`SANDBOX_IMAGES.${name}.${backend}: that provider cannot boot a chosen image`);
+      if (typeof ref !== "string" || !ref.trim())
+        throw new Error(`SANDBOX_IMAGES.${name}.${backend} must be an image reference`);
+      if (backend === "render") parseRenderSandboxImage(ref.trim());
+      (images[name] ??= {})[backend as SandboxBackendName] = ref.trim();
+    }
+  }
+  return images;
+}
+
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -486,7 +523,9 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
 
 function warnUnprotectedSandboxes(env: NodeJS.ProcessEnv): void {
   if (
-    ["sprites", "e2b", "modal", "smolmachines", "porter", "render"].includes(env.SANDBOX_BACKEND ?? "") &&
+    ["sprites", "e2b", "modal", "smolmachines", "porter", "render", "do-managed-agents"].includes(
+      env.SANDBOX_BACKEND ?? "",
+    ) &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(
@@ -578,5 +617,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),
     modalSandbox: modalSandboxEnv(env),
+    sandboxImages: sandboxImagesEnv(env.SANDBOX_IMAGES),
   };
 }

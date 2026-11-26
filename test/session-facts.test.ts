@@ -23,14 +23,14 @@ function request(threadRef: string, extra: Partial<OrchestratorInput> = {}): Orc
 test("a session keeps the Slack binding it was created with and follows its latest context", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const first = request("slack:dm:facts");
-  const created = await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", undefined, {
+  const created = await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", {
     surfaceBinding: binding,
     context: sessionContextOf(first),
   });
   assert.deepEqual(created.surfaceBinding, binding);
   assert.deepEqual(created.spawnMeta?.origin, { kind: "human" });
   const later = request("slack:dm:facts", { timezone: "America/Los_Angeles" });
-  await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", undefined, {
+  await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", {
     surfaceBinding: { ...binding, author: { ...binding.author, account: "A3" } },
     context: sessionContextOf(later),
   });

@@ -10,9 +10,10 @@ import { inTenant } from "../../tenants/claim.ts";
 import { withTenant } from "../../tenants/context.ts";
 import { tenantAllowsEmail } from "../../tenants/settings.ts";
 import { bootTenant } from "../../tenants/boot.ts";
-import { labelOfAppHost, splitAppLabel } from "../../tenants/app-handle.ts";
+import { labelOfAppHost } from "../../tenants/app-handle.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import { externalOrgSchema } from "../../tenants/self-serve.ts";
+import { personalScope } from "../../types.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -91,7 +92,7 @@ async function admission(ctx: ApiCtx, email: string, listed = false): Promise<Ad
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return { allowed: true, expiresAt: member?.expiresAt };
   const grants =
-    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
+    (await deps.acl?.find(tenantOf(ctx), { granteeScopeIds: [personalScope(email)], kind: "deploy" })) ?? [];
   const publishedApps = await app.listApps();
   const granted = publishedApps.filter(
     (d) =>
@@ -148,8 +149,7 @@ async function principalTenants(ctx: ApiCtx): Promise<void> {
 
 async function appHostTenant(ctx: ApiCtx, host: string): Promise<string | undefined> {
   const label = labelOfAppHost(host, ctx.deps.deployAppsDomain);
-  const split = label === undefined ? undefined : splitAppLabel(label);
-  return split && ctx.deps.directory?.tenantForAppHandle?.(split.handle);
+  return label && !label.includes(".") ? ctx.deps.directory?.tenantForAppHost?.(label) : undefined;
 }
 
 async function hostTenant(ctx: ApiCtx): Promise<void> {
@@ -157,16 +157,6 @@ async function hostTenant(ctx: ApiCtx): Promise<void> {
   if (!host || host.length > 253) return sendJson(ctx.res, 400, { error: "bad_request", message: "host required" });
   const app = await appHostTenant(ctx, host);
   return sendJson(ctx.res, 200, app ? { tenant: app, app: true } : { tenant: null });
-}
-
-async function workspaceTenant(ctx: ApiCtx): Promise<void> {
-  const handle = (ctx.url.searchParams.get("handle") ?? "").trim().toLowerCase();
-  if (!handle || handle.length > 63)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "handle required" });
-  const tenant = await ctx.deps.directory?.tenantForAppHandle?.(handle);
-  if (!tenant) return sendJson(ctx.res, 200, { tenant: null });
-  const client = await ctx.deps.directory?.trustedClientFor?.(tenant);
-  return sendJson(ctx.res, 200, { tenant, ...(client ? { trustedClient: client } : {}) });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {
@@ -225,7 +215,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
       audit(ctx, {
         principalId: grant.grantedBy!,
         action: "grant.create",
-        resource: `${grant.principalId}/org_admin`,
+        resource: `${grant.principalId}/${grant.role}`,
         scopeLabel: grant.scopeId,
       });
     return sendJson(res, 200, { ok: true });
@@ -305,7 +295,7 @@ async function selfServeWorkspace(ctx: ApiCtx): Promise<void> {
       if (granted)
         audit(
           { deps, tenant: bound },
-          { ...event, action: "grant.create", resource: `${grant.principalId}/org_admin` },
+          { ...event, action: "grant.create", resource: `${grant.principalId}/${grant.role}` },
         );
     });
     return sendJson(res, 200, { tenant, created });
@@ -422,5 +412,4 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: principalTenants,
   },
   { method: "GET", path: "/v1/auth/broker/host-tenant", auth: "source", tenant: "none", handle: hostTenant },
-  { method: "GET", path: "/v1/auth/broker/workspace", auth: "source", tenant: "none", handle: workspaceTenant },
 ];

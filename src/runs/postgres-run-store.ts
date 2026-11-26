@@ -327,6 +327,15 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return { requeued, parked };
     },
 
+    async deleteByThread(tenant: Tenant, threadRef: string): Promise<string[]> {
+      const { rows } = await pg
+        .forTenant(tenant)
+        .query("DELETE FROM runs WHERE session_id = $1 AND status NOT IN ('pending', 'running') RETURNING id", [
+          threadRef,
+        ]);
+      return rows.map((r) => r.id as string);
+    },
+
     async close(): Promise<void> {
       await closeWatch();
       await closePool();

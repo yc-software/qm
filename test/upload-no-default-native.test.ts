@@ -82,7 +82,7 @@ test("without a default sandbox, a steered upload is registered and surfaced wit
     const result = await built.app.turn({ ...base, text: "start" });
     assert.equal(result.status, "ok");
     assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
-    assert.match(steered!.text, /not yet on a computer/);
+    assert.match(steered!.text, /Files ID [0-9a-f]+\)/);
     assert.equal(steered!.images?.length, 1);
     assert.equal(Buffer.from(steered!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
     const doc = steered!.attachments!.find((a) => a.name === "notes.txt")!;

@@ -15,7 +15,11 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+const TAP_HELP: &str = "In System Settings > Privacy & Security, turn on QM under Input Monitoring and Accessibility, \
+then quit and reopen QM. If QM runs from Downloads, move it to Applications first.";
+
 type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
+type GetFrontProcess = unsafe extern "C" fn(*mut ProcessSerialNumber) -> i16;
 type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
 type GetProcessPid = unsafe extern "C" fn(*const ProcessSerialNumber, *mut i32) -> i32;
 
@@ -41,35 +45,42 @@ struct ProcessSerialNumber {
     low: u32,
 }
 
-pub fn keyboard_focus_pid() -> Result<i32, Failure> {
-    let query = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSGetKeyFocusProcess".as_ptr()) };
+fn process_pid(lookup: &std::ffi::CStr, query: impl FnOnce(*mut c_void, &mut ProcessSerialNumber) -> i32) -> Result<i32, String> {
+    let name = lookup.to_string_lossy();
+    let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, lookup.as_ptr()) };
     let resolve = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"GetProcessPID".as_ptr()) };
-    if query.is_null() || resolve.is_null() {
-        return Err(Failure::new(ErrorCode::ActionFailed, "Keyboard-focus ownership is unavailable; input was not started"));
+    if symbol.is_null() || resolve.is_null() {
+        return Err(format!("{name} or GetProcessPID is unavailable"));
     }
-    let query = unsafe { std::mem::transmute::<*mut c_void, GetKeyFocus>(query) };
     let resolve = unsafe { std::mem::transmute::<*mut c_void, GetProcessPid>(resolve) };
     let mut process = ProcessSerialNumber::default();
-    let mut flags = 0;
     let mut pid = 0;
-    let status = unsafe { query(&mut process, &mut flags) };
+    let status = query(symbol, &mut process);
     if status != 0 {
-        return Err(Failure::new(
-            ErrorCode::ActionFailed,
-            format!("CPSGetKeyFocusProcess failed (status {status}); input was not started"),
-        ));
+        return Err(format!("{name} failed (status {status})"));
     }
     let status = unsafe { resolve(&process, &mut pid) };
     if status != 0 {
-        return Err(Failure::new(ErrorCode::ActionFailed, format!("GetProcessPID failed (status {status}); input was not started")));
+        return Err(format!("GetProcessPID failed (status {status})"));
     }
     if pid <= 0 {
-        return Err(Failure::new(
-            ErrorCode::ActionFailed,
-            format!("Keyboard-focus lookup returned invalid PID {pid}; input was not started"),
-        ));
+        return Err(format!("{name} returned invalid PID {pid}"));
     }
     Ok(pid)
+}
+
+pub fn keyboard_focus_pid() -> Result<i32, Failure> {
+    process_pid(c"CPSGetKeyFocusProcess", |symbol, process| {
+        let mut flags = 0;
+        unsafe { std::mem::transmute::<*mut c_void, GetKeyFocus>(symbol)(process, &mut flags) }
+    })
+    .map_err(|reason| Failure::new(ErrorCode::ActionFailed, format!("{reason}; input was not started")))
+}
+
+pub fn front_process_pid() -> Result<i32, String> {
+    process_pid(c"GetFrontProcess", |symbol, process| {
+        i32::from(unsafe { std::mem::transmute::<*mut c_void, GetFrontProcess>(symbol)(process) })
+    })
 }
 
 const NOTIFICATION_SUBTYPE: CGEventField = CGEventField(64);
@@ -145,7 +156,7 @@ impl Tap {
                 ),
             }
         }
-        .ok_or_else(|| "Could not create a focus-protection event tap".to_string())?;
+        .ok_or_else(|| format!("Could not create a focus-protection event tap. {TAP_HELP}"))?;
         let legacy = unsafe { CFMachPort::wrap_under_get_rule((&*port as *const objc2_core_foundation::CFMachPort).cast_mut().cast()) };
         let source = match legacy.create_runloop_source(0) {
             Ok(source) => source,
@@ -159,7 +170,7 @@ impl Tap {
         CGEvent::tap_enable(&port, true);
         let tap = Self { port, source, runloop, _context: callback };
         if !CGEvent::tap_is_enabled(&tap.port) {
-            return Err("Focus-protection event tap did not become enabled".into());
+            return Err(format!("Focus-protection event tap did not become enabled. {TAP_HELP}"));
         }
         Ok(tap)
     }

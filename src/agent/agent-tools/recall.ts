@@ -2,8 +2,10 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing, MemoryForgetRefused } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
+import { RECALL_CHECKED } from "../../memory/cross-scope.ts";
 import { MAX_FACTS_PER_WRITE, problemLine } from "../../memory/provider-outcome.ts";
 import { quotedData } from "../../util/text.ts";
+import { NeedsApproval } from "../../tools/primitives.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export function recallTools(kit: ToolKit) {
@@ -20,13 +22,15 @@ export function recallTools(kit: ToolKit) {
       "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
       "edit: replace notebook facts' text by id; a brain copy that search shows as (also <ref>) keeps the old wording until you delete that ref. delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
-      action: Type.Union([
-        Type.Literal("search"),
-        Type.Literal("read"),
-        Type.Literal("add"),
-        Type.Literal("edit"),
-        Type.Literal("delete"),
-      ]),
+      action: opts?.ephemeral
+        ? Type.Union([Type.Literal("search"), Type.Literal("read")])
+        : Type.Union([
+            Type.Literal("search"),
+            Type.Literal("read"),
+            Type.Literal("add"),
+            Type.Literal("edit"),
+            Type.Literal("delete"),
+          ]),
       query: Type.Optional(Type.String({ description: "search: words to look for (all must match)." })),
       limit: Type.Optional(Type.Integer({ description: "search: max facts (default 20)." })),
       scope: Type.Optional(
@@ -44,7 +48,9 @@ export function recallTools(kit: ToolKit) {
         ),
       ),
       ids: Type.Optional(
-        Type.Array(Type.String(), { description: "delete: notebook #ids or brain refs from search, like acme:4821." }),
+        Type.Array(Type.String(), {
+          description: "delete: notebook #ids or brain refs, like acme:4821 for fact_id 4821 from brain acme.",
+        }),
       ),
     }),
     async execute(callId, params) {
@@ -77,7 +83,7 @@ export function recallTools(kit: ToolKit) {
           true,
         );
       }
-      if (opts?.readOnly && action !== "search" && action !== "read") {
+      if ((opts?.readOnly || opts?.ephemeral) && action !== "search" && action !== "read") {
         return recordResult(
           callId,
           { tool: "memory", action, readOnly: true },
@@ -94,7 +100,10 @@ export function recallTools(kit: ToolKit) {
             const found = await tc.memorySearch(query, params.limit, params.scope);
             if (found === null) return unavailable();
             const { hits, problems } = found;
-            const lines = [...problems.map(problemLine), ...(hits.length ? [quotedData(hits.join("\n"))] : [])];
+            const lines = [
+              ...problems.map(problemLine),
+              ...(hits.length ? [RECALL_CHECKED, quotedData(hits.join("\n"))] : []),
+            ];
             return recordResult(
               callId,
               { tool: "memory", action, query, count: hits.length, ...(problems.length ? { problems } : {}) },
@@ -107,7 +116,7 @@ export function recallTools(kit: ToolKit) {
             return recordResult(
               callId,
               { tool: "memory", action, chars: body.length },
-              text(body.trim() ? body : "(you have nothing remembered here yet)"),
+              text(body.trim() ? `${RECALL_CHECKED}\n${body}` : "(you have nothing remembered here yet)"),
             );
           }
           case "add": {
@@ -183,6 +192,7 @@ export function recallTools(kit: ToolKit) {
       } catch (e) {
         if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied || e instanceof MemoryForgetRefused)
           return fail(e.message);
+        if (e instanceof NeedsApproval) return kit.blockOnApproval(callId, e, undefined, { tool: "memory" });
         throw e;
       }
     },

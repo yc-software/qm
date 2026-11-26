@@ -6,6 +6,7 @@ import { ensureUserIn } from "../identity/user-store.ts";
 import type { ScopeId } from "../types.ts";
 import type { ProjectIcon } from "../projects/project-store.ts";
 import type { PersonaRole } from "./persona-schema.ts";
+import type { Tenant } from "../tenants/context.ts";
 
 export interface Persona {
   id: string;
@@ -58,6 +59,8 @@ export class PersonaChannelPinned extends Error {
   }
 }
 
+export type PersonaSummary = Pick<Persona, "id" | "name" | "description">;
+
 export interface PersonaFields {
   name?: string;
   description?: string;
@@ -78,6 +81,7 @@ export interface PersonaStore {
   pinnedIn(channel: ScopeId): Promise<string | null>;
   roles(grantees: readonly ScopeId[], id?: string): Promise<Map<string, PersonaRole>>;
   listFor(grantees: readonly ScopeId[]): Promise<Array<Persona & { role: PersonaRole }>>;
+  summariesFor(tenant: Tenant, grantees: readonly ScopeId[]): Promise<PersonaSummary[]>;
   ownerGrants(): Promise<Array<{ personaId: string; scopeId: ScopeId }>>;
   addOwner(id: string, owner: ScopeId, by: string): Promise<void>;
 }
@@ -139,7 +143,8 @@ export class PersonaOwnerRequired extends Error {
 }
 
 export function createPostgresPersonaStore(connectionString: string, opts: { id?: () => string } = {}): PersonaStore {
-  const { q, pool } = createPgPool(connectionString);
+  const pg = createPgPool(connectionString);
+  const { q, pool } = pg;
   const nextId = opts.id ?? randomUUID;
   return {
     claimTenants: () => claimRows({ q }, "claim_persona_tenants"),
@@ -276,6 +281,15 @@ export function createPostgresPersonaStore(connectionString: string, opts: { id?
         [[...new Set(grantees)]],
       );
       return rows.map((r) => ({ ...toPersona(r), role: r.role as PersonaRole }));
+    },
+    async summariesFor(tenant, grantees) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT p.id, p.name, p.description
+           FROM (SELECT DISTINCT persona_id FROM persona_access WHERE tenant_id = $1 AND grantee_scope_id = ANY($2)) a
+           JOIN personas p ON p.tenant_id = $1 AND p.id = a.persona_id ORDER BY lower(p.name), p.id`,
+        [tenant.id, [...new Set(grantees)]],
+      );
+      return rows.map((r) => ({ id: r.id as string, name: r.name as string, description: r.description as string }));
     },
     async ownerGrants() {
       const rows = await q(

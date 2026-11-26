@@ -44,7 +44,7 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
       const { kind, ref } = parseScopeId(scope);
       if (person.type !== "internal") return false;
       if (kind === "personal") return samePerson(person.id, ref);
-      if (kind === "org") return native(scope);
+      if (kind === "org" || kind === "persona") return native(scope);
       if (kind === "team") return native(scope) && person.teamIds?.includes(ref) === true;
       if (scope === input.targetScope && native(scope)) return true;
       return (await input.isCurrentSharedScopeMember?.(person.id, scope)) === true;
@@ -59,7 +59,10 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
   function sourceAllowed(source: ScopeId, sensitivity: MemoryProvenance["sensitivity"]): Promise<boolean> {
     return once(`source:${source}:${sensitivity}`, async () => {
       if (!(await entitled(input.actor, source))) return false;
-      if (source === input.targetScope || (native(source) && ["org", "team"].includes(parseScopeId(source).kind ?? "")))
+      if (
+        source === input.targetScope ||
+        (native(source) && ["org", "team", "persona"].includes(parseScopeId(source).kind ?? ""))
+      )
         return allEntitled(source);
       if (!input.open || !input.config) return false;
       const personal = personalScope(input.actor.id);

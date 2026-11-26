@@ -16,7 +16,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { scopeId, type ChildIsolation, type ClientToolDeclaration } from "../src/types.ts";
+import { scopeId, type ChildIsolation, type ClientToolDeclaration, personalScope } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
@@ -52,7 +52,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     },
     async read(path) {
       return path === "a.txt"
-        ? { content: "data", sourceScopeId: "personal:U1" }
+        ? { content: "data", sourceScopeId: personalScope("U1") }
         : { content: null, sourceScopeId: null };
     },
     async write() {},
@@ -135,7 +135,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id: "cron-1",
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -154,7 +154,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         crons: [
           {
             id: "cron-1",
-            ownerScopeId: "personal:U1",
+            ownerScopeId: personalScope("U1"),
             owner: "U1",
             createdBy: "U1",
             enabled: true,
@@ -172,7 +172,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id,
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -188,7 +188,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id,
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -213,7 +213,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id,
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -234,7 +234,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id,
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled,
@@ -251,7 +251,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         cron: {
           id,
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -266,7 +266,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ok: true,
         webhook: {
           id: "wh-1",
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -282,7 +282,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return [
         {
           id: "wh-1",
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           owner: "U1",
           createdBy: "U1",
           enabled: true,
@@ -360,6 +360,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async callMcpTool() {
       return "";
     },
+    async lookupBrain() {
+      return "";
+    },
     async mcpToolNeedsApproval() {
       return false;
     },
@@ -394,7 +397,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute, , read] = createAgentTools(ref, { controlTools: true });
   const write = read;
@@ -438,7 +441,7 @@ test("sandbox manages the box out-of-band instead of running a command", async (
         "fetch failed <- Error ERR_HTTP2_GOAWAY_SESSION: New streams cannot be created after receiving a GOAWAY",
     }),
   };
-  const ref: ToolContextRef = { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = { current: tc, emit: async () => undefined, scopeLabel: personalScope("U1") };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
 
   const status = (await call(execute, { action: "status", purpose: "p" })) as {
@@ -474,7 +477,11 @@ test("sandbox manages the box out-of-band instead of running a command", async (
 });
 
 test("sandbox advertises available management actions and retires migrate", async () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), emit: async () => undefined, scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: async () => undefined,
+    scopeLabel: personalScope("U1"),
+  };
   const enabled = createAgentTools(ref, { sandboxResources: true });
   const sandbox = enabled.find((t) => t.name === "sandbox")!;
   const properties = (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
@@ -568,7 +575,7 @@ test("computer status surfaces list-view disagreement and guest pressure", async
     }),
     restartComputer: async () => {},
   };
-  const ref: ToolContextRef = { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = { current: tc, emit: async () => undefined, scopeLabel: personalScope("U1") };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
   const status = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
@@ -598,7 +605,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
       }),
     },
     emit: async () => undefined,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
   const out = (await call(execute, { action: "status", purpose: "p" })) as {
@@ -645,7 +652,7 @@ test("computer status verdicts: answering guest is ok, dead guest without a mach
     const ref: ToolContextRef = {
       current: { ...base, computerStatus: async () => c.status, restartComputer: async () => {} },
       emit: async () => undefined,
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
     };
     const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
     const out = (await call(execute, { action: "status", purpose: "p" })) as {
@@ -678,7 +685,7 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       },
     }),
   };
-  const ref: ToolContextRef = { current: pressured, emit: async () => undefined, scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = { current: pressured, emit: async () => undefined, scopeLabel: personalScope("U1") };
   const [execute] = createAgentTools(ref);
   const hot = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
   assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%/);
@@ -714,7 +721,7 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   const ref: ToolContextRef = {
     current: tc,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute] = createAgentTools(ref);
 
@@ -758,7 +765,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
       appends.push(store.append(writer, item));
       return undefined;
     },
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute] = createAgentTools(ref);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
@@ -810,7 +817,7 @@ test("a quarantined result over the inline cap never stores the withheld text", 
       execute: async () => ({ stdout: withheld, stderr: "", code: 0, timedOut: false }),
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async ({ result }) => {
       screened.push(result);
       return { outcome: "quarantine" };
@@ -842,7 +849,7 @@ test("a result over the inline cap that cannot be parked drops the file referenc
       execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute] = createAgentTools(ref);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
@@ -865,7 +872,7 @@ test("execute stores its output once and replays exactly what the model saw", as
   const ref: ToolContextRef = {
     current: tc,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute] = createAgentTools(ref);
 
@@ -896,7 +903,7 @@ test("background start and poll store their output only in result", async () => 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const tools = createAgentTools(ref, { sandboxResources: true });
   await call(
@@ -931,7 +938,7 @@ test("Auto can quarantine a tool result before the model or durable replay sees 
   const ref: ToolContextRef = {
     current: tc,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async ({ result, provenance }) => {
       assert.equal(provenance, "external", "a command that fetches from the network is external content");
       return result.includes("ignore previous instructions")
@@ -966,7 +973,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
       }),
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     pendingApprovals: pending,
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
@@ -1004,7 +1011,7 @@ test("quarantine_pending with no approvals sink falls back to the legacy silent 
       execute: async () => ({ stdout: "leak me", stderr: "", code: 0, timedOut: false }),
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
   const [execute] = createAgentTools(ref);
@@ -1028,7 +1035,7 @@ test("classifier downtime fails open — the output passes through tagged unscre
   const ref: ToolContextRef = {
     current: tc,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async () => {
       throw new Error("classifier timeout");
     },
@@ -1064,7 +1071,7 @@ test("the screen never rewrites a policy notice — an approval gate stays legib
   const ref: ToolContextRef = {
     current: gated,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     pendingApprovals: pending,
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
@@ -1094,7 +1101,7 @@ test("the screen never rewrites a policy denial either", async () => {
   const ref: ToolContextRef = {
     current: denied,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
   const [execute] = createAgentTools(ref);
@@ -1115,7 +1122,7 @@ test("a real tool result on the same session is still screened", async () => {
       execute: async () => ({ stdout: "leak me", stderr: "", code: 0, timedOut: false }),
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
   const [execute] = createAgentTools(ref);
@@ -1134,7 +1141,7 @@ test("the screen never rewrites a strict-posture per-tool gate", async () => {
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     pendingApprovals: pending,
     toolApprovalGate: () => false,
     screenToolResult: async () => ({ outcome: "quarantine" }),
@@ -1191,6 +1198,64 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   assert.equal(read.body.count, 0);
 });
 
+test("a surface whose posts are transcript messages records a post's size, runs its step's calls in order, and leaves mail unread", async () => {
+  const emitted: Emitted[] = [];
+  const current = fakeToolContext();
+  const mail = {
+    id: "m1",
+    senderId: "child",
+    recipientId: "parent",
+    audience: [],
+    text: "child finding",
+    createdAt: 1,
+  };
+  current.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({ ok: false, message: "unused" }),
+    receive: async () => [{ ...mail, actor: { id: "U1", type: "internal" as const } }],
+  };
+  const ref: ToolContextRef = { current, emit: sink(emitted), scopeLabel: personalScope("U1"), replyOptional: true };
+  const tools = createAgentTools(ref, {
+    surfaceTools: true,
+    surfaceName: "web",
+    surfacePrompt: { label: "the web app", mentionSyntax: "", transcript: true },
+  });
+  const web = tools.find((tool) => tool.name === "web")!;
+  assert.equal(web.executionMode, "sequential");
+  const ends = (r: unknown) => (r as { terminate?: boolean }).terminate === true;
+  assert.ok(ends(await call(web, { action: "post", text: "hello there" })), "a post ends the turn");
+  assert.ok(ends(await call(web, { action: "edit", ref: "7", text: "hello" })), "an edit ends the turn");
+  await call(
+    tools.find((tool) => tool.name === "finish_silently")!,
+    {},
+  );
+  assert.ok(!emitted.some((e) => String(e.text).includes("child finding")));
+  assert.ok(!ends(await call(web, { action: "post", text: "x", channel: "C1" })), "a refused post does not");
+  assert.deepEqual(
+    emitted
+      .filter((e) => e.kind === "ToolCall" && e.tool === "web")
+      .map((e) => [e.body.action, e.body.bytes, e.body.text]),
+    [
+      ["post", 11, undefined],
+      ["edit", 5, undefined],
+    ],
+  );
+});
+
+test("surface post/edit results carry the delivered ts and the ref they acted on", async () => {
+  const emitted: Emitted[] = [];
+  const ctx = fakeToolContext();
+  ctx.post = async () => ({ ok: true, deliveryId: "d1", ts: "1795030226.902129", notes: ["<@U999> unverified"] });
+  ctx.edit = async () => ({ ok: true, deliveryId: "e1", ts: "777.888" });
+  const slack = surfaceTool({ current: ctx, emit: sink(emitted), scopeLabel: "channel:C1" });
+  const textOf = async (action: string, params: Record<string, unknown>) =>
+    ((await call(slack, { action, ...params })) as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.equal(await textOf("post", { text: "hello there" }), "[sent ts=1795030226.902129] <@U999> unverified");
+  assert.equal(await textOf("edit", { ref: "777.888", text: "hello again" }), "[edited ref=777.888]");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "post")!.body.ts, "1795030226.902129");
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.body.action === "edit")!.body.ref, "777.888");
+});
 test("surface reads fail closed without persisting blocked content", async () => {
   const emitted: Emitted[] = [];
   const external = {
@@ -1320,8 +1385,8 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     tool: "slack",
     callId: "t",
     isError: false,
-    text: "[edited]",
-    body: { action: "edit", ok: true, deliveryId: "e1" },
+    text: "[edited ref=173.4]",
+    body: { action: "edit", ok: true, ref: "173.4", deliveryId: "e1" },
   });
   assert.deepEqual(columns(result("delete")), {
     tool: "slack",
@@ -1557,7 +1622,7 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
 });
 
 test("readOnly exposes observation and constrained session coordination without execution tools", () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: personalScope("U1") };
   const full = createAgentTools(ref, { controlTools: true });
   const readOnly = createAgentTools(ref, { controlTools: true, readOnly: true });
 
@@ -1565,7 +1630,8 @@ test("readOnly exposes observation and constrained session coordination without 
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(names(full).has(t), `full toolset has ${t}`);
   }
-  assert.deepEqual([...names(readOnly)].sort(), ["finish_silently", "history", "memory", "runtime", "subagents"]);
+  const want = ["finish_silently", "history", "memory", "runtime", "sessions", "subagents"];
+  assert.deepEqual([...names(readOnly)].sort(), want);
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
     assert.ok(!names(readOnly).has(t), `read-only toolset drops ${t}`);
   }
@@ -1576,7 +1642,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     replyOptional: true,
   };
   const finish = createAgentTools(ref).find((t) => t.name === "finish_silently");
@@ -1606,7 +1672,7 @@ test("finish_silently ends surface turns and replaces stay_silent", async () => 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const tools = createAgentTools(ref, { surfaceTools: true });
   assert.ok(!tools.some((t) => t.name === "stay_silent"));
@@ -1641,7 +1707,7 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const [execute, , read, , memory] = createAgentTools(ref);
 
@@ -1842,7 +1908,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const background = createAgentTools(ref).find((t) => t.name === "background");
   assert.ok(background);
@@ -1894,7 +1960,7 @@ test("background watch reports an already exited job as a successful tail result
       },
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const background = createAgentTools(ref).find((t) => t.name === "background");
 
@@ -2053,7 +2119,7 @@ test("cron note rejects arguments exceeding the advertised cap before dispatch",
 test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async () => {
   assert.match(textOut(await call(tool("cron"), { action: "list" })), /cron-1/);
   const got = textOut(await call(tool("cron"), { action: "get", id: "cron-1" }));
-  assert.ok(got.includes("Gmail digest") && got.includes("authority: none"), got);
+  assert.ok(got.includes("Gmail digest") && got.includes("bot-made"), got);
   assert.match(textOut(await call(tool("cron"), { action: "runs", id: "cron-1", limit: 1 })), /checked inbox/);
   assert.match(
     textOut(await call(tool("cron"), { action: "patch", id: "cron-1", title: "renamed" })),
@@ -2071,7 +2137,7 @@ test("cron list/get/runs/patch/delete/run/disable/retarget each dispatch", async
 test("cron list paginates live-first/newest-first with a footer naming the next offset", async () => {
   const mk = (i: number, over: Record<string, unknown> = {}) => ({
     id: `cron-${String(i).padStart(3, "0")}`,
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     enabled: true,
@@ -2121,7 +2187,7 @@ test("cron list trims long task text to a one-line preview and points at get", a
   const crons = [
     {
       id: "cron-big",
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       enabled: true,
@@ -2145,7 +2211,7 @@ test("cron list preview never cuts a surrogate pair in half and flattens U+0085 
   const crons = [
     {
       id: "cron-emoji",
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       enabled: true,
@@ -2156,7 +2222,7 @@ test("cron list preview never cuts a surrogate pair in half and flattens U+0085 
     },
     {
       id: "cron-nel",
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       enabled: true,
@@ -2191,7 +2257,7 @@ test("cron list stays footer-free when everything fits", async () => {
 test("webhook list paginates; action text is one line, generous but bounded", async () => {
   const hooks = Array.from({ length: 27 }, (_, i) => ({
     id: `wh-${String(i).padStart(2, "0")}`,
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     owner: "U1",
     createdBy: "U1",
     enabled: true,
@@ -2259,6 +2325,20 @@ test("webhook create surfaces BOTH the url and the secret verbatim", async () =>
   assert.match(out, /won't fire until the sender is pointed/);
 });
 
+test("webhook create and update carry the title, like cron", async () => {
+  const seen: unknown[] = [];
+  const base = fakeToolContext();
+  const t = tool("webhook", {
+    ...base,
+    webhookCreate: async (req) => (seen.push(req), base.webhookCreate(req)),
+    webhookUpdate: async (id, patch) => (seen.push([id, patch]), base.webhookUpdate(id, patch)),
+  } as ToolContext);
+  await call(t, { action: "create", title: "PR review", task: "x", verification: { scheme: "github", secret: "s" } });
+  await call(t, { action: "update", id: "wh-1", title: "PR triage" });
+  assert.equal((seen[0] as { title?: string }).title, "PR review");
+  assert.deepEqual(seen[1], ["wh-1", { title: "PR triage" }]);
+});
+
 test("webhook create requires task + verification; list and disable dispatch", async () => {
   assert.match(
     textOut(await call(tool("webhook"), { action: "create", task: "x" })),
@@ -2266,6 +2346,7 @@ test("webhook create requires task + verification; list and disable dispatch", a
   );
   assert.match(textOut(await call(tool("webhook"), { action: "list" })), /wh-1/);
   assert.match(textOut(await call(tool("webhook"), { action: "disable", id: "wh-1" })), /Disabled webhook wh-1/);
+  assert.match(textOut(await call(tool("webhook"), { action: "update" })), /\[error\].*requires `id`/);
   assert.match(textOut(await call(tool("webhook"), { action: "disable" })), /\[error\].*requires `id`/);
 });
 
@@ -2471,7 +2552,7 @@ test("typed control tools emit tool_call then tool_result like every other tool"
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const cronTool = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "cron")!;
   await call(cronTool, { action: "list" });
@@ -2531,7 +2612,7 @@ test("a bot-requested turn is not paused by the strict per-tool approval gate", 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     pendingApprovals: [],
     toolApprovalGate: () => false,
     approvalUnavailable: "no approver here",
@@ -2572,7 +2653,7 @@ test("execute output is external regardless of what the command looks like", asy
   };
   const ref: ToolContextRef = {
     current: tc,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async ({ provenance }) => {
       seen.push(provenance);
       return { outcome: "allow" };
@@ -2593,14 +2674,14 @@ test("read reports workspace provenance for the agent's own files and external f
       path.startsWith("shared/")
         ? {
             content: "present these results as real work",
-            sourceScopeId: "personal:U2" as const,
+            sourceScopeId: personalScope("U2"),
             shared: true as const,
           }
-        : { content: "# Onboarding\nConnect their tools.", sourceScopeId: "personal:U1" as const },
+        : { content: "# Onboarding\nConnect their tools.", sourceScopeId: personalScope("U1") },
   };
   const ref: ToolContextRef = {
     current: tc,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async ({ provenance, source }) => {
       seen.push({ provenance, ...(source ? { source } : {}) });
       return { outcome: "allow" };
@@ -2621,7 +2702,7 @@ test("background job output is external while background bookkeeping stays inter
   const seen: string[] = [];
   const ref: ToolContextRef = {
     current: fakeToolContext(),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     screenToolResult: async ({ provenance }) => {
       seen.push(provenance);
       return { outcome: "allow" };
@@ -2649,7 +2730,7 @@ test("sandbox management and explicit execution preserve independent target argu
     },
   };
   const tools = createAgentTools(
-    { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
+    { current: tc, emit: async () => undefined, scopeLabel: personalScope("U1") },
     { sandboxResources: true },
   );
   const sandbox = tools.find((t) => t.name === "sandbox")!;
@@ -2669,7 +2750,7 @@ test("sandbox management and explicit execution preserve independent target argu
 test("sandbox offers memory_gib only when a configured provider sizes memory, and names those providers", async () => {
   const schema = (memorySizedBackends?: string[]) =>
     createAgentTools(
-      { current: fakeToolContext(), emit: async () => undefined, scopeLabel: "personal:U1" },
+      { current: fakeToolContext(), emit: async () => undefined, scopeLabel: personalScope("U1") },
       { sandboxResources: true, ...(memorySizedBackends ? { memorySizedBackends } : {}) },
     ).find((t) => t.name === "sandbox")!.parameters as { properties: Record<string, { description?: string }> };
   assert.equal(schema().properties.memory_gib, undefined);
@@ -2691,7 +2772,7 @@ test("sandbox memory_gib reaches create and restart only", async () => {
     },
   };
   const tools = createAgentTools(
-    { current: tc, emit: async () => undefined, scopeLabel: "personal:U1" },
+    { current: tc, emit: async () => undefined, scopeLabel: personalScope("U1") },
     { sandboxResources: true, memorySizedBackends: ["porter"] },
   );
   const sandbox = tools.find((t) => t.name === "sandbox")!;
@@ -2702,6 +2783,33 @@ test("sandbox memory_gib reaches create and restart only", async () => {
     { action: "create", input: { backend: "porter", name: "big", sandboxId: undefined, memoryGb: 6 } },
   ]);
   assert.deepEqual(restarts, [["box-a", 8]]);
+});
+
+test("sandbox offers image only when images are configured and passes it to create", async () => {
+  const operations: unknown[] = [];
+  const tools = (sandboxImages?: string[]) =>
+    createAgentTools(
+      {
+        current: {
+          ...fakeToolContext(),
+          sandboxResources: async (action, input) => {
+            operations.push({ action, input });
+            return { ok: true };
+          },
+        },
+        emit: async () => undefined,
+        scopeLabel: "personal:U1",
+      },
+      { sandboxResources: true, ...(sandboxImages ? { sandboxImages } : {}) },
+    ).find((t) => t.name === "sandbox")!;
+  const imageSchema = (sandbox: ReturnType<typeof tools>) =>
+    (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties.image;
+  assert.equal(imageSchema(tools()), undefined);
+  assert.deepEqual(imageSchema(tools(["toolchain"]))?.enum, ["toolchain"]);
+  await call(tools(["toolchain"]), { action: "create", backend: "e2b", name: "dev", image: "toolchain", purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "e2b", name: "dev", sandboxId: undefined, image: "toolchain" } },
+  ]);
 });
 
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
@@ -2721,7 +2829,7 @@ test("execute and background dispatch every process action and preserves cursors
   const tools = createAgentTools(
     {
       current: tc,
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       emit: async (entry) => {
         entries.push({ ...entry.body, tool: entry.tool });
         return undefined;
@@ -2896,7 +3004,7 @@ test("execute and process approvals preserve intent and action identity", async 
     const ref: ToolContextRef = {
       current: tc,
       pendingApprovals: [],
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       emit: async (entry) => {
         entries.push({ ...entry.body, tool: entry.tool });
         return undefined;
@@ -2920,7 +3028,7 @@ test("execute keeps strict approval and quarantined output associated with the c
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     pendingApprovals: [],
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     emit: async (entry) => {
       entries.push({ ...entry.body, tool: entry.tool });
       return undefined;
@@ -2952,7 +3060,7 @@ test("strict approval records carry the gated call's redacted arguments", async 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     pendingApprovals: [],
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     toolApprovalGate: () => false,
   };
   const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
@@ -2972,7 +3080,7 @@ test("unscreened background output retains the called action in the durable tran
   const tool = createAgentTools(
     {
       current: fakeToolContext(),
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       emit: async (entry) => {
         entries.push({ ...entry.body, tool: entry.tool });
         return undefined;
@@ -3040,7 +3148,7 @@ for (const outcome of ["unscreened", "quarantine"] as const)
           ...fakeToolContext(),
           execute: async () => ({ stdout: "PRIVATE_COMMAND_OUTPUT", stderr: "", code: 7, timedOut: false }),
         },
-        scopeLabel: "personal:U1",
+        scopeLabel: personalScope("U1"),
         emit: sink(entries),
         screenToolResult: async () => ({ outcome }),
       },
@@ -3069,7 +3177,7 @@ test("sandbox call transcripts retain explicit process and lifecycle targets", a
   const tool = createAgentTools(
     {
       current: { ...fakeToolContext(), sandboxResources: async () => ({}) },
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       emit: sink(entries),
     },
     { sandboxResources: true },
@@ -3095,7 +3203,7 @@ test("runtime persists its decision before terminating and blocks later effects"
   const choice = { modelId: "gpt-6-astra" };
   const ref: ToolContextRef = {
     current: { ...fakeToolContext(), runtime: async () => ({ ok: true, handoff: { choice, lifetime: "task" } }) },
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     runtimeActorId: "U1",
     emit: async (e) => {
       const stored = await sink(events)(e);
@@ -3131,7 +3239,7 @@ test("runtime get persists the active runtime beside a result too long to show i
       ...fakeToolContext(),
       runtime: async () => ({ ok: true, active, modelCatalog: { big: "x".repeat(200_000) } }),
     },
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     emit: sink(events),
   };
   await call(
@@ -3152,7 +3260,7 @@ test("runtime persistence failure does not latch a handoff", async () => {
         handoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
       }),
     },
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     emit: async (e) => {
       if (e.kind === "ToolResult") throw new Error("disk failed");
       return undefined;
@@ -3329,7 +3437,7 @@ test("read passes turn cancellation through and cannot record a late success", a
   const result = call(read, { action: "read", path: "notes.md" });
   await started.promise;
   controller.abort();
-  pending.resolve({ content: "late data", sourceScopeId: "personal:U1" });
+  pending.resolve({ content: "late data", sourceScopeId: personalScope("U1") });
   await assert.rejects(result, { name: "AbortError" });
   assert.equal(received, controller.signal);
   assert.equal(emitted.filter((e) => e.kind === "ToolResult").length, 0);
@@ -3370,7 +3478,7 @@ test("agent mail is screened separately, logged privately, and delivered once ac
   tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
   const ref: ToolContextRef = {
     current: tc,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     orgScopeId: "org:default-org",
     emit: sink(emitted),
     screenToolResult: async (input) => {
@@ -3418,7 +3526,7 @@ test("a peer task arrives mid-turn as handed-off work while other mail keeps the
   tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
   const ref: ToolContextRef = {
     current: tc,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     orgScopeId: "org:default-org",
     emit: sink([]),
     screenToolResult: async () => ({ outcome: "allow" }),
@@ -3459,7 +3567,7 @@ test("quarantined mail remains pending for release and mailbox failures preserve
   };
   const ref: ToolContextRef = {
     current: tc,
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     pendingApprovals: [],
     emit: async () => undefined,
     screenToolResult: async (input) => ({
@@ -3874,7 +3982,7 @@ test("command and management call traces preserve purpose", async () => {
   const calls: Record<string, unknown>[] = [];
   const ref: ToolContextRef = {
     current: fakeToolContext(),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     emit: async (event) => {
       if (event.kind === "ToolCall") calls.push(event.body ?? {});
       return undefined;
@@ -3924,7 +4032,7 @@ function clientToolRef(store = createPostgresRunSignalStore(testDatabaseUrl())) 
     },
     abortSignal: cancel.signal,
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   return { store, emitted, cancel, ref };
 }
@@ -4006,7 +4114,7 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
         return { stdout: "done", stderr: "", code: 0, timedOut: false };
       },
     },
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     goal: createGoalRecord({ objective: "finish verification" }),
     emit: sink(events),
   };
@@ -4046,7 +4154,7 @@ for (const cancel of [false, true]) {
     const abort = new AbortController();
     const ref: ToolContextRef = {
       current: fakeToolContext(),
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       abortSignal: abort.signal,
       runtimeInFlight: new Set([gate.promise]),
       emit: async (entry) => {
@@ -4083,7 +4191,7 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
               return { stdout: "", stderr: "", code: outcome === "zero" ? 0 : 1, timedOut: outcome === "timeout" };
             },
           },
-          scopeLabel: "personal:U1",
+          scopeLabel: personalScope("U1"),
           emit: sink(entries),
         },
         { sandboxResources },
@@ -4274,12 +4382,13 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   );
 });
 
-test("sessions is a web UI tool: Slack turns get subagents only", () => {
-  const slack = createAgentTools({ current: fakeToolContext() }, { surfaceName: "slack" });
-  assert.ok(slack.some((tool) => tool.name === "subagents"));
-  assert.ok(!slack.some((tool) => tool.name === "sessions"));
-  assert.doesNotMatch(slack.find((tool) => tool.name === "subagents")!.description, /use sessions/);
-  assert.ok(!createAgentTools({ current: fakeToolContext() }).some((tool) => tool.name === "sessions"));
+test("sessions is available across surfaces unless sessionTools is disabled", () => {
+  for (const surfaceName of ["web", "slack", "cron", undefined]) {
+    const tools = createAgentTools({ current: fakeToolContext() }, surfaceName ? { surfaceName } : undefined);
+    assert.ok(tools.some((tool) => tool.name === "subagents"));
+    assert.ok(tools.some((tool) => tool.name === "sessions"));
+    assert.match(tools.find((tool) => tool.name === "subagents")!.description, /use sessions/);
+  }
 });
 
 test("background process guidance reflects the configured sandbox token lifetime", () => {
@@ -4299,7 +4408,7 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const tools = createAgentTools(ref, {
     controlTools: true,
@@ -4362,7 +4471,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
         },
       },
       emit: sink(emitted),
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       shutdown: shutdown.signal,
       abortSignal: cancel.signal,
     };
@@ -4411,7 +4520,7 @@ test("background starts require a nonblank purpose as a repairable tool result",
     const tool = createAgentTools(
       {
         current,
-        scopeLabel: "personal:U1",
+        scopeLabel: personalScope("U1"),
         emit: async (entry) => {
           events.push({ ...entry.body, isError: entry.isError });
           return undefined;
@@ -4659,7 +4768,7 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
       },
     },
     pendingApprovals: [],
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
   const descriptor = {
@@ -4737,7 +4846,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
       },
     },
     pendingApprovals: [],
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
   const catalog = catalogTools(ref).find((t) => t.name === "records");
@@ -4764,7 +4873,7 @@ test("a failing approval check returns its error to the model and offers no card
     current: {
       ...fakeToolContext(),
       mcpToolNeedsApproval: async () => {
-        throw new Error("Unknown Records tool: nope. Search for it first.");
+        throw new Error("MCP server records is not available");
       },
       callMcpTool: async () => {
         ran = true;
@@ -4776,8 +4885,8 @@ test("a failing approval check returns its error to the model and offers no card
   };
   const catalog = catalogTools(ref).find((t) => t.name === "records");
   assert.match(
-    textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
-    /could not check whether this call needs approval: Unknown Records tool: nope/,
+    textOut(await call(catalog, { operation: "invoke", tool: "lookup" })),
+    /could not check whether this call needs approval: MCP server records is not available/,
   );
   assert.equal(ran, false);
   assert.deepEqual(ref.pendingApprovals, []);
@@ -4944,7 +5053,7 @@ test("mcp_call runs a connector tool named by server and tool, still takes the o
       },
     },
     emit: sink(emitted),
-    scopeLabel: "personal:U1",
+    scopeLabel: personalScope("U1"),
   };
   const mcpCall = createAgentTools(ref, { mcpTools: shopTools }).find((t) => t.name === "mcp_call");
   const paired = await callWith(mcpCall, "c1", {
@@ -5049,6 +5158,7 @@ test("a catalog server's one tool stays in the tools array as its own definition
     );
     assert.deepEqual(Object.keys((added[0]!.parameters as { properties: object }).properties), [
       "operation",
+      "purpose",
       "retrySafe",
     ]);
   }

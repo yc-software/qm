@@ -5,6 +5,7 @@ import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { publicFetch } from "../../util/network.ts";
+import { ownPrivateConversation } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -94,7 +95,8 @@ function parseIngestEntry(loop: Loop, raw: unknown): IngestEntryInput | { error:
 
 function readableItems(ctx: ApiCtx, loop: Loop): boolean {
   if (!ctx.capability || parseScopeId(loop.ownerScopeId).kind !== "personal") return true;
-  if (ctx.capability.privateScope === true) return true;
+  const { actorId, scopeId, audienceScopeId } = ctx.capability;
+  if (ownPrivateConversation(actorId, scopeId, audienceScopeId)) return true;
   sendJson(ctx.res, 403, {
     error: "forbidden",
     message: "a personal loop's items are reachable only from its owner's own scope",
@@ -155,7 +157,6 @@ async function loadItem(ctx: ApiCtx): Promise<{
   loop: Loop;
   item: LoopItem;
   actorId: string;
-  liveHuman: () => Promise<boolean>;
 } | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
@@ -170,8 +171,16 @@ async function loadItem(ctx: ApiCtx): Promise<{
     loop: loaded.loop,
     item,
     actorId: loaded.acting.actorId,
-    liveHuman: loaded.acting.liveHuman,
   };
+}
+
+async function ownerInstructs(ctx: ApiCtx, loop: Loop, actorId: string): Promise<boolean> {
+  if (await ctx.app.samePerson(loop.owner, actorId)) return true;
+  sendJson(ctx.res, 403, {
+    error: "forbidden",
+    message: "a loop's agent works with its owner's authority, so only its owner can instruct it",
+  });
+  return false;
 }
 
 const IMAGE_MAX_BYTES = 8_000_000;
@@ -204,7 +213,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   const slackHosted = host === "slack.com" || host.endsWith(".slack.com");
   let authHeader: Record<string, string> = {};
   if (slackHosted) {
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     const token = tokens
       ? ((await tokens.connectorAccessToken("slack.com", loop.owner, "personal")) ??
         (await tokens.connectorAccessToken("slack.com", loop.owner)))
@@ -306,8 +315,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
-    if (ctx.capability)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "only a person can override triage" });
     const priority = LOOP_ITEM_PRIORITIES.find((value) => value === args.priority);
     if (kind === "prioritize" && !priority)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "priority must be urgent, high, normal, or low" });
@@ -362,7 +369,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
       });
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
     if (!decisionToken)
@@ -396,14 +403,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  const turn = await deps.fire.itemAction(
-    loop,
-    item,
-    kind,
-    args,
-    loaded.actorId,
-    (await loaded.liveHuman()) ? undefined : { unattended: true },
-  );
+  if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
+  const turn = await deps.fire.itemAction(loop, item, kind, args);
   if (!turn.ok) {
     return sendJson(ctx.res, 502, { error: "action_failed", message: turn.userNote ?? "the agent turn did not run" });
   }
@@ -460,11 +461,15 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
   try {
-    const next = await deps.fire.followUp(loop, item, message || "Please review the attached files.", loaded.actorId, {
-      ...options,
-      ...((await loaded.liveHuman()) ? {} : { unattended: true as const }),
-    });
+    const next = await deps.fire.followUp(
+      loop,
+      item,
+      message || "Please review the attached files.",
+      loaded.actorId,
+      options,
+    );
     sendJson(ctx.res, 200, await itemDetail(ctx, deps, loop, next ?? item));
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });

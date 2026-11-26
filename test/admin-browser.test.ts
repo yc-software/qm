@@ -5,7 +5,6 @@ import type { AddressInfo } from "node:net";
 import { apiAlias } from "../src/api/browser-session.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -34,6 +33,7 @@ const ADMIN_PAGES = [
   "POST /v1/admin/grants",
   "DELETE /v1/admin/grants/:principalId",
   "GET /v1/admin/keychain",
+  "POST /v1/admin/keychain/grants",
   "GET /v1/admin/mcp-servers",
   "PUT /v1/admin/mcp-servers/:id",
   "DELETE /v1/admin/mcp-servers/:id",
@@ -80,6 +80,10 @@ const ADMIN_PAGES = [
   "GET /v1/admin/skills",
   "GET /v1/admin/skills/:id",
   "DELETE /v1/admin/skills/:id",
+  "GET /v1/admin/slack-config-token",
+  "PUT /v1/admin/slack-config-token",
+  "DELETE /v1/admin/slack-config-token",
+  "POST /v1/admin/slack-installation/create",
   "GET /v1/admin/slack-emoji",
   "GET /v1/admin/slack-installation",
   "PUT /v1/admin/slack-installation",
@@ -147,7 +151,7 @@ test("the browser reaches exactly the admin routes the admin pages use, and only
 async function serve(t: TestContext) {
   const config = testConfig({ signingSecret: "admin-browser-signing-secret-0123456789" });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

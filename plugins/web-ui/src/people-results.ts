@@ -5,6 +5,7 @@ import { icon } from "./icons";
 
 export interface DirectoryMatch {
   principalId: string;
+  scopeId: string;
   displayName: string;
   type: string;
   avatarUrl?: string;

@@ -25,6 +25,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import {
@@ -67,6 +68,7 @@ export interface StoredMicrovm extends SnapshotBookkeeping {
 }
 
 export interface AwsSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   region: string;
   profile?: string;
   imageIdentifier: string;
@@ -196,23 +198,22 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
   const snapshotHome = (scope: string, id: string): Promise<void> => homeSnapshots.snapshotHome(scope, id);
   const hydrateHome = (scope: string, id: string): Promise<boolean> => homeSnapshots.hydrateHome(scope, id);
 
-  let resolvedImageArn: string | undefined;
-  async function imageArn(): Promise<string> {
-    if (resolvedImageArn) return resolvedImageArn;
-    if (opts.imageIdentifier.startsWith("arn:")) {
-      resolvedImageArn = opts.imageIdentifier;
-      return resolvedImageArn;
-    }
-    const img = await api.findImage(opts.imageIdentifier);
-    if (!img) throw new Error(`AWS sandbox image not found: ${opts.imageIdentifier}`);
-    resolvedImageArn = img.imageArn;
-    return resolvedImageArn;
+  const resolvedImageArns = new Map<string, string>();
+  async function imageArn(identifier: string): Promise<string> {
+    if (identifier.startsWith("arn:")) return identifier;
+    const known = resolvedImageArns.get(identifier);
+    if (known) return known;
+    const img = await api.findImage(identifier);
+    if (!img) throw new Error(`AWS sandbox image not found: ${identifier}`);
+    resolvedImageArns.set(identifier, img.imageArn);
+    return img.imageArn;
   }
 
   async function launchBody(scope: string | undefined): Promise<{ id: string; endpoint: string }> {
+    const chosen = scope === undefined ? undefined : await opts.imageFor?.(scope);
     const run = await api.runMicrovm({
-      imageIdentifier: await imageArn(),
-      ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
+      imageIdentifier: await imageArn(chosen ?? opts.imageIdentifier),
+      ...(opts.imageVersion && !chosen ? { imageVersion: opts.imageVersion } : {}),
       ingressNetworkConnectors: ingress,
       egressNetworkConnectors: egress,
       ...(opts.executionRoleArn ? { executionRoleArn: opts.executionRoleArn } : {}),

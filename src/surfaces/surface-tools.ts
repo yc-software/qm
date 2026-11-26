@@ -2,6 +2,7 @@ import type { Tenant } from "../tenants/context.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
   Conversation,
+  Delivery,
   DeliveryProvenance,
   Destination,
   OutgoingAttachment,
@@ -49,18 +50,63 @@ import {
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
+import { webTranscript } from "./web-spine.ts";
+import { sleep } from "../util/async.ts";
+import { foldPrincipalId } from "../directory/person.ts";
+import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { Item } from "../sessions/items.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
 
+const DELIVERY_SETTLE_WAIT_MS = 1_000;
+const DELIVERY_SETTLE_POLL_MS = 40;
+
+function deliversOwnMessageTs(destination: Destination): boolean {
+  return (
+    (destination.type === SLACK || destination.type === "group") &&
+    !destination.react &&
+    !destination.delete &&
+    !destination.keychainAskId &&
+    !destination.commandApprovalId &&
+    !destination.deploymentAccess
+  );
+}
+
+async function waitForDeliverySettle(deliveries: Pick<DeliveryStore, "get">, id: string): Promise<Delivery | null> {
+  const maxPolls = DELIVERY_SETTLE_WAIT_MS / DELIVERY_SETTLE_POLL_MS;
+  for (let polls = 0; ; polls++) {
+    let d: Delivery | null;
+    try {
+      d = await deliveries.get(id);
+    } catch (err) {
+      console.error("%s", "[surface] delivery settle check failed:", (err as Error).message);
+      return null;
+    }
+    if (d && (d.deliveredAt !== null || d.failedReason !== undefined)) return d;
+    if (polls >= maxPolls) return d;
+    await sleep(DELIVERY_SETTLE_POLL_MS, { unref: true });
+  }
+}
+
+function deliveryFailureMessage(reason: string, destination: Destination): string {
+  const ref = destination.edit?.messageTs;
+  if (
+    ref &&
+    (reason === "cant_update_message" || reason === "edit_target_not_found" || reason === "edit_window_closed")
+  )
+    return `ref ${ref} isn't one of my own messages (Slack refused: ${reason}) — I can only edit or delete messages I posted; use the ts my own post or edit returned`;
+  return `delivery failed (${reason})`;
+}
+
 export interface SpineState {
   surfaceOutboundCount: number;
   crossConversationPosts: number;
   turnUserEntrySeq: number | undefined;
+  transcript?: NewItem[];
 }
 
 export interface SurfaceToolsContext {
@@ -166,6 +212,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   } = ctx;
   if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
+  const transcript = spine?.transcript ? webTranscript(spine, spine.transcript, deps.sessions, session.id) : undefined;
+  const inTranscript = (d: Destination) => !!transcript && d === currentDestination;
   const textOnly = (d: Destination) => turnCapabilities(deps.surfaces.get(d.type), input)?.textOnly === true;
   const editable = (d: Destination) => editableIn(deps.surfaces, d.type, input);
   const homeSurface = deps.surfaces.get(currentDestination.type);
@@ -178,6 +226,27 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
   let editRefConsumed = false;
+  let mentionRoster: { ids: Set<string>; known: boolean } | undefined;
+  const rosterForMentions = async (): Promise<{ ids: Set<string>; known: boolean }> => {
+    mentionRoster ??= await (async () => {
+      const ids = new Set<string>();
+      for (const p of [actor, ...conversation.audience]) {
+        const key = foldPrincipalId(p.id);
+        if (key) ids.add(key);
+      }
+      try {
+        for (const m of (await deps.directory.getMany([...ids])).values()) {
+          const key = foldPrincipalId(m.principalId);
+          if (key) ids.add(key);
+          if (m.slackId) ids.add(m.slackId);
+        }
+        return { ids, known: true };
+      } catch {
+        return { ids, known: false };
+      }
+    })();
+    return mentionRoster;
+  };
   const resolveDestination = async (
     target?: {
       channel?: string;
@@ -246,6 +315,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       spine.surfaceOutboundCount += 1;
       if (input.runId) deps.turnStream.markSurfacePosted(input.runId);
+      if (deliversOwnMessageTs(destination)) {
+        const settled = await waitForDeliverySettle(deps.deliveries, delivery.id);
+        if (settled?.failedReason)
+          return {
+            ok: false,
+            message: deliveryFailureMessage(settled.failedReason, destination),
+            deliveryId: delivery.id,
+          };
+        if (settled?.messageTs) return { ok: true, deliveryId: delivery.id, ts: settled.messageTs };
+      }
       return { ok: true, deliveryId: delivery.id };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
@@ -316,6 +395,14 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
+      if (transcript)
+        return transcript.post(postText, f.attachments?.length ? postedFileMetas(f.attachments) : undefined);
+      let unknownMentions: string[] | undefined;
+      if (postText.includes("<@") && deliversOwnMessageTs(destination)) {
+        const roster = await rosterForMentions();
+        if (roster.known)
+          unknownMentions = [...new Set(mentionedUserIds(postText).filter((id) => !roster.ids.has(id)))];
+      }
       const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
       const editRef =
@@ -327,7 +414,16 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(footer ? { debugFooter: footer } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
-      return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      const withAttachments =
+        sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
+      if (!unknownMentions?.length) return withAttachments;
+      const raw = unknownMentions.map((id) => `<@${id}>`).join(", ");
+      return {
+        ...withAttachments,
+        notes: [
+          `mention id(s) ${raw} aren't recognized members of this conversation — the message went out as written, so an unverified id may ping an unintended person; edit the message${sent.ok && sent.ts ? ` (ts ${sent.ts})` : ""} to fix it`,
+        ],
+      };
     },
     reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
@@ -372,6 +468,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
+      if (inTranscript(d.destination)) return transcript!.edit(input.ref, input.text);
       if (!editable(d.destination))
         return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);

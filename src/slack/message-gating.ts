@@ -11,19 +11,40 @@ export function isOwnSlackMessage(
   return Boolean((botUserId && message.user === botUserId) || (ownBotId && message.bot_id === ownBotId));
 }
 
-export function isOwnStatusCard(
-  message: { user?: string; bot_id?: string; blocks?: unknown[] },
+interface StatusBearing {
+  user?: string;
+  bot_id?: string;
+  blocks?: unknown[];
+  text?: string;
+}
+
+const isStatusBlock = (block: unknown): boolean =>
+  isObj(block) && typeof block.task_id === "string" && block.task_id.startsWith(SLACK_STATUS_TASK_PREFIX);
+
+const carriesStatus = (message: StatusBearing): boolean =>
+  Array.isArray(message.blocks) && message.blocks.some(isStatusBlock);
+
+export function isOwnStatusCard(message: StatusBearing, botUserId: string, ownBotId = ""): boolean {
+  return (
+    isOwnSlackMessage(message, botUserId, ownBotId) &&
+    carriesStatus(message) &&
+    (message.blocks ?? []).every(isStatusBlock)
+  );
+}
+
+export function isOwnStatusEvent(
+  event: StatusBearing & { message?: StatusBearing; previous_message?: StatusBearing },
   botUserId: string,
   ownBotId = "",
 ): boolean {
+  const { message: now, previous_message: was } = event;
+  if (isOwnStatusCard(now ?? was ?? event, botUserId, ownBotId)) return true;
   return Boolean(
-    isOwnSlackMessage(message, botUserId, ownBotId) &&
-    Array.isArray(message.blocks) &&
-    message.blocks.some((block) =>
-      (isObj(block) && block.type === "plan" && Array.isArray(block.tasks) ? block.tasks : [block]).some(
-        (task) => isObj(task) && typeof task.task_id === "string" && task.task_id.startsWith(SLACK_STATUS_TASK_PREFIX),
-      ),
-    ),
+    now &&
+    was &&
+    isOwnSlackMessage(now, botUserId, ownBotId) &&
+    now.text === was.text &&
+    (carriesStatus(now) || carriesStatus(was)),
   );
 }
 

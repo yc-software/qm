@@ -3,7 +3,6 @@ import type { Webhook } from "../triggers/types.ts";
 import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
-import { ownerAuthored } from "../cron/authority.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 
@@ -123,7 +122,8 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         securityScreenData: event.securityScreenData,
         fireKey,
         surface: "webhook",
-        ownerFire: ownerAuthored(wh),
+        sourceId: wh.id,
+        ...(wh.title ? { title: wh.title } : {}),
         ...(destination ? { destination } : {}),
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
       })

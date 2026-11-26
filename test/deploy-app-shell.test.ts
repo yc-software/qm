@@ -13,7 +13,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createHmac } from "node:crypto";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -490,18 +490,18 @@ test("app shell: the version poll tells the top bar who can open the app", async
 
 test("app shell: access summary wording", async () => {
   const { appAccess } = await import("../src/deploy/app-access.ts");
-  const base = { ownerScopeId: "personal:U1", public: false, grantees: [], canEdit: true };
+  const base = { ownerScopeId: personalScope("U1"), public: false, grantees: [], canEdit: true };
   assert.equal(appAccess(base).label, "Restricted");
   assert.equal(appAccess(base).detail, "Only you can open");
   assert.equal(appAccess({ ...base, public: true, grantees: [{ scope: "org:acme" }] }).level, "public");
-  const people = appAccess({ ...base, grantees: [{ scope: "personal:a" }, { scope: "personal:b" }] });
+  const people = appAccess({ ...base, grantees: [{ scope: personalScope("a") }, { scope: personalScope("b") }] });
   assert.equal(people.label, "2 people");
   assert.equal(people.level, "restricted");
-  const manager = appAccess({ ...base, canEdit: false, grantees: [{ scope: "personal:a" }] });
+  const manager = appAccess({ ...base, canEdit: false, grantees: [{ scope: personalScope("a") }] });
   assert.equal(manager.detail, "Shared with 1 person");
   const channel = appAccess({ ...base, ownerScopeId: "channel:C1", canEdit: false });
   assert.equal(channel.label, "Channel");
-  const mixed = appAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: "personal:a" }] });
+  const mixed = appAccess({ ...base, grantees: [{ scope: "channel:C1" }, { scope: personalScope("a") }] });
   assert.equal(mixed.label, "Shared");
   assert.equal(mixed.detail, "Shared with 1 channel and 1 person");
   const org = appAccess({ ...base, grantees: [{ scope: "org:acme" }], orgName: "Acme" });
