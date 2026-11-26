@@ -201,6 +201,7 @@ export interface StoredApproval {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  grantTool?: string;
   request?: Record<string, unknown>;
 }
 
@@ -216,11 +217,15 @@ export interface RecoveredApprovalContext {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  grantTool?: string;
   turn: Record<string, unknown>;
 }
 
 export function recoveredApprovalContext(
-  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "request">,
+  stored: Pick<
+    StoredApproval,
+    "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "grantTool" | "request"
+  >,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
   const req = stored.request as
@@ -250,6 +255,7 @@ export function recoveredApprovalContext(
     ...(stored.summary ? { summary: stored.summary } : {}),
     ...(stored.kind ? { kind: stored.kind } : {}),
     ...(stored.grantModes ? { grantModes: stored.grantModes } : {}),
+    ...(stored.grantTool ? { grantTool: stored.grantTool } : {}),
     turn,
   };
 }
