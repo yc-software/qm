@@ -11,11 +11,12 @@ import { createHmac } from "node:crypto";
 import { Webhook as StandardWebhook } from "standardwebhooks";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -25,9 +26,13 @@ function start(
   publicUrl?: string,
 ): { base: string; built: ReturnType<typeof buildApp>; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
-  const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
+  const deps = { ...testCore(built), ...(publicUrl ? { publicUrl } : {}) };
   const server = signingSecret
-    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
+    ? createServer(built.app, {
+        ...deps,
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+        signingSecret,
+      })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   return {
@@ -103,7 +108,7 @@ test("registration stamps the signed-in person as owner and creator, whatever th
   try {
     const body = JSON.stringify({
       ...JSON.parse(regBody()),
-      ownerScopeId: "personal:U2",
+      ownerScopeId: personalScope("U2"),
       owner: "U2",
       createdBy: "U2",
     });
@@ -114,7 +119,7 @@ test("registration stamps the signed-in person as owner and creator, whatever th
     });
     assert.equal(res.status, 200);
     const { webhook } = (await res.json()) as { webhook: { ownerScopeId: string; owner: string; createdBy: string } };
-    assert.deepEqual([webhook.ownerScopeId, webhook.owner, webhook.createdBy], ["personal:U1", "U1", "U1"]);
+    assert.deepEqual([webhook.ownerScopeId, webhook.owner, webhook.createdBy], [personalScope("U1"), "U1", "U1"]);
     const unsigned = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
       headers: sign("POST", "/v1/webhooks", body),
@@ -228,7 +233,7 @@ test("inbound per-webhook auth holds even in core dev mode (no core secret)", as
   const srv = start();
   try {
     const webhook = await srv.built.app.createWebhook({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       action: "triage",
@@ -310,7 +315,7 @@ test("a flagged webhook delivery surfaces an approval card to its owner and keep
   const srv = start(SECRET);
   try {
     const webhook = await srv.built.app.createWebhook({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       action: "triage",
@@ -340,7 +345,7 @@ test("a token webhook accepts its secret as a bearer header or on the URL, and n
   const srv = start();
   try {
     const webhook = await srv.built.app.createWebhook({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       action: "triage",
@@ -371,7 +376,7 @@ test("a standard-webhooks webhook accepts a sender-signed request once and rejec
   try {
     const secret = `whsec_${Buffer.from("standard-webhooks-secret").toString("base64")}`;
     const webhook = await srv.built.app.createWebhook({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       action: "triage",

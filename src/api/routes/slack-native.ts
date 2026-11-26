@@ -5,12 +5,11 @@ import { ErrorCode, type WebAPIPlatformError, type AuthTestResponse } from "@sla
 import { slackWebClient } from "../../slack/web-client.ts";
 import { personIds, samePerson } from "../../directory/person.ts";
 import { ACCOUNT_TYPES } from "../../connectors/oauth.ts";
-import { resolverFor } from "./connectors.ts";
 import type { ApiCtx } from "./route.ts";
 
 export async function nativeSlackConfigured(ctx: ApiCtx): Promise<boolean> {
   try {
-    await resolverFor(ctx.deps)("slack", {});
+    await ctx.deps.resolveClient("slack", {});
     return Boolean(ctx.deps.connectorTokens);
   } catch {
     return false;
@@ -21,7 +20,7 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
   const principal = ctx.actor!.p;
   for (const id of personIds(principal)) {
     for (const accountType of ACCOUNT_TYPES) {
-      const auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("slack.com", id, accountType);
+      const auth = await ctx.deps.connectorTokens.connectorDerivedAuth("slack.com", id, accountType);
       if (!auth) continue;
       const call = async (method: string, payload?: Record<string, unknown>, token = auth.accessToken) => {
         const client = slackWebClient(token, ctx.deps.slackWebClient);
@@ -36,9 +35,9 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
       };
       const identity = await call("auth.test");
       if (!identity.ok || identity.bot_id || !identity.user_id || !identity.team_id) continue;
-      const member = (await ctx.deps.directory?.getBySlackIds([identity.user_id]))?.get(identity.user_id);
+      const member = (await ctx.deps.directory.getBySlackIds([identity.user_id])).get(identity.user_id);
       if (!member || member.type !== "internal" || !samePerson(member.principalId, principal)) continue;
-      const installation = await ctx.deps.slackInstallation?.get();
+      const installation = await ctx.deps.slackInstallation.get();
       let teamId = installation?.teamId;
       if (!teamId && ctx.deps.slackEnvBotToken) {
         const bot = await call("auth.test", undefined, ctx.deps.slackEnvBotToken);

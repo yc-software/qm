@@ -598,7 +598,6 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
   const key = url.searchParams.get("key") ?? "";
   if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
-  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const rec = await deps.uiState.get(uiStateId(principalId, key));
   return sendJson(res, 200, rec ?? { value: null, updatedAt: 0 });
 }
@@ -613,7 +612,6 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   if (b.value === undefined) return sendJson(res, 400, { error: "bad_request", message: "value required" });
   if (Buffer.byteLength(JSON.stringify(b.value)) > UI_STATE_MAX_BYTES)
     return sendJson(res, 413, { error: "payload_too_large", message: "ui state too large" });
-  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
   const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
   const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
@@ -1269,7 +1267,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
 }
 
 async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
-  const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  const catalog = await ctx.deps.config.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
   const raw = catalog?.emoji ?? {};
   const emoji: Record<string, string> = {};
   for (const [name, value] of Object.entries(raw)) {
@@ -1281,9 +1279,8 @@ async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
 }
 
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   const { res, deps } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
     deps.config.getWebuiModelsDurable(orgScope(deps)),
     deps.config.getBaseModelDurable(orgScope(deps)),
@@ -1347,10 +1344,9 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const account = ctx.url.searchParams.get("account");
   if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   return sendJson(
     ctx.res,
     200,
@@ -1364,12 +1360,12 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   if (ctx.capability && !carriesPersonAuthority(ctx.capability))
     return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   const config = ctx.deps.config;
   const offered = async (modelId: string) =>
     (await userRuntimeConfigBody(ctx, target.scope, target.actorId)).models.includes(modelId);
@@ -1406,7 +1402,6 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   const [on, configured, def] = await Promise.all([
@@ -1418,7 +1413,7 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 }
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
   if (ctx.capability && !carriesPersonAuthority(ctx.capability))
     return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);

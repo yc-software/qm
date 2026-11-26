@@ -1001,6 +1001,21 @@ test("Render app publishing needs a complete source, project, and environment", 
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
 });
 
+test("SANDBOX_IMAGES maps image names to each provider's image reference and refuses what cannot boot", () => {
+  const images = (value: unknown) => loadConfig({ SANDBOX_IMAGES: JSON.stringify(value) }).sandboxImages;
+  assert.deepEqual(loadConfig({}).sandboxImages, {});
+  assert.deepEqual(images({ toolchain: { e2b: " toolchain ", render: RENDER_IMAGE } }), {
+    toolchain: { e2b: "toolchain", render: RENDER_IMAGE },
+  });
+  assert.throws(
+    () => images({ toolchain: { sprites: "x" } }),
+    /SANDBOX_IMAGES.toolchain.sprites: that provider cannot boot/,
+  );
+  assert.throws(() => images({ toolchain: ["x"] }), /must be a named object/);
+  assert.throws(() => images({ toolchain: { e2b: "" } }), /must be an image reference/);
+  assert.throws(() => images({ toolchain: { render: "repo:tag" } }), /Render sandbox image must be/);
+});
+
 test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
   const env = {
     SANDBOX_BACKEND: "render",

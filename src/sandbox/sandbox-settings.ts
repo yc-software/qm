@@ -18,6 +18,7 @@ export interface SandboxSettings {
   e2bSandbox: E2bSandboxEnv;
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
   modalSandbox: ModalSandboxEnv;
+  sandboxImages: SandboxImages;
   porterSandbox: PorterSandboxEnv;
   renderSandbox: RenderSandboxEnv;
 }
@@ -440,6 +441,43 @@ export function superserveGenerationKey(
     .slice(0, 32);
 }
 
+export type SandboxImages = Record<string, Partial<Record<SandboxBackendName, string>>>;
+
+const IMAGE_BACKENDS: Record<Exclude<SandboxBackendName, "sprites">, true> = {
+  aws: true,
+  local: true,
+  smolmachines: true,
+  e2b: true,
+  modal: true,
+  porter: true,
+  agent37: true,
+  superserve: true,
+  "do-managed-agents": true,
+  render: true,
+};
+
+function sandboxImagesEnv(raw: string | undefined): SandboxImages {
+  if (!raw?.trim()) return {};
+  const parsed: unknown = JSON.parse(raw);
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  if (!isObject(parsed)) throw new Error("SANDBOX_IMAGES must be an object of image names");
+  const images: SandboxImages = {};
+  for (const [name, refs] of Object.entries(parsed)) {
+    if (!name.trim() || !isObject(refs))
+      throw new Error(`SANDBOX_IMAGES.${name} must be a named object mapping providers to image references`);
+    for (const [backend, ref] of Object.entries(refs)) {
+      if (!Object.hasOwn(IMAGE_BACKENDS, backend))
+        throw new Error(`SANDBOX_IMAGES.${name}.${backend}: that provider cannot boot a chosen image`);
+      if (typeof ref !== "string" || !ref.trim())
+        throw new Error(`SANDBOX_IMAGES.${name}.${backend} must be an image reference`);
+      if (backend === "render") parseRenderSandboxImage(ref.trim());
+      (images[name] ??= {})[backend as SandboxBackendName] = ref.trim();
+    }
+  }
+  return images;
+}
+
 export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendName[] {
   const credentialed: Record<SandboxBackendName, boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -579,5 +617,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),
     modalSandbox: modalSandboxEnv(env),
+    sandboxImages: sandboxImagesEnv(env.SANDBOX_IMAGES),
   };
 }

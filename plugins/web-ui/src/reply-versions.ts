@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ChevronRight } from "lucide";
 import { icon } from "./icons.ts";
 import { messageText, type AssistantWork } from "./core-bridge.ts";
+import { activityItems, isNarration } from "./items.ts";
 import { markdown } from "./message-markdown.ts";
 import { formatMessageTime } from "./message-time.ts";
 import { workSeconds } from "./work-duration.ts";
@@ -12,6 +13,7 @@ interface ReplyVersions {
   superseded: Map<AgentMessage, number>;
   absorbed: Set<AgentMessage>;
   folded: Map<AgentMessage, AssistantWork>;
+  inlined: Set<number>;
 }
 
 function foldable(message: AgentMessage, superseded: Map<AgentMessage, number>): boolean {
@@ -32,17 +34,30 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
   const superseded = new Map<AgentMessage, number>();
   const absorbed = new Set<AgentMessage>();
   const folded = new Map<AgentMessage, AssistantWork>();
-  if (!messages.some((message) => (message as AssistantWork).supersedes !== undefined))
-    return { earlier, superseded, absorbed, folded };
+  const inlined = new Set<number>();
+  const marked = (message: AgentMessage) => !!(message as AssistantWork).supersedes?.length;
+  if (!messages.some(marked)) return { earlier, superseded, absorbed, folded, inlined };
+  const narration = new Set(
+    messages.flatMap((message) =>
+      activityItems((message as AssistantWork).work?.activity ?? []).flatMap((item) =>
+        isNarration(item) ? [item.seq] : [],
+      ),
+    ),
+  );
   const replies = new Map<number, AssistantWork>();
   for (const message of messages) {
     const reply = message as AssistantWork & { entrySeqs?: number[] };
     if (reply.role !== "assistant" || !messageText(reply).trim()) continue;
-    const previous = reply.supersedes === undefined ? undefined : replies.get(reply.supersedes);
-    if (previous) {
-      earlier.set(reply, [...(earlier.get(previous) ?? []), previous]);
+    for (const seq of reply.supersedes ?? []) {
+      if (narration.has(seq)) {
+        inlined.add(seq);
+        continue;
+      }
+      const previous = replies.get(seq);
+      if (!previous || previous === reply || superseded.has(previous)) continue;
+      earlier.set(reply, [...(earlier.get(reply) ?? []), ...(earlier.get(previous) ?? []), previous]);
       earlier.delete(previous);
-      superseded.set(previous, reply.supersedes!);
+      superseded.set(previous, seq);
     }
     for (const seq of reply.entrySeqs ?? []) replies.set(seq, reply);
   }
@@ -70,7 +85,7 @@ export function replyVersions(messages: readonly AgentMessage[]): ReplyVersions 
       },
     });
   }
-  return { earlier, superseded, absorbed, folded };
+  return { earlier, superseded, absorbed, folded, inlined };
 }
 
 export function rowEntrySeqs(versions: ReplyVersions, message: AgentMessage, seqs: number[]): string {

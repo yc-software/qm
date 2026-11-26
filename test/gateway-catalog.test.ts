@@ -21,6 +21,7 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -275,7 +276,7 @@ test("custom provider models live in their own namespace, never the gateway one"
 test("removed gateway selections never fall back to a different org or direct model", async () => {
   const store = testConfigStore("default-org");
   const org = "org:default-org" as const;
-  const personal = "personal:alice" as const;
+  const personal = personalScope("alice");
   const fallback = { modelId: "claude-opus-5" };
   await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
   await assert.rejects(

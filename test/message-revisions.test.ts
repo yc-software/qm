@@ -20,8 +20,9 @@ import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.t
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
 import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
+import { personalScope } from "../src/types.ts";
 
-const SCOPE = "personal:alex@example.com" as ScopeId;
+const SCOPE = personalScope("alex@example.com") as ScopeId;
 const runs = testRuns();
 const DM = "D123";
 const CH = "C456";

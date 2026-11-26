@@ -15,7 +15,7 @@ import { testTenant } from "./support/test-tenant.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { personalScope, scopeId } from "../src/types.ts";
+import { personalScope, scopeId, type ScopeId } from "../src/types.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
@@ -33,6 +33,7 @@ import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createControlService } from "../src/api/control-service.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -80,6 +81,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const server = createServer(app, {
+    ...testCore(),
     sessions: signOff.sessions as never,
     approvals: testMap<PendingApprovalRecord>(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -222,7 +224,7 @@ test("only the publisher can lend, with a signed-off card, per app and per conne
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     [
       "/v1/share",
-      { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true },
+      { type: "deploy", id: h.d.id, toScope: personalScope("x@example.com"), move: true },
       { personAuthority: false },
     ],
   ] as const) {
@@ -314,7 +316,12 @@ test("an upgrade withdraws loans on apps outside their publisher's library", asy
   const url = testDatabaseUrl();
   const apps = createPostgresMapFactory(url).map<PublishedApp>("deployments", undefined, APP_TABLES);
   const lent = (id: string, owner: string) =>
-    ({ id, createdBy: PUBLISHER, ownerScopeId: personalScope(owner), connectors: ["slack.com"] }) as PublishedApp;
+    ({
+      id,
+      createdBy: PUBLISHER,
+      ownerScopeId: `personal:${owner}` as ScopeId,
+      connectors: ["slack.com"],
+    }) as PublishedApp;
   await apps.put("kept", lent("kept", PUBLISHER));
   await apps.put("moved", lent("moved", CO_MANAGER));
   const audit = createPostgresAuditLog(url);

@@ -129,7 +129,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
-    appState.me = { user: "owner", org: "test" };
+    appState.me = { user: "owner", personalScope: "personal:owner", org: "test" };
     appState.currentView = "chats";
     sessionsState.list = [row];
     const host = document.querySelector<HTMLElement>("#main")!;
@@ -152,23 +152,23 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     }
     function click(label: string) {
       const button = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === label,
+        (candidate) => candidate.getAttribute("aria-label") === label || candidate.textContent?.trim() === label,
       );
       assert.ok(button, `missing ${label} button`);
       button.click();
     }
     mount();
-    await until(() => !!chat.composer.currentModelOption() && !!host.querySelector(".approval-btn"));
+    await until(() => !!chat.composer.currentModelOption() && !!host.querySelector(".ac-card"));
 
     await t.test("submission and handoff suppress duplicate clicks and stale cards", async () => {
-      click("Allow once");
+      click("Approve");
       chat.resolveCommandApproval({ requestId: "a1", approved: true });
       assert.equal(requests.filter((r) => r.path === "/api/approvals/a1").length, 1);
       assert.equal(host.querySelector<HTMLTextAreaElement>("textarea")?.disabled, true);
       decision.resolve(Response.json({ runId: "r1" }, { status: 202 }));
       await until(() => requests.some((r) => r.path === "/api/sessions/s1"));
       assert.equal(chat.state.resolvingApprovals.size, 1);
-      assert.equal(host.querySelector(".approval-btn"), null);
+      assert.equal(host.querySelector(".ac-card"), null);
       handoff.resolve();
       await until(() => chat.state.agent!.state.isStreaming && chat.hasLiveRun());
     });
@@ -281,17 +281,17 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       continuation.resolve(
         Response.json({ status: "done", result: { status: "pending_approval", pendingApprovals: pending } }),
       );
-      await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".approval-btn"));
+      await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".ac-card"));
       assert.ok(host.querySelector("textarea"), "the composer stays open beside the card");
       decision = deferred<Response>();
-      click("Deny");
+      click("Decline");
       await until(() => requests.some((r) => r.path === "/api/approvals/a2"));
       pending = [];
       continuation = deferredRun();
       continuation.resolve(
         Response.json({
           status: "done",
-          result: { status: "refused", refusalKind: "approval_denied", reason: "approval denied" },
+          result: { status: "refused", refusalKind: "approval_denied", reason: "approval declined" },
         }),
       );
       decision.resolve(Response.json({ runId: "r1" }));
@@ -303,9 +303,9 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       pending = [approval];
       decision = deferred<Response>();
       mount();
-      click("Allow once");
+      click("Approve");
       decision.resolve(Response.json({ error: "unavailable" }, { status: 503 }));
-      await until(() => chat.state.resolvingApprovals.size === 0 && !!host.querySelector(".approval-btn"));
+      await until(() => chat.state.resolvingApprovals.size === 0 && !!host.querySelector(".ac-card"));
       assert.match(chat.composer.state.error, /unavailable/i);
     });
     await t.test("a failed continuation does not leave the composer locked", async () => {
@@ -314,7 +314,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       decision = deferred<Response>();
       continuation = deferredRun();
       mount();
-      click("Allow once");
+      click("Approve");
       decision.resolve(Response.json({ runId: "r1" }));
       await until(() => chat.state.agent!.state.isStreaming && chat.hasLiveRun());
       pending = [];
@@ -330,16 +330,16 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       decision = deferred<Response>();
       continuation = deferredRun();
       mount();
-      click("Allow once");
+      click("Approve");
       decision.resolve(Response.json({ runId: "r1" }));
       await until(() => chat.state.agent!.state.isStreaming && chat.hasLiveRun());
       refreshGate = deferred<void>();
       continuation.resolve(
         Response.json({ status: "done", result: { status: "pending_approval", pendingApprovals: pending } }),
       );
-      await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".approval-btn"));
+      await until(() => !chat.state.agent!.state.isStreaming && !!host.querySelector(".ac-card"));
       decision = deferred<Response>();
-      click("Allow once");
+      click("Approve");
       assert.equal(chat.state.resolvingApprovals.size, 1);
       refreshGate.resolve();
       refreshGate = undefined;
@@ -358,11 +358,11 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       pending = [approval];
       decision = deferred<Response>();
       mount();
-      click("Allow once");
+      click("Approve");
       const oldDecision = decision;
       decision = deferred<Response>();
       mount();
-      click("Allow once");
+      click("Approve");
       oldDecision.resolve(Response.json({ error: "old request failed" }, { status: 503 }));
       await new Promise((resolve) => setTimeout(resolve, 50));
       assert.equal(chat.state.resolvingApprovals.size, 1);

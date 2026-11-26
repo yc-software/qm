@@ -9,6 +9,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testCore } from "./support/build-app.ts";
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();
@@ -20,6 +21,7 @@ test("swarm HTTP rejects body identity selectors and completed capabilities whil
       authorizesCapabilityScope: async () => true,
     } as unknown as App,
     {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: "swarm-regression-source-secret-distinct",
       capabilitySecret,
@@ -91,6 +93,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     },
   } as unknown as App;
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     capabilitySecret,
@@ -172,6 +175,7 @@ test("swarm HTTP rejects credentials from a replaced run attempt", async () => {
       authorizesCapabilityScope: async () => true,
     } as unknown as App,
     {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: "swarm-attempt-source-secret-distinct-long",
       capabilitySecret: secret,
@@ -213,6 +217,7 @@ test("HTTP retry after a lost initial response exposes only a complete pool and 
       authorizesCapabilityScope: async () => true,
     } as unknown as App,
     {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: "swarm-atomic-http-source-secret-distinct",
       capabilitySecret,

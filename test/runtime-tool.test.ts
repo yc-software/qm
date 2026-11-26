@@ -7,11 +7,12 @@ import type { RuntimeChoice } from "../src/agent/agent.ts";
 import { randomUUID } from "node:crypto";
 import { storedItem } from "../src/sessions/items.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
   actorId: "alice",
-  scopeId: "personal:alice",
+  scopeId: personalScope("alice"),
   internalAudience: true,
   personAuthority: true,
   exp: Date.now() + 60000,
@@ -57,10 +58,13 @@ test("runtime changes reject revoked access, bots, turns without a person's auth
       error: "authority_required",
     });
   }
-  assert.deepEqual(await service({ ...claims, scopeId: "personal:bob" }, active, { action: "set", model: "Astra" }), {
-    ok: false,
-    error: "forbidden",
-  });
+  assert.deepEqual(
+    await service({ ...claims, scopeId: personalScope("bob") }, active, { action: "set", model: "Astra" }),
+    {
+      ok: false,
+      error: "forbidden",
+    },
+  );
 });
 
 test("runtime rejects unsupported effort and fast mode instead of silently dropping them", async () => {
@@ -183,7 +187,7 @@ test("cron task handoffs still enforce actor, access, model and account policy",
   );
   assert.deepEqual(
     await service(
-      { ...cronClaims, scopeId: "personal:bob" },
+      { ...cronClaims, scopeId: personalScope("bob") },
       active,
       { action: "set", model: "Astra" },
       undefined,

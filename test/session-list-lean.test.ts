@@ -13,6 +13,8 @@ import { assertLateJoinerScopes, assertLeanListing } from "./support/participant
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
@@ -24,14 +26,20 @@ test("participantScopes counts sessions whose content predates the participant",
 
 test("GET /v1/sessions rows carry no spawn metadata or entry flag", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "lean-list-")) }));
-  const child = await built.sessions.getOrCreateByThread("subagent:root:2", "dm", "personal:U1", undefined, "web");
+  const child = await built.sessions.getOrCreateByThread(
+    "subagent:root:2",
+    "dm",
+    personalScope("U1"),
+    undefined,
+    "web",
+  );
   await built.sessions.setSpawnMeta(child.id, {
     surface: "web",
     conversation: { kind: "dm", threadRef: "web:U1:root", audience: [] },
     actor: { id: "U1", type: "internal" },
   } as unknown as SpawnMeta);
   await built.sessions.addParticipant(child.id, "U1", "Research task");
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const port = (server.address() as AddressInfo).port;

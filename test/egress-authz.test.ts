@@ -436,6 +436,7 @@ test("relay sink: batches decisions into a signed POST to core's /v1/egress-audi
     5 * 60_000,
   );
   assert.equal(v.ok, true, "the POST is source-signed over the canonical payload");
+  assert.equal(typeof calls[0]!.body.nonce, "string", "each relay carries a nonce");
 
   await sink.flush();
   assert.equal(calls.length, 1, "an empty buffer does not POST");

@@ -15,8 +15,10 @@ import {
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
 import {
+  EMAIL_MEMBER_TENANTS,
   EMAIL_USER_TENANTS,
   PRINCIPAL_ADMIN_TENANTS,
+  PRINCIPAL_MEMBER_TENANTS,
   PRINCIPAL_TENANTS,
   PRINCIPAL_USER_TENANTS,
 } from "../tenants/lookup.ts";
@@ -196,6 +198,8 @@ END $tenants_for_email$`,
     id: "directory/store/0014-meta-app-icon",
     statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
   },
+  PRINCIPAL_MEMBER_TENANTS,
+  EMAIL_MEMBER_TENANTS,
 ];
 
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;

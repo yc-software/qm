@@ -8,18 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { scopeId } from "../src/types.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-http-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    memory: built.memory,
-    sessions: built.sessions,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -118,14 +113,14 @@ test("the admin memory directory lists every known scope, notebooks-first (power
 
     assert.ok(byId.has("org:default-org"), "the org scope is always listed");
     assert.ok(byId.has("channel:C9"), "session scopes are listed");
-    assert.ok(byId.has("personal:U1"), "every participant gets a personal-scope row, even with no memory yet");
-    assert.ok(byId.has("personal:admin-alice"), "grant holders are listed even if they never spoke");
+    assert.ok(byId.has(personalScope("U1")), "every participant gets a personal-scope row, even with no memory yet");
+    assert.ok(byId.has(personalScope("admin-alice")), "grant holders are listed even if they never spoke");
 
     const c9: any = byId.get("channel:C9");
     assert.equal(c9.hasMemory, true);
     assert.equal(c9.label, "#eng", "channel rows carry the human channel name");
     assert.ok(c9.bytes > 0);
-    const u1: any = byId.get("personal:U1");
+    const u1: any = byId.get(personalScope("U1"));
     assert.equal(u1.hasMemory, false);
     assert.equal(d.scopes[0].hasMemory, true, "scopes with notebooks sort first");
 
@@ -140,18 +135,5 @@ test("the admin memory directory lists every known scope, notebooks-first (power
     );
   } finally {
     await s.close();
-  }
-});
-
-test("memory routes 404 when no MemoryService is wired", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-http-none-")) }));
-  const server = createInsecureTestServer(built.app, { admin: built.admin, auditLog: built.auditLog });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    assert.equal((await fetch(`${base}/v1/memory?principalId=U1`)).status, 404);
-    assert.equal((await fetch(`${base}/v1/admin/memory?scope=org:default-org`, { headers: ALICE_ADMIN })).status, 404);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
   }
 });

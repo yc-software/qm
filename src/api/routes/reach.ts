@@ -136,12 +136,6 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   if (files.length) {
     const { sandbox, blobTransfer } = deps;
     const needsSandbox = files.some((f) => typeof f === "string");
-    if (!blobTransfer || (needsSandbox && !sandbox) || (requestedSandboxId && !deps.sandboxResources)) {
-      return sendJson(res, 501, {
-        error: "not_configured",
-        message: "file attachments aren't available on this server — the sandbox/blob store isn't wired",
-      });
-    }
     const pre = await app.resolveReachTarget(
       {
         ...(typeof b.recipient === "string" ? { recipient: b.recipient } : {}),
@@ -169,7 +163,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
           createdInScope: capability.scopeId,
           seed: `reach:${randomUUID()}`,
           onError: (e) =>
-            deps.errors?.record(
+            deps.errors.record(
               tenantOf(ctx),
               {
                 category: "file_store",

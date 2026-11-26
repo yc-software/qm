@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { personalScope } from "../src/types.ts";
 
 test("publisher resumes an existing transfer after new uploads are disabled", async () => {
   const directory = await mkdtemp(join(tmpdir(), "qm-publisher-"));
@@ -55,7 +56,8 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
   const source = join(directory, "empty.txt");
   await writeFile(source, "");
   let token =
-    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: personalScope("user") })).toString("base64url") +
+    ".signature";
   const run = () =>
     new Promise<string>((resolve, reject) => {
       const child = spawn(
@@ -85,7 +87,9 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     token = await mintSignedPayload(
       {
         encoding: "deflate-raw",
-        claims: deflateRawSync(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url"),
+        claims: deflateRawSync(JSON.stringify({ actorId: "user", scopeId: personalScope("user") })).toString(
+          "base64url",
+        ),
       },
       "upload-test-secret",
     );
@@ -97,7 +101,9 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     token = await mintSignedPayload(
       {
         encoding: "deflate-raw",
-        claims: deflateRawSync(JSON.stringify({ actorId: "other", scopeId: "personal:other" })).toString("base64url"),
+        claims: deflateRawSync(JSON.stringify({ actorId: "other", scopeId: personalScope("other") })).toString(
+          "base64url",
+        ),
       },
       "upload-test-secret",
     );
@@ -140,14 +146,15 @@ test("publisher cancels an unfinished upload when the file changed", async () =>
   const name = `${"s".repeat(252)}.md`;
   const source = join(directory, name);
   const token =
-    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: personalScope("user") })).toString("base64url") +
+    ".signature";
   await writeFile(source, "new contents");
   await writeFile(
     join(directory, `.qm-upload-${createHash("sha256").update(name).digest("hex")}.json`),
     JSON.stringify({
       id: "a".repeat(32),
       manifest: { name, mimetype: "text/markdown", sizeBytes: 3, checksums: ["old"] },
-      destination: { origin, actor: "user", scope: "personal:user" },
+      destination: { origin, actor: "user", scope: personalScope("user") },
       next: 1,
     }),
   );
@@ -199,7 +206,8 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
     origin = `http://127.0.0.1:${address.port}`;
     const source = join(directory, "note.txt");
     const token =
-      Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+      Buffer.from(JSON.stringify({ actorId: "user", scopeId: personalScope("user") })).toString("base64url") +
+      ".signature";
     await writeFile(source, "abc");
     const checksum = createHash("sha256").update("abc").digest("base64");
     await writeFile(
@@ -207,7 +215,7 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
       JSON.stringify({
         id: stale,
         manifest: { name: "note.txt", mimetype: "text/plain", sizeBytes: 3, checksums: [checksum] },
-        destination: { origin, actor: "user", scope: "personal:user" },
+        destination: { origin, actor: "user", scope: personalScope("user") },
         next: 1,
       }),
     );
@@ -257,7 +265,8 @@ test("publisher shows what holds a full quota and can list and abort those uploa
   const source = join(directory, "next.txt");
   await writeFile(source, "abc");
   const token =
-    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: personalScope("user") })).toString("base64url") +
+    ".signature";
   const run = (...args: string[]) =>
     new Promise<{ code: number | null; out: string }>((resolve, reject) => {
       let out = "";

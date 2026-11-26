@@ -4,8 +4,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import type { Grant } from "../src/types.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
-const base = { ownerScopeId: "org:default-org", granteeScopeId: "personal:alice", permission: "read" } as const;
+const base = { ownerScopeId: "org:default-org", granteeScopeId: personalScope("alice"), permission: "read" } as const;
 
 async function regrant(acl: ReturnType<typeof createAclStore>, ref: string): Promise<Grant[]> {
   await acl.grant(tenant, { ...base, ref, grantedBy: "first-admin" });

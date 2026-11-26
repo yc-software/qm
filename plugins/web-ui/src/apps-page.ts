@@ -34,6 +34,7 @@ import {
 import { tip } from "./tooltip";
 import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { deepLinkPath, UI_BASE } from "./deep-link";
+import { scopePerson } from "./scope-labels";
 
 const APP_TABS: Array<{ value: AppTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -112,17 +113,16 @@ function permissionBadge(d: AppView): TemplateResult {
 }
 
 function ownerLabel(d: AppView): string {
-  const me = appState.me?.user;
-  if (d.ownerScopeId === `personal:${me}`) return "Owned by you";
+  if (d.ownerScopeId === appState.me?.personalScope) return "Owned by you";
   if (d.ownerScopeId?.startsWith("personal:"))
-    return `Owned by ${d.ownerName ?? friendlyPrincipal(d.ownerScopeId.slice("personal:".length))}`;
+    return `Owned by ${d.ownerName ?? friendlyPrincipal(scopePerson(d.ownerScopeId))}`;
   if (d.ownerScopeId?.startsWith("org:")) return "Organization";
   return "Shared context";
 }
 
 function appTabs(): TemplateResult {
   const inContext = appList.filter((d) => appInScope(d, appScope));
-  const viewer = appState.me?.user;
+  const viewer = appState.me;
   const counts = Object.fromEntries(
     APP_TABS.map((tab) => [tab.value, inContext.filter((d) => appTab(d, viewer) === tab.value).length]),
   ) as Record<AppTab, number>;
@@ -250,7 +250,7 @@ function drawAppsPage(): void {
     appsPageHost.className = "pane apps-page";
     appState.mainEl.replaceChildren(appsPageHost);
   }
-  const viewer = appState.me?.user;
+  const viewer = appState.me;
   const rows = filterApps(appList, {
     tab: selectedAppTab,
     scope: appScope,
@@ -363,7 +363,7 @@ function drawAppDetail(d: AppView, loading = false): void {
           <div>
             <span>${ownerLabel(d)}</span>
             ${contextScope && contextScope !== d.ownerScopeId ? html`<span class="app-secondary-context">Created in ${scopeChip(contextScope)}</span>` : nothing}
-            ${d.createdBy && d.ownerScopeId !== `personal:${d.createdBy}` ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
+            ${d.createdBy && !d.ownedByCreator ? html`<span class="app-secondary-context">Created by ${d.createdByName ?? friendlyPrincipal(d.createdBy)}</span>` : nothing}
           </div>
           ${d.canShare ? shareButton({ type: "deploy", id: d.id, title: appTitle(d), owner: d.ownerScopeId! }) : permissionBadge(d)}
         </div>
@@ -830,11 +830,11 @@ async function restoreApp(d: AppView): Promise<void> {
     appList = appListAfterRestoreRefresh(appList, restored, refreshResult);
     const destination = currentAppActionView(d.id);
     if (destination === "target") {
-      selectedAppTab = appTab(restored, appState.me?.user);
+      selectedAppTab = appTab(restored, appState.me);
       activeApp = restored;
       await openApp(restored);
     } else if (destination === "list") {
-      selectedAppTab = appTab(restored, appState.me?.user);
+      selectedAppTab = appTab(restored, appState.me);
       activeApp = null;
       drawAppsPage();
     } else {

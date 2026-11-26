@@ -66,3 +66,24 @@ test("a busy thread resolves every author and mentioned person, not only the fir
     crowd.map((i) => [`@Mentioned ${i} hello`, `Author ${i}`, `a${i}@example.com`]),
   );
 });
+
+test("a mention in a file's thread carries the thread files QM has not answered yet", async () => {
+  const raw: SlackHistoryMessage[] = [
+    { ts: "1.0", user: "UA0", text: "funny behavior", files: [{ id: "F1", name: "shot.png" }] },
+    { ts: "2.0", user: "UALICE", thread_ts: "1.0", text: "mine", files: [{ id: "F2", name: "mine.png" }] },
+    { ts: "3.0", user: "UA1", thread_ts: "1.0", text: "theirs", files: [{ id: "F3", name: "theirs.png" }] },
+    { ts: "4.0", user: "UALICE", thread_ts: "1.0", text: "<@UBOT> what does this show?" },
+  ];
+  const inc = { kind: "channel" as const, channel: "C1", threadTs: "1.0", ts: "4.0", userId: "UALICE", files: [] };
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => true,
+    readHistory: async () => ({ raw, hasMore: false }),
+  });
+  const threadFiles = async () =>
+    (await serializer.serializeSlackConversation({}, inc, { audience: [] })).threadFiles?.map((f) => f.id);
+  assert.deepEqual(await threadFiles(), ["F1", "F2"]);
+  raw.splice(2, 0, { ts: "2.5", user: "UBOT", bot_id: "BBOT", thread_ts: "1.0", text: "Looked at it." });
+  assert.equal(await threadFiles(), undefined);
+});

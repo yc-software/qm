@@ -296,9 +296,7 @@ export async function turnModelRefusal(
     return validateWebTurnModelOptions(req, available.models);
   }
   const fallback = deps.runtimeFallback ?? { modelId: defaultModel() };
-  const providers = deps.modelCredentials
-    ? await deps.modelCredentials.availability()
-    : (deps.providerKeys ?? deps.modelProviders);
+  const providers = deps.modelCredentials ? await deps.modelCredentials.availability() : deps.providerKeys;
   const hydrate = async () =>
     deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
   const modelCredentials = deps.modelCredentials && { ...deps.modelCredentials, availability: async () => providers! };

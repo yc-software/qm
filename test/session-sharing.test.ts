@@ -13,6 +13,7 @@ import { scopeId } from "../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 function at(item: NewItem, seq: number): Item {
   return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
@@ -145,7 +146,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       body: body ? JSON.parse(body) : null,
       tenant,
       actor: null,
-      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
+      deps: { ...testCore(), identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
         canViewSessionSnapshot: async (_id: string, user: string) => accessible && user === "alice",
         getSessionForViewer: async (_id: string, user: { actorId: string }) =>

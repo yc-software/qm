@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { createPrincipalLinkService, PrincipalLinkError } from "../src/identity/principal-links.ts";
 import type { UserLink } from "../src/identity/user-store.ts";
@@ -247,7 +247,7 @@ describe("linked sign-ins across the HTTP surface", () => {
   const SECRET = "principal-links-source-secret".repeat(2);
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let nonce = 0;
 
   const signed = (method: string, rawPath: string, body = "", headers: Record<string, string> = {}) => {
@@ -273,18 +273,9 @@ describe("linked sign-ins across the HTTP surface", () => {
       { principalId: "U0LISTED", displayName: "Listed bot", type: "internal", isBot: true },
     ]);
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      admin: built.admin,
-      auditLog: built.auditLog,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      runs: built.runs,
-      signals: built.signals,
-      identity: built.identity,
-      principalLinks: built.principalLinks,
-      directory: built.directory,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -406,18 +397,16 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
   const PID = "portal-only-identity-secret-for-tests-02";
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
     await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
     await built.identity.refresh(true);
     server = createInsecureTestServer(built.app, {
+      ...testCore(built),
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      scheduler: built.scheduler,
-      identity: built.identity,
-      sessionShares: built.sessionShares,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -528,6 +517,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     installPrincipalLinks(links);
     await identity.refresh(true);
     const server = createInsecureTestServer(app.app, {
+      ...testCore(app),
       portalIdentitySecret: secret,
       requireSignedPortalIdentity: true,
       identity,
@@ -566,9 +556,9 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
     await app.identity.refresh(true);
     const server = createInsecureTestServer(app.app, {
+      ...testCore(app),
       portalIdentitySecret: secret,
       requireSignedPortalIdentity: true,
-      identity: app.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;

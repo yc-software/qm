@@ -53,6 +53,7 @@ import type {
   Sandbox,
   SandboxHandle,
   TeardownOptions,
+  ImageFor,
 } from "./sandbox.ts";
 
 const HOME_DIR = "/root";
@@ -82,6 +83,7 @@ export interface StoredModalSandbox extends SnapshotBookkeeping {
 }
 
 export interface ModalSandboxOptions extends BlobStagingOptions {
+  imageFor?: ImageFor;
   client: ModalClient;
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
@@ -222,7 +224,12 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
     }
     let session: ModalSession;
     try {
-      session = await client.create({ name, tags: tags("scope"), memoryGb: sizeByScope.get(scope) });
+      session = await client.create({
+        name,
+        tags: tags("scope"),
+        memoryGb: sizeByScope.get(scope),
+        image: await opts.imageFor?.(scope),
+      });
     } catch (err) {
       if (!(err instanceof ModalNameConflictError)) throw err;
       const adopted = await client.fromName(name);
@@ -347,7 +354,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             }
           }
           try {
-            await session.terminate();
+            await session.terminate({ wait: true });
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
@@ -850,7 +857,7 @@ export function createModalSandbox(opts: ModalSandboxOptions): Sandbox {
             await snapshotHome(scopeId, session).catch((error: unknown) => {
               if (!(error instanceof ModalSandboxGoneError)) throw error;
             });
-          await session.terminate().catch((error: unknown) => {
+          await session.terminate({ wait: true }).catch((error: unknown) => {
             if (!(error instanceof ModalSandboxGoneError)) throw error;
           });
         }

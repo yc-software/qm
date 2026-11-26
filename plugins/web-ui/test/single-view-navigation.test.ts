@@ -41,7 +41,7 @@ beforeEach(async () => {
   shell = await env.vite.ssrLoadModule("/src/shell.ts");
   sessions = await env.vite.ssrLoadModule("/src/sessions.ts");
   split = await env.vite.ssrLoadModule("/src/split.ts");
-  shell.appState.me = { user: "tester", org: "test" };
+  shell.appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   shell.appState.currentView = "chats";
   shell.appState.mainEl = document.querySelector("main");
 });

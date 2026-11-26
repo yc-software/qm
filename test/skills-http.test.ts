@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -30,7 +30,7 @@ function start() {
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return {
@@ -528,9 +528,9 @@ async function startSecure() {
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    config: built.config,
     runs: liveRunStore(),
   });
   server.listen(0);
@@ -1407,11 +1407,10 @@ test("a turn's skills tool saves with that turn's own capability, and read-only 
     },
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     capabilitySecret: SECRET,
-    config: built.config,
-    runs: built.runs,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

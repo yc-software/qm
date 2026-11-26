@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session-store.ts";
 import { isUserItem, storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -144,13 +144,9 @@ test("windowedTranscript: conversation text is never truncated — only tool pay
   }
 });
 
-function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "transcript-window-")) }));
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

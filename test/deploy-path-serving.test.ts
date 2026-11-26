@@ -18,6 +18,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { companyTest } from "./support/app-handle.ts";
+import { testCore } from "./support/build-app.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
@@ -38,7 +39,7 @@ function httpGet(
 }
 
 async function fixture(
-  deps: Parameters<typeof createInsecureTestServer>[1],
+  deps: Partial<Parameters<typeof createInsecureTestServer>[1]>,
   upstreamContentType = "text/html; charset=utf-8",
   upstreamHeaders: Record<string, string> = {},
 ) {
@@ -76,7 +77,7 @@ async function fixture(
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, deps);
+  const server = createInsecureTestServer(app, { ...testCore(), ...deps });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   const close = async () => {

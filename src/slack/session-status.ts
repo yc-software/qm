@@ -1,13 +1,22 @@
-import { buildPlanBlock, type PlanTaskSnapshot } from "./step-labels.ts";
 import { SLACK_STATUS_TASK_PREFIX } from "./message-gating.ts";
+import { botIdentityArgs } from "./delivery.ts";
+import { slackSectionBlocks } from "./mrkdwn.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { SessionWork, SessionWorkReader } from "../sessions/session-work.ts";
+import type { WornPersona } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+
+export interface SlackStatusHost {
+  ts: string;
+  at: number;
+  text: string;
+  blocks?: Record<string, unknown>[];
+}
 
 export interface SlackSessionStatusState {
   writer?: string;
@@ -19,6 +28,7 @@ export interface SlackSessionStatusState {
   cardId?: string;
   cardTs?: string;
   cardContent?: string;
+  host?: SlackStatusHost;
 }
 
 interface StatusClient {
@@ -28,6 +38,7 @@ interface StatusClient {
 export interface SlackStatusActivity {
   work?: Pick<SessionWorkReader, "of">;
   publicWebUrl?: string;
+  persona?(runId: string): WornPersona | null;
 }
 
 export function createSlackSessionStatus(
@@ -41,8 +52,7 @@ export function createSlackSessionStatus(
   const deleteIf = store.deleteIf.bind(store);
   const queue = createKeyedQueue<string>();
   const key = (account: string, channel: string, threadTs: string) => JSON.stringify([account, channel, threadTs]);
-
-  async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState) {
+  async function sync(client: StatusClient, id: string, next?: SlackSessionStatusState, released?: string) {
     await queue(id, async () => {
       for (let attempt = 0; attempt < 300; attempt++) {
         const applied = await lease.hold(`slack:session-status:${id}`, async (lost) => {
@@ -52,26 +62,35 @@ export function createSlackSessionStatus(
           });
           const writer = randomUUID();
           const anchor = await runs.get((next ?? (await store.get(id)))?.anchorRunId ?? "");
-          if (next && (!anchor?.deliveryState?.replying || anchor.request.privateSessionMessage)) return true;
+          const replying = !!next?.host || !!anchor?.deliveryState?.replying;
+          if (next && (!replying || anchor?.request.privateSessionMessage)) return true;
           if (leaseLost) return true;
           if (next) await store.putIfAbsent(id, { ...next, writer });
           if (leaseLost) {
             await deleteIf(id, (row) => row.writer === writer && !row.cardTs);
             return true;
           }
-          const current = await store.get(id);
+          let current = await store.get(id);
           if (!current || leaseLost) return true;
+          const posted = next?.host && next.host.ts !== current.host?.ts ? next.host : undefined;
+          if (posted || (released && [current.cardTs, current.host?.ts].includes(released))) {
+            if (posted) await erase(client, current);
+            const cleared = { host: posted, cardTs: undefined, cardContent: undefined, cardId: randomUUID() };
+            current = await update(id, (row) => ({ ...row, ...cleared }));
+            if (!current || leaseLost) return true;
+          }
           const work = anchor ? await activity.work?.of(anchor.sessionId, "slack") : undefined;
           if (work?.delivering) return true;
-          const deferredToThinkingStream = !!work?.running;
           const startedAt = current.startedAt ?? now();
           const cardId = current.cardId ?? randomUUID();
           const elapsed = now() - startedAt;
           const followUrl = work?.sessionId ? conversationWebUrl(activity.publicWebUrl, work.sessionId) : undefined;
-          const { blocks, headline } = renderWaitingPlan(work, { cardId, elapsed, followUrl });
-          const ongoing = !!work?.busy && !deferredToThinkingStream;
+          const card = renderCard(work, { cardId, elapsed, followUrl });
+          const blocks = current.host ? [...hostBlocks(current.host), ...card.blocks] : card.blocks;
+          const quiet = now() - (current.host?.at ?? startedAt);
+          const ongoing = !!work?.busy;
           const content = JSON.stringify(blocks);
-          const post = current.cardContent !== content && (!!current.cardTs || ongoing);
+          const post = current.cardContent !== content && (!!current.cardTs || (ongoing && quiet >= SHOW_AFTER_MS));
           if (!next && ongoing && !post && current.startedAt && current.cardId) return true;
           let state = await update(id, (row) =>
             leaseLost ? row : { ...row, writer, ...(next ? { anchorRunId: next.anchorRunId } : {}) },
@@ -86,15 +105,17 @@ export function createSlackSessionStatus(
           if (!(await persist({ startedAt, cardId }))) return true;
           try {
             if (post && ongoing) {
-              const result = (await client.apiCall(state.cardTs ? "chat.update" : "chat.postMessage", {
+              const target = state.cardTs ?? state.host?.ts;
+              const identity = botIdentityArgs(activity.persona?.(state.anchorRunId) ?? undefined);
+              const result = (await client.apiCall(target ? "chat.update" : "chat.postMessage", {
                 channel: state.channel,
-                ...(state.cardTs ? { ts: state.cardTs } : { thread_ts: state.threadTs, client_msg_id: state.cardId }),
-                text: headline,
+                ...(target ? { ts: target } : { thread_ts: state.threadTs, client_msg_id: state.cardId, ...identity }),
+                text: state.host?.text ?? card.headline,
                 blocks,
                 unfurl_links: false,
                 unfurl_media: false,
               })) as { ts?: string };
-              const cardTs = state.cardTs ?? result.ts;
+              const cardTs = target ?? result.ts;
               if (!cardTs) throw new Error("Slack task card response missing timestamp");
               if (leaseLost) {
                 await update(id, (row) => (row.cardId === state!.cardId && !row.cardTs ? { ...row, cardTs } : row));
@@ -104,9 +125,8 @@ export function createSlackSessionStatus(
               if (!(await persist({ cardTs, cardContent: content }))) return true;
             }
             if (!ongoing) {
-              if (state.cardTs) await client.apiCall("chat.delete", { channel: state.channel, ts: state.cardTs });
-              if (!deferredToThinkingStream) await deleteIf(id, (row) => !leaseLost && row.writer === writer);
-              else await persist({ cardTs: undefined, cardContent: undefined });
+              await erase(client, state);
+              await deleteIf(id, (row) => !leaseLost && row.writer === writer);
             }
           } catch (error) {
             const code = (error as { data?: { error?: string } }).data?.error;
@@ -136,7 +156,6 @@ export function createSlackSessionStatus(
       throw new Error("Slack session status lock timed out");
     });
   }
-
   return {
     async start(client: StatusClient, account: string, runId: string, channel: string, threadTs?: string) {
       if (!threadTs) return;
@@ -150,6 +169,23 @@ export function createSlackSessionStatus(
         cardId: randomUUID(),
       }).catch(swallowAs("slack: start session status", undefined));
     },
+    card(client: StatusClient, account: string, channel: string, threadTs: string) {
+      const id = key(account, channel, threadTs);
+      return {
+        posted(message: Pick<SlackStatusHost, "text" | "blocks">, ts: string, runId: string) {
+          const at = now();
+          const next = { account, channel, threadTs, anchorRunId: runId, startedAt: at, cardId: randomUUID() };
+          return sync(client, id, { ...next, host: { ...message, ts, at } }).catch(
+            swallowAs("slack: session status after a post", undefined),
+          );
+        },
+        async release(ts: string) {
+          const row = await store.get(id);
+          if (!row || ![row.cardTs, row.host?.ts].includes(ts)) return;
+          await sync(client, id, undefined, ts).catch(swallowAs("slack: release session status", undefined));
+        },
+      };
+    },
     async reconcile(client: StatusClient, account: string) {
       for (const [id, state] of await store.entries())
         if (state.account === account)
@@ -158,7 +194,19 @@ export function createSlackSessionStatus(
   };
 }
 
+const SHOW_AFTER_MS = 15_000;
 const BACKGROUND_STEP = { watch: "Watching for updates", job: "Background job" } as const;
+
+function hostBlocks(host: SlackStatusHost): Record<string, unknown>[] {
+  return host.blocks ?? slackSectionBlocks(host.text);
+}
+
+async function erase(client: StatusClient, row: SlackSessionStatusState) {
+  if (!row.cardTs) return;
+  const at = { channel: row.channel, ts: row.cardTs };
+  if (row.host) await client.apiCall("chat.update", { ...at, text: row.host.text, blocks: row.host.blocks ?? [] });
+  else await client.apiCall("chat.delete", at);
+}
 
 function stillWorking(step: string): string {
   const second = step.charAt(1);
@@ -181,36 +229,37 @@ function headlineOf(work: SessionWork | undefined): [string, string] {
   return ["", ""];
 }
 
-function renderWaitingPlan(
+function renderCard(
   work: SessionWork | undefined,
-  opts: { cardId: string; elapsed: number; followUrl?: string },
-): { blocks: Record<string, unknown>[]; headline: string } {
-  const [headline] = headlineOf(work);
-  const tasks: PlanTaskSnapshot[] = [];
-  for (const branch of work?.branches ?? []) {
-    tasks.push({
-      taskId: `${SLACK_STATUS_TASK_PREFIX}branch:${branch.id}`,
-      title: branch.step ? `${branch.title}: ${branch.step}` : branch.title,
-      status: "in_progress",
-    });
-  }
-  if (tasks.length === 0) {
-    tasks.push({
-      taskId: `${SLACK_STATUS_TASK_PREFIX}wait:${opts.cardId}`,
-      title: headline,
-      status: "in_progress",
-    });
-  }
+  card: { cardId: string; elapsed: number; followUrl?: string | undefined },
+) {
+  const [title, phrase] = headlineOf(work);
+  const details = richText(phrase, card.elapsed >= 60_000 ? ` · ${minutes(card.elapsed)}` : "", card.followUrl);
   const blocks: Record<string, unknown>[] = [
-    buildPlanBlock(headline, tasks, `${SLACK_STATUS_TASK_PREFIX}waitplan:${opts.cardId}`),
+    {
+      type: "task_card",
+      task_id: `${SLACK_STATUS_TASK_PREFIX}${card.cardId}`,
+      title,
+      status: "in_progress",
+      ...(details ? { details } : {}),
+    },
   ];
-  if (opts.followUrl) {
-    blocks.push({
-      type: "context",
-      elements: [{ type: "mrkdwn", text: `<${opts.followUrl}|Open in QM>` }],
-    });
-  }
-  return { blocks, headline };
+  return { blocks, headline: title };
+}
+
+function minutes(ms: number): string {
+  const total = Math.floor(ms / 60_000);
+  return total >= 60 ? `${Math.floor(total / 60)}h ${total % 60}m` : `${total}m`;
+}
+
+function richText(phrase: string, elapsed: string, url?: string) {
+  if (!phrase) return undefined;
+  const elements = url
+    ? [{ type: "link", url, text: "Open in QM" }, ...(elapsed ? [{ type: "text", text: elapsed }] : [])]
+    : [{ type: "text", text: `${phrase}${elapsed}` }];
+  return { type: "rich_text", elements: [{ type: "rich_text_section", elements }] };
 }
 
 export type SlackSessionStatus = ReturnType<typeof createSlackSessionStatus>;
+
+export type SlackStatusCard = ReturnType<SlackSessionStatus["card"]>;

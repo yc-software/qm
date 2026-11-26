@@ -12,7 +12,6 @@ import { randomUUID } from "node:crypto";
 import { retryOperation, withAbort } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { RENDER_SNAPSHOT_RETENTION_MS } from "./render-limits.ts";
 
 export const RENDER_SCRIPT_DIR = "/dev/.qm-run";
 const RENDER_SANDBOX_PLAN = "2c-4g";
@@ -140,17 +139,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     }
   };
   const exec = (sandboxId: string, command: string, signal: AbortSignal) =>
-    withAbort(async () => {
-      const stream = await api.exec(sandboxId, command, undefined, signal);
-      let stdout = "";
-      let stderr = "";
-      for await (const event of stream) {
-        if (event.type === "exit") return { stdout, stderr, exitCode: event.exit_code };
-        if (event.stream === "stdout") stdout += event.data;
-        else stderr += event.data;
-      }
-      throw new Error(`Render sandbox ${sandboxId}: command stream ended without an exit code`);
-    }, signal);
+    withAbort(() => api.exec(sandboxId, command, undefined, signal).result(), signal);
   const getSnapshot = async (snapshot: RenderSnapshot): Promise<RenderSnapshot> =>
     normalizeSnapshot(
       await retryOperation(
@@ -342,7 +331,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
               sandboxId,
               kind,
               name,
-              expiresAt: new Date(Date.now() + RENDER_SNAPSHOT_RETENTION_MS).toISOString(),
+              ttlSeconds: 0,
             }),
           "refused",
           {

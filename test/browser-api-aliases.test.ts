@@ -7,12 +7,13 @@ import { apiRoutes } from "../src/api/routes/index.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { createServer } from "../src/api/server.ts";
 import { startQm } from "../src/start.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { freePort } from "../scripts/dev/lib/proc.ts";
+import { personalScope } from "../src/types.ts";
 
 const SIGNING = "browser-alias-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-alias-identity-secret-0123456789";
@@ -50,7 +51,7 @@ async function core(t: TestContext, onBuilt: (built: ReturnType<typeof buildApp>
   const config = testConfig({ signingSecret: SIGNING, publicWebUrl: "https://qm.example.com" });
   const built = stopAtEnd(buildApp(config));
   onBuilt(built);
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -71,6 +72,8 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["POST", "/api/crons"],
     ["PUT", "/api/inbox"],
     ["DELETE", "/api/loops/1/grants/2"],
+    ["GET", "/api/files/upload-client"],
+    ["GET", "/api/files/uploads"],
     ["GET", "/v1/sessions"],
   ] as const)
     assert.equal(apiAlias(method, path), null, `${method} ${path}`);
@@ -81,7 +84,7 @@ test("each aliased path answers a cookie-only browser exactly as its /v1 route d
   const base = await core(t, (built) => {
     flags = built.featureFlags;
   });
-  await flags!.setEnabled("inbox_loops", "personal:alice", true, "test");
+  await flags!.setEnabled("inbox_loops", personalScope("alice"), true, "test");
   const cookie = browserSessionCookie("alice");
   for (const { path, target } of aliases.filter(({ method }) => method === "GET")) {
     const query = QUERY[path] ?? "";
@@ -187,11 +190,15 @@ test("browser writes act as the signed-in person under their canonical id", asyn
   const read = await fetch(`${base}/api/ui-state?key=sidebar`, { headers: { cookie } });
   assert.equal(((await read.json()) as { value?: unknown }).value, 1, sub);
   const pinned = await write("PUT", "/api/channel-header-pin", { on: false });
-  assert.deepEqual(await pinned.json(), { scopeId: `personal:${sub}`, on: false, configured: false }, sub);
+  assert.deepEqual(await pinned.json(), { scopeId: personalScope(sub), on: false, configured: false }, sub);
   const pin = await fetch(`${base}/api/channel-header-pin`, { headers: { cookie } });
-  assert.equal(((await pin.json()) as { scopeId?: string }).scopeId, `personal:${sub}`, sub);
+  assert.equal(((await pin.json()) as { scopeId?: string }).scopeId, personalScope(sub), sub);
   assert.equal((await fetch(`${base}/api/runtime-config`, { headers: { cookie } })).status, 200, sub);
-  const session = await built.sessions.getOrCreateByThread("web:alice:fork-me", "dm", "personal:alice@example.com");
+  const session = await built.sessions.getOrCreateByThread(
+    "web:alice:fork-me",
+    "dm",
+    personalScope("alice@example.com"),
+  );
   await built.sessions.addParticipant(session.id, "alice@example.com", "Fork me");
   const forked = await write("POST", `/api/sessions/${session.id}/fork`);
   assert.equal(forked.status, 200);

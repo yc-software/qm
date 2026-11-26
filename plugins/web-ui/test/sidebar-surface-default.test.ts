@@ -80,6 +80,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       const sidebar = await env.vite.ssrLoadModule("/src/sessions.ts");
       shell.appState.me = {
         user: "tester",
+        personalScope: "personal:tester",
         org: "test",
         permissions: [],
         chatSurfaces: [

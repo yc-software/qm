@@ -1,7 +1,15 @@
 import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
-import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
+import {
+  isAgentReply,
+  isOverheard,
+  isShownReply,
+  isUserItem,
+  type Item,
+  type NewItem,
+  stepMessage,
+} from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -13,7 +21,12 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { DESKTOP_PERSON_ONLY_TEXT, desktopCallFor } from "../surfaces/desktop-calls.ts";
-import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
+import {
+  startDispatchTrace,
+  setRunAttribute,
+  tracePhase,
+  type DispatchTrace,
+} from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -56,13 +69,14 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope, scopeLabel } from "../types.ts";
 import {
   desktopClientForTurn,
   introducesUser,
   isPersonAuthored,
   isSessionTurn,
   mayDriveDesktop,
+  runStarter,
 } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -209,6 +223,8 @@ import {
   finishSystemPrompt,
   replacesReply,
   replyToRewrite,
+  rewriteTargets,
+  supersedeMarker,
   wakeTurnEvent,
 } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
@@ -572,9 +588,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const personFireTurn =
         (!sessionTurn || delegatedOrigin !== undefined) &&
         isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
-      const speakerTurn =
-        (!sessionTurn && (humanTurn || authoredDetection)) ||
-        (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
+      const personSpoke = !sessionTurn && (humanTurn || authoredDetection);
+      const speakerTurn = personSpoke || (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
       const personAuthorityTurn = internalAudience && input.botActor !== true && (speakerTurn || personFireTurn);
       const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
       const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
@@ -615,7 +630,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .catch(swallowAs("orchestrator: run-activity append", undefined));
         if (ACTIVITY_KINDS.has(item.kind) || (item.kind === "AgentMessage" && item.variant === "narration")) {
           await append(item);
-          if (ACTIVITY_KINDS.has(item.kind)) deps.turnStream.noteActivity(input.runId);
         } else if (item.kind === "Reasoning") {
           const id = stepMessage(item)?.id;
           const step = typeof id === "string" && item.step !== null ? { id, index: item.step } : undefined;
@@ -770,6 +784,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const approval = await issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
+              summary: "Let through a message held by the security screen",
               reason: heldReason,
               homeChannel: homeChannel?.channelName,
               blocksInput: true,
@@ -999,7 +1014,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       await deps.skillsReady?.();
       const skillSources = tracePhase("turn.skills", () => context.listSkills([scopeId, resolution.orgScopeId]), {
-        counts: countSkills,
+        attributes: countSkills,
       });
       void skillSources.catch(() => undefined);
       const configuredProviders =
@@ -1043,7 +1058,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
       if (otherSkillSources.length)
-        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
+        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.map(scopeLabel).join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
@@ -1119,6 +1134,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      setRunAttribute("qm.started_by", runStarter(input, delegatedTask));
       const wakingChild =
         input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
           ? await deps.sessions.get(input.sessionSenderId)
@@ -1144,6 +1160,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sourceScopeId: scopeId as ScopeId,
           sourceThreadRef: session.threadRef,
           sourceSessionId: session.id,
+          ...(input.runId ? { sourceRunId: input.runId } : {}),
         });
 
       const isRetry = (input.attempt ?? 1) > 1;
@@ -1787,9 +1804,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               identities.set(credential.handle, identity);
               refreshed.set(credential.handle, placeCredential(credential));
             };
-            await registerKeychainCredentials(credentialCatalog, add);
+            const brokerToken = await registerServiceCredentials(
+              credentialCatalog,
+              { scopeAttestation, sandboxTokenExpiry },
+              add,
+              handles,
+            );
+            await registerKeychainCredentials(credentialCatalog, add, brokerToken);
             await registerConnectorCredentials(credentialCatalog, add);
-            await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
             for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
               add(credential, "");
             return [...refreshed.values()];
@@ -1986,10 +2008,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
         const rewrites =
-          wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
+          (wakeTurn || humanInput) && isWeb && !spineDm
+            ? await rewriteTargets(deps, tenant, actor.id, wakeTurn ? history : [])
+            : undefined;
         if (spineWake)
           turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine"), history));
-        else if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
+        else if (childWake || rewrites?.some(isShownReply))
+          turnEvents.push(wakeTurnEvent(childWake, rewrites?.filter(isShownReply) ?? []));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2161,7 +2186,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 externalId: messageTs ?? entryTs ?? null,
                 body: {
                   ...(inboundIssues.length ? { environment: environmentNote(inboundIssuesNote(inboundIssues)) } : {}),
-                  ...(humanInput ? { speakerId: actor.id } : {}),
+                  ...(personSpoke ? { speakerId: actor.id } : {}),
                   ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                   ...(input.displayText?.trim() ? { display: input.displayText } : {}),
                   ...(recallOutcomes.length ? { memoryRecallOutcomes: recallOutcomes } : {}),
@@ -2291,7 +2316,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
               if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
               if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
-              if (rewrites && replacesReply(entry)) body.supersedes = rewrites.seq;
+              if (rewrites && replacesReply(entry)) Object.assign(body, supersedeMarker(rewrites, emittedEntries));
               return { ...entry, body };
             };
             const stored = ((): NewItem => {
@@ -2316,7 +2341,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               Object.assign(body, swarmEntryProvenance);
               if (!steered) delete body.speakerId;
-              if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
+              if (personSpoke && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
               const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
               if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
                 body.name = actor.displayName.trim();

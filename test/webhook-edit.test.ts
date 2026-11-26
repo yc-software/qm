@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 test("editing a webhook's action keeps its id (URL) and secret", async () => {
   const store = createWebhookStore(testMap(), testMap());
   const wh = await store.create({
     owner: "u:a",
     createdBy: "u:a",
-    ownerScopeId: "personal:a",
+    ownerScopeId: personalScope("a"),
     action: "old task",
     verification: { scheme: "hmac-sha256", secret: "s3cret" },
   });
@@ -24,7 +25,7 @@ test("a webhook's title is set on create, normalized, and renamed without touchi
   const wh = await store.create({
     owner: "u:a",
     createdBy: "u:a",
-    ownerScopeId: "personal:a",
+    ownerScopeId: personalScope("a"),
     title: "  GitHub   PR review ",
     action: "review it",
     verification: { scheme: "hmac-sha256", secret: "s3cret" },

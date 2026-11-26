@@ -34,7 +34,7 @@ export async function requireScopedResource<T>(
 export const FILES_PAGE_SIZE = 200;
 
 export async function personNamer(app: App, deps: ServerDeps): Promise<(principalId: string) => string | undefined> {
-  const [members] = await Promise.all([app.directoryMembers(), deps.identity?.refresh()]);
+  const [members] = await Promise.all([app.directoryMembers(), deps.identity.refresh()]);
   const byId = new Map(members.map((m) => [foldPrincipalId(m.principalId), m.displayName?.trim() || m.principalId]));
   return (principalId) => {
     const ids = [principalId, ...personIds(principalId)];
@@ -62,9 +62,9 @@ export async function discoverScopes(
 ): Promise<Map<string, string>> {
   const labels = new Map<string, string>([[orgScope(deps), "org-wide"]]);
   const [scopes, participants, grants] = await Promise.all([
-    deps.sessions?.distinctScopes() ?? [],
-    deps.sessions?.distinctParticipants() ?? [],
-    deps.admin?.listGrants(tenant) ?? [],
+    deps.sessions.distinctScopes(),
+    deps.sessions.distinctParticipants() ?? [],
+    deps.admin.listGrants(tenant) ?? [],
   ]);
   for (const s of scopes) {
     if (!labels.has(s.scopeId) || (s.channelName && !labels.get(s.scopeId))) {

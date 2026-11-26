@@ -19,7 +19,8 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   var body: some View {
     let revision = UUID()
     GeometryReader { geometry in
-      let sidebarWidth = min(geometry.size.width * 0.8, 400)
+      // The list fills the screen and pushes the conversation fully off.
+      let sidebarWidth = geometry.size.width
       let drawer = hasSelection && !showsSidebarPage
       ZStack(alignment: .leading) {
         DrawerSidebarLayer(
@@ -27,7 +28,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
           isCovered: hasSelection && !showsSidebarPage,
           content: DrawerContent(revision: revision) {
             sidebar()
-              .frame(width: drawer ? sidebarWidth : geometry.size.width)
+              .frame(width: sidebarWidth)
           }
         )
         if hasSelection {
@@ -45,7 +46,6 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
         }
       }
       .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
-      .mask { Rectangle().ignoresSafeArea(.container, edges: .vertical) }
     }
     .background(QMTheme.paper.ignoresSafeArea())
     .modifier(DrawerSync(isOpen: $isOpen, motion: motion))

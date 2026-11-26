@@ -65,7 +65,7 @@ test("an untitled cron is listed by its clipped task text, a titled one by its t
   const { renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
   appState.currentView = "crons";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   await renderCronsPage();
   assert.deepEqual(
     [...main.querySelectorAll(".cron-title-line")].map((row) => row.textContent?.trim()),
@@ -80,7 +80,7 @@ test("the schedule picker saves a weekday preset as a calendar schedule in the c
   const { openCronById, renderCronsPage } = await vite.ssrLoadModule("/src/crons.ts");
   appState.currentView = "crons";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   openCronById("c1");
   await renderCronsPage();
   assert.equal(main.querySelector(".cron-when-main")?.textContent?.trim(), "Every day at 9:00 AM");
@@ -100,7 +100,7 @@ test("cron detail menu, delete dialog Escape/reset, failed notice, unsaved edit,
   const { openCronById, renderCronsPage, resetActiveCron } = await vite.ssrLoadModule("/src/crons.ts");
   appState.currentView = "crons";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
   holdRuns = true;
   openCronById("c1");
   await renderCronsPage();

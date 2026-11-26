@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { harness } from "./deep-link-boot-fixture.ts";
+import { harness, welcomeSeeds } from "./deep-link-boot-fixture.ts";
 
 test("personal Slack linking appears beneath the confirmed company installation", async () => {
   const h = await harness({ path: "/", welcome: true });
@@ -8,7 +8,15 @@ test("personal Slack linking appears beneath the confirmed company installation"
   let installed = false;
   globalThis.fetch = async (input, init) => {
     if (String(input) === "/me")
-      return Response.json({ user: "tester", org: "test", welcomeCohort: "F26", permissions: ["admin"] });
+      return Response.json({
+        user: "tester",
+        personalScope: "personal:tester",
+        org: "test",
+        welcome: welcomeSeeds,
+        permissions: ["admin"],
+      });
+    if (String(input) === "/api/composio/slack")
+      return Response.json({ connected: false, workspaceInstalled: installed });
     if (String(input) === "/api/admin/slack-installation")
       return Response.json({ configured: installed, installAvailable: true, setup: { connected: installed } });
     return previousFetch(input, init);

@@ -25,6 +25,7 @@ import {
 } from "./cron-format";
 import { tip } from "./tooltip";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
+import { rememberScopeLabels } from "./scope-labels";
 
 export interface CronView {
   id: string;
@@ -754,9 +755,11 @@ function cronScheduleSection(c: CronView, manageable: boolean): TemplateResult {
 
 async function loadCronShares(id: string): Promise<void> {
   try {
-    const r = await api<{ grantees: Array<{ scope: string; permission: "read" | "write" }> }>(
-      `/api/shares/cron/${encodeURIComponent(id)}`,
-    );
+    const r = await api<{
+      grantees: Array<{ scope: string; permission: "read" | "write" }>;
+      labels?: Record<string, string>;
+    }>(`/api/shares/cron/${encodeURIComponent(id)}`);
+    rememberScopeLabels(r.labels);
     cronShares.set(id, r.grantees ?? []);
   } catch {
     cronShares.set(id, []);

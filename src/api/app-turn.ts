@@ -54,7 +54,6 @@ export function createTurnMethods(
   | "turn"
   | "getApproval"
   | "subscribeSessionStates"
-  | "stopThread"
   | "subscribeLedgerEvents"
   | "listSessionApprovals"
   | "pendingApprovalForThread"
@@ -368,6 +367,9 @@ export function createTurnMethods(
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
+        ...(req.declinePendingApprovals && !req.approval && origin.kind === "human"
+          ? { declinePendingApprovals: true }
+          : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(project ? { scopeVersion: project.version } : {}),
       };
@@ -556,9 +558,6 @@ export function createTurnMethods(
       return terminalResult ? withAdminLink(terminalResult) : awaitRun(run.id);
     },
 
-    stopThread(threadRef, opts) {
-      return stopThread(threadRef, undefined, opts?.tree ?? true);
-    },
     subscribeSessionStates(cb, opts) {
       if (!deps.sessionStateBus) return () => {};
       const lookupParticipants = async (threadRef: string): Promise<string[]> => {

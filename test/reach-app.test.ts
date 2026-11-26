@@ -21,6 +21,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -314,7 +315,7 @@ test("HTTP: /v1/apps?principalId= filters through viewer authz", async () => {
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(app, testCore());
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -358,7 +359,7 @@ test("HTTP: /v1/apps/:id shows an app only to principals who can see it", async 
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(app, testCore());
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -400,6 +401,7 @@ test("HTTP: each /v1/apps row carries an authed, clonable gitUrl when ingress is
   );
   const secret = "deployments-list-secret".repeat(3);
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
     apiBaseUrl: "https://core.test",

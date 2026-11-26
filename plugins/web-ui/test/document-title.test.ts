@@ -93,7 +93,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
       title: "New title",
     };
     sessionsState.list = [oldSession, newSession];
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     appState.currentView = "chats";
     appState.mainEl = document.createElement("main");
     appState.listEl = document.createElement("aside");

@@ -44,7 +44,7 @@ test("a steered queued message shows in the transcript as waiting until model in
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     const model = {
       id: "alpha",
       name: "Alpha",

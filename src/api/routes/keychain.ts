@@ -36,7 +36,7 @@ async function resolveScopeNames(
   if (!wanted.length) return {};
   const names: Record<string, string> = {};
   const sessionScopes =
-    (await Promise.resolve(deps.sessions?.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
+    (await Promise.resolve(deps.sessions.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
     [];
   const byScope = new Map(sessionScopes.filter((s) => s.channelName).map((s) => [s.scopeId, s.channelName!]));
   let channelsById: Map<string, string> | null = null;
@@ -348,7 +348,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
-  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+  if (await botWorkInPersonsName(ctx.deps.admin.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
@@ -376,7 +376,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const dest = resolveCapabilityDestination(capability, undefined);
   const requesterDestination =
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
-  const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+  const originRun = capability.runId ? await deps.runs.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
   const runRequest = originRun && originRun.sessionId === capability.threadRef ? originRun.request : undefined;
   const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
@@ -407,7 +407,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   });
   const cardDestination = approvalCardDestination(ask);
   if (cardDestination)
-    await deps.deliveries?.enqueue({
+    await deps.deliveries.enqueue({
       destination: cardDestination,
       text: notice,
       idempotencyKey: `ask:${ask.id}:notice`,

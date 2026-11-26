@@ -17,7 +17,7 @@ export async function egress(ctx: ApiCtx): Promise<void> {
   audit(ctx, { principalId: actor.id, action: "egress.read", resource: "egress", scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   const q = orgWide ? { limit: EGRESS_LIST_LIMIT } : { scopeId: scope, limit: EGRESS_LIST_LIMIT };
-  const brokerRows = ((await deps.credentialUsage?.list(tenantOf(ctx), q)) ?? []).map((s) => ({
+  const brokerRows = ((await deps.credentialUsage.list(tenantOf(ctx), q)) ?? []).map((s) => ({
     ts: s.ts,
     source: "broker" as string,
     host: s.host,
@@ -28,7 +28,7 @@ export async function egress(ctx: ApiCtx): Promise<void> {
     slug: s.slug,
     ...(s.upstreamStatus !== undefined ? { upstreamStatus: s.upstreamStatus } : {}),
   }));
-  const firewallRows = ((await deps.egressAudit?.list(tenantOf(ctx), q)) ?? []).map((e) => ({
+  const firewallRows = ((await deps.egressAudit.list(tenantOf(ctx), q)) ?? []).map((e) => ({
     ts: e.ts,
     source: e.source,
     host: e.host,
@@ -68,11 +68,11 @@ export async function listAdminErrors(ctx: ApiCtx): Promise<void> {
     });
   }
   const limit = Math.min(rawLimit, ERRORS_LIST_LIMIT);
-  const total = (await deps.errors?.count(tenantOf(ctx), filters)) ?? 0;
+  const total = await deps.errors.count(tenantOf(ctx), filters);
   if (url.searchParams.get("count")) return sendJson(res, 200, { scopeId: scope, total });
   const lastOffset = total ? Math.floor((total - 1) / limit) * limit : 0;
   const offset = Math.min(rawOffset, lastOffset);
-  const errors = (await deps.errors?.list(tenantOf(ctx), { ...filters, limit, offset })) ?? [];
+  const errors = (await deps.errors.list(tenantOf(ctx), { ...filters, limit, offset })) ?? [];
   return sendJson(res, 200, { scopeId: scope, errors, total, limit, offset });
 }
 
@@ -92,7 +92,7 @@ export async function listAdminAudit(ctx: ApiCtx): Promise<void> {
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, cap) : fallback;
   const nameOf = await personNamer(ctx.app, deps);
   const events = (
-    (await deps.auditLog?.tail(tenantOf(ctx), {
+    (await deps.auditLog.tail(tenantOf(ctx), {
       limit,
       ...(orgWide ? {} : { scopeLabel: scope as ScopeId }),
       ...(action === undefined ? {} : { action }),

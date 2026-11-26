@@ -9,22 +9,22 @@ import { request } from "node:http";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp, type Core } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { BlobTooLargeError, type BlobInfo } from "../src/persistence/blob-transfer.ts";
+import { personalScope } from "../src/types.ts";
 
 const SIGNING = "web-uploads-signing-secret-0123456789";
 
-type Deps = ReturnType<typeof serverDeps>;
+type Deps = Core;
 
 async function core(t: TestContext, overrides: (deps: Deps) => Partial<Deps> = () => ({})) {
   const config = testConfig({ signingSecret: SIGNING });
   const built = stopAtEnd(buildApp(config));
-  const deps = serverDeps(config, built);
-  const server = createServer(built.app, { ...deps, ...browserSessionDeps, ...overrides(deps) });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps, ...overrides(built) });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const port = (server.address() as AddressInfo).port;
@@ -83,7 +83,7 @@ test("a file upload lands in the signed-in person's files with its name and cont
   assert.ok(!(await bobs.text()).includes(file.id));
   const named = await upload(base, `/api/files/upload?${query}&principalId=bob`, browserSessionCookie("alice"), bytes);
   assert.equal(named.status, 403);
-  const elsewhere = new URLSearchParams({ sha: sha(bytes), scope: "personal:bob" });
+  const elsewhere = new URLSearchParams({ sha: sha(bytes), scope: personalScope("bob") });
   const foreign = await upload(base, `/api/files/upload?${elsewhere}`, browserSessionCookie("alice"), bytes);
   assert.deepEqual(
     [foreign.status, await foreign.json()],

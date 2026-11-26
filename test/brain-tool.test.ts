@@ -15,13 +15,14 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { AddressFetch } from "../src/util/network.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { contract, contractListing } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { connectorTool } from "../src/mcp/mcp-tool-service.ts";
 import { withBrainTools } from "../src/resolution/turn-context.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 type Row = Record<string, unknown>;
 type Step = { search: string } | { call: { server?: string; tool: string; args?: Row } } | "revoke" | "crash";
@@ -113,13 +114,7 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
   const memoryRegistryFetch: AddressFetch = (url, init) =>
     routedTo(new URL(url).host === "brain.beta.example" ? beta.url : acme.url)(url, init);
   const built = buildApp(config, { memoryRegistryFetch, agent });
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    memory: built.memory,
-    memoryRegistry: built.memoryRegistry,
-    capabilitySecret: TEST_CAPABILITY_SECRET,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), capabilitySecret: TEST_CAPABILITY_SECRET });
   server.listen(0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const admin = async (method: string, path: string, body?: unknown) => {
@@ -278,8 +273,8 @@ test("a brain sharing a connector's id is listed beside it, a tool whose cleaned
 test("a lookup checks the person, the live binding and the brain's read-only tools when it runs, and sends nothing otherwise", async (t) => {
   const { built, acme, beta, bind, turn } = await brainApp(t);
   const lookup = (tool: string, personAuthority?: boolean) =>
-    built.memory.lookup!("personal:U1", tool, {}, turnAuthority("U1", undefined, personAuthority), {
-      audienceScopeId: "personal:U1",
+    built.memory.lookup!(personalScope("U1"), tool, {}, turnAuthority("U1", undefined, personAuthority), {
+      audienceScopeId: personalScope("U1"),
     });
   await assert.rejects(lookup("acme:whois"), /^Error: \[brain_refused\] Only the person/);
   await assert.rejects(
@@ -337,10 +332,10 @@ test("a lookup outlasts recall's timeout, and a refusal or failure answers with 
 
 test("strict posture holds a brain lookup for approval, and dangerous runs it", async (t) => {
   const { built, acme, turn } = await brainApp(t);
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await built.config.setSecurityPosture(personalScope("U1"), "strict");
   assert.match((await turn([whois]))!.texts[0]!, /needs human approval/);
   assert.deepEqual(lookups(acme), [VOLUNTEER]);
-  await built.config.setSecurityPosture("personal:U1", "dangerous");
+  await built.config.setSecurityPosture(personalScope("U1"), "dangerous");
   assert.match((await turn([whois]))!.texts[0]!, /"query":"Priya Raman"/);
 });
 

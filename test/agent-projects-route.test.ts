@@ -2,8 +2,8 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
@@ -16,7 +16,7 @@ const SECRET = "agent-projects-secret".repeat(2);
 describe("agent projects self-API", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let mineId: string;
   let theirsId: string;
 
@@ -52,6 +52,7 @@ describe("agent projects self-API", async () => {
     mineId = (await built.app.createProject("U1", "Mine"))!.id;
     theirsId = (await built.app.createProject("U2", "Theirs"))!.id;
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });

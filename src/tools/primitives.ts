@@ -62,6 +62,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
+import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { quotedData, trimTrailingSlashes, tryDecodeUtf8 } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
@@ -225,7 +226,7 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<ExecResult & { scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
-    input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
+    input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number; image?: string },
   ): Promise<unknown>;
   computerStatus(sandboxId?: string): Promise<ComputerStatus>;
   restartComputer(sandboxId?: string, memoryGb?: number): Promise<void>;
@@ -672,7 +673,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     return run(deps.surface);
   }
 
-  const selectCredentials = async (handles: readonly string[]) => {
+  const pickCredentials = async (handles: readonly string[]) => {
     const available = new Map(
       (
         (handles.length ? await deps.resolveCommandCredentials?.(handles) : undefined) ??
@@ -687,7 +688,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     });
   };
 
-  const stageCredentials = async (
+  const materializeCredentials = async (
     requested: readonly CommandCredential[],
     handle: SandboxHandle,
     use: "command" | "background",
@@ -750,6 +751,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     };
   };
 
+  const selectCredentials = (handles: readonly string[]) =>
+    tracePhase("exec.credentials", () => pickCredentials(handles));
+  const stageCredentials = (...args: Parameters<typeof materializeCredentials>) =>
+    tracePhase("exec.credentials", () => materializeCredentials(...args));
+
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
@@ -769,7 +775,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       ? {
           async sandboxResources(
             action: "list" | "create" | "default" | "retire",
-            input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number },
+            input?: { backend?: string; name?: string; sandboxId?: string | null; memoryGb?: number; image?: string },
           ): Promise<unknown> {
             const resources = deps.sandboxResources!;
             if (action === "list") {
@@ -810,7 +816,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               input.name,
               undefined,
               undefined,
-              input.memoryGb,
+              { memoryGb: input.memoryGb, image: input.image },
               undefined,
               !deps.botActor,
             );
@@ -884,24 +890,30 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       const scratchReroute = Boolean(scratchOnly) && !scratch;
       const executionPolicy = deps.commandPolicy;
-      let handle;
-      let script = command;
-      if (execOpts?.sandboxId !== undefined && !scratchOnly) {
-        if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-        const access = await accessSandbox(execOpts.sandboxId);
-        handle = await deps.provisionResource(access, (current) => {
-          if (current.crossScope && requestedCredentials.length)
-            throw new Error("command credentials cannot be copied to another scope's computer");
-          authorizeExecution(command, current, executionPolicy());
-        });
-      } else {
-        const gated = authorizeExecution(command, undefined, executionPolicy());
-        if (scratch || scratchOnly) handle = await provisionAuthorized(command, gated, () => deps.provisionScratch!());
-        else {
-          handle = await provisionAuthorized(command, gated, () => deps.provision());
-          script = inWorkdir(handle, command);
-        }
-      }
+      const { handle, script } = await tracePhase(
+        "exec.acquire",
+        async () => {
+          if (execOpts?.sandboxId !== undefined && !scratchOnly) {
+            if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
+            const access = await accessSandbox(execOpts.sandboxId);
+            const named = await deps.provisionResource(access, (current) => {
+              if (current.crossScope && requestedCredentials.length)
+                throw new Error("command credentials cannot be copied to another scope's computer");
+              authorizeExecution(command, current, executionPolicy());
+            });
+            return { handle: named, script: command };
+          }
+          const gated = authorizeExecution(command, undefined, executionPolicy());
+          if (scratch || scratchOnly)
+            return {
+              handle: await provisionAuthorized(command, gated, () => deps.provisionScratch!()),
+              script: command,
+            };
+          const scoped = await provisionAuthorized(command, gated, () => deps.provision());
+          return { handle: scoped, script: inWorkdir(scoped, command) };
+        },
+        { attributes: ({ handle }) => execAttributes(handle, false) },
+      );
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
       const timeoutMs =
         resolvedMs != null && deps.execTimeoutCeilingMs != null
@@ -930,8 +942,26 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
           const mask = createExactSecretValueMasker(Object.values(secretEnv));
           try {
-            const result = await deps.sandbox.run(commandHandle, script, opts);
-            return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+            const result = await tracePhase("exec.run", () => deps.sandbox.run(commandHandle, script, opts), {
+              attributes: (ran) => ({
+                ...execAttributes(handle, false),
+                "qm.exec.exit_code": ran.code,
+                "qm.exec.timed_out": ran.timedOut,
+                "qm.exec.stdout_bytes": Buffer.byteLength(ran.stdout),
+                "qm.exec.stderr_bytes": Buffer.byteLength(ran.stderr),
+              }),
+            });
+            const rawBytes = result.stdout.length + result.stderr.length;
+            const maskStart = performance.now();
+            const stdout = mask(result.stdout);
+            const stderr = mask(result.stderr);
+            const maskMs = performance.now() - maskStart;
+            if (rawBytes > 1_000_000 || maskMs > 50) {
+              console.warn(
+                `[execute] slow or large output bytes=${rawBytes} maskMs=${Math.round(maskMs)} sandbox=${commandHandle.id} backend=${commandHandle.backend ?? "unknown"}`,
+              );
+            }
+            return { ...result, stdout, stderr };
           } catch (error) {
             const message = errMessage(error);
             const masked = mask(message);
@@ -940,7 +970,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           }
         },
         async () => {
-          credentialNote = await fileExecution?.finish();
+          credentialNote = fileExecution && (await tracePhase("exec.credentials", () => fileExecution.finish()));
         },
       ).catch((error: unknown) => {
         if (credentialNote) console.warn(`${credentialNote} The command itself failed.`);
@@ -1268,7 +1298,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async awaitClientResult(callId, timeoutMs, signal, toolName, args) {
       if (toolName === "desktop")
         return deps.desktopCall
-          ? deps.desktopCall(callId, args, timeoutMs, signal)
+          ? deps.desktopCall(args, timeoutMs, signal)
           : { content: DESKTOP_UNAVAILABLE_TEXT, isError: true };
       if (!deps.signals || runId === undefined) throw new Error("client tools need a queued run");
       return waitForClientResult(deps.signals, runId, callId, { timeoutMs, ...(signal ? { signal } : {}) });
@@ -1285,24 +1315,32 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (scratchOnly && !deps.provisionJobComputer)
         throw new Error(`background jobs here cannot use ${scratchOnly}; run the command in the foreground`);
       const policy = deps.commandPolicy;
-      let handle: SandboxHandle;
-      let script = command;
-      if (scratchOnly) {
-        const gated = authorizeExecution(command, undefined, policy());
-        handle = await provisionAuthorized(command, gated, () => deps.provisionJobComputer!());
-      } else if (opts?.sandboxId !== undefined) {
-        if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
-        const access = await accessSandbox(opts.sandboxId);
-        handle = await deps.provisionResource(access, (current) => {
-          if (current.crossScope && requestedCredentials.length)
-            throw new Error("command credentials cannot be copied to another scope's computer");
-          authorizeExecution(command, current, policy());
-        });
-      } else {
-        const gated = authorizeExecution(command, undefined, policy());
-        handle = await provisionAuthorized(command, gated, () => deps.provision());
-        script = inWorkdir(handle, command);
-      }
+      const { handle, script } = await tracePhase(
+        "exec.acquire",
+        async () => {
+          if (scratchOnly) {
+            const gated = authorizeExecution(command, undefined, policy());
+            return {
+              handle: await provisionAuthorized(command, gated, () => deps.provisionJobComputer!()),
+              script: command,
+            };
+          }
+          if (opts?.sandboxId !== undefined) {
+            if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
+            const access = await accessSandbox(opts.sandboxId);
+            const named = await deps.provisionResource(access, (current) => {
+              if (current.crossScope && requestedCredentials.length)
+                throw new Error("command credentials cannot be copied to another scope's computer");
+              authorizeExecution(command, current, policy());
+            });
+            return { handle: named, script: command };
+          }
+          const gated = authorizeExecution(command, undefined, policy());
+          const scoped = await provisionAuthorized(command, gated, () => deps.provision());
+          return { handle: scoped, script: inWorkdir(scoped, command) };
+        },
+        { attributes: ({ handle }) => execAttributes(handle, true) },
+      );
       const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
       const release = async () => {
         await staged?.fileExecution?.finish();
@@ -1320,12 +1358,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } catch (error) {
         return withCleanup(() => Promise.reject(error), release);
       }
-      const started = await deps.backgroundBroker!.start(
-        handle,
-        script,
-        opts.purpose,
-        opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
-        credentials,
+      const started = await tracePhase(
+        "exec.start",
+        () =>
+          deps.backgroundBroker!.start(
+            handle,
+            script,
+            opts.purpose,
+            opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
+            credentials,
+          ),
+        { attributes: () => execAttributes(handle, true) },
       );
       return scratchOnly ? { ...started, jobComputer: true } : started;
     },
@@ -1438,6 +1481,11 @@ function audienceFromGrantees(
       : {}),
   };
 }
+
+const execAttributes = (handle: SandboxHandle, background: boolean) => ({
+  "qm.exec.provider": handle.backend,
+  "qm.exec.background": background,
+});
 
 const COMMAND_PATH_PROBE_TIMEOUT_MS = 10_000;
 

@@ -18,20 +18,19 @@ export interface SurfaceTransport {
     text: string,
     opts?: {
       idempotencyKey?: string;
+      runId?: string;
       note?: string;
       notice?: boolean;
       fileIds?: readonly string[];
       persona?: WornPersona;
-      rawMarkdown?: string;
     },
   ): Promise<string | undefined>;
-  postPrivate(text: string, opts?: { transient?: boolean; outcome?: "stopped" | "failed" }): Promise<void>;
+  postPrivate(text: string, opts?: { transient?: boolean }): Promise<void>;
   edit(ref: string, text: string): Promise<void>;
   remove(ref: string): Promise<void>;
   react(ref: string, name: string, on: boolean): Promise<void>;
   applyReactions(reactions: readonly ReplyReaction[]): Promise<void>;
   typing(on: boolean, run?: { runId: string }): Promise<void>;
-  finishTurn?(runId: string, outcome: "completed" | "stopped" | "failed" | "silent"): Promise<void>;
   upload(attachments: OutgoingAttachment[]): Promise<{ fileIds?: readonly string[]; failureNote?: string }>;
   render?(markdown: string): string;
   escape?(text: string): string;
@@ -89,7 +88,7 @@ export async function runSurfaceTurn(
       taskManaged: !!turn.taskAck,
       postAck: async (text, persona) => {
         const ref = await transport.post(transport.render?.(text) ?? text, {
-          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : {}),
+          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId), runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
         });
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
@@ -131,7 +130,7 @@ export async function runSurfaceTurn(
   let result: TurnResult;
   try {
     result = await callCore(
-      { ...body, origin: turnOrigin(turn) },
+      { ...body, origin: turnOrigin(turn), ...(turn.synthetic ? { midTurn: "queue" as const } : {}) },
       {
         deferDeliveryAck: true,
         ...(turn.synthetic
@@ -194,8 +193,7 @@ export async function runSurfaceTurn(
 
   if (result.steered) {
     await settleAck();
-    if (result.stopped) await transport.postPrivate("Stopped.", { transient: true, outcome: "stopped" });
-    if (queuedRunId) await transport.finishTurn?.(queuedRunId, result.stopped ? "stopped" : "completed");
+    if (result.stopped) await transport.postPrivate("Stopped.", { transient: true });
     return;
   }
 
@@ -203,7 +201,6 @@ export async function runSurfaceTurn(
     if (unprompted) console.error(`[${label}] turn.silent (no reply) ${turn.where}`);
     await settleAck();
     await finishTaskAck();
-    if (queuedRunId) await transport.finishTurn?.(queuedRunId, "silent");
     return;
   }
 
@@ -212,7 +209,6 @@ export async function runSurfaceTurn(
     const names = result.reactions ?? [];
     if (names.length) await transport.applyReactions([{ names }]);
     await finishTaskAck();
-    if (queuedRunId) await transport.finishTurn?.(queuedRunId, "silent");
     console.error(`[${label}] turn.react (acknowledged) ${turn.where} emoji=${names.join(",")}`);
     return;
   }
@@ -238,9 +234,8 @@ export async function runSurfaceTurn(
         await transport.post(reply, {
           ...(note ? { note } : {}),
           ...(uploaded.fileIds?.length ? { fileIds: uploaded.fileIds } : {}),
-          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}` } : {}),
+          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}`, runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
-          ...(replyBody ? { rawMarkdown: replyBody } : {}),
         });
       if (uploaded.failureNote) await transport.post(uploaded.failureNote, persona ? { persona } : undefined);
       await transport.applyReactions(reactions);
@@ -250,7 +245,6 @@ export async function runSurfaceTurn(
     try {
       if (queuedRunId) await afterPost(queuedRunId, deliverReply);
       else await deliverReply();
-      if (queuedRunId) await transport.finishTurn?.(queuedRunId, result.stopped ? "stopped" : "completed");
     } catch (err) {
       await settleAck();
       if (!queuedRunId) throw err;
@@ -281,12 +275,10 @@ export async function runSurfaceTurn(
         await transport.post(note, runKey);
         await finishTaskAck();
       });
-      await transport.finishTurn?.(queuedRunId, "failed");
       return;
     }
     if (delivery === "silent") {
       await finishTaskAck();
-      if (queuedRunId) await transport.finishTurn?.(queuedRunId, "silent");
       if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
       else if (queuedRunId) ackRunDelivery(queuedRunId);
       console.error(
@@ -301,7 +293,6 @@ export async function runSurfaceTurn(
     };
     if (queuedRunId) await afterPost(queuedRunId, postFailure);
     else await postFailure();
-    if (queuedRunId) await transport.finishTurn?.(queuedRunId, "failed");
   }
   await finishTaskAck();
 }

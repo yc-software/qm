@@ -248,6 +248,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  organizationBearer?: () => Promise<string | undefined>;
   fetch?: AddressFetch;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
@@ -261,14 +262,14 @@ export function createMcpToolService(opts: {
     perf: { now },
     fetchMethod: async (_url, _stale, { context }) => {
       try {
-        return { listing: await clientFor(context).listTools({}) };
+        return { listing: await (await clientFor(context)).listTools({}) };
       } catch (error) {
         return { error };
       }
     },
   });
   const tenantState = perTenant<{
-    clients: Map<string, { client: McpClient; server: McpServer }>;
+    clients: Map<string, { client: McpClient; key: string }>;
     snapshot: McpToolDescriptor[];
     perUserServers: Map<string, McpServer>;
     servers: Map<string, McpServer>;
@@ -303,12 +304,21 @@ export function createMcpToolService(opts: {
     });
   }
 
-  function clientFor(server: McpServer): McpClient {
+  async function serverAuth(server: McpServer): Promise<McpAuth> {
+    if (server.auth !== "organization") return mcpServerAuth(server);
+    const token = await opts.organizationBearer?.();
+    if (!token) throw new Error(`MCP server ${server.id} acts for this workspace's organization, and none is linked`);
+    return { mode: "bearer", token };
+  }
+
+  async function clientFor(server: McpServer): Promise<McpClient> {
     const { clients } = tenantState();
+    const auth = await serverAuth(server);
+    const key = JSON.stringify([server, auth]);
     const cached = clients.get(server.id);
-    if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch });
-    clients.set(server.id, { client, server });
+    if (cached?.key === key) return cached.client;
+    const client = createMcpClient({ url: server.url, auth, fetch: opts.fetch });
+    clients.set(server.id, { client, key });
     return client;
   }
 
@@ -398,7 +408,7 @@ export function createMcpToolService(opts: {
   }
 
   async function listServer(server: McpServer): Promise<McpListing> {
-    if (!shared(server)) return clientFor(server).listTools({ headers: headersFor(server, undefined) });
+    if (!shared(server)) return (await clientFor(server)).listTools({ headers: headersFor(server, undefined) });
     const entry = await sharedListings.fetch(server.url, { context: server });
     if (!entry?.listing) throw entry?.error ?? new Error("the shared tool listing expired before the server answered");
     return entry.listing;
@@ -535,13 +545,15 @@ export function createMcpToolService(opts: {
       const def = (await loaded()).snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
-      if (args.operation !== "invoke") return false;
+      if (args.operation !== "invoke" || typeof args.tool !== "string") return false;
       try {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
         refuseOutsideAudience(server, principalId, audienceScopeId, turn);
-        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+        const entry = (await catalogTools(server, principalId)).find((t) => t.name === args.tool);
+        return entry ? mcpToolNeedsApproval(server, entry.annotations) : false;
       } catch (e) {
+        if (e instanceof SignInRequired) return false;
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
       }
@@ -577,7 +589,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server, principalId) {
-      return createMcpClient({ url: server.url, auth: mcpServerAuth(server), fetch: opts.fetch }).listTools({
+      return createMcpClient({ url: server.url, auth: await serverAuth(server), fetch: opts.fetch }).listTools({
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
@@ -589,7 +601,7 @@ export function createMcpToolService(opts: {
           if (!apps.length) return [];
           let listed = new Set<string>();
           try {
-            listed = new Set((await catalogTools(server, principalId)).map((tool) => tool.name));
+            listed = new Set((await catalogTools(server, principalId)).flatMap((tool) => tool.name.split(".", 1)));
           } catch (e) {
             record("list", server.id, `app status error: ${errMessage(e)}`, principalId);
           }

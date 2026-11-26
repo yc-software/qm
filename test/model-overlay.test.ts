@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { withTenant } from "../src/tenants/context.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
@@ -25,7 +25,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -35,7 +35,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
       headers: ADMIN,
       body: JSON.stringify({
         principalId: "admin-alice@default-org",
-        scopeId: "personal:admin-alice@default-org",
+        scopeId: personalScope("admin-alice@default-org"),
         modelId: MODEL_ID,
       }),
     });
@@ -208,7 +208,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
@@ -226,7 +226,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
   const path = `/v1/admin/model-registry/${MODEL_ID}`;
   const runtime = {
     principalId: "admin-alice@default-org",
-    scopeId: "personal:admin-alice@default-org",
+    scopeId: personalScope("admin-alice@default-org"),
     modelId: MODEL_ID,
   };
   try {
@@ -378,7 +378,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       runtime: { modelId: MODEL_ID },
       recordModelCall: () => {},
       tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
-      scopeLabel: "personal:alice" as const,
+      scopeLabel: personalScope("alice"),
       orgScopeId: "org:default-org" as const,
       emit: async (item: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) =>
         storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
@@ -454,7 +454,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
   const registry = createModelOverlayStore(backing);
   let refreshes = 0;
   const deps = {
-    ...serverDeps(config, built),
+    ...built,
     modelRegistry: registry,
     refreshModels: async () => {
       refreshes++;
@@ -503,11 +503,12 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
+import { personalScope } from "../src/types.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");
   const org = "org:default-org" as const;
-  const scope = "personal:alice" as const;
+  const scope = personalScope("alice");
   const fallback = { modelId: "gpt-5.6-sol" };
   const overlay = validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true });
   setModelOverlays([overlay]);

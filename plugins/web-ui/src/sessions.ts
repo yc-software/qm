@@ -491,7 +491,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   }
   const personaId = item.groupKind === "persona" ? item.scopeId.slice("persona:".length) : null;
   if (personaId) glyph = Bot;
-  let fallbackName = personaId ? "Persona" : "Project";
+  let fallbackName = personaId ? "Bot" : "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
   const name = item.name ?? fallbackName;
@@ -503,7 +503,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   return html`
     <section
       class="recent-project ${item.sessions.some(isActiveRow) ? "active" : ""}"
-      aria-label=${`${name} ${personaId ? "persona" : "project"}`}
+      aria-label=${`${name} ${personaId ? "bot" : "project"}`}
     >
       ${
         sessionsState.renamingId === menuKey
@@ -668,7 +668,7 @@ function personaMenuPopover(personaId: string): TemplateResult {
           viewPersona(personaId);
         }}
       >
-        ${icon(Bot, 15)}<span>View persona</span>
+        ${icon(Bot, 15)}<span>View bot</span>
       </button>
       ${
         personaEditable(personaId)
@@ -681,7 +681,7 @@ function personaMenuPopover(personaId: string): TemplateResult {
                 viewPersona(personaId, true);
               }}
             >
-              ${icon(Pencil, 15)}<span>Edit persona</span>
+              ${icon(Pencil, 15)}<span>Edit bot</span>
             </button>`
           : nothing
       }

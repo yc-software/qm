@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
@@ -26,6 +26,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -199,20 +200,12 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
       brokerCredentials,
     }),
   );
-  const deps = {
-    config: built.config,
-    serviceCreds: built.serviceCreds,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    brokerFetch: fetchImpl,
-  };
+  const deps = { ...testCore(built), brokerFetch: fetchImpl };
   const server = admin
     ? createInsecureTestServer(built.app, deps)
     : createServer(built.app, {
-        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
         ...deps,
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
         signingSecret: SECRET,
       });
   server.listen(0);
@@ -283,7 +276,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     const token = await mintCapabilityToken(
       {
         actorId: "U1",
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         aud: CREDENTIAL_BROKER_AUD,
         credentials: ["search"],
         exp: Date.now() + CAPABILITY_TTL_MS,
@@ -340,7 +333,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
     if (command === "echo hi") executed = handle.env;
     return realRun(handle, command, opts);
   };
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   const prompt = await built.app.turn(dm("!sysprompt"));
   assert.match(prompt.reply ?? "", /`search` — Web search; proxy api\.search\.example/);
   const res = await built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`));
@@ -357,6 +350,7 @@ test("a deployment credential cannot back a decision provider", async () => {
       body,
       tenant,
       deps: {
+        ...testCore(),
         serviceCreds,
         decisions: {
           saveProvider: async (_tenant: unknown, provider: unknown) => void saved.push(provider),
@@ -396,7 +390,7 @@ test("the broker adds a deployment credential's fixed headers, which callers can
     const token = await mintCapabilityToken(
       {
         actorId: "U1",
-        scopeId: "personal:U1",
+        scopeId: personalScope("U1"),
         aud: CREDENTIAL_BROKER_AUD,
         credentials: ["versioned"],
         exp: Date.now() + CAPABILITY_TTL_MS,

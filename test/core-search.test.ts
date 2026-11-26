@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { createCoreSearch, type SearchBackend } from "../src/search/core-search.ts";
 import { createIntersectionBackend } from "../src/search/backends.ts";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
@@ -93,9 +93,9 @@ test("POST /v1/search derives principals from capability and shared scopes fail 
       direction: "in",
     });
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
-    auditLog: built.auditLog,
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

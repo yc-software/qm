@@ -5,7 +5,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
@@ -16,6 +15,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+import { personalScope } from "../src/types.ts";
 
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
@@ -80,13 +80,13 @@ test("company browser inference runs on the session route through the gateway", 
     },
   });
   const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
   const claims = {
     actorId: "U1",
-    scopeId: "personal:U1" as const,
+    scopeId: personalScope("U1"),
     browserModel: model,
     aud: BROWSER_MODEL_AUD,
     browserAccount: "company" as const,
@@ -155,9 +155,9 @@ test("company browser inference runs on the session route through the gateway", 
   const limitedText = await limited.text();
   assert.match(limitedText, /billed to the shared model gateway/);
   assert.ok(!limitedText.includes(key));
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await built.config.setSecurityPosture(personalScope("U1"), "strict");
   assert.equal((await post(body)).status, 403);
-  await built.config.setSecurityPosture("personal:U1", "auto");
+  await built.config.setSecurityPosture(personalScope("U1"), "auto");
   assert.equal(calls.length, 3);
 });
 
@@ -173,7 +173,7 @@ test("gateway deployment provisions a browser token without exposing the company
     },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => {
@@ -194,7 +194,7 @@ test("gateway deployment provisions a browser token without exposing the company
   const claims = await verifyCapabilityToken(env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, BROWSER_MODEL_AUD);
   assert.equal(claims?.browserModel, model);
-  assert.equal(claims?.scopeId, "personal:U1");
+  assert.equal(claims?.scopeId, personalScope("U1"));
   assert.equal(claims?.sessionId, result.sessionId);
   assert.equal(claims?.origin, "conversation");
   assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
@@ -225,7 +225,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
       },
     });
     const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
-    await selectDefaultSandbox(built, "U1", "personal:U1");
+    await selectDefaultSandbox(built, "U1", personalScope("U1"));
     let captured: ProvisionOptions | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
     built.sandbox.provision = (owner, opts) => {
@@ -282,10 +282,10 @@ test("company browsing without a gateway uses current deployment credentials and
     providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
   });
   const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (owner, opts) => {

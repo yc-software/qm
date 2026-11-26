@@ -8,18 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { personalScope } from "../src/types.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-artifacts-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    sessions: built.sessions,
-    errors: built.errors,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -32,22 +28,22 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
   const s = start();
   try {
     await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
       action: "ping",
-      destination: { type: "slack", target: "D1", audienceScopeId: "personal:U1" },
+      destination: { type: "slack", target: "D1", audienceScopeId: personalScope("U1") },
     });
     await s.built.app.createCron({
-      ownerScopeId: "personal:OTHER",
+      ownerScopeId: personalScope("OTHER"),
       owner: "U9",
       createdBy: "U9",
       schedule: { everyMs: 60_000 },
       action: "noise",
     });
     const madeSkill = await s.built.skills.create({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
       createdBy: "U1",
     });
@@ -58,7 +54,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     assert.equal(crons.crons[0].action, "ping");
     assert.equal(crons.crons[0].createdBy, "U1");
     assert.equal(crons.crons[0].schedule.everyMs, 60_000);
-    assert.deepEqual(crons.crons[0].destination, { type: "slack", target: "D1", audienceScopeId: "personal:U1" });
+    assert.deepEqual(crons.crons[0].destination, { type: "slack", target: "D1", audienceScopeId: personalScope("U1") });
     assert.ok(crons.crons[0].createdAt > 0, "rows carry createdAt for the dashboard");
 
     const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=personal:U1`, { headers: ALICE_ADMIN }));
@@ -73,7 +69,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     );
     assert.deepEqual(
       publishedApps,
-      { scopeId: "personal:U1", apps: [] },
+      { scopeId: personalScope("U1"), apps: [] },
       "a scope with no apps answers an honest empty list",
     );
 
@@ -94,7 +90,7 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
       );
       assert.ok(
         (await s.built.auditLog.events(testTenant)).some(
-          (e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1",
+          (e) => e.action === `${kind}.read` && e.scopeLabel === personalScope("U1"),
         ),
         `${kind}: the read is audited`,
       );
@@ -108,7 +104,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
   const s = start();
   try {
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -126,7 +122,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
     assert.deepEqual((await s.built.app.getCron(cron.id))?.destination, {
       type: "principal",
       target: "U2",
-      audienceScopeId: "personal:U2",
+      audienceScopeId: personalScope("U2"),
       onBehalfOf: "U1",
     });
 
@@ -159,7 +155,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
     assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
     assert.ok(
       (await s.built.auditLog.events(testTenant)).some(
-        (e) => e.action === "cron.destination.update" && e.scopeLabel === "personal:U1",
+        (e) => e.action === "cron.destination.update" && e.scopeLabel === personalScope("U1"),
       ),
       "the admin edit is audited",
     );
@@ -172,7 +168,7 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
   const s = start();
   try {
     const made = await s.built.skills.create({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       manifest: {
         name: "summarize",
         description: "sum it up",
@@ -190,7 +186,7 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
     assert.deepEqual(got.requiredCapabilities, ["egress:example.com"]);
     assert.ok(
       (await s.built.auditLog.events(testTenant)).some(
-        (e) => e.action === "skill.read" && e.scopeLabel === "personal:U1",
+        (e) => e.action === "skill.read" && e.scopeLabel === personalScope("U1"),
       ),
       "the read is audited",
     );
@@ -203,7 +199,7 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
       made.id,
       "a skill deep link resolves by id even when the scope filter doesn't match (grants are org-wide)",
     );
-    assert.equal(mismatched.ownerScopeId, "personal:U1", "the response reports the skill's own scope");
+    assert.equal(mismatched.ownerScopeId, personalScope("U1"), "the response reports the skill's own scope");
     const orgGot = await json(
       await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
     );
@@ -230,7 +226,7 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
   const s = start();
   try {
     await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -244,7 +240,7 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       action: "digest",
     });
     await s.built.skills.create({
-      scopeId: "personal:U1",
+      scopeId: personalScope("U1"),
       manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
       createdBy: "U1",
     });
@@ -252,7 +248,7 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       category: "turn",
       code: "boom",
       message: "redacted",
-      scopeLabel: "personal:U1",
+      scopeLabel: personalScope("U1"),
       sessionId: "sess-1",
     });
     s.built.errors.record(testTenant, {
@@ -265,26 +261,26 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
     const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, { headers: ALICE_ADMIN }));
     assert.deepEqual(
       crons.crons.map((c: any) => c.ownerScopeId).sort(),
-      ["channel:C9", "personal:U1"],
+      ["channel:C9", personalScope("U1")],
       "org scope lists every scope's crons, labelled with their owner scope",
     );
 
     const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ALICE_ADMIN }));
     assert.ok(
-      skills.skills.some((k: any) => k.ownerScopeId === "personal:U1"),
+      skills.skills.some((k: any) => k.ownerScopeId === personalScope("U1")),
       "org scope includes other scopes' skills (alongside the seeded org ones)",
     );
 
     const errors = await json(await fetch(`${s.base}/v1/admin/errors?scope=org:default-org`, { headers: ALICE_ADMIN }));
     assert.deepEqual(
       errors.errors.map((e: any) => e.scopeLabel).sort(),
-      ["channel:C9", "personal:U1"],
+      ["channel:C9", personalScope("U1")],
       "org scope sees every scope's errors",
     );
     const scoped = await json(await fetch(`${s.base}/v1/admin/errors?scope=personal:U1`, { headers: ALICE_ADMIN }));
     assert.deepEqual(
       scoped.errors.map((e: any) => e.scopeLabel),
-      ["personal:U1"],
+      [personalScope("U1")],
       "a non-org scope still filters",
     );
     const bySession = await json(
@@ -366,7 +362,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
   const s = start();
   try {
     const cron = await s.built.crons.create({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -374,13 +370,13 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       destination: { type: "principal", target: "U1" },
     });
     const runtime = { modelId: "claude-sonnet-5" };
-    const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
+    const put = (body: unknown, scope = personalScope("U1"), actor = ALICE_ADMIN) =>
       fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
         method: "PUT",
         headers: { ...actor, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-    assert.equal((await put({ runtime }, "personal:U1", { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await put({ runtime }, personalScope("U1"), { "x-admin-actor": "nobody@default-org" })).status, 403);
     assert.equal((await put({ runtime }, "channel:C9")).status, 403);
     assert.equal((await put({ runtime: { ...runtime, modelId: "unavailable" } })).status, 400);
     assert.equal((await put({ runtime, action: "replace the task" })).status, 400);
@@ -405,9 +401,9 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
 test("an admin edit's destination audience follows its target and cannot be supplied by the caller", async () => {
   const s = start();
   try {
-    const dm = { type: "slack", target: "D1:1.2", audienceScopeId: "personal:U1" };
+    const dm = { type: "slack", target: "D1:1.2", audienceScopeId: personalScope("U1") };
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -422,7 +418,7 @@ test("an admin edit's destination audience follows its target and cannot be supp
       });
     const stored = async (id = cron.id) => (await s.built.app.getCron(id))?.destination;
 
-    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status, 400);
+    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: personalScope("U1") })).status, 400);
     assert.deepEqual(await stored(), dm, "a caller-supplied audience is refused and changes nothing");
 
     assert.equal((await put({ type: "slack", target: "D1:1.2" })).status, 200);
@@ -442,12 +438,12 @@ test("an admin edit's destination audience follows its target and cannot be supp
     assert.equal((await put({ type: "principal", target: "oidc:H:bob" })).status, 200);
     assert.deepEqual(
       await stored(),
-      { type: "principal", target: "oidc:H:bob", audienceScopeId: "personal:oidc:H:bob" },
+      { type: "principal", target: "oidc:H:bob", audienceScopeId: personalScope("oidc:H:bob") },
       "a principal's audience is always that principal, even when its id contains a colon",
     );
 
     const groupCron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -481,7 +477,10 @@ test("an admin edit cannot aim a cron at a channel its owner can't see by labell
         ownerScopeId: "channel:C-home",
         destination: { type: "slack", target: "C-home", audienceScopeId: "channel:C-home" },
       },
-      { ownerScopeId: "personal:U1", destination: { type: "principal", target: "U1", audienceScopeId: "personal:U1" } },
+      {
+        ownerScopeId: personalScope("U1"),
+        destination: { type: "principal", target: "U1", audienceScopeId: personalScope("U1") },
+      },
     ];
     const statuses: number[] = [];
     for (const home of homes) {

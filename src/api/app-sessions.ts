@@ -86,6 +86,7 @@ export function createSessionMethods(
   | "unpinConversationItem"
   | "listFilesForViewer"
   | "uploadFileForViewer"
+  | "fileForViewer"
   | "openFileForViewer"
   | "listSessions"
   | "listSessionPage"
@@ -161,6 +162,14 @@ export function createSessionMethods(
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
   const fireOrigins: ReadonlySet<SessionOrigin> = new Set(["cron", "webhook", "monitor", "loop"]);
+  const fileArtifactForViewer = async (tenant: Tenant, id: string, principalId: string, ownScopeBotWork: boolean) => {
+    const art = await deps.files.get(id);
+    if (!art) return null;
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
+    if (myScopes.includes(art.ownerScopeId)) return art;
+    const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
+    return grants.some((g) => myScopes.includes(g.granteeScopeId)) ? art : null;
+  };
   const accessibleFireSession = async (
     sessionId: string,
     principalId: string,
@@ -614,16 +623,14 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
+    async fileForViewer(tenant, id, principalId, ownScopeBotWork) {
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
+      return art ? toFileItem(art) : null;
+    },
+
     async openFileForViewer(tenant, id, principalId, ownScopeBotWork, pickRange) {
-      const art = await deps.files.get(id);
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
-      let allowed = myScopes.includes(art.ownerScopeId);
-      if (!allowed) {
-        const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
-        allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
-      }
-      if (!allowed) return null;
       const range = pickRange?.(art.sizeBytes);
       const opened = await deps.files.open(id, range);
       if (!opened) return null;

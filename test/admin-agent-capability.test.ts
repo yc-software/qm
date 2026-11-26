@@ -11,10 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { scopeId, type PendingApprovalRecord, type TurnRequest } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord, type TurnRequest, personalScope } from "../src/types.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -32,7 +32,7 @@ import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-async function start(withConfig = true) {
+async function start() {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
@@ -57,15 +57,11 @@ async function start(withConfig = true) {
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    memory: built.memory,
-    ...(withConfig ? { config: built.config } : {}),
-    auditLog: built.auditLog,
     sessions: signOff.sessions,
     approvals: testMap<PendingApprovalRecord>(),
     runs: liveRunStore(built.runs),
-    errors: built.errors,
     keychain,
     capabilitySecret: SECRET,
     signingSecret: SECRET,
@@ -767,18 +763,6 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
   });
 }
 
-test("shared admin reads fail closed without a sharing config resolver", async () => {
-  const s = await start(false);
-  try {
-    await s.built.config.setSharingPosture(ORG, "open");
-    const cap = await capFor("admin-alice", { scope: scopeId("channel", "C1") });
-    const response = await fetch(`${s.base}/v1/admin/sessions`, { headers: { "x-agent-capability": cap } });
-    assert.equal(response.status, 403);
-  } finally {
-    await s.close();
-  }
-});
-
 for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`retired bulk import is equally unsupported from ${room}`, async () => {
     const s = await start();
@@ -810,7 +794,7 @@ test("shared-channel admin runtime mutations do not return a private cron prompt
   try {
     await s.built.config.setSharingPosture("channel:C1", "isolated");
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },

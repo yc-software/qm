@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -171,7 +172,7 @@ export function createRelayAuditSink(
     flushing = true;
     try {
       const batch = buffer.slice(0, RELAY_MAX_BATCH);
-      const body = JSON.stringify({ records: batch });
+      const body = JSON.stringify({ records: batch, nonce: randomUUID() });
       const res = await fetchImpl(url, {
         method: "POST",
         headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {

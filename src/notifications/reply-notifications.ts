@@ -1,23 +1,18 @@
+import { MAX_NOTIFY_PAYLOAD_BYTES } from "../persistence/postgres-notify-bus.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { conversationWebUrl } from "../util/conversation-links.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
+import { scopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
 
 export interface ReplyNotice {
   sessionId: string;
   title: string;
   body: string;
-  url?: string;
 }
 
-export interface AddressedReplyNotice {
-  principalId: string;
-  notice: ReplyNotice;
-}
-
-const PUSH_RECORD_BYTES = 4096;
-const AES128GCM_OVERHEAD_BYTES = 103;
-const REPLY_NOTICE_MAX_BYTES = PUSH_RECORD_BYTES - AES128GCM_OVERHEAD_BYTES;
+const SESSION_EVENT_ENVELOPE_BYTES = 1_024;
+const REPLY_NOTICE_MAX_BYTES = MAX_NOTIFY_PAYLOAD_BYTES - SESSION_EVENT_ENVELOPE_BYTES;
 const UNTITLED = "New reply";
 const NOTIFYING_STATES = new Set<SessionStateEvent["state"]>(["idle", "awaiting_approval"]);
 
@@ -35,12 +30,17 @@ export function fitReplyNotice(notice: ReplyNotice, maxBytes = REPLY_NOTICE_MAX_
   return { ...notice, body: `${body}…` };
 }
 
+export async function webNotificationsOn(
+  deps: { featureFlags?: Pick<FeatureFlagStore, "enabled"> },
+  person: string,
+): Promise<boolean> {
+  return (await deps.featureFlags?.enabled("web_notifications", scopeId("personal", person))) === true;
+}
+
 export function watchReplyNotices(deps: {
   bus: SessionStateBus;
   sessions: Pick<SessionStore, "claimReplyNotifications">;
   notifiable: () => Promise<readonly string[] | "everyone">;
-  publicUrl?: string;
-  send?: (notices: readonly AddressedReplyNotice[]) => Promise<void>;
 }): () => void {
   const notify = async (event: SessionStateEvent): Promise<void> => {
     if (!NOTIFYING_STATES.has(event.state) || !event.sessionId) return;
@@ -49,28 +49,15 @@ export function watchReplyNotices(deps: {
     const sessionId = event.sessionId;
     const claims = await deps.sessions.claimReplyNotifications(sessionId, people);
     if (!claims.length) return;
-    const url = conversationWebUrl(deps.publicUrl, sessionId);
-    const notices = claims.map((claim) => ({
-      principalId: claim.principalId,
-      notice: fitReplyNotice({
-        sessionId,
-        title: claim.title?.trim() || UNTITLED,
-        body: claim.text.trim(),
-        ...(url ? { url } : {}),
-      }),
-    }));
-    for (const { principalId, notice } of notices)
+    for (const claim of claims)
       deps.bus.emit({
         threadRef: event.threadRef,
         sessionId,
-        participants: [principalId],
+        participants: [claim.principalId],
         state: "notify",
-        notice,
+        notice: fitReplyNotice({ sessionId, title: claim.title?.trim() || UNTITLED, body: claim.text.trim() }),
         at: Date.now(),
       });
-    await deps
-      .send?.(notices)
-      .catch((error: unknown) => reportFailure("notifications: send reply notices", error, `session=${sessionId}`));
   };
   return deps.bus.subscribe((event) =>
     notify(event).catch((error: unknown) =>
