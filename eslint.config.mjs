@@ -71,7 +71,7 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
-    files: ["plugins/web-ui/src/admin/controller.js"],
+    files: ["plugins/web-ui/src/admin/controller.js", "apps-seed/*/public/**/*.js"],
     languageOptions: { globals: globals.browser },
   },
   {

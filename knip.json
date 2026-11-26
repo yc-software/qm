@@ -34,7 +34,9 @@
         "superserve/templates/qm-agent.ts",
         "superserve/templates/verify-qm-agent.ts",
         "docs/qa/resource-search-demo.mjs",
-        "src/deploy/vendor/devbar.js"
+        "src/deploy/vendor/devbar.js",
+        "apps-seed/*/server.mjs",
+        "apps-seed/*/public/app.js"
       ],
       "ignoreDependencies": ["yaml"]
     },

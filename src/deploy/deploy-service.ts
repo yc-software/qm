@@ -57,6 +57,7 @@ export interface DeployInput extends RedeployInput {
   createdBy: string;
   createdInScope?: ScopeId;
   name?: string;
+  seed?: string;
 }
 
 export type Reach =
@@ -120,6 +121,7 @@ export interface DeployService {
   deploy(input: DeployInput): Promise<PublishedApp>;
   redeploy(id: string, input: RedeployInput): Promise<PublishedAppWithLiveEdit>;
   getApp(idOrName: string): Promise<PublishedApp | null>;
+  seededApp(createdBy: string, seed: string): Promise<PublishedApp | null>;
   appUrl?(d: PublishedApp): string | undefined;
   listApps(): Promise<PublishedApp[]>;
   rollbackApp(id: string, version: number, options?: { alwaysOn?: boolean; actor?: string }): Promise<void>;
@@ -533,6 +535,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
         ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+        ...(input.seed ? { seed: input.seed } : {}),
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
@@ -590,6 +593,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     },
 
     getApp,
+    seededApp: (createdBy, seed) => deps.deployStore.findSeeded(createdBy, seed),
 
     listApps() {
       return deps.deployStore.list();

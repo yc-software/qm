@@ -708,6 +708,11 @@ export interface App {
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
   setAppPublic(idOrName: string, isPublic: boolean, actor: SigningAppActor): Promise<PublishedApp>;
   setAppConnectors(idOrName: string, connectors: string[], actor: SigningAppActor): Promise<PublishedApp>;
+  ensureSeededApp(
+    person: string,
+    seed: string,
+    opts: { reset?: boolean; signOff: SigningAppActor["signOff"] },
+  ): Promise<PublishedApp>;
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
   appLiveEdit(id: string): Promise<{ draft: AppDraft | null } | null>;

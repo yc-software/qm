@@ -228,7 +228,7 @@ export function avatarTpl(person: { key: string; name: string; avatarUrl?: strin
   </span>`;
 }
 
-export function photoTpl(url: string | undefined): ReturnType<typeof keyed> | typeof nothing {
+function photoTpl(url: string | undefined): ReturnType<typeof keyed> | typeof nothing {
   const photo = url?.startsWith("https://") ? url : undefined;
   return photo
     ? keyed(
