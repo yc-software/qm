@@ -1,5 +1,5 @@
 import type { Scheduler } from "../../src/cron/scheduler.ts";
-import type { BuiltApp } from "../../src/wiring.ts";
+import type { Core } from "../../src/wiring.ts";
 import type { TurnRequest } from "../../src/types.ts";
 
 export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
@@ -7,7 +7,7 @@ export async function runNowSettled(scheduler: Scheduler, cronId: string): Promi
   if (r.started) await r.settled;
 }
 
-export async function firstAttemptFailed(built: BuiltApp, request: TurnRequest): Promise<void> {
+export async function firstAttemptFailed(built: Core, request: TurnRequest): Promise<void> {
   built.runtime.start();
   const queued = await built.app.turn({ ...request, async: true });
   await settle(async () => (await built.runs.get(queued.runId!))?.errorAttempts === 1);

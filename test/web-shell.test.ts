@@ -10,7 +10,6 @@ import { orgScope } from "../src/config.ts";
 import type { ScopeId } from "../src/types.ts";
 import { resolveBranding } from "../src/resolution/branding.ts";
 import { createWebShell, type WebReleases } from "../src/web/shell.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -58,7 +57,7 @@ const shell = createWebShell(
   release,
 );
 const core = createServer(built.app, {
-  ...serverDeps(config, built),
+  ...built,
   ...browserSessionDeps,
   web: { events: {} as never, me: { suggestedActivities: [] }, shell },
 });

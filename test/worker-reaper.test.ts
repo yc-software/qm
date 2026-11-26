@@ -11,7 +11,7 @@ import { createWorker, SHUTDOWN_EXIT_MS, SHUTDOWN_RELEASE_MS, SHUTDOWN_SETTLE_MS
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
-import type { BuiltApp } from "../src/wiring.ts";
+import type { Core } from "../src/wiring.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
@@ -482,7 +482,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     text: "!work-until-shutdown",
     async: true,
   });
-  const entriesNow = async (app: BuiltApp) => {
+  const entriesNow = async (app: Core) => {
     const session = await app.sessions.getByThread(threadRef);
     return session ? app.sessions.getItems(session.id) : [];
   };

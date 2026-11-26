@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createServer as httpServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { configurePublicFetch } from "../src/util/network.ts";
@@ -59,7 +58,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
   let overBudget = false;
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     modelGatewayTransport: {
       url: `${upstreamUrl}/v1`,
       apiKey: key,
@@ -184,7 +183,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 test("a sandbox-model token is refused on every other route", async (t) => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const token = await mintCapabilityToken(
@@ -287,7 +286,7 @@ test("sandbox code reaches a company's own provider through core's chat completi
   const built = buildApp(config, { modelCredentialFetch: fetch });
   configurePublicFetch(new Set([new URL(upstreamUrl).origin]), () => false);
   t.after(() => configurePublicFetch(new Set()));
-  const server = createServer(built.app, { ...serverDeps(config, built), modelCredentialFetch: fetch });
+  const server = createServer(built.app, { ...built, modelCredentialFetch: fetch });
   const root = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   await built.customProviders.upsert(

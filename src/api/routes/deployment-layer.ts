@@ -14,7 +14,7 @@ function bundleFrom(body: unknown): DeploymentLayerBundle | null {
 }
 
 async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
-  const store = ctx.deps.deploymentLayer;
+  const store = ctx.deps.deploymentLayerStore;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
   const record = await store.get();
   if (!record) {
@@ -43,7 +43,7 @@ async function getDeploymentLayer(ctx: ApiCtx): Promise<void> {
 }
 
 async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
-  const store = ctx.deps.deploymentLayer;
+  const store = ctx.deps.deploymentLayerStore;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
   const bundle = bundleFrom(ctx.body);
   if (!bundle) {

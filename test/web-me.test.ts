@@ -8,7 +8,6 @@ import { webMeConfig } from "../src/api/routes/web-me.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { orgId, orgScope } from "../src/config.ts";
 import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -29,7 +28,7 @@ const webMe = webMeConfig({
 
 async function serve(deps: Partial<ServerDeps> = {}): Promise<string> {
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     web: { events: {} as never, me: webMe, shell: { release: async () => undefined } as never },
     suggestedActivities: undefined,

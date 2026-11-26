@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
@@ -22,7 +22,7 @@ const SECRET = "directory-resolve-secret".repeat(3);
 describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = await mintCapabilityToken(
     { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + CAPABILITY_TTL_MS },
@@ -196,7 +196,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
 describe("a deployment without the Slack surface (the directory store is never populated)", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = await mintCapabilityToken(
     { actorId: "dana@acme.com", scopeId: personalScope("dana@acme.com"), exp: Date.now() + CAPABILITY_TTL_MS },

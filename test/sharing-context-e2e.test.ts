@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { sessionVisibleTo } from "../src/sessions/session-rows.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -24,7 +23,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(cfg);
   await built.config.hydrate?.();
   await built.identity.refresh();
-  await built.deploymentLayerReady;
+  await built.deploymentLayerReady();
   t.after(async () => {
     built.scheduler.stop();
     await built.runtime.stop();
@@ -278,7 +277,7 @@ test("sharing e2e: a delegated turn shares its parent's access under current sha
   assert.ok(token);
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.personAuthority, true);
-  const server = createServer(b.app, serverDeps(b.cfg, b));
+  const server = createServer(b.app, b);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;

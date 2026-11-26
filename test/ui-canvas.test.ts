@@ -3,7 +3,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -23,7 +23,7 @@ const SECRET = "ui-canvas-test-secret-value!".repeat(2);
 const THREAD = "web:U1:canvas";
 
 describe("ui canvas and ui observe", () => {
-  let built: BuiltApp;
+  let built: Core;
   let agentServer: Server;
   let sourceServer: Server;
   let browserServer: Server;

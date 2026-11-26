@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
@@ -36,7 +36,7 @@ it("detects charset parameters outside quoted parameter values", () => {
 describe("agent files self-API", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let mineId: string;
   let theirsId: string;
   let encodedId: string;

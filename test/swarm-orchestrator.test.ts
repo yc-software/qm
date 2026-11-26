@@ -217,8 +217,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     };
   };
   captureIssuedTokens();
-  const { serverDeps } = await import("../src/wiring.ts");
-  let server = createServer(built.app, serverDeps(config, built));
+  let server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   let rootId = "";
@@ -320,7 +319,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     await built.runtime.stop();
     built = buildApp(config);
     captureIssuedTokens();
-    server = createServer(built.app, serverDeps(config, built));
+    server = createServer(built.app, built);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     await built.app.swarms!.sweep();

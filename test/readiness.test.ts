@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -15,14 +14,14 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });
   const built = buildApp(config);
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     ...(checkReadiness ? { checkReadiness } : {}),
     requireSignedPortalIdentity: true,
     portalIdentitySecret: "readiness-test-portal-secret".repeat(3),
   });
   await inBootTenant(bootTenant(), async (tenant) => {
     if (tenant) await loadTenant();
-    await built.deploymentLayerReady;
+    await built.deploymentLayerReady();
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
