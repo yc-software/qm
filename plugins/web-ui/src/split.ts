@@ -70,6 +70,7 @@ import {
 import type { Conversation } from "./conv-types";
 import {
   openSession,
+  sessionSlackUrl,
   openSessionInto,
   refreshSessions,
   sessionsReady,
@@ -80,7 +81,9 @@ import {
   workingMark,
   backgroundIcons,
 } from "./sessions";
-import { conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
+import { chatSurfaceOf, conversationBackground, rowIndicators, type RowIndicators } from "./session-list";
+import { openInSurface } from "./slack-thread-view";
+import { onPaneHeaderExtrasChange, paneHeaderExtra, paneHeaderExtraKey } from "./pane-header-extras";
 import { scopeToolCount, setScopedSession, type SessionTool } from "./session-scope";
 import {
   fetchTranscript,
@@ -827,10 +830,12 @@ function computeHeaderSignature(): string {
       const parent = session?.parentSessionId
         ? sessionsState.list.find((row) => row.id === session.parentSessionId)
         : undefined;
-      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}|${session?.personaId ? personaName(session.personaId) : ""}`;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}|${session?.personaId ? personaName(session.personaId) : ""}|${paneHeaderExtraKey(session?.id)}`;
     })
     .join("~");
 }
+
+onPaneHeaderExtrasChange(() => notifyPanesChanged());
 
 export function notifyPanesChanged(): void {
   if (!splitState.active || !dockApi) return;
@@ -1236,6 +1241,7 @@ class PaneTab implements ITabRenderer {
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
+    const slackSession = paneSession(panel)?.surface === "slack" ? paneSession(panel) : undefined;
     render(
       html`
         ${working ? workingMark() : nothing}
@@ -1265,7 +1271,14 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${sessionPersonaChip(paneSession(panel))}
+        ${
+          slackSession
+            ? html`${paneHeaderExtra(slackSession.id) ?? nothing}${openInSurface(
+                sessionSlackUrl(slackSession),
+                chatSurfaceOf(slackSession)?.label,
+              )}`
+            : sessionPersonaChip(paneSession(panel))
+        }
         ${
           background
             ? html`<span class="bg-chip" aria-label=${background.label} ${tip(background.label)}

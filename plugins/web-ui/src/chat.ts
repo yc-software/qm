@@ -190,6 +190,7 @@ import { appState, renderSidebarTop, switchView, syncUrlFromState } from "./shel
 import { hasWelcomeScreen } from "./shell-state";
 import { contextsState, scopeTitle } from "./contexts";
 import { openProjectPage, scopeToolCount, sessionTopbarTpl, setScopedSession } from "./session-scope";
+import { setPaneHeaderExtra } from "./pane-header-extras";
 import {
   addPendingSession,
   onSessionDragStart,
@@ -1758,21 +1759,31 @@ export function createChatSurface(
       const approvals = readOnly.approvals();
       const chatSurface = chatSurfaceOf(roSession);
       const slackReply = readOnly.slackReply();
-      const header =
-        roSession.surface === "slack"
-          ? chatHeader(
-              roSession.type === "channel"
-                ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
-                : groupDmTitle(roSession),
-              null,
-              messages,
-              { shown: 3, named: true },
-              openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
-            )
-          : chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
-              shown: 5,
-              named: false,
-            });
+      let header: TemplateResult | typeof nothing = nothing;
+      if (roSession.surface !== "slack")
+        header = chatHeader(groupDmTitle(roSession), chatSurface ? chatSurface.label : "Read-only", messages, {
+          shown: 5,
+          named: false,
+        });
+      else if (ctx.pane) {
+        const people = conversationParticipants(messages).slice(0, 3);
+        setPaneHeaderExtra(
+          roSession.id,
+          people.map((person) => `${person.key}:${person.avatarUrl ?? ""}`).join(","),
+          html`${participantStack(people, 3)}${
+            people.length ? html`<span class="chat-participant-names">${peopleNames(people, 3)}</span>` : nothing
+          }`,
+        );
+      } else
+        header = chatHeader(
+          roSession.type === "channel"
+            ? slackTitle(defaultSessionTitle(roSession), roSession.title?.trim())
+            : groupDmTitle(roSession),
+          null,
+          messages,
+          { shown: 3, named: true },
+          openInSurface(sessionSlackUrl(roSession), chatSurface?.label),
+        );
       content = html`
         <div class="custom-chat-shell">
           ${header}
