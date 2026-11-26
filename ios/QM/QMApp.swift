@@ -353,9 +353,10 @@ struct RootView: View {
       switch item {
       case .conversations: showingConversations = true
       case .new:
-        if section != .home || selectedConversation?.localOnly != true,
-          let conversation = model.newConversation()
-        {
+        // Already on a blank chat: just bring it back instead of doing nothing.
+        if section == .home, selectedConversation?.localOnly == true {
+          showingConversations = false
+        } else if let conversation = model.newConversation() {
           open(conversation)
         }
       case .more:
@@ -681,6 +682,7 @@ struct ShellNav: View {
   ) -> some View {
     let isSelected = selected == target
     return Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
       action(target)
     } label: {
       Image(systemName: isSelected ? filled : icon)
@@ -694,12 +696,22 @@ struct ShellNav: View {
             Circle().fill(QMTheme.unread).frame(width: 8, height: 8).offset(x: -12, y: 6)
           }
         }
-        .contentShape(Capsule())
+        .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(NavPressStyle())
     .foregroundStyle(QMTheme.ink.opacity(isSelected ? 1 : 0.6))
     .accessibilityLabel(label)
     .accessibilityAddTraits(isSelected ? .isSelected : [])
+  }
+}
+
+/// Shrinks on touch-down so a tap registers immediately.
+private struct NavPressStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.88 : 1)
+      .opacity(configuration.isPressed ? 0.7 : 1)
+      .animation(.snappy(duration: 0.12), value: configuration.isPressed)
   }
 }
 
