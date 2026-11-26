@@ -39,12 +39,18 @@ struct WorkspaceDestination: Identifiable {
   }
 
   /// The destinations someone can open, grouped under their section titles in display order.
-  static func sections(for identity: Identity) -> [(title: String, destinations: [Self])] {
+  static func sections(for identity: Identity) -> [WorkspaceSection] {
     let destinations = available(to: identity)
     return ["Your work", "Automations", "Tools and settings"].map { title in
-      (title, destinations.filter { $0.section == title })
+      WorkspaceSection(title: title, destinations: destinations.filter { $0.section == title })
     }
   }
+}
+
+struct WorkspaceSection: Identifiable {
+  let title: String
+  let destinations: [WorkspaceDestination]
+  var id: String { title }
 }
 
 struct WorkspaceDestinationView: View {
@@ -87,7 +93,7 @@ struct MoreGrid: View {
         columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
         alignment: .leading, spacing: 12
       ) {
-        ForEach(WorkspaceDestination.sections(for: identity), id: \.title) { section in
+        ForEach(WorkspaceDestination.sections(for: identity)) { section in
           Section {
             ForEach(section.destinations) { tile($0) }
           } header: {

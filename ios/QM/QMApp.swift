@@ -450,6 +450,7 @@ struct RootView: View {
     }
   }
 
+  @ViewBuilder
   private func conversationActions(_ conversation: Conversation) -> some View {
     if conversation.localOnly != true {
       Button(conversation.pinned == true ? "Unpin" : "Pin", systemImage: "pin") {
