@@ -1902,8 +1902,7 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
 
 const ORGANIZATION_OWNER_KEY = personKey("Organization");
 
-export const grantableCredential = (c: KeychainCredentialMeta): boolean =>
-  c.kind !== "broker" && !isBackendCredential(c);
+const grantableCredential = (c: KeychainCredentialMeta): boolean => c.kind !== "broker" && !isBackendCredential(c);
 
 export async function turnScopeGrants(
   keychain: Pick<Keychain, "grantsForScope">,
