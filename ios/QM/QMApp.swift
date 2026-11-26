@@ -212,7 +212,7 @@ struct RootView: View {
     )
     .task(id: webOnly) { await model.narrow(webOnly: webOnly) }
     .task(id: foregroundURL) {
-      if model.identity == nil { await model.restore() }
+      if foregroundURL != nil, model.identity == nil { await model.restore() }
     }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
