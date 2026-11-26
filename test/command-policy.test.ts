@@ -489,7 +489,7 @@ test("parseCommandPolicy rejects malformed input", () => {
 });
 
 test("parseCommandPolicy rejects regexes with catastrophic repetition", () => {
-  for (const pattern of ["(a+)+$", "(a|aa)+$", "(.*)*$"]) {
+  for (const pattern of ["(a+)+$", "(a|aa)+$", "(.*)*$", "((a+))+$", "((a|aa))+$", "(?:(a+))+$", "(a(b|bb))+$"]) {
     const parsed = parseCommandPolicy({ mode: "denylist", rules: [{ pattern, decision: "deny" }] });
     assert.ok("error" in parsed, pattern);
   }
