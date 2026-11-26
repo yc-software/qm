@@ -66,7 +66,16 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
   };
 }
 
-export function redactedCommand(command: string): string {
+export function decisionBody(record: PendingApprovalRecord): Record<string, unknown> {
+  return {
+    command: redactedCommand(record.command),
+    ...(record.purpose ? { purpose: record.purpose } : {}),
+    ...(record.summary && record.call ? { summary: redactedCommand(record.summary) } : {}),
+    ...visibleCall(record),
+  };
+}
+
+function redactedCommand(command: string): string {
   return redactCommandSecrets(command)
     .split("\n")
     .map((line) => line.split(" ").map(redactSecrets).join(" "))
@@ -376,11 +385,9 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         approved: decided.approved,
         author,
         body: {
-          command: redactedCommand(record.command),
-          ...(record.purpose ? { purpose: record.purpose } : {}),
-          ...(record.summary && record.call ? { summary: record.summary } : {}),
+          ...decisionBody(record),
           ...(decided.scope ? { scope: decided.scope } : {}),
-          ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : visibleCall(record)),
+          ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
       }),
     ).catch(async (error: unknown) => {

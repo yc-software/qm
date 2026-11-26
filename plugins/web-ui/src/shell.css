@@ -14468,7 +14468,7 @@ button:disabled .qm-switch {
   margin: 0 auto 10px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 20px;
   background: var(--background);
   box-shadow:
     0 2px 5px rgb(0 0 0 / 0.05),

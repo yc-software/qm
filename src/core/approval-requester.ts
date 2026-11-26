@@ -1,4 +1,4 @@
-import { redactedCommand, visibleCall } from "./orchestrator/approvals.ts";
+import { decisionBody } from "./orchestrator/approvals.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
@@ -62,10 +62,7 @@ async function recordDeclined(
     approved: false,
     author,
     body: {
-      command: redactedCommand(record.command),
-      ...(record.purpose ? { purpose: record.purpose } : {}),
-      ...(record.summary && record.call ? { summary: record.summary } : {}),
-      ...visibleCall(record),
+      ...decisionBody(record),
       ...body,
     },
   });
