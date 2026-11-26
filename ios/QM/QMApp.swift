@@ -140,13 +140,18 @@ struct RootView: View {
     // One nav for the whole app, drawn above both the list and the main screen so it stays
     // put while they slide underneath it.
     .overlay(alignment: .bottom) {
-      if showsNav { nav(plain: false, inList: showingConversations) }
+      if showsNav {
+        nav(plain: false, inList: showingConversations)
+          .transition(.opacity.combined(with: .offset(y: 24)))
+      }
     }
+    // Hide and restore the nav in step with the keyboard, so the room it leaves (and anything
+    // centred in that room, like the new-chat greeting) glides instead of jumping.
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
-      _ in keyboardUp = true
+      note in withAnimation(Self.keyboardAnimation(note)) { keyboardUp = true }
     }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
-      _ in keyboardUp = false
+      note in withAnimation(Self.keyboardAnimation(note)) { keyboardUp = false }
     }
     .environment(\.qmIdentity, model.identity)
     .environment(model)
@@ -332,6 +337,13 @@ struct RootView: View {
         }
       }
     }
+  }
+
+  /// The keyboard's own duration, as a smooth curve, so layout moves with it.
+  private static func keyboardAnimation(_ note: Notification) -> Animation {
+    let duration =
+      (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+    return .smooth(duration: max(duration, 0.25))
   }
 
   private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }

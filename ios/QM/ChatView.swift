@@ -579,6 +579,8 @@ struct ChatView: View {
             }
           }
           .containerRelativeFrame(.vertical, alignment: .center) { height, _ in height * 0.85 }
+          // Glide up with the keyboard rather than snapping to the new centre.
+          .animation(.smooth(duration: 0.3), value: composerFocused)
         }
         ForEach(sections) { section in
           VStack(alignment: .leading, spacing: 16) {
