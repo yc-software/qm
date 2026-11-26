@@ -50,35 +50,7 @@ struct BrowseView: View {
           ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
             destination in
             NavigationLink {
-              if destination.id == "contexts" {
-                ProjectsView(client: client, identity: identity)
-              } else if destination.id == "files" {
-                NativeFileLibrary(client: client)
-              } else if destination.id == "crons" {
-                NativeCronsView(client: client, user: identity.user)
-              } else if destination.id == "webhooks" {
-                NativeWebhooksView(client: client, user: identity.user)
-              } else if destination.id == "skills" {
-                NativeSkillsView(client: client, user: identity.user)
-              } else if destination.id == "apps" {
-                NativeAppsView(client: client, user: identity.user)
-              } else if destination.id == "calendar" {
-                ContentUnavailableView(
-                  "Calendar is coming soon", systemImage: "calendar",
-                  description: Text("Your calendar will appear here when it is available in QM."))
-              } else if destination.id == "keychain" {
-                NativeKeychainView(client: client)
-              } else if destination.id == "settings" {
-                NativeSettingsView(client: client, identity: identity)
-              } else if destination.id == "loops" {
-                NativeLoopsView(client: client)
-              } else if destination.id == "inbox" {
-                NativeInboxView(client: client, user: identity.user)
-              } else if destination.id == "memory" {
-                NativeMemoryView(client: client)
-              } else if destination.id == "voice.html" {
-                VoiceView(client: client)
-              }
+              WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
             } label: {
               HStack(spacing: 12) {
                 Image(systemName: destination.icon).frame(width: 24)
@@ -107,5 +79,75 @@ struct BrowseView: View {
 
   private var background: Color {
     NativeThemeStore.shared.active?.surface.color ?? Color(uiColor: .systemGroupedBackground)
+  }
+}
+
+struct WorkspaceDestinationView: View {
+  let id: String
+  let identity: Identity
+  let client: APIClient
+
+  var body: some View {
+    switch id {
+    case "contexts": ProjectsView(client: client, identity: identity)
+    case "files": NativeFileLibrary(client: client)
+    case "crons": NativeCronsView(client: client, user: identity.user)
+    case "webhooks": NativeWebhooksView(client: client, user: identity.user)
+    case "skills": NativeSkillsView(client: client, user: identity.user)
+    case "apps": NativeAppsView(client: client, user: identity.user)
+    case "calendar":
+      ContentUnavailableView(
+        "Calendar is coming soon", systemImage: "calendar",
+        description: Text("Your calendar will appear here when it is available in QM."))
+    case "keychain": NativeKeychainView(client: client)
+    case "settings": NativeSettingsView(client: client, identity: identity)
+    case "loops": NativeLoopsView(client: client)
+    case "inbox": NativeInboxView(client: client, user: identity.user)
+    case "memory": NativeMemoryView(client: client)
+    case "voice.html": VoiceView(client: client)
+    default: EmptyView()
+    }
+  }
+}
+
+/// Two-column tiles for every workspace destination, like ChatGPT's More screen.
+struct MoreGrid: View {
+  let identity: Identity
+  let client: APIClient
+
+  private static let tints: [String: Color] = [
+    "inbox": .blue, "calendar": .red, "voice.html": .pink, "contexts": .cyan, "files": .orange,
+    "crons": .purple, "webhooks": .yellow, "loops": .green, "keychain": .gray, "apps": .indigo,
+    "memory": .mint, "skills": .brown, "settings": .gray,
+  ]
+
+  var body: some View {
+    ScrollView {
+      LazyVGrid(
+        columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+        spacing: 12
+      ) {
+        ForEach(WorkspaceDestination.available(to: identity)) { destination in
+          NavigationLink {
+            WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
+          } label: {
+            VStack(alignment: .leading, spacing: 0) {
+              Text(destination.title).font(.title3).foregroundStyle(QMTheme.ink)
+              Spacer(minLength: 20)
+              Image(systemName: destination.icon)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(Self.tints[destination.id] ?? QMTheme.ink)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+            .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(16)
+    }
+    .background(QMTheme.paper)
+    .navigationBarTitleDisplayMode(.inline)
   }
 }

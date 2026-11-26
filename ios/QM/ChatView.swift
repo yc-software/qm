@@ -260,7 +260,7 @@ struct ChatView: View {
     if let onShowConversations {
       ToolbarItem(placement: .topBarLeading) {
         Button(action: onShowConversations) {
-          Image(systemName: "chevron.left")
+          Image(systemName: "line.2.horizontal")
         }
         .accessibilityLabel("Conversations")
       }

@@ -18,16 +18,13 @@ struct RootView: View {
     case workspace, search, waiting, archived, setup
   }
 
-  private enum HomeTab: Hashable {
-    case chats, waiting, workspace, search
-  }
-
-  @State private var tab = HomeTab.chats
+  @State private var section = ShellSection.home
+  @State private var keyboardUp = false
 
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
   @State private var selectedConversation: Conversation?
-  @State private var showingConversations = true
+  @State private var showingConversations = false
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
   @State private var search = ""
@@ -47,33 +44,7 @@ struct RootView: View {
     model.visibleConversations(search: searchTerm, webOnly: webOnly)
   }
 
-  // The bottom island: Chats, Waiting and Workspace tabs, with search as its own tab.
-  @ViewBuilder
-  private var home: some View {
-    if let identity = model.identity, let client = model.client {
-      TabView(selection: $tab) {
-        Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: HomeTab.chats) {
-          chatsStack
-        }
-        Tab("Waiting", systemImage: "tray", value: HomeTab.waiting) {
-          NavigationStack { waitingConversations }
-        }
-        .badge(waitingCount)
-        Tab("Workspace", systemImage: "square.grid.2x2", value: HomeTab.workspace) {
-          NavigationStack { BrowseView(identity: identity, client: client) }
-        }
-        Tab(value: HomeTab.search, role: .search) {
-          NavigationStack {
-            SearchView(client: client, user: identity.user)
-              .navigationTitle("Search")
-          }
-        }
-      }
-      .modifier(IslandMinimizesOnScroll())
-    } else {
-      chatsStack
-    }
-  }
+  private var home: some View { chatsStack }
 
   private var waitingCount: Int {
     model.conversations.filter { $0.awaitingInput == true && $0.archived != true }.count
@@ -85,6 +56,7 @@ struct RootView: View {
       Group {
         if let identity = model.identity {
           QMList(background: QMTheme.sidebar) {
+            shortcutRows
             if webOnly {
               HStack {
                 Text("Web conversations").foregroundStyle(.secondary)
@@ -121,18 +93,21 @@ struct RootView: View {
           .scrollContentBackground(.hidden)
           .background(QMTheme.sidebar)
           .refreshable { await model.refresh() }
-          .toolbar { homeToolbar }
+          .toolbar(.hidden, for: .navigationBar)
         } else if model.client?.hasSession == true {
           workspaceConnection
         } else {
           WelcomeView(model: model, choosingWorkspace: $choosingWorkspace)
         }
       }
-      .navigationTitle(model.identity == nil ? "" : "Chats")
-      .navigationBarTitleDisplayMode(model.identity == nil ? .inline : .large)
+      .navigationTitle("")
+      .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if model.identity != nil, !model.conversations.isEmpty {
-          ConversationErrorBanner(model: model)
+        if let identity = model.identity {
+          VStack(spacing: 8) {
+            if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
+            listActions(identity)
+          }
         }
       }
       .navigationDestination(for: Page.self) { page in
@@ -154,24 +129,18 @@ struct RootView: View {
 
   var body: some View {
     NativeConversationDrawer(
-      isOpen: $showingConversations, hasSelection: selectedConversation != nil,
-      showsSidebarPage: !homePath.isEmpty || tab != .chats
+      isOpen: $showingConversations, hasSelection: model.identity != nil && model.client != nil,
+      showsSidebarPage: !homePath.isEmpty, fullWidth: true
     ) {
       home
     } detail: {
-      if let conversation = selectedConversation, let client = model.client,
-        let identity = model.identity
-      {
-        NavigationStack {
-          ChatView(
-            model: ChatModel(
-              conversation: conversation, client: client, user: identity.user,
-              knownSession: conversation.localOnly != true),
-            onShowConversations: { showingConversations = true })
-        }
-        .id(conversation.id)
-        .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
-      }
+      shell
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
+      _ in keyboardUp = true
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
+      _ in keyboardUp = false
     }
     .environment(\.qmIdentity, model.identity)
     .environment(model)
@@ -217,7 +186,7 @@ struct RootView: View {
     .modifier(
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation,
-        listVisible: homePath.isEmpty && tab == .chats, phase: phase, model: model)
+        listVisible: homePath.isEmpty, phase: phase, model: model)
     )
     .task(id: [searchTerm, String(webOnly)]) {
       if !searchTerm.isEmpty {
@@ -240,7 +209,7 @@ struct RootView: View {
       #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     selectedConversation = conversation
     homePath = []
-    tab = .chats
+    section = .home
     showingConversations = false
   }
 
@@ -323,37 +292,124 @@ struct RootView: View {
       }
       Button("Sign out", role: .destructive) { confirmingSignOut = true }
     } label: {
-      Text(String((identity.displayName ?? identity.user).prefix(1)).uppercased())
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.white)
-        .frame(width: 32, height: 32)
-        .background(
-          LinearGradient(
-            colors: [Color(red: 0.95, green: 0.65, blue: 0.35), Color(red: 0.89, green: 0.38, blue: 0.31)],
-            startPoint: .topLeading, endPoint: .bottomTrailing),
-          in: Circle())
+      Image(systemName: "gearshape")
+        .font(.system(size: 20, weight: .medium))
+        .frame(width: 52, height: 48)
     }
-    .accessibilityLabel("Account")
+    .accessibilityLabel("Account and settings")
+  }
+
+  // The main screen: the open conversation, Waiting or More, with a small nav underneath.
+  @ViewBuilder
+  private var shell: some View {
+    if let client = model.client, let identity = model.identity {
+      Group {
+        switch section {
+        case .home:
+          if let conversation = selectedConversation {
+            NavigationStack {
+              ChatView(
+                model: ChatModel(
+                  conversation: conversation, client: client, user: identity.user,
+                  knownSession: conversation.localOnly != true),
+                onShowConversations: { showingConversations = true })
+            }
+            .id(conversation.id)
+            .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
+          } else {
+            QMTheme.paper.ignoresSafeArea()
+              .task { selectedConversation = model.newConversation() }
+          }
+        case .waiting:
+          NavigationStack { waitingConversations.toolbar { menuToolbar } }
+        case .more:
+          NavigationStack { MoreGrid(identity: identity, client: client).toolbar { menuToolbar } }
+        }
+      }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if !keyboardUp { ShellNav(section: $section, waiting: waitingCount) }
+      }
+    }
   }
 
   @ToolbarContentBuilder
-  private var homeToolbar: some ToolbarContent {
-    let account = ToolbarItem(placement: .topBarLeading) {
-      if let identity = model.identity { accountMenu(identity) }
+  private var menuToolbar: some ToolbarContent {
+    ToolbarItem(placement: .topBarLeading) {
+      Button {
+        showingConversations = true
+      } label: {
+        Image(systemName: "line.2.horizontal")
+      }
+      .accessibilityLabel("Conversations")
     }
-    if #available(iOS 26.0, *) {
-      account.sharedBackgroundVisibility(.hidden)
-    } else {
-      account
+  }
+
+  private var shortcutRows: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      shortcut("Home", icon: "house", to: .home)
+      shortcut("Waiting", icon: "tray", to: .waiting, count: waitingCount)
+      shortcut("More", icon: "square.grid.2x2", to: .more)
     }
-    ToolbarItem(placement: .topBarTrailing) {
+    .padding(.top, 12).padding(.bottom, 12)
+    .listRowInsets(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 24))
+    .listRowSeparator(.hidden)
+    .listRowBackground(QMTheme.sidebar)
+  }
+
+  private func shortcut(
+    _ title: String, icon: String, to target: ShellSection, count: Int = 0
+  ) -> some View {
+    Button {
+      section = target
+      if target == .home, selectedConversation == nil {
+        selectedConversation = model.newConversation()
+      }
+      showingConversations = false
+    } label: {
+      HStack(spacing: 16) {
+        Image(systemName: icon).font(.system(size: 22, weight: .regular)).frame(width: 28)
+        Text(title).font(.title2.weight(.medium))
+        if count > 0 {
+          Text("\(count)").font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(QMTheme.unread, in: Capsule())
+        }
+        Spacer(minLength: 0)
+      }
+      .frame(minHeight: 48)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func listActions(_ identity: Identity) -> some View {
+    HStack {
       Button {
         if let conversation = model.newConversation() { open(conversation) }
       } label: {
-        Image(systemName: "plus")
+        Label("New", systemImage: "square.and.pencil")
+          .font(.body.weight(.semibold))
+          .padding(.horizontal, 20)
+          .frame(height: 48)
       }
+      .buttonStyle(.plain)
+      .modifier(GlassPill(prominent: true))
       .accessibilityLabel("New conversation")
+      Spacer()
+      HStack(spacing: 0) {
+        NavigationLink(value: Page.search) {
+          Image(systemName: "magnifyingglass")
+            .font(.system(size: 20, weight: .medium))
+            .frame(width: 52, height: 48)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search")
+        accountMenu(identity)
+      }
+      .modifier(GlassPill(prominent: false))
     }
+    .padding(.horizontal, 20)
+    .padding(.bottom, 8)
   }
 
   @ViewBuilder
@@ -559,13 +615,66 @@ private struct ConversationDrawerEffects: ViewModifier {
   }
 }
 
-/// On iOS 26 the tab bar shrinks to the current tab and search while the list scrolls down.
-private struct IslandMinimizesOnScroll: ViewModifier {
+enum ShellSection: Hashable {
+  case home, waiting, more
+}
+
+/// Small icon-only nav under the main screen, in the style of the ChatGPT app.
+struct ShellNav: View {
+  @Binding var section: ShellSection
+  let waiting: Int
+
+  var body: some View {
+    HStack(spacing: 24) {
+      item(.home, icon: "house", label: "Home")
+      item(.waiting, icon: "tray", label: "Waiting")
+      item(.more, icon: "square.grid.2x2", label: "More")
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.top, 6)
+    .background(QMTheme.paper.ignoresSafeArea(edges: .bottom))
+  }
+
+  private func item(_ target: ShellSection, icon: String, label: String) -> some View {
+    let selected = section == target
+    return Button {
+      section = target
+    } label: {
+      Image(systemName: selected ? icon + ".fill" : icon)
+        .font(.system(size: 20, weight: .medium))
+        .frame(width: 64, height: 40)
+        .background {
+          if selected { Capsule().fill(QMTheme.ink.opacity(0.1)) }
+        }
+        .overlay(alignment: .topTrailing) {
+          if target == .waiting, waiting > 0 {
+            Circle().fill(QMTheme.unread).frame(width: 8, height: 8).offset(x: -14, y: 7)
+          }
+        }
+        .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(QMTheme.ink.opacity(selected ? 1 : 0.6))
+    .accessibilityLabel(label)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+}
+
+/// Liquid Glass capsule on iOS 26, material before it.
+struct GlassPill: ViewModifier {
+  let prominent: Bool
+
   func body(content: Content) -> some View {
     if #available(iOS 26.0, *) {
-      content.tabBarMinimizeBehavior(.onScrollDown)
+      content
+        .foregroundStyle(prominent ? QMTheme.paper : QMTheme.ink)
+        .glassEffect(
+          prominent ? .regular.tint(QMTheme.ink).interactive() : .regular.interactive(),
+          in: .capsule)
     } else {
       content
+        .foregroundStyle(prominent ? QMTheme.paper : QMTheme.ink)
+        .background(prominent ? AnyShapeStyle(QMTheme.ink) : AnyShapeStyle(.thinMaterial), in: Capsule())
     }
   }
 }
