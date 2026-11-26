@@ -92,7 +92,9 @@ struct RootView: View {
           .scrollContentBackground(.hidden)
           .background(QMTheme.sidebar)
           .refreshable { await model.refresh() }
-          .toolbar { listToolbar(identity) }
+          .contentMargins(.top, 4, for: .scrollContent)
+          .toolbar(.hidden, for: .navigationBar)
+          .safeAreaInset(edge: .top, spacing: 0) { listHeader(identity) }
         } else if model.client?.hasSession == true {
           workspaceConnection
         } else {
@@ -380,18 +382,23 @@ struct RootView: View {
     }
   }
 
-  // Search and settings live top-right so nothing floats over the bottom nav.
-  @ToolbarContentBuilder
-  private func listToolbar(_ identity: Identity) -> some ToolbarContent {
-    ToolbarItemGroup(placement: .topBarTrailing) {
+  // An opaque bar with search and settings; the list starts right under it and scrolls beneath.
+  private func listHeader(_ identity: Identity) -> some View {
+    HStack(spacing: 4) {
+      Spacer()
       NavigationLink(value: Page.search) {
-        Image(systemName: "magnifyingglass")
+        Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
       }
+      .buttonStyle(.plain)
       .accessibilityLabel("Search")
-      accountMenu(identity)
+      accountMenu(identity).frame(width: 44, height: 44)
     }
+    .font(.system(size: 19, weight: .medium))
+    .foregroundStyle(QMTheme.ink)
+    .padding(.horizontal, 12)
+    .padding(.bottom, 4)
+    .background(QMTheme.sidebar.ignoresSafeArea(edges: .top))
   }
-
 
   @ViewBuilder
   private var loadMoreRow: some View {
@@ -408,6 +415,7 @@ struct RootView: View {
       .listRowBackground(QMTheme.sidebar)
     }
   }
+
 
   private var waitingConversations: some View {
     let showing = model.filter == .waiting
