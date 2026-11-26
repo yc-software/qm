@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { failedTurnError } from "./support/failed-turn.ts";
 import { type TurnRequest, personalScope } from "../src/types.ts";
@@ -32,7 +32,7 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
   const acl = wrapAcl?.(built.acl) ?? built.acl;
   const server = createInsecureTestServer(built.app, {
@@ -48,7 +48,7 @@ function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: Bu
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function startBroker(brokerFetch: BrokerFetch): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-broker-")), signingSecret: SECRET }),
   );
@@ -67,7 +67,7 @@ function startBroker(brokerFetch: BrokerFetch): { base: string; built: BuiltApp;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-git-broker-")), signingSecret: SECRET }),
   );

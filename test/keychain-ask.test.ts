@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
@@ -592,7 +592,7 @@ test("an ask's resolution is one event line, shown only to the first turn after 
 describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let approvals: KeychainApprovals;
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);

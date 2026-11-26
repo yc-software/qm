@@ -22,6 +22,15 @@ struct ChatView: View {
   @State private var openedConversation: Conversation?
   @State private var startingSideChat = false
   @State private var followsLatest = true
+  // The bottom bar's height with the dictation panel closed, and how far the open panel
+  // rises above it. While dictating, the transcript's inset stays at the closed height and
+  // the transcript is lifted instead, so it moves on the panel's own spring.
+  @State private var restingBarHeight: CGFloat = 0
+  @State private var dictationLift: CGFloat = 0
+  // The last open panel's lift, so the next open can start moving the text on the tap
+  // instead of a layout pass later. The first open uses a typical panel height.
+  @State private var expectedDictationLift: CGFloat = 160
+  @State private var liftsTranscript = false
   @State private var previewingAttachment: UploadAttachment?
   @State private var stopping = false
   @State private var retryingHistory = false
@@ -29,7 +38,7 @@ struct ChatView: View {
   @State private var approvalSubmission: (id: String, approved: Bool)?
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
 
   init(
     model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
@@ -124,8 +133,27 @@ struct ChatView: View {
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        // Changing the inset re-anchors the transcript in one step while the panel springs
+        // open, which clipped the last message for a beat. Lifting it is drawn, not laid
+        // out, so it tracks the panel frame for frame.
+        .offset(y: liftsTranscript ? -dictationLift : 0)
+        .animation(reduceMotion ? nil : liftMotion, value: dictationLift)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
+            .fixedSize(horizontal: false, vertical: dictation.busy)
+            .onGeometryChange(for: CGFloat.self) {
+              $0.size.height
+            } action: { height in
+              if dictation.busy {
+                dictationLift = max(0, height - restingBarHeight)
+                expectedDictationLift = dictationLift
+              } else {
+                restingBarHeight = height
+                dictationLift = 0
+              }
+            }
+            // The open panel overflows upward from the closed bar's height.
+            .frame(height: dictation.busy ? restingBarHeight : nil, alignment: .bottom)
         }
       }
     }
@@ -777,9 +805,16 @@ struct ChatView: View {
     // the chrome, the rows above it that hide while dictating, and the buttons all move in
     // one transaction; animating only the composer let the bar snap and the buttons jump.
     // Closing settles without bounce.
-    .animation(
-      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
-      value: dictation.busy)
+    .animation(reduceMotion ? nil : barSpring, value: dictation.busy)
+  }
+
+  private var barSpring: Animation {
+    .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0)
+  }
+
+  /// The text leads the panel up so the last lines are never under it, and trails it down.
+  private var liftMotion: Animation {
+    dictation.busy ? .smooth(duration: 0.26) : .smooth(duration: 0.5)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -838,6 +873,8 @@ struct ChatView: View {
         } else {
           Button {
             composerFocused = false
+            liftsTranscript = followsLatest
+            dictationLift = expectedDictationLift
             dictation.start()
           } label: {
             Image(systemName: "mic")
@@ -903,17 +940,20 @@ struct ChatView: View {
   }
 
   private var composerTextField: some View {
-    TextField(
-      model.activeRunID == nil ? "Message QM" : "Queue a message", text: $model.draft,
-      axis: .vertical
+    let placeholder = model.activeRunID == nil ? "Message QM" : "Queue a message"
+    return ComposerField(
+      text: $model.draft, focused: $composerFocused, placeholder: placeholder,
+      maxLines: verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8,
+      onPasteImages: model.addAttachments
     )
-    .lineLimit(
-      1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
-    )
+    .overlay(alignment: .topLeading) {
+      if model.draft.isEmpty {
+        Text(placeholder).foregroundStyle(Color(uiColor: .placeholderText))
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+    }
     .padding(.horizontal, 8).padding(.top, 8)
-    .focused($composerFocused)
     .disabled(model.sending)
-    .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {

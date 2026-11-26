@@ -3285,11 +3285,11 @@ export function createChatSurface(
       isStreaming &&
       currentTextPhase(work)?.phase !== "final_answer" &&
       (work.status === "working" || work.status === "thinking");
-    const segments = workTimelineSegments(workTimeline(work, active ? "" : text));
+    const segments = workTimelineSegments(workTimeline(work, active ? "" : text), versions.inlined);
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
-      if (steer?.kind === "text") return renderTimelineItem(steer, work);
+      if (steer?.kind === "text" && !versions.inlined.has(steer.item.seq)) return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: TemplateResult[] = [];
       const timeline = segment.filter((item) => {

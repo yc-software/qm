@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, type Core } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -26,7 +26,7 @@ function start(
   modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 }),
 ): {
   base: string;
-  built: BuiltApp;
+  built: Core;
   close: () => Promise<void>;
 } {
   const appConfig = testConfig({

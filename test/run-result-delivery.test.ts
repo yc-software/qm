@@ -68,6 +68,7 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
       fireKey: "run:r-1",
       sourceScopeId: personalScope("internal:U1"),
       sourceThreadRef: "t",
+      sourceRunId: "r-1",
     },
     idempotencyKey: "run:r-1",
   });

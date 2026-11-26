@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
@@ -21,7 +21,7 @@ const SECRET = "surface-context-test-secret".repeat(3);
 describe("surface-context pulls", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = (overrides: Record<string, unknown> = {}) =>
     mintCapabilityToken(

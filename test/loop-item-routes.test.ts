@@ -156,7 +156,7 @@ async function call(
       loopSlackClient: slackClientFor(w),
       ...(w.tokens
         ? {
-            loopSourceTokens: { connectorAccessToken: async () => "tok" },
+            keychain: { connectorAccessToken: async () => "tok" },
           }
         : {}),
     },

@@ -10,7 +10,6 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId, personalScope } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -295,6 +294,6 @@ test("spend export: an unavailable spend store is an error, not an empty export"
 
 test("spend export: core receives the configured token", () => {
   const config = testConfig({ spendExportToken: exportToken });
-  assert.equal(serverDeps(config, buildApp(config)).spendExportToken, exportToken);
-  assert.equal(serverDeps(testConfig(), buildApp(testConfig())).spendExportToken, undefined);
+  assert.equal(buildApp(config).spendExportToken, exportToken);
+  assert.equal(buildApp(testConfig()).spendExportToken, undefined);
 });

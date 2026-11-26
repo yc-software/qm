@@ -258,38 +258,18 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     ),
     /"needsApproval":true/,
   );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "send-message" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    true,
-  );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "invoke", tool: "find-record" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    false,
-  );
-  assert.equal(
-    await service.needsApproval(
-      "records",
-      { operation: "search" },
-      "alice@example.com",
-      personalScope("alice@example.com"),
-    ),
-    false,
-  );
+  const ask = (args: Record<string, unknown>) =>
+    service.needsApproval("records", args, "alice@example.com", personalScope("alice@example.com"));
+  assert.equal(await ask({ operation: "invoke", tool: "send-message" }), true);
+  assert.equal(await ask({ operation: "invoke", tool: "find-record" }), false);
+  assert.equal(await ask({ operation: "invoke", tool: "send_message" }), false, "an invented name asks no question");
+  assert.equal(await ask({ operation: "search" }), false);
   await assert.rejects(
-    service.needsApproval(
+    service.call(
       "records",
       { operation: "invoke", tool: "send_message" },
       "alice@example.com",
+      undefined,
       personalScope("alice@example.com"),
     ),
     /Unknown Records tool: send_message\. Search for it first/,
@@ -790,4 +770,20 @@ test("an app a connector serves is connected for a person only when that person'
     [false, false],
   );
   service.close();
+});
+
+test("organization auth sends the linked organization's bearer on every call and fails closed without one", async (t) => {
+  const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer org-7000" });
+  let org: string | undefined = "7000";
+  const store = createMcpServerStore(testMap<McpServer>());
+  const organizationBearer = async () => org && `org-${org}`;
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, organizationBearer });
+  t.after(() => service.close());
+  await store.put(server({ url: mcp.url, auth: "organization" }));
+  await service.refresh();
+  assert.equal(await service.call("crm_query", {}), "ran query");
+  org = "7001";
+  await assert.rejects(service.call("crm_query", {}), /HTTP 401/);
+  org = undefined;
+  await assert.rejects(service.call("crm_query", {}), /none is linked/);
 });

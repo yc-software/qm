@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
@@ -24,7 +24,7 @@ const SECRET = "memory-route-test-secret".repeat(3);
 describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const capFor = async (actorId: string, memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] }, run = {}) =>
     await mintCapabilityToken(
@@ -373,7 +373,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 describe("agent memory: cross-conversation writes are refused", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const CH_PUBLIC = "C-eng";
   const CH_PRIVATE = "C-secret";
