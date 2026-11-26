@@ -11,6 +11,7 @@ export function createRunReads(
   | "activeForThreads"
   | "activeForThread"
   | "inFlightForThread"
+  | "inFlight"
   | "activeSessionIds"
   | "list"
 > {
@@ -22,6 +23,7 @@ export function createRunReads(
     | "activeForThreads"
     | "activeForThread"
     | "inFlightForThread"
+    | "inFlight"
     | "activeSessionIds"
     | "list"
   > = {
@@ -75,6 +77,14 @@ export function createRunReads(
       const { rows } = await q(
         `SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, ${turnOrder("runs")}`,
         [sessionId],
+      );
+      return rows.map(rowToRun);
+    },
+
+    async inFlight(actorIds: string[]): Promise<Run[]> {
+      const { rows } = await q(
+        "SELECT * FROM runs WHERE status IN ('pending','running') AND request::jsonb -> 'actor' ->> 'id' = ANY($1)",
+        [actorIds],
       );
       return rows.map(rowToRun);
     },

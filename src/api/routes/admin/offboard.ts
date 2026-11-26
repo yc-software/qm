@@ -1,4 +1,6 @@
 import type { AdminGrant } from "../../../admin/admin-grant-store.ts";
+import { AdminError, trustedSubjectPrincipal } from "../../../admin/admin-service.ts";
+import { inTenant } from "../../../tenants/claim.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { personKey, samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
@@ -19,6 +21,15 @@ interface Change {
 }
 
 type Step = Change & { run: () => Promise<unknown> };
+
+type OffboardActor = AuthorizedAdmin & { system?: true };
+
+const TRUSTED_SYSTEM_ACTOR: OffboardActor = {
+  id: "system:trusted-issuer",
+  type: "internal",
+  role: "org_admin",
+  system: true,
+};
 
 interface TargetGovernance {
   grants: AdminGrant[];
@@ -86,7 +97,7 @@ async function deactivateAndSignOut(
 
 async function plan(
   ctx: ApiCtx,
-  actor: AuthorizedAdmin,
+  actor: OffboardActor,
   principalId: string,
   emails: string[],
   isThem: (id: string) => Promise<boolean>,
@@ -105,13 +116,28 @@ async function plan(
 
   if (deps.identity && deps.identity.deactivationSource(principalId) !== "manual")
     step("principal", principalId, "sign-in", "deactivate", () => deactivateAndSignOut(deps, principalId, emails));
+  const { runs, signals } = deps;
+  if (runs && signals)
+    for (const run of await runs.inFlight([...new Set(emails)]))
+      step("turn", run.id, run.sessionId, "stop", async () => {
+        await signals.send(run.id, { kind: "abort", reason: "offboarded" });
+        if (run.status === "pending") await runs.withdraw(run.id);
+      });
   for (const grant of governance.grants)
     step(
       "admin_grant",
       `${grant.principalId}:${grant.role}`,
       grant.role === "owner" ? "owner access" : "admin access",
       "revoke",
-      () => deps.admin!.revokeGrant(tenantOf(ctx), actor, grant.principalId, grant.scopeId, grant.role),
+      () =>
+        deps.admin!.revokeGrant(
+          tenantOf(ctx),
+          actor,
+          grant.principalId,
+          grant.scopeId,
+          grant.role,
+          actor.system ? { system: true } : undefined,
+        ),
     );
   if (actor.role === "owner") return steps;
   for (const c of await app.listCrons())
@@ -140,7 +166,8 @@ async function plan(
       step("skill", s.id, s.manifest.name, "archive", () => app.archiveSkill(s.id));
   const computers = deps.sandboxResources;
   const home = makeScopeId("personal", principalId);
-  for (const c of (await computers?.list(actorId, home))?.sandboxes ?? [])
+  const listed = actor.system ? undefined : await computers?.list(actorId, home);
+  for (const c of listed?.sandboxes ?? [])
     if (c.state !== "retired" && c.availableActions?.includes("retire") && (await personal(c.ownerScopeId)))
       step("computer", c.id, c.name, "retire", async () => {
         if ((await computers!.resolve(c.ownerScopeId))?.id === c.id)
@@ -187,11 +214,28 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (governance.isOwner && governance.otherActiveOrgAdmins === 0 && governance.otherActiveOwners === 0)
     return sendJson(res, 400, { error: "bad_request", message: "cannot offboard the last owner" });
   const emails = [principalId, params.principalId!, ...(resolvedUser?.aliases ?? [])];
+  return sendJson(
+    res,
+    200,
+    await applyOffboard(ctx, actor, principalId, emails, isThem, governance, input.apply === true),
+  );
+}
+
+async function applyOffboard(
+  ctx: ApiCtx,
+  actor: OffboardActor,
+  principalId: string,
+  emails: string[],
+  isThem: (id: string) => Promise<boolean>,
+  governance: TargetGovernance,
+  apply: boolean,
+) {
+  const { deps } = ctx;
   const steps = await plan(ctx, actor, principalId, emails, isThem, governance);
-  const user = input.apply === true ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
+  const user = apply ? await deps.admin!.users.markOffboarded(principalId, actor.id) : undefined;
   const changes: Change[] = [];
   for (const { run, ...change } of steps) {
-    if (input.apply === true) {
+    if (apply) {
       try {
         await run();
         change.result = "done";
@@ -209,7 +253,53 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     }
     changes.push(change);
   }
-  return sendJson(res, 200, { principalId, applied: input.apply === true, changes, ...(user ? { user } : {}) });
+  return { principalId, applied: apply, changes, ...(user ? { user } : {}) };
+}
+
+export async function offboardTrustedSubject(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body } = ctx;
+  const issuer = deps.trustedOidcIssuer;
+  const tenantsFor = deps.directory?.tenantsForPrincipal;
+  if (!issuer || !deps.admin || !deps.identity || !tenantsFor) return sendJson(res, 503, { error: "not_configured" });
+  const input = isObj(body) ? body : null;
+  if (
+    !input ||
+    Object.keys(input).some((k) => k !== "subject" && k !== "apply") ||
+    typeof input.subject !== "string" ||
+    !["boolean", "undefined"].includes(typeof input.apply)
+  )
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "body is { subject: string, apply?: boolean }; omit apply to preview",
+    });
+  let principalId: string;
+  try {
+    principalId = trustedSubjectPrincipal(issuer, input.subject);
+  } catch (e) {
+    if (e instanceof AdminError) return sendJson(res, e.status, { error: "bad_request", message: e.message });
+    throw e;
+  }
+  const apply = input.apply === true;
+  const workspaces = [];
+  for (const { id, brandName } of await tenantsFor(principalId)) {
+    const workspace = { tenant: id, ...(brandName ? { name: brandName } : {}) };
+    try {
+      const result = await inTenant(id, async (tenant) => {
+        const bound = { ...ctx, tenant };
+        const { user, member } = await resolveAdminUser(deps, principalId);
+        const isThem = deps.directory
+          ? await samePersonMatcher(deps.directory, principalId)
+          : async (other: string) => samePerson(other, principalId);
+        const governance = await targetGovernance(bound, principalId, user?.aliases ?? [], member);
+        const emails = [principalId, ...(user?.aliases ?? [])];
+        return applyOffboard(bound, TRUSTED_SYSTEM_ACTOR, principalId, emails, isThem, governance, apply);
+      });
+      workspaces.push({ ...workspace, changes: result.changes });
+    } catch (e) {
+      workspaces.push({ ...workspace, error: errMessage(e) });
+    }
+  }
+  return sendJson(res, 200, { principalId, applied: apply, workspaces });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
