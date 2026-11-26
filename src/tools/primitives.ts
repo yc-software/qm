@@ -951,7 +951,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
                 "qm.exec.stderr_bytes": Buffer.byteLength(ran.stderr),
               }),
             });
-            return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
+            const rawBytes = result.stdout.length + result.stderr.length;
+            const maskStart = performance.now();
+            const stdout = mask(result.stdout);
+            const stderr = mask(result.stderr);
+            const maskMs = performance.now() - maskStart;
+            if (rawBytes > 1_000_000 || maskMs > 50) {
+              console.warn(
+                `[execute] slow or large output bytes=${rawBytes} maskMs=${Math.round(maskMs)} sandbox=${commandHandle.id} backend=${commandHandle.backend ?? "unknown"}`,
+              );
+            }
+            return { ...result, stdout, stderr };
           } catch (error) {
             const message = errMessage(error);
             const masked = mask(message);

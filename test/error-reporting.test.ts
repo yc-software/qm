@@ -508,3 +508,12 @@ test("execute stages keep their diagnostic attributes and the command's own run 
   assert.equal(command.parent_span_id, run.span_id);
   assert.ok(Math.abs(command.end_timestamp - command.start_timestamp - 0.25) < 0.01);
 });
+
+test("ANR integration is registered when error reporting is enabled", async () => {
+  const { code, output } = await runReporting(`
+    console.log(Boolean(Sentry.getClient()?.getIntegrationByName("Anr")));
+    await flushErrorReporting();
+  `);
+  assert.equal(code, 0);
+  assert.equal(output.trim(), "true");
+});

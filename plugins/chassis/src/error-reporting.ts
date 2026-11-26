@@ -208,6 +208,7 @@ export function initializeErrorReporting(
       sdk.onUncaughtExceptionIntegration(),
       sdk.linkedErrorsIntegration(),
       sdk.extraErrorDataIntegration({ depth: 8 }),
+      sdk.anrIntegration({ pollInterval: 1000, anrThreshold: 5000, captureStackTrace: true }),
       ...(traced
         ? [
             sdk.httpIntegration({
