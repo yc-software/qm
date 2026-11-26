@@ -14195,22 +14195,39 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--muted-foreground);
 }
 .session-persona-badge {
-  cursor: default;
-  gap: 4px;
+  flex: none;
+  display: inline-flex;
+  min-width: 0;
 }
 .session-persona-open {
   display: inline-flex;
   align-items: center;
-  gap: inherit;
-  padding: 0;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 9px 2px 2px;
   border: 0;
-  background: transparent;
-  color: inherit;
+  border-radius: 999px;
+  background: hsl(var(--bot-hue, 220) calc(80% * var(--bot-sat, 1)) 55% / 0.1);
+  color: color-mix(in srgb, var(--foreground) 80%, var(--background));
   font: inherit;
+  font-size: var(--font-12-5);
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 .session-persona-open:hover {
-  text-decoration: underline;
+  background: hsl(var(--bot-hue, 220) calc(80% * var(--bot-sat, 1)) 55% / 0.17);
+  color: var(--foreground);
+}
+.session-persona-open .bot-avatar-tile {
+  box-shadow: inset 0 0 0 1px var(--bot-tile-edge);
+}
+.session-persona-open .bot-avatar-tile .project-icon {
+  filter: none;
 }
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .session-persona-badge {
   flex: 0 1 auto;
