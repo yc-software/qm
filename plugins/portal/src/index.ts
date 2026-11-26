@@ -260,15 +260,6 @@ const appHandoff = createAppHandoff({
 
 const TMP_TTL_S = 600;
 const LOCAL_LOGOUT_COOKIE = "portal_local_logout";
-const CONSUMED_STATES_MAX = 10_000;
-export const consumedStates = new LRUCache<string, number>({ max: CONSUMED_STATES_MAX, ttl: 2 * TMP_TTL_S * 1000 });
-export function consumeState(state: string): boolean {
-  const now = Date.now();
-  const existing = consumedStates.get(state);
-  if (existing !== undefined && existing > now) return false;
-  consumedStates.set(state, now + TMP_TTL_S * 1000);
-  return true;
-}
 
 const ADMIN_TTL_MS = 60_000;
 const ADMIN_PROBE_TIMEOUT_MS = 6_500;
@@ -1498,7 +1489,13 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now());
   if (!tmp) return fail("login session expired, please try again");
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
-  if (!consumeState(tmp.state)) return fail("login already used, please try again");
+  try {
+    if (!(await claimTrusted(`oidc-state:${tmp.state}`, tmp.exp * 1000)))
+      return fail("login already used, please try again");
+  } catch (error) {
+    if (!(error instanceof ClaimStoreUnavailableError)) throw error;
+    return sendHtml(res, 503, signInErrorHtml("Sign-in is temporarily unavailable. Please try again."));
+  }
 
   let signIn: VerifiedSignIn;
   let tenants: SignInTenant[] = [];
