@@ -347,7 +347,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       ownerScopeId: scopeId("channel", "C-eng"),
       input: "summarize this channel",
       fireKey: "cron:c1:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -375,7 +375,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       ownerScopeId: scopeId("channel", "C-secret"),
       input: "digest",
       fireKey: "cron:team1:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -400,7 +400,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       input: "",
       message: "the deploy is done 🚀",
       fireKey: "cron:relay1:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -440,7 +440,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       ownerScopeId: scopeId("personal", "U-carol"),
       input: "daily digest",
       fireKey: "cron:digest1:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -466,7 +466,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       ownerScopeId: scopeId("personal", "U-carol"),
       input: "chart only",
       fireKey: "cron:digest2:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -485,7 +485,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
       ownerScopeId: scopeId("channel", "C-eng"),
       input: "post the standup",
       fireKey: "cron:ch1:slot",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
