@@ -24,7 +24,8 @@ import { createConversation, disposeConversation, ensureDeliveryStream } from ".
 import { openSession, openSessionInto, refreshSessions, workingMark } from "./sessions";
 import { hasHumanMessage, markWorking } from "./session-list";
 import { saveDraft, storedDraft } from "./drafts";
-import { glide, inRail, morph } from "./side-chat-motion";
+import { appear, inRail, leave } from "./side-chat-motion";
+import { withoutSideChatExcerpt } from "./side-chat-excerpt";
 import { liveWorkDuration } from "./live-work-duration";
 import { liveTurnOf } from "./working-dot";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -61,7 +62,7 @@ export function createSideChatController(ctx: ConvCtx) {
   let sendOnOpen = false;
   let maximized = false;
   let includeExcerpt = true;
-  const previews = new Map<string, { text: string; state: keyof typeof PREVIEW_NOTE }>();
+  const previews = new Map<string, { text: string; question: string; state: keyof typeof PREVIEW_NOTE }>();
   const unsent = new Set<string>();
   let loadingId: string | null = null;
   let previewFrame: number | null = null;
@@ -85,7 +86,6 @@ export function createSideChatController(ctx: ConvCtx) {
   }
   let hovered: string | undefined;
   let choices = new Set<string>();
-  const slots = new Map<string, number>();
   let pressedOutside: number | null = null;
   const highlightResize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => paintHighlights());
   let watched = new WeakSet<Element>();
@@ -192,17 +192,16 @@ export function createSideChatController(ctx: ConvCtx) {
     for (const { card, top, height, marginBottom } of cards) {
       const id = card.dataset.sideChatId ?? "";
       card.classList.toggle("hovered", Boolean(hovered) && id === hovered);
-      if (rail && card.classList.contains("collapsed")) slots.set(id, height);
-      const slot = rail ? Math.min(height, slots.get(id) ?? 0) : height;
-      const tuck = `${height - slot}px`;
-      if (card.style.getPropertyValue("--side-chat-tuck") !== tuck) card.style.setProperty("--side-chat-tuck", tuck);
-      const wanted = Math.max(top - origin.top, floor) - nextCardTop;
-      const offset = rail && !id ? wanted : Math.max(0, wanted);
+      const floating = rail && !id;
+      const line = Math.max(top - origin.top, floor);
+      const offset = floating ? line : Math.max(0, line - nextCardTop);
       const value = `${offset}px`;
       if (card.style.getPropertyValue("--side-chat-offset") !== value)
         card.style.setProperty("--side-chat-offset", value);
-      reach = Math.max(reach, origin.top + nextCardTop + offset + height);
-      nextCardTop += offset + (rail ? slot : height + marginBottom) + gap;
+      const start = floating ? offset : nextCardTop + offset;
+      const panel = card.querySelector(":scope > .side-chat-panel")?.getBoundingClientRect().height ?? 0;
+      reach = Math.max(reach, origin.top + start + Math.max(height, panel));
+      if (!floating) nextCardTop = start + height + (rail ? 0 : marginBottom) + gap;
     }
     return { bottom: Math.max(above, rail ? origin.top + nextCardTop : origin.bottom), reach };
   }
@@ -233,14 +232,17 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function collapse(after?: () => void) {
     const card = openCard();
+    const inline = card && !inRail(card);
     const leaving = epoch;
-    return morph(card, () => {
+    const settle = () => {
       if (leaving !== epoch) return;
       ctx.chat.holdTranscript(besideRow(card));
       close();
       redraw();
+      if (inline) appear(card.querySelector(":scope > .side-chat-note"));
       after?.();
-    });
+    };
+    return leave(panelHost()?.parentElement)?.then(settle) ?? settle();
   }
 
   function dismiss() {
@@ -299,9 +301,22 @@ export function createSideChatController(ctx: ConvCtx) {
     else dismiss();
   }
 
+  function asked(session: CoreSession, messages: readonly object[]) {
+    const question = messages.findLast((message) => {
+      const { role, opener } = message as { role?: string; opener?: boolean };
+      return (role === "user" || role === "user-with-attachments") && !opener;
+    });
+    return question
+      ? withoutSideChatExcerpt(
+          messageText(question as Parameters<typeof messageText>[0]),
+          session.sideChat?.quote,
+        ).trim()
+      : "";
+  }
+
   async function loadPreview(session: CoreSession) {
     const id = sourceId;
-    const preview = { ...(previews.get(session.id) ?? { text: "", state: "loading" as const }) };
+    const preview = { ...(previews.get(session.id) ?? { text: "", question: "", state: "loading" as const }) };
     previews.set(session.id, preview);
     try {
       const page = await fetchTranscript(session.id, { tailTurns: 1 });
@@ -309,9 +324,9 @@ export function createSideChatController(ctx: ConvCtx) {
       if (sourceId !== id || previews.get(session.id) !== preview) return;
       if (pendingQuote === null && !cachedTranscript(session.id)) storeTranscript(session.id, page);
       else refreshCachedTranscript(session.id);
-      const messages = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1))).filter(
-        (message): message is AssistantWork => message.role === "assistant",
-      );
+      const turn = itemsToMessages(items.filter((item) => item.seq > (session.forkBoundarySeq ?? -1)));
+      const messages = turn.filter((message): message is AssistantWork => message.role === "assistant");
+      preview.question = asked(session, turn) || preview.question;
       const replies = messages.map(messageText).filter(Boolean);
       const work = messages.at(-1)?.work;
       if (!replies.length && work)
@@ -335,25 +350,33 @@ export function createSideChatController(ctx: ConvCtx) {
       });
   }
 
-  function collapsedBody(chat: CoreSession) {
+  function note(chat: CoreSession) {
     if (unsent.has(chat.id))
-      return html`<div class="side-chat-preview draft"><strong>Draft</strong> ${storedDraft(chat.threadRef)}</div>`;
+      return chat.id === active?.id
+        ? nothing
+        : html`<div class="side-chat-note">
+            <div class="side-chat-preview draft"><strong>Draft</strong> ${storedDraft(chat.threadRef)}</div>
+          </div>`;
     const preview = previews.get(chat.id);
     const state = preview?.state ?? "loading";
     const text = preview?.text || (chat.working && state !== "failed" ? "" : PREVIEW_NOTE[state]);
-    return html`${text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing}${
-      chat.working
-        ? html`<div class="side-chat-working work-head">
-            ${workingMark()}${sheenLabel("Working", true)}${
-              chat.workingSince === undefined
-                ? nothing
-                : html`<span class="work-elapsed"
-                    >${liveWorkDuration({ status: "working", startedAt: chat.workingSince, activity: [] })}</span
-                  >`
-            }
-          </div>`
-        : nothing
-    }`;
+    return html`<div class="side-chat-note">
+      ${preview?.question ? html`<div class="side-chat-question">${preview.question}</div>` : nothing}${
+        text ? html` <div class="side-chat-preview">${markdown(text)}</div> ` : nothing
+      }${
+        chat.working
+          ? html`<div class="side-chat-working work-head">
+              ${workingMark()}${sheenLabel("Working", true)}${
+                chat.workingSince === undefined
+                  ? nothing
+                  : html`<span class="work-elapsed"
+                      >${liveWorkDuration({ status: "working", startedAt: chat.workingSince, activity: [] })}</span
+                    >`
+              }
+            </div>`
+          : nothing
+      }
+    </div>`;
   }
 
   function refreshHighlights(fresh: readonly string[] = []) {
@@ -395,6 +418,8 @@ export function createSideChatController(ctx: ConvCtx) {
       const state = conversation?.state;
       const live = state && liveTurnOf(state);
       const draft = (conversation?.composer.state.draft || storedDraft(leaving.threadRef)).trim();
+      const preview = previews.get(leaving.id);
+      if (preview && !preview.question) preview.question = asked(leaving, state?.agent?.state.messages ?? []);
       if (!unsent.has(leaving.id) || live || hasHumanMessage(state?.agent?.state.messages ?? [])) {
         unsent.delete(leaving.id);
         if (live) chats = markWorking(chats, live);
@@ -439,7 +464,6 @@ export function createSideChatController(ctx: ConvCtx) {
     sourceId = id;
     highlightResize?.disconnect();
     watched = new WeakSet();
-    slots.clear();
     observedRows.clear();
     for (const host of anchors.keys())
       host.querySelectorAll(":scope > .side-chat-highlight").forEach((element) => element.remove());
@@ -549,18 +573,16 @@ export function createSideChatController(ctx: ConvCtx) {
     redraw();
   }
 
-  function reveal(conv: Conversation) {
+  function reveal() {
     const card =
       [...(ctx.chat.state.host?.querySelectorAll<HTMLElement>(".side-chat-card") ?? [])].find(
         (element) => element.dataset.sideChatId === loadingId,
       ) ?? null;
-    return morph(card, () => {
-      if (conversation !== conv) return;
-      ctx.chat.holdTranscript(besideRow(card));
-      loadingId = null;
-      redraw();
-      conv.drawActiveChat();
-    });
+    ctx.chat.holdTranscript(besideRow(card));
+    loadingId = null;
+    redraw();
+    conversation?.drawActiveChat();
+    if (card) appear(panelHost()?.parentElement);
   }
 
   async function show(session: CoreSession, creating = false) {
@@ -618,8 +640,7 @@ export function createSideChatController(ctx: ConvCtx) {
         pendingQuote = null;
         pendingDraft = "";
         sendOnOpen = false;
-        await reveal(conv);
-        if (conversation !== conv) return;
+        reveal();
         conv.composer.focusComposerEnd();
         if (send) void conv.composer.submit();
       }
@@ -652,7 +673,7 @@ export function createSideChatController(ctx: ConvCtx) {
     error = "";
     redraw();
     const panel = panelHost()?.closest<HTMLElement>(".side-chat-panel");
-    if (panel && !created) glide(panel, 0);
+    if (!created) appear(panel);
     panel?.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true });
     try {
       if (created) {
@@ -757,7 +778,6 @@ export function createSideChatController(ctx: ConvCtx) {
       observedRows.clear();
       highlightResize?.disconnect();
       watched = new WeakSet();
-      slots.clear();
     },
     hover(event: MouseEvent) {
       const card = (event.target as Element).closest<HTMLElement>(".side-chat-card");
@@ -814,8 +834,7 @@ export function createSideChatController(ctx: ConvCtx) {
               return;
             }
             watch(host);
-            for (const card of host.querySelectorAll(":scope > .side-chat-card, :scope > .side-chat-panel"))
-              watch(card);
+            for (const card of host.querySelectorAll(":scope > .side-chat-card, :scope .side-chat-panel")) watch(card);
             if (row) {
               observedRows.set(host, row as HTMLElement);
               watch(row);
@@ -870,7 +889,7 @@ export function createSideChatController(ctx: ConvCtx) {
                 ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
                 ${shown ? nothing : html`<b class="side-chat-more" aria-hidden="true">…</b>`}
               </button>
-              ${shown ? nothing : collapsedBody(chat)}${open ? this.card() : nothing}
+              ${note(chat)}${open ? this.card() : nothing}
             </div>`;
           },
         )}
@@ -909,11 +928,9 @@ export function createSideChatController(ctx: ConvCtx) {
                   class="icon-btn subtle compact"
                   aria-label=${maximized ? "Collapse side chat" : "Expand side chat"}
                   @click=${() => {
-                    const card = openCard();
-                    const from = card?.getBoundingClientRect().height ?? 0;
                     maximized = !maximized;
                     redraw();
-                    if (card) glide(card, from);
+                    appear(openCard());
                   }}
                 >
                   ${icon(maximized ? Minimize2 : Maximize2, 15)}

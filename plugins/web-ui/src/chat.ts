@@ -1,4 +1,4 @@
-import { sideChatExcerpt } from "./side-chat-excerpt";
+import { withoutSideChatExcerpt } from "./side-chat-excerpt";
 import { createSideChatController } from "./side-chat";
 import "./slack-reply";
 import type { SlackReply } from "./slack-reply";
@@ -2189,9 +2189,10 @@ export function createChatSurface(
       }
 
       const rawText = messageText(message);
-      const quote = isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined;
-      const excerpt = quote ? sideChatExcerpt(quote) : "";
-      const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
+      const displayText = withoutSideChatExcerpt(
+        rawText,
+        isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined,
+      );
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const speaker = speakerLabelFor(message);
