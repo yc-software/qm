@@ -37,48 +37,13 @@ struct WorkspaceDestination: Identifiable {
     }
     return destinations
   }
-}
 
-struct BrowseView: View {
-  let identity: Identity
-  let client: APIClient
-
-  var body: some View {
-    List {
-      ForEach(["Your work", "Automations", "Tools and settings"], id: \.self) { section in
-        Section {
-          ForEach(WorkspaceDestination.available(to: identity).filter { $0.section == section }) {
-            destination in
-            NavigationLink {
-              WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
-            } label: {
-              HStack(spacing: 12) {
-                Image(systemName: destination.icon).frame(width: 24)
-                Text(destination.title)
-              }
-              .font(.body)
-            }
-            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
-            .listRowBackground(QMTheme.paper)
-            .listRowSeparatorTint(QMTheme.border)
-          }
-        } header: {
-          Text(section).font(.subheadline).foregroundStyle(.secondary).textCase(nil)
-        }
-      }
+  /// The destinations someone can open, grouped under their section titles in display order.
+  static func sections(for identity: Identity) -> [(title: String, destinations: [Self])] {
+    let destinations = available(to: identity)
+    return ["Your work", "Automations", "Tools and settings"].map { title in
+      (title, destinations.filter { $0.section == title })
     }
-    .listStyle(.insetGrouped)
-    .listSectionSpacing(24)
-    .scrollContentBackground(.hidden)
-    .background(background)
-    .foregroundStyle(QMTheme.ink)
-    .toolbarBackground(background, for: .navigationBar)
-    .toolbarBackground(.visible, for: .navigationBar)
-    .navigationTitle("Your Workspace").navigationBarTitleDisplayMode(.inline)
-  }
-
-  private var background: Color {
-    NativeThemeStore.shared.active?.surface.color ?? Color(uiColor: .systemGroupedBackground)
   }
 }
 
@@ -110,44 +75,48 @@ struct WorkspaceDestinationView: View {
   }
 }
 
-/// Two-column tiles for every workspace destination, like ChatGPT's More screen.
+/// Two-column tiles for every workspace destination, like ChatGPT's More screen, grouped by
+/// section.
 struct MoreGrid: View {
   let identity: Identity
   let client: APIClient
-
-  private static let tints: [String: Color] = [
-    "inbox": .blue, "calendar": .red, "voice.html": .pink, "contexts": .cyan, "files": .orange,
-    "crons": .purple, "webhooks": .yellow, "loops": .green, "keychain": .gray, "apps": .indigo,
-    "memory": .mint, "skills": .brown, "settings": .gray,
-  ]
 
   var body: some View {
     ScrollView {
       LazyVGrid(
         columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-        spacing: 12
+        alignment: .leading, spacing: 12
       ) {
-        ForEach(WorkspaceDestination.available(to: identity)) { destination in
-          NavigationLink {
-            WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
-          } label: {
-            VStack(alignment: .leading, spacing: 0) {
-              Text(destination.title).font(.title3).foregroundStyle(QMTheme.ink)
-              Spacer(minLength: 20)
-              Image(systemName: destination.icon)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Self.tints[destination.id] ?? QMTheme.ink)
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-            .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        ForEach(WorkspaceDestination.sections(for: identity), id: \.title) { section in
+          Section {
+            ForEach(section.destinations) { tile($0) }
+          } header: {
+            Text(section.title).font(.subheadline).foregroundStyle(.secondary)
+              .padding(.top, 12).padding(.leading, 4)
           }
-          .buttonStyle(.plain)
         }
       }
       .padding(16)
     }
     .background(QMTheme.paper)
+    .navigationTitle("Your Workspace")
     .navigationBarTitleDisplayMode(.inline)
+  }
+
+  private func tile(_ destination: WorkspaceDestination) -> some View {
+    NavigationLink {
+      WorkspaceDestinationView(id: destination.id, identity: identity, client: client)
+    } label: {
+      VStack(alignment: .leading, spacing: 0) {
+        Text(destination.title).font(.title3)
+        Spacer(minLength: 20)
+        Image(systemName: destination.icon).font(.system(size: 17, weight: .medium))
+      }
+      .foregroundStyle(QMTheme.ink)
+      .padding(18)
+      .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+      .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+    .buttonStyle(.plain)
   }
 }

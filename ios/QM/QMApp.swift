@@ -15,7 +15,7 @@ struct QMApp: App {
 
 struct RootView: View {
   private enum Page: Hashable {
-    case workspace, search, waiting, archived, setup
+    case search, archived, setup
   }
 
   @State private var section = ShellSection.home
@@ -27,21 +27,18 @@ struct RootView: View {
   @State private var showingConversations = false
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
-  @State private var search = ""
   @State private var rename: Conversation?
   @State private var renamedTitle = ""
   @State private var choosingWorkspace = false
   @State private var confirmingSignOut = false
   @Environment(\.scenePhase) private var phase
 
-  private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
-
   private var narrowing: Bool {
-    model.narrowing || model.search != searchTerm || model.webOnly != webOnly
+    model.narrowing || model.webOnly != webOnly
   }
 
   private var visibleConversations: [Conversation] {
-    model.visibleConversations(search: searchTerm, webOnly: webOnly)
+    model.visibleConversations(search: "", webOnly: webOnly)
   }
 
   private var home: some View { chatsStack }
@@ -73,7 +70,7 @@ struct RootView: View {
                 .listRowSeparator(.hidden)
             }
             NativeConversationSections(
-              conversations: visibleConversations, contexts: contexts, search: search,
+              conversations: visibleConversations, contexts: contexts, search: "",
               selectedID: selectedConversation?.id, updatingIDs: model.updatingConversationIDs,
               onOpen: open, actions: conversationActions
             )
@@ -104,19 +101,15 @@ struct RootView: View {
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .safeAreaInset(edge: .bottom) {
-        if model.identity != nil {
-          VStack(spacing: 8) {
-            if !model.conversations.isEmpty { ConversationErrorBanner(model: model) }
-            if showsNav { Color.clear.frame(height: ShellNav.height) }
-          }
+        if model.identity != nil, !model.conversations.isEmpty {
+          ConversationErrorBanner(model: model)
         }
       }
+      .modifier(navRoom)
       .navigationDestination(for: Page.self) { page in
         if let client = model.client, let identity = model.identity {
           switch page {
-          case .workspace: BrowseView(identity: identity, client: client)
           case .search: SearchView(client: client, user: identity.user)
-          case .waiting: waitingConversations
           case .archived:
             archivedConversations
               .task { await model.select(.archived) }
@@ -131,7 +124,7 @@ struct RootView: View {
   var body: some View {
     NativeConversationDrawer(
       isOpen: $showingConversations, hasSelection: model.identity != nil && model.client != nil,
-      showsSidebarPage: !homePath.isEmpty, fullWidth: true
+      showsSidebarPage: !homePath.isEmpty
     ) {
       home
     } detail: {
@@ -141,7 +134,7 @@ struct RootView: View {
     // put while they slide underneath it.
     .overlay(alignment: .bottom) {
       if showsNav {
-        nav(plain: false, inList: showingConversations)
+        nav(inList: showingConversations)
           .transition(.opacity.combined(with: .offset(y: 24)))
       }
     }
@@ -158,11 +151,13 @@ struct RootView: View {
     }
     // Hide and restore the nav in step with the keyboard, so the room it leaves (and anything
     // centred in that room, like the new-chat greeting) glides instead of jumping.
-    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
-      note in withAnimation(Self.keyboardAnimation(note)) { keyboardUp = true }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification))
+    {
+      note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = true }
     }
-    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) {
-      note in withAnimation(Self.keyboardAnimation(note)) { keyboardUp = false }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification))
+    {
+      note in withAnimation(ShellNav.keyboardAnimation(note)) { keyboardUp = false }
     }
     .environment(\.qmIdentity, model.identity)
     .environment(model)
@@ -203,18 +198,15 @@ struct RootView: View {
       selectedConversation = nil
       homePath = []
       showingConversations = true
-      search = ""
     }
     .modifier(
       ConversationDrawerEffects(
         isOpen: $showingConversations, selected: selectedConversation,
         listVisible: homePath.isEmpty, phase: phase, model: model)
     )
-    .task(id: [searchTerm, String(webOnly)]) {
-      if !searchTerm.isEmpty {
-        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-      }
-      await model.narrow(search: searchTerm, webOnly: webOnly)
+    .task(id: webOnly) { await model.narrow(search: "", webOnly: webOnly) }
+    .task(id: connectingURL) {
+      if connectingURL != nil { await model.watchConversations() }
     }
     .onChange(of: model.client?.hasSession) { _, hasSession in
       if hasSession == false {
@@ -275,16 +267,12 @@ struct RootView: View {
         .accessibilityIdentifier("conversationLoadError")
       } else if webOnly {
         ContentUnavailableView {
-          Label(
-            search.isEmpty ? "No web conversations" : "No matching web conversations",
-            systemImage: search.isEmpty ? "bubble.left" : "magnifyingglass")
+          Label("No web conversations", systemImage: "bubble.left")
         } description: {
           Text("Your conversation filter is hiding Slack conversations.")
         } actions: {
           Button("Show all conversations") { webOnly = false }
         }
-      } else if !search.isEmpty {
-        ContentUnavailableView.search(text: search)
       } else {
         let empty = ConversationEmptyState(filter: model.filter)
         ContentUnavailableView(
@@ -317,7 +305,7 @@ struct RootView: View {
     .accessibilityLabel("Account and settings")
   }
 
-  // The main screen: the open conversation, Waiting or More, with a small nav underneath.
+  // The main screen: the open conversation or More, with a small nav underneath.
   @ViewBuilder
   private var shell: some View {
     if let client = model.client, let identity = model.identity {
@@ -329,17 +317,15 @@ struct RootView: View {
               ChatView(
                 model: ChatModel(
                   conversation: conversation, client: client, user: identity.user,
-                  knownSession: conversation.localOnly != true),
-                bottomInset: showsNav ? ShellNav.height : 0)
+                  knownSession: conversation.localOnly != true))
             }
+            .modifier(navRoom)
             .id(conversation.id)
             .environment(\.scenePhase, homePath.isEmpty ? phase : .background)
           } else {
             QMTheme.paper.ignoresSafeArea()
               .task { selectedConversation = model.newConversation() }
           }
-        case .waiting:
-          NavigationStack { waitingConversations.modifier(navRoom) }
         case .more:
           NavigationStack {
             MoreGrid(identity: identity, client: client).modifier(navRoom)
@@ -349,24 +335,26 @@ struct RootView: View {
     }
   }
 
-  /// The keyboard's own duration, as a smooth curve, so layout moves with it.
-  private static func keyboardAnimation(_ note: Notification) -> Animation {
-    let duration =
-      (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-    return .smooth(duration: max(duration, 0.25))
-  }
-
   /// Signed in and waiting for the workspace: the launch loader shows.
   private var launching: Bool {
     model.identity == nil && model.client?.hasSession == true && model.error == nil
   }
 
+  /// The workspace to connect to while the app is in front and nothing has loaded yet. Launch
+  /// opens on a conversation, not the list, so this is what loads the workspace; the list's
+  /// own sync takes over whenever it is shown.
+  private var connectingURL: URL? {
+    guard phase == .active, model.identity == nil, model.client?.hasSession == true else {
+      return nil
+    }
+    return model.client?.baseURL
+  }
+
   private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
 
-  /// Keeps scrolling content clear of the bottom nav, which floats above every screen.
   private var navRoom: NavRoom { NavRoom(height: showsNav ? ShellNav.height : 0) }
 
-  private func nav(plain: Bool, inList: Bool = false) -> ShellNav {
+  private func nav(inList: Bool) -> ShellNav {
     let selected: ShellNavItem
     if inList {
       selected = .conversations
@@ -374,11 +362,10 @@ struct RootView: View {
       selected =
         switch section {
         case .more: .more
-        case .waiting: .conversations
         case .home: selectedConversation?.localOnly == true ? .new : .conversations
         }
     }
-    return ShellNav(selected: selected, waiting: waitingCount, plain: plain) { item in
+    return ShellNav(selected: selected, waiting: waitingCount) { item in
       switch item {
       case .conversations: showingConversations = true
       case .new:
@@ -410,12 +397,11 @@ struct RootView: View {
       .font(.system(size: 18, weight: .medium))
       .foregroundStyle(QMTheme.ink)
       .padding(.horizontal, 4)
-      .modifier(GlassPill(prominent: false))
+      .modifier(GlassPill())
     }
     .padding(.horizontal, 16)
     .padding(.bottom, 4)
   }
-
 
   @ViewBuilder
   private var loadMoreRow: some View {
@@ -431,32 +417,6 @@ struct RootView: View {
       .listRowSeparator(.hidden)
       .listRowBackground(QMTheme.sidebar)
     }
-  }
-
-
-  private var waitingConversations: some View {
-    let showing = model.filter == .waiting
-    let rows = showing ? visibleConversations : []
-    let empty = ConversationEmptyState(filter: .waiting)
-    return QMList {
-      if !showing || model.showingInitialConversationLoad {
-        NativeConversationListLoading()
-          .listRowSeparator(.hidden)
-      }
-      conversationRows(rows)
-      if showing { loadMoreRow }
-    }
-    .navigationTitle("Waiting on you")
-    .safeAreaInset(edge: .bottom) { ConversationErrorBanner(model: model) }
-    .refreshable { await model.refresh() }
-    .overlay {
-      if showing, !model.showingInitialConversationLoad, model.error == nil, rows.isEmpty {
-        ContentUnavailableView(
-          empty.title, systemImage: empty.systemImage, description: Text(empty.description))
-      }
-    }
-    .task { await model.select(.waiting) }
-    .onDisappear { Task { await model.select(.active) } }
   }
 
   private var archivedConversations: some View {
@@ -601,10 +561,7 @@ private struct ConversationDrawerEffects: ViewModifier {
   let model: AppModel
 
   private var syncURL: URL? {
-    // Launch now opens on Home with the list closed, so also sync until the workspace loads.
-    guard phase == .active, (isOpen && listVisible) || model.identity == nil,
-      model.client?.hasSession == true
-    else {
+    guard phase == .active, isOpen, listVisible, model.client?.hasSession == true else {
       return nil
     }
     return model.client?.baseURL
@@ -621,105 +578,5 @@ private struct ConversationDrawerEffects: ViewModifier {
       .task(id: syncURL) {
         if syncURL != nil { await model.watchConversations() }
       }
-  }
-}
-
-enum ShellSection: Hashable {
-  case home, waiting, more
-}
-
-/// Small icon-only nav under the main screen, in the style of the ChatGPT app.
-enum ShellNavItem {
-  case conversations, new, more
-}
-
-struct ShellNav: View {
-  /// Room kept above the home indicator: a 52pt glass island plus a little air.
-  static let height: CGFloat = 60
-
-  let selected: ShellNavItem
-  let waiting: Int
-  /// Inside the conversation's own bottom bar, which already has a background and padding.
-  var plain = false
-  let action: (ShellNavItem) -> Void
-
-  var body: some View {
-    // A floating Liquid Glass island; content scrolls freely behind it.
-    HStack(spacing: 2) {
-      item(
-        .conversations, icon: "line.3.horizontal", filled: "line.3.horizontal",
-        label: "Conversations")
-      item(.new, icon: "square.and.pencil", filled: "square.and.pencil", label: "New chat")
-      item(.more, icon: "square.grid.2x2", filled: "square.grid.2x2.fill", label: "More")
-    }
-    .padding(4)
-    .modifier(GlassPill(prominent: false))
-    .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
-    .frame(maxWidth: .infinity)
-    .padding(.top, plain ? 0 : 6)
-    .padding(.bottom, plain ? 0 : 2)
-  }
-
-  private func item(
-    _ target: ShellNavItem, icon: String, filled: String, label: String
-  ) -> some View {
-    let isSelected = selected == target
-    return Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      action(target)
-    } label: {
-      Image(systemName: isSelected ? filled : icon)
-        .font(.system(size: 19, weight: .medium))
-        .frame(width: 60, height: 44)
-        .background {
-          if isSelected { Capsule().fill(QMTheme.ink.opacity(0.1)) }
-        }
-        .overlay(alignment: .topTrailing) {
-          if target == .conversations, waiting > 0 {
-            Circle().fill(QMTheme.unread).frame(width: 8, height: 8).offset(x: -12, y: 6)
-          }
-        }
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(NavPressStyle())
-    .foregroundStyle(QMTheme.ink.opacity(isSelected ? 1 : 0.6))
-    .accessibilityLabel(label)
-    .accessibilityAddTraits(isSelected ? .isSelected : [])
-  }
-}
-
-struct NavRoom: ViewModifier {
-  let height: CGFloat
-  func body(content: Content) -> some View {
-    content.safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: height) }
-  }
-}
-
-/// Shrinks on touch-down so a tap registers immediately.
-private struct NavPressStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.88 : 1)
-      .opacity(configuration.isPressed ? 0.7 : 1)
-      .animation(.snappy(duration: 0.12), value: configuration.isPressed)
-  }
-}
-
-/// Liquid Glass capsule on iOS 26, material before it.
-struct GlassPill: ViewModifier {
-  let prominent: Bool
-
-  func body(content: Content) -> some View {
-    if #available(iOS 26.0, *) {
-      content
-        .foregroundStyle(prominent ? QMTheme.paper : QMTheme.ink)
-        .glassEffect(
-          prominent ? .regular.tint(QMTheme.ink).interactive() : .regular.interactive(),
-          in: .capsule)
-    } else {
-      content
-        .foregroundStyle(prominent ? QMTheme.paper : QMTheme.ink)
-        .background(prominent ? AnyShapeStyle(QMTheme.ink) : AnyShapeStyle(.thinMaterial), in: Capsule())
-    }
   }
 }

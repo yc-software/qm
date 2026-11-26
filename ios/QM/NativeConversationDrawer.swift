@@ -9,8 +9,6 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   @Binding var isOpen: Bool
   let hasSelection: Bool
   var showsSidebarPage = false
-  /// The list fills the screen and pushes the conversation fully off, instead of a drawer.
-  var fullWidth = false
   @ViewBuilder let sidebar: () -> Sidebar
   @ViewBuilder let detail: () -> Detail
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,7 +19,8 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
   var body: some View {
     let revision = UUID()
     GeometryReader { geometry in
-      let sidebarWidth = fullWidth ? geometry.size.width : min(geometry.size.width * 0.8, 400)
+      // The list fills the screen and pushes the conversation fully off.
+      let sidebarWidth = geometry.size.width
       let drawer = hasSelection && !showsSidebarPage
       ZStack(alignment: .leading) {
         DrawerSidebarLayer(
@@ -29,7 +28,7 @@ struct NativeConversationDrawer<Sidebar: View, Detail: View>: View {
           isCovered: hasSelection && !showsSidebarPage,
           content: DrawerContent(revision: revision) {
             sidebar()
-              .frame(width: drawer ? sidebarWidth : geometry.size.width)
+              .frame(width: sidebarWidth)
           }
         )
         if hasSelection {

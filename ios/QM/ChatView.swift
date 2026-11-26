@@ -4,9 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var onShowConversations: (() -> Void)?
-  /// Room kept under the composer for the app's bottom nav.
-  var bottomInset: CGFloat = 0
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
   @State private var dictation: NativeDictationModel
@@ -43,11 +40,8 @@ struct ChatView: View {
   @State private var composerFocused = false
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil,
-    bottomInset: CGFloat = 0
+    model: ChatModel, initialSequence: Int? = nil
   ) {
-    self.onShowConversations = onShowConversations
-    self.bottomInset = bottomInset
     _model = State(initialValue: model)
     _dictation = State(
       initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
@@ -266,14 +260,6 @@ struct ChatView: View {
 
   @ToolbarContentBuilder
   private var conversationToolbar: some ToolbarContent {
-    if let onShowConversations {
-      ToolbarItem(placement: .topBarLeading) {
-        Button(action: onShowConversations) {
-          Image(systemName: "line.3.horizontal")
-        }
-        .accessibilityLabel("Conversations")
-      }
-    }
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
         if model.conversation.localOnly != true {
@@ -679,7 +665,6 @@ struct ChatView: View {
       bottomControls(proxy)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
-    .padding(.bottom, bottomInset)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
     // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the
@@ -1018,11 +1003,17 @@ struct ComposerSendLabel: View {
       }
     }
     .foregroundStyle(QMTheme.paper)
-    .frame(width: 32, height: 32)
-    .background(QMTheme.ink.opacity(enabled ? 1 : 0.25), in: Circle())
-    // Keep a full-size tap target around the smaller circle.
-    .frame(width: 44, height: 44)
-    .contentShape(Rectangle())
+    .composerCircle(QMTheme.ink.opacity(enabled ? 1 : 0.25))
+  }
+}
+
+extension View {
+  /// The composer's round buttons: a 32pt circle inside a full 44pt tap target.
+  func composerCircle(_ fill: Color) -> some View {
+    frame(width: 32, height: 32)
+      .background(fill, in: Circle())
+      .frame(width: 44, height: 44)
+      .contentShape(Rectangle())
   }
 }
 
