@@ -113,14 +113,18 @@ export const PRINCIPAL_ADMIN_TENANTS: PgMigrationDefinition = {
 const ACTIVE_PERSON = `JOIN users u ON u.tenant_id = l.tenant_id AND u.id = l.user_id
             AND u.kind = 'person' AND u.offboarded_at IS NULL`;
 
-export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
-  id: "tenancy/lookups/0006-principal-user-tenants",
+const MEMBER_PERSON = `${ACTIVE_PERSON}
+            AND (u.first_seen_at IS NOT NULL OR EXISTS (SELECT 1 FROM user_links s
+              WHERE s.tenant_id = u.tenant_id AND s.user_id = u.id AND s.alias_id <> u.primary_alias))`;
+
+const principalUserTenants = (id: string, person: string): PgMigrationDefinition => ({
+  id,
   statements: [
     `CREATE OR REPLACE FUNCTION qm_tenants_for_principal(principal text) RETURNS SETOF uuid
       LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
       AS $lookup$ BEGIN
         RETURN QUERY
-          SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = ${fold("principal")}
+          SELECT l.tenant_id FROM user_links l ${person} WHERE l.alias_id = ${fold("principal")}
           UNION
           SELECT g.tenant_id FROM admin_grants g WHERE g.principal_id = principal
           UNION
@@ -130,10 +134,19 @@ export const PRINCIPAL_USER_TENANTS: PgMigrationDefinition = {
            WHERE l.alias_id = ${fold("principal")};
       END $lookup$`,
   ],
-};
+});
 
-export const EMAIL_USER_TENANTS: PgMigrationDefinition = {
-  id: "directory/store/0010-tenants-for-email-users",
+export const PRINCIPAL_USER_TENANTS = principalUserTenants(
+  "tenancy/lookups/0006-principal-user-tenants",
+  ACTIVE_PERSON,
+);
+export const PRINCIPAL_MEMBER_TENANTS = principalUserTenants(
+  "tenancy/lookups/0009-principal-member-tenants",
+  MEMBER_PERSON,
+);
+
+const emailUserTenants = (id: string, person: string): PgMigrationDefinition => ({
+  id,
   statements: [
     `DO $tenants_for_email$
 BEGIN
@@ -146,12 +159,15 @@ BEGIN
         UNION
         SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email)
         UNION
-        SELECT l.tenant_id FROM user_links l ${ACTIVE_PERSON} WHERE l.alias_id = lower(btrim(email));
+        SELECT l.tenant_id FROM user_links l ${person} WHERE l.alias_id = lower(btrim(email));
     END $body$$function$,
     current_schema());
 END $tenants_for_email$`,
   ],
-};
+});
+
+export const EMAIL_USER_TENANTS = emailUserTenants("directory/store/0010-tenants-for-email-users", ACTIVE_PERSON);
+export const EMAIL_MEMBER_TENANTS = emailUserTenants("directory/store/0015-tenants-for-email-members", MEMBER_PERSON);
 
 export const SLACK_BRIDGE_TENANT: PgMigrationDefinition = {
   id: "tenancy/lookups/0004-slack-bridge",

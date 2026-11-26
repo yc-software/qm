@@ -156,7 +156,10 @@ test("a company admin or user is found by email or sign-in principal, directly o
     await signIn(beta, "oidc:issuer:user", "user@copied.test");
     await signIn(alpha, "oidc:issuer:leaver", "leaver@copied.test");
     await withTenant(alpha, () => users.markOffboarded("leaver@copied.test", "linked@copied.test"));
+    await withTenant(alpha, () => users.ensure("grantee@copied.test"));
     try {
+      assert.deepEqual(await directory.tenantsForEmail!("grantee@copied.test"), []);
+      assert.deepEqual(await directory.tenantsForPrincipal!("grantee@copied.test"), []);
       assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
       assert.deepEqual(await directory.tenantsForEmail!("User@Copied.test"), [{ id: beta }]);
       assert.deepEqual(await directory.tenantsForEmail!("leaver@copied.test"), []);
