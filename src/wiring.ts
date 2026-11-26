@@ -192,7 +192,7 @@ import {
   type AppDraft,
 } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
-import { appCredentialSlugs } from "./deploy/app-credentials.ts";
+import { appBorrowing, appCredentialSlugs } from "./deploy/app-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
@@ -2069,11 +2069,15 @@ export function buildApp(
       ? {
           appEnv: async (publishedApp: PublishedApp): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
+            const tenant = ambientTenant();
             const credentials = await appCredentialSlugs(
-              ambientTenant(),
               await serviceCreds.listServiceCredentials(orgScope),
-              orgScope,
-              acl,
+              appBorrowing(publishedApp, {
+                tenant,
+                orgScope,
+                acl,
+                memberTeams: (id, teamIds) => teams.memberTeams(tenant, id, teamIds),
+              }),
             );
             return {
               VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, publishedApp.id),

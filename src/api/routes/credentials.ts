@@ -4,6 +4,24 @@ import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { orgId as configOrgId } from "../../config.ts";
+import { deploymentBorrowing } from "../../deploy/app-credentials.ts";
+import type { BaseCtx } from "./route.ts";
+
+export function appBorrows(ctx: BaseCtx): (deployment: string, slug: string) => Promise<boolean> {
+  return async (deployment, slug) => {
+    const { acl, teams } = ctx.deps;
+    if (!acl) return false;
+    const tenant = tenantOf(ctx);
+    return deploymentBorrowing((id) => ctx.app.getApp(id), {
+      tenant,
+      orgScope: makeScopeId("org", configOrgId()),
+      acl,
+      ...(teams
+        ? { memberTeams: (id: string, teamIds: readonly string[]) => teams.memberTeams(tenant, id, teamIds) }
+        : {}),
+    })(deployment, slug);
+  };
+}
 
 async function brokerCredential(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, app } = ctx;
@@ -28,6 +46,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     body: body as Record<string, unknown>,
     orgScopeId: orgScope,
     reader: deps.serviceCreds,
+    appBorrows: appBorrows(ctx),
     fetchImpl: deps.brokerFetch ?? realBrokerFetch,
     ...(deps.credentialUsage ? { usage: deps.credentialUsage } : {}),
     audit,
