@@ -145,6 +145,17 @@ struct RootView: View {
           .transition(.opacity.combined(with: .offset(y: 24)))
       }
     }
+    // The launch loader sits above everything and fades away once the workspace arrives, so
+    // the app is revealed underneath it instead of cutting in.
+    .overlay {
+      if launching {
+        NativeDeepWaterLoading(label: "Loading your workspace")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(QMTheme.paper.ignoresSafeArea())
+          .transition(
+            .opacity.combined(with: .scale(scale: 1.04)).animation(.smooth(duration: 0.7)))
+      }
+    }
     // Hide and restore the nav in step with the keyboard, so the room it leaves (and anything
     // centred in that room, like the new-chat greeting) glides instead of jumping.
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) {
@@ -241,9 +252,8 @@ struct RootView: View {
       }
       .accessibilityIdentifier("workspaceConnectionError")
     } else {
-      NativeDeepWaterLoading(label: "Loading your workspace")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(QMTheme.paper.ignoresSafeArea())
+      // The launch loader itself is drawn above the whole app (see `launching`).
+      QMTheme.paper.ignoresSafeArea()
     }
   }
 
@@ -344,6 +354,11 @@ struct RootView: View {
     let duration =
       (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
     return .smooth(duration: max(duration, 0.25))
+  }
+
+  /// Signed in and waiting for the workspace: the launch loader shows.
+  private var launching: Bool {
+    model.identity == nil && model.client?.hasSession == true && model.error == nil
   }
 
   private var showsNav: Bool { model.identity != nil && model.client != nil && !keyboardUp }
