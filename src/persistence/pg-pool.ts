@@ -482,6 +482,15 @@ export function dbMigrations({ vector = false } = {}): PgMigration[] {
   ];
 }
 
+export async function pgvectorAvailable(connectionString: string): Promise<boolean> {
+  const pool = await retainPool(connectionString, "migration");
+  try {
+    return (await pool.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rowCount === 1;
+  } finally {
+    await releasePool(connectionString, pool, "migration");
+  }
+}
+
 export function migrateDatabase(connectionString: string, { vector = false } = {}): Promise<void> {
   return migrationQueue(connectionString, async () => {
     const pool = await retainPool(connectionString, "migration");

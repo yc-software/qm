@@ -6,6 +6,7 @@ import { availableParallelism } from "node:os";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
+import { pgvectorAvailable } from "../src/persistence/pg-pool.ts";
 import { boundUrl, seedTestTenant } from "../test/support/test-tenant.ts";
 
 const { values, positionals } = parseArgs({
@@ -116,8 +117,7 @@ const templateName = `${runId}_template`;
 
 const started = Date.now();
 await admin.query(`CREATE DATABASE ${templateName}`);
-const vector = (await admin.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rows.length > 0;
-await seedTestTenant(databaseUrl(templateName), { vector });
+await seedTestTenant(databaseUrl(templateName), { vector: await pgvectorAvailable(baseUrl) });
 await admin.query(`ALTER DATABASE ${templateName} WITH ALLOW_CONNECTIONS false`);
 await admin.query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [templateName]);
 const results = [];
