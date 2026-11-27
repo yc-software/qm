@@ -199,3 +199,31 @@ test("admin session reads hand the model items without null columns", async () =
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("admin session_persona routes PUT /v1/admin/sessions/:id/persona for string or null", async () => {
+  const seen: { method: string; url: string; body: string }[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    seen.push({ method: req.method!, url: req.url!, body: Buffer.concat(chunks).toString() });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ session: { id: "s1", personaId: null } }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const call = createAdminCall(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "synthetic-capability");
+    await call({ action: "session_persona", scope: "personal:u1", id: "s1", value: { personaId: null } });
+    await call({ action: "session_persona", scope: "personal:u1", id: "s1", value: { personaId: "p1" } });
+    await assert.rejects(() =>
+      call({ action: "session_persona", scope: "personal:u1", id: "s1", value: { personaId: 123 } }),
+    );
+    assert.deepEqual(seen, [
+      { method: "PUT", url: "/v1/admin/sessions/s1/persona?scope=personal%3Au1", body: '{"personaId":null}' },
+      { method: "PUT", url: "/v1/admin/sessions/s1/persona?scope=personal%3Au1", body: '{"personaId":"p1"}' },
+    ]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

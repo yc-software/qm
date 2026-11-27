@@ -10,7 +10,13 @@ import {
   whoami,
 } from "./admin/scope-config.ts";
 import { egress, listAdminAudit, listAdminErrors } from "./admin/observability.ts";
-import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
+import {
+  getAdminSession,
+  getAdminSessionLlm,
+  listAdminSessions,
+  listAdminShadowDeliveries,
+  putAdminSessionPersona,
+} from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
   archiveAdminSkill,
@@ -334,6 +340,12 @@ const routes: Route<ApiCtx>[] = [
         privateRead: "always",
       },
       handle: getAdminSession,
+    },
+    {
+      method: "PUT",
+      path: "/v1/admin/sessions/:id/persona",
+      auth: "either",
+      handle: putAdminSessionPersona,
     },
     {
       method: "GET",

@@ -84,6 +84,10 @@ export const adminOperations = {
     "/sessions/:id/llm",
     scopedId,
   ),
+  session_persona: operation("Set or clear a session's persona (null clears).", "PUT", "/sessions/:id/persona", {
+    ...scopedId,
+    value: Type.Object({ personaId: Type.Union([string, Type.Null()]) }, { additionalProperties: false }),
+  }),
   files: operation("List stored files, optionally matching q.", "GET", "/files", { ...scope, q: optionalString }),
   file: operation("Read a stored text file.", "GET", "/files/read", scopedId),
   upload_file: operation("Register a staged blob as a scope file.", "POST", "/files/upload", {

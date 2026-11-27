@@ -128,7 +128,7 @@ async function deliveryProvenanceSidecars(
   return out;
 }
 
-function requireAdminSession(ctx: ApiCtx, id: string) {
+function requireAdminSession(ctx: ApiCtx, id: string, scopeMismatch: "forbid" | "fallback" = "fallback") {
   return requireScopedResource(
     ctx,
     async () => {
@@ -137,7 +137,7 @@ function requireAdminSession(ctx: ApiCtx, id: string) {
     },
     (s) => s.scopeId,
     "session",
-    "fallback",
+    scopeMismatch,
   );
 }
 
@@ -327,6 +327,36 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
     limit,
     origin: await sessionOrigin(app, session, scope, cronLookup),
   });
+}
+
+export async function putAdminSessionPersona(ctx: ApiCtx): Promise<void> {
+  const { res, app, deps, params, body } = ctx;
+  const id = params.id!;
+  const scoped = await requireAdminSession(ctx, id, "forbid");
+  if (!scoped) return;
+  const { actor, record: session } = scoped;
+  const raw = typeof body === "object" && body !== null ? (body as { personaId?: unknown }).personaId : undefined;
+  let personaId: string | null | undefined;
+  if (raw === null) personaId = null;
+  else if (typeof raw === "string" && raw.trim()) personaId = raw.trim();
+  if (personaId === undefined) {
+    return sendJson(res, 400, { error: "bad_request", message: "personaId (string or null) required" });
+  }
+  if (personaId === null) {
+    await deps.sessions.setPersona(session.id, null);
+  } else {
+    if (!app.personas) return sendJson(res, 503, { error: "personas unavailable" });
+    const persona = await app.personas.get(personaId);
+    if (!persona) return sendJson(res, 404, { error: "not_found", message: "persona not found" });
+    await app.personas.adopt(session, persona.id);
+  }
+  audit(ctx, {
+    principalId: actor.id,
+    action: "session.persona.update",
+    resource: id,
+    scopeLabel: session.scopeId,
+  });
+  return sendJson(res, 200, { session: { id: session.id, personaId } });
 }
 
 export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {

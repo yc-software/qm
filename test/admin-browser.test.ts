@@ -70,6 +70,7 @@ const ADMIN_PAGES = [
   "GET /v1/admin/sessions",
   "GET /v1/admin/sessions/:id",
   "GET /v1/admin/sessions/:id/llm",
+  "PUT /v1/admin/sessions/:id/persona",
   "GET /v1/admin/skill-packs",
   "POST /v1/admin/skill-packs",
   "PATCH /v1/admin/skill-packs/:id",

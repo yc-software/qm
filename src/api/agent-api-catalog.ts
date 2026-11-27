@@ -900,7 +900,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/admin/sessions?scope=",
         summary:
-          "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for captured prompts (DM or effective Open sharing)",
+          "conversation metadata; /v1/admin/sessions/:id for a transcript, /:id/llm for captured prompts, and PUT /:id/persona ({personaId|null}) to set or clear a session's persona (DM or effective Open sharing)",
       },
       {
         method: "GET",
