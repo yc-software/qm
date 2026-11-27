@@ -372,6 +372,9 @@ function patchFromCronPatchRequest(
       message: CRON_PATCH_NOTHING_TO_CHANGE,
     };
   }
+  if (req.action !== undefined && req.text !== undefined) {
+    return { ok: false, code: "bad_request", message: "provide either task or text, not both" };
+  }
   if (req.unfurlLinks !== undefined && !before.destination) {
     return {
       ok: false,
@@ -387,12 +390,16 @@ function patchFromCronPatchRequest(
       message: "session:true needs a live conversation in the cron's own scope to tie it to",
     };
   }
+  let runtime = req.runtime;
+  if (runtime === undefined && req.text !== undefined && before.runtime) runtime = null;
   return {
     ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
-    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
+    ...(runtime !== undefined ? { runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
-    ...(req.action !== undefined ? { action: req.action } : {}),
-    ...(req.text !== undefined ? { message: req.text } : {}),
+    ...(req.action !== undefined
+      ? { action: req.action, ...(before.message !== undefined ? { message: null } : {}) }
+      : {}),
+    ...(req.text !== undefined ? { message: req.text, ...(before.action !== undefined ? { action: null } : {}) } : {}),
     ...(req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {}),
     ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
     ...(req.archived !== undefined ? { archived: req.archived } : {}),
@@ -431,6 +438,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async createCron(req, capability): Promise<CronCreateResult> {
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
+      }
+      if (req.action !== undefined && req.text !== undefined) {
+        return { ok: false, code: "bad_request", message: "provide either task or text, not both" };
       }
       const script = req.script ? cronScriptFrom(req.script, req) : undefined;
       if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
