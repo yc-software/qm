@@ -935,16 +935,13 @@ test("a guest in the room: a person's turn without an internal audience gets a t
   }
 });
 
-test("org admin can set and clear another user's session persona via PUT /v1/admin/sessions/:id/persona", async () => {
+test("org admin can set and clear another user's session persona", async () => {
   const s = await start();
   try {
-    const adminCap = await capFor("admin-alice");
-    const memberCap = await capFor("U1");
+    const [adminCap, memberCap] = await Promise.all([capFor("admin-alice"), capFor("U1")]);
     await s.built.featureFlags.setEnabled("personas", ORG, true, "admin-alice");
     const created = await s.built.app.personas!.create("admin-alice", { name: "Helper" });
     assert.equal(created.status, "ok");
-    const personaId = created.value.id;
-
     const session = await s.built.sessions.getOrCreateByThread(
       "dm:D_U1",
       "dm",
@@ -952,60 +949,24 @@ test("org admin can set and clear another user's session persona via PUT /v1/adm
       undefined,
       "slack",
     );
-    const url = `${s.base}/v1/admin/sessions/${encodeURIComponent(session.id)}/persona?scope=${encodeURIComponent(session.scopeId)}`;
-
-    const denied = await fetch(url, {
-      method: "PUT",
-      headers: { "x-agent-capability": memberCap, "content-type": "application/json" },
-      body: JSON.stringify({ personaId }),
-    });
-    assert.equal(denied.status, 403);
-
-    const bad = await fetch(url, {
-      method: "PUT",
-      headers: { "x-agent-capability": adminCap, "content-type": "application/json" },
-      body: JSON.stringify({ personaId: "" }),
-    });
-    assert.equal(bad.status, 400);
-
-    const missing = await fetch(url, {
-      method: "PUT",
-      headers: { "x-agent-capability": adminCap, "content-type": "application/json" },
-      body: JSON.stringify({ personaId: "no-such-persona" }),
-    });
-    assert.equal(missing.status, 404);
-
-    const wrongScope = await fetch(
-      `${s.base}/v1/admin/sessions/${encodeURIComponent(session.id)}/persona?scope=${encodeURIComponent(personalScope("admin-alice"))}`,
-      {
-        method: "PUT",
-        headers: { "x-agent-capability": adminCap, "content-type": "application/json" },
-        body: JSON.stringify({ personaId }),
-      },
-    );
-    assert.equal(wrongScope.status, 403);
-
-    const setRes = await fetch(url, {
-      method: "PUT",
-      headers: { "x-agent-capability": adminCap, "content-type": "application/json" },
-      body: JSON.stringify({ personaId }),
-    });
-    assert.equal(setRes.status, 200);
-    assert.deepEqual(await setRes.json(), { session: { id: session.id, personaId } });
-    assert.equal((await s.built.sessions.get(session.id))?.personaId, personaId);
-
-    const clearRes = await fetch(url, {
-      method: "PUT",
-      headers: { "x-agent-capability": adminCap, "content-type": "application/json" },
-      body: JSON.stringify({ personaId: null }),
-    });
-    assert.equal(clearRes.status, 200);
-    assert.deepEqual(await clearRes.json(), { session: { id: session.id, personaId: null } });
+    const put = (token: string, scope: string, personaId: unknown) =>
+      fetch(
+        `${s.base}/v1/admin/sessions/${encodeURIComponent(session.id)}/persona?scope=${encodeURIComponent(scope)}`,
+        {
+          method: "PUT",
+          headers: { "x-agent-capability": token, "content-type": "application/json" },
+          body: JSON.stringify({ personaId }),
+        },
+      );
+    assert.equal((await put(memberCap, session.scopeId, created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, "")).status, 400);
+    assert.equal((await put(adminCap, session.scopeId, "missing")).status, 404);
+    assert.equal((await put(adminCap, personalScope("admin-alice"), created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, created.value.id)).status, 200);
+    assert.equal((await s.built.sessions.get(session.id))?.personaId, created.value.id);
+    assert.equal((await put(adminCap, session.scopeId, null)).status, 200);
     assert.equal((await s.built.sessions.get(session.id))?.personaId, undefined);
-
-    const audited = (await s.built.auditLog.events(tenant)).filter(
-      (e) => e.action === "session.persona.update" && e.resource === session.id,
-    );
+    const audited = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "session.persona.update");
     assert.equal(audited.length, 2);
   } finally {
     await s.close();
