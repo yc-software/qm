@@ -26,3 +26,8 @@ Never edit a migration once it has merged; add another. A file that is exactly o
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` runs outside a transaction, and a failed build is
 dropped and rebuilt on the next start. Set `lock_timeout` with `SET LOCAL` when altering a
 busy table.
+
+A file whose first line is `-- qm:batched` rewrites data a slice at a time. It runs again and
+again, each run in its own transaction, until its last statement selects `false AS more`; the
+last run records it. Keep its progress in tables so a stopped run resumes, and make each run
+safe to repeat. It holds its own lock while it runs, not the one other migrations wait on.

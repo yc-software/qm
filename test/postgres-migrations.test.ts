@@ -283,3 +283,128 @@ test(
     }
   },
 );
+
+test(
+  "a batched migration commits each batch, resumes after a failure and is recorded once done",
+  { skip },
+  async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const { id, table } = names();
+    const migration = definePgMigration({
+      id,
+      statements: [
+        `-- qm:batched
+       UPDATE ${table} SET done = true WHERE value IN (SELECT value FROM ${table} WHERE NOT done ORDER BY value LIMIT 2);
+       SELECT EXISTS (SELECT 1 FROM ${table} WHERE NOT done) AS more`,
+      ],
+    });
+    try {
+      await pool.query(`CREATE TABLE ${table}(value INT PRIMARY KEY, done BOOLEAN NOT NULL DEFAULT false)`);
+      await pool.query(`INSERT INTO ${table}(value) SELECT generate_series(1, 7)`);
+      await pool.query(`CREATE FUNCTION ${table}_stop() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.value = 6 THEN RAISE EXCEPTION 'stopped at 6'; END IF; RETURN NEW; END $$`);
+      await pool.query(`CREATE TRIGGER stop BEFORE UPDATE ON ${table} FOR EACH ROW EXECUTE FUNCTION ${table}_stop()`);
+      await assert.rejects(applyPgMigrations(pool, [migration]), /stopped at 6/);
+      const partial = await pool.query(`SELECT value FROM ${table} WHERE done ORDER BY value`);
+      assert.deepEqual(
+        partial.rows.map((row: { value: number }) => row.value),
+        [1, 2, 3, 4],
+      );
+      assert.equal((await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id])).rowCount, 0);
+      await pool.query(`DROP TRIGGER stop ON ${table}`);
+      await applyPgMigrations(pool, [migration]);
+      assert.equal((await pool.query(`SELECT 1 FROM ${table} WHERE NOT done`)).rowCount, 0);
+      assert.equal((await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id])).rowCount, 1);
+    } finally {
+      await pool.query(`DROP TABLE IF EXISTS ${table}`);
+      await pool.query(`DROP FUNCTION IF EXISTS ${table}_stop()`);
+      await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+      await pool.end();
+    }
+  },
+);
+
+test("a batched migration waits out a row lock by retrying instead of queueing behind it", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const holder = await pool.connect();
+  const { id, table } = names();
+  const migration = definePgMigration({
+    id,
+    statements: [
+      `-- qm:batched
+       UPDATE ${table} SET done = true WHERE NOT done;
+       SELECT false AS more`,
+    ],
+  });
+  try {
+    await pool.query(`CREATE TABLE ${table}(value INT PRIMARY KEY, done BOOLEAN NOT NULL DEFAULT false)`);
+    await pool.query(`INSERT INTO ${table}(value) VALUES (1)`);
+    await holder.query("BEGIN");
+    await holder.query(`SELECT 1 FROM ${table} FOR UPDATE`);
+    const applied = applyPgMigrations(pool, [migration]);
+    const waits = async (): Promise<number> =>
+      (
+        await pool.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE $1",
+          [`%UPDATE ${table}%`],
+        )
+      ).rows[0]!.n;
+    while ((await waits()) === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await holder.query("COMMIT");
+    await applied;
+    assert.equal((await pool.query(`SELECT 1 FROM ${table} WHERE done`)).rowCount, 1);
+  } finally {
+    holder.release();
+    await pool.query(`DROP TABLE IF EXISTS ${table}`);
+    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    await pool.end();
+  }
+});
+
+test("a batched migration must report whether more batches remain", { skip }, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const { id } = names();
+  try {
+    await assert.rejects(
+      applyPgMigrations(pool, [definePgMigration({ id, statements: ["-- qm:batched\nSELECT 1 AS n"] })]),
+      /must end by selecting a boolean more/,
+    );
+    assert.equal((await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id])).rowCount, 0);
+  } finally {
+    await pool.end();
+  }
+});
+
+test("a batched migration lets other migrators through while its batches run", { skip }, async () => {
+  const a = new pg.Pool({ connectionString: databaseUrl });
+  const b = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const batched = definePgMigration({
+    id: `${id}/batched`,
+    statements: [
+      `-- qm:batched
+       SELECT pg_sleep(0.2);
+       UPDATE ${table} SET n = n + 1;
+       SELECT (SELECT n FROM ${table}) < 10 AS more`,
+    ],
+  });
+  const other = definePgMigration({ id: `${id}/other`, statements: [`CREATE TABLE ${table}_other(value INT)`] });
+  try {
+    await a.query(`CREATE TABLE ${table}(n INT NOT NULL)`);
+    await a.query(`INSERT INTO ${table} VALUES (0)`);
+    const running = applyPgMigrations(a, [batched]);
+    while ((await a.query(`SELECT n FROM ${table}`)).rows[0].n < 2) await new Promise((r) => setTimeout(r, 50));
+    await applyPgMigrations(b, [other]);
+    assert.ok(
+      (await a.query(`SELECT n FROM ${table}`)).rows[0].n < 10,
+      "the other migration did not wait for every batch",
+    );
+    await Promise.all([running, applyPgMigrations(b, [batched])]);
+    assert.deepEqual((await a.query(`SELECT n FROM ${table}`)).rows, [{ n: 10 }]);
+  } finally {
+    await a.query(`DROP TABLE IF EXISTS ${table}, ${table}_other`);
+    await a.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
+    await Promise.all([a.end(), b.end()]);
+  }
+});

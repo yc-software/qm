@@ -3,7 +3,6 @@
 0000-tenancy/base/retire-0116-keys/repair
 0000-tenancy/boot-tenant-function
 0000-tenancy/external-orgs
-0000-tenancy/external-orgs-lookups
 0000-tenancy/legacy-tenant
 0000-tenancy/retire-0116-hosts
 0000-tenancy/serving-tenants-function
@@ -137,7 +136,6 @@ directory/store/0011-group-surface
 directory/store/0012-member-is-bot
 directory/store/0013-member-slack-id-index
 directory/store/0014-meta-app-icon
-directory/store/0015-tenants-for-email-members
 durable-map/ack_emoji/0001
 durable-map/ack_emoji/0010-tenants/0-column
 durable-map/ack_emoji/0010-tenants/0-stamp-column
@@ -1508,7 +1506,6 @@ tenancy/lookups/0005-principal-admin-tenants
 tenancy/lookups/0006-principal-user-tenants
 tenancy/lookups/0007-partner-chat
 tenancy/lookups/0008-serving-slack-tenants
-tenancy/lookups/0009-principal-member-tenants
 tenancy/lookups/consent_links-inbound-indexes
 tenancy/lookups/deployments-inbound-indexes
 tenancy/lookups/loop_ingress-inbound-indexes
@@ -1542,7 +1539,6 @@ users/v2/0005-tenanted-backfill
 users/v2/0006-display-name
 users/v2/0006-persona-channel-pins
 users/v2/0007-persona-claims
-users/v2/0007-personal-scopes-by-user-id
 users/v2/0007-tenant-pin/1-index
 users/v2/0007-tenant-pin/2-swap
 users/v2/0008-bot-marker-backfill

@@ -282,6 +282,91 @@ function unmigrated(migration: PgMigration): Error {
   return new Error(message);
 }
 
+const BATCHED_MIGRATION = /^--\s*qm:batched\b/;
+const BATCH_LOCK_TIMEOUT = "2s";
+const BATCH_RETRY_MS = 500;
+const BATCH_PROGRESS_MS = 10_000;
+
+export function batchedMigration(migration: PgMigration): boolean {
+  return migration.statements.length === 1 && BATCHED_MIGRATION.test(migration.statements[0]!);
+}
+
+function moreBatches(result: QueryResult | QueryResult[]): boolean {
+  const last = Array.isArray(result) ? result.at(-1) : result;
+  const more = (last?.rows[0] as { more?: unknown } | undefined)?.more;
+  if (typeof more !== "boolean") throw new Error("pg-pool: a batched migration must end by selecting a boolean more");
+  return more;
+}
+
+async function applyBatchedMigration(
+  client: PoolClient,
+  migration: PgMigration,
+): Promise<{ error: unknown; discard: Error | undefined } | undefined> {
+  const lock = `qm:batched-migration:${migration.id}`;
+  await client.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+  try {
+    await lockSchema(client, lock);
+    try {
+      const done = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [migration.id]);
+      if (done.rowCount) return undefined;
+      return await runBatches(client, migration);
+    } finally {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [lock])
+        .catch(swallowAs(`pg-pool: unlock ${lock}`, undefined));
+    }
+  } finally {
+    await lockSchema(client, "qm:schema-migrations");
+  }
+}
+
+async function runBatches(
+  client: PoolClient,
+  migration: PgMigration,
+): Promise<{ error: unknown; discard: Error | undefined } | undefined> {
+  const started = Date.now();
+  let reported = started;
+  let batches = 0;
+  let retries = 0;
+  for (;;) {
+    await untraced(() => client.query("BEGIN"));
+    let more: boolean;
+    try {
+      await client.query(`SET LOCAL lock_timeout = '${BATCH_LOCK_TIMEOUT}'`);
+      more = moreBatches(await client.query(migration.statements[0]!));
+      if (!more) {
+        await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
+          migration.id,
+          migration.checksum,
+        ]);
+      }
+      await untraced(() => client.query("COMMIT"));
+    } catch (error) {
+      const discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
+      const code = (error as { code?: unknown }).code;
+      if (!discard && (code === "55P03" || code === "40P01")) {
+        retries++;
+        await sleep(BATCH_RETRY_MS);
+        continue;
+      }
+      console.error(`[pg-pool] migration ${migration.id} failed after ${batches} batches: ${describePgError(error)}`);
+      return { error, discard };
+    }
+    batches++;
+    if (!more) break;
+    if (Date.now() - reported >= BATCH_PROGRESS_MS) {
+      reported = Date.now();
+      console.log(
+        `[pg-pool] migration ${migration.id}: ${batches} batches, ${retries} lock retries in ${Math.round((reported - started) / 1000)}s`,
+      );
+    }
+  }
+  console.log(
+    `[pg-pool] migration ${migration.id} applied in ${batches} batches, ${retries} lock retries, over ${Date.now() - started}ms`,
+  );
+  return undefined;
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
@@ -402,6 +487,14 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           migration.id,
           migration.checksum,
         ]);
+        continue;
+      }
+      if (batchedMigration(migration)) {
+        const outcome = await applyBatchedMigration(client, migration);
+        if (outcome) {
+          discard = outcome.discard;
+          throw outcome.error;
+        }
         continue;
       }
       await untraced(() => client.query("BEGIN"));
