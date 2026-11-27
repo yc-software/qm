@@ -264,6 +264,16 @@ struct PickedMedia: Transferable {
     return ordinal > 0 ? "\(name) (\(ordinal + 1))" : name
   }
 
+  /// Photos and pasted images become thumbnails, so they get a same-sized placeholder tile
+  /// while uploading instead of a filename row.
+  var showsAsTile: Bool {
+    switch self {
+    case .file: return false
+    case .image: return true
+    case .media(let name, _): return name.hasPrefix("Photo ")
+    }
+  }
+
   var name: String {
     switch self {
     case .file(let url): return url.lastPathComponent
@@ -506,15 +516,18 @@ extension ChatModel {
     attachmentUploadTask = nil
     uploading = false
     uploadingName = nil
+    pendingImageUploads = 0
   }
 
   func uploadAttachments(_ sources: [AttachmentSource]) async {
     guard !conversation.isSubagent, !Task.isCancelled, !sending, !uploading else { return }
     uploading = true
+    pendingImageUploads = sources.filter(\.showsAsTile).count
     defer {
       if !Task.isCancelled {
         uploading = false
         uploadingName = nil
+        pendingImageUploads = 0
       }
     }
     error = nil
@@ -523,6 +536,9 @@ extension ChatModel {
     let account = attachmentAccount
     var failures: [String] = []
     for source in sources {
+      // Runs in the same main-actor turn as the append below, so a placeholder tile turns into
+      // its thumbnail without the strip shifting.
+      defer { if source.showsAsTile { pendingImageUploads = max(0, pendingImageUploads - 1) } }
       do {
         try Task.checkCancellation()
         guard generation == client.generation else { break }

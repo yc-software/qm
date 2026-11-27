@@ -809,7 +809,7 @@ struct ChatView: View {
                 insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
         } else {
           VStack(alignment: .leading, spacing: 6) {
-            if !model.attachments.isEmpty {
+            if !model.attachments.isEmpty || model.pendingImageUploads > 0 {
               attachmentStrip
             }
             composerTextField
@@ -817,7 +817,9 @@ struct ChatView: View {
               NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
                 .padding(.horizontal, 8)
             }
-            if model.uploading, let uploadingName = model.uploadingName {
+            if model.uploading, model.pendingImageUploads == 0,
+              let uploadingName = model.uploadingName
+            {
               NativeChatUploadStatus(filename: uploadingName)
                 .padding(.horizontal, 8)
             }
@@ -973,6 +975,9 @@ struct ChatView: View {
             .overlay { Capsule().strokeBorder(QMTheme.border, lineWidth: 1) }
           }
         }
+        ForEach(0..<model.pendingImageUploads, id: \.self) { _ in
+          UploadingImageTile()
+        }
       }
     }
     .padding(.horizontal, 4).padding(.top, 4)
@@ -1075,5 +1080,17 @@ private struct DrawerOpenWatcher: View {
     Color.clear.onChange(of: open) { _, open in
       if open { onOpen() }
     }
+  }
+}
+
+/// Stands in for a photo while it uploads: the same size and shape as the thumbnail it
+/// becomes, so the composer doesn't shift when the image arrives.
+struct UploadingImageTile: View {
+  var body: some View {
+    RoundedRectangle(cornerRadius: 16)
+      .fill(Color.primary.opacity(0.08))
+      .frame(width: 80, height: 80)
+      .overlay { ProgressView().controlSize(.small) }
+      .accessibilityLabel("Uploading photo")
   }
 }

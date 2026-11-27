@@ -205,11 +205,9 @@ struct DraftImageThumbnail: View {
 
   var body: some View {
     ZStack {
-      QMTheme.surface
+      Color.primary.opacity(0.08)
       if let image {
         Image(image, scale: 1, label: Text(attachment.name)).resizable().scaledToFill()
-      } else {
-        Image(systemName: "photo").foregroundStyle(.secondary)
       }
     }
     .task(id: attachment.localSHA) {

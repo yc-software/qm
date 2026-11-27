@@ -125,6 +125,8 @@ final class ChatModel {
   var attachments: [UploadAttachment] = []
   var uploading = false
   var uploadingName: String?
+  /// Photos picked but not yet uploaded; the composer shows a placeholder tile for each.
+  var pendingImageUploads = 0
   @ObservationIgnored var attachmentUploadTask: Task<Void, Never>?
   var partial = "" { didSet { streamChanged() } }
   private(set) var liveActivity: [Item] = [] {
