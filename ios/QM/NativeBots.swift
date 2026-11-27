@@ -74,11 +74,12 @@ final class BotsModel {
         bots = []
         enabled = false
       } else {
-        throw QMError.rejected(APIClient.errorMessage(status: 404, data: nil))
+        throw QMError.rejected("Couldn’t load bots (\(result.error ?? "HTTP 404")).")
       }
       loaded = true
       error = nil
     } failed: {
+      Log.background.failure("Loading bots", $0)
       error = $0.localizedDescription
     }
   }
