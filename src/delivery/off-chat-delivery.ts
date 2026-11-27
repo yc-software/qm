@@ -1,8 +1,7 @@
 import type { DeliveryStore } from "./delivery-store.ts";
-import { isTrustedSubject } from "../admin/admin-service.ts";
 import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { personIds, personKey } from "../directory/person.ts";
+import { isTrustedSubject, personIds, personKey } from "../directory/person.ts";
 import { scopeId } from "../types.ts";
 
 export function withOffChatRecipients<T extends DeliveryStore>(
