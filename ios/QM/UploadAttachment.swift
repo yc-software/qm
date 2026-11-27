@@ -385,16 +385,6 @@ extension AttachmentPicker {
       }
       row("Photos", systemImage: "photo") { choose(.photos) }
       row("Files", systemImage: "paperclip") { choose(.files) }
-      // Checking for images does not prompt; only reading them shows iOS's paste permission.
-      if UIPasteboard.general.hasImages {
-        row("Paste image", systemImage: "doc.on.clipboard") {
-          showingOptions = false
-          onSelect(
-            UIPasteboard.general.itemProviders
-              .filter { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }
-              .map(AttachmentSource.image))
-        }
-      }
     }
     .padding(.vertical, 12)
     .frame(minWidth: 240, alignment: .leading)
