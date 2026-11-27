@@ -213,7 +213,12 @@ final class FilePreviewTests: XCTestCase {
   private func writeJPEG(width: Int, height: Int) throws -> URL {
     let renderer = UIGraphicsImageRenderer(
       size: CGSize(width: width, height: height),
-      format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = true; return f }())
+      format: {
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 1
+        f.opaque = true
+        return f
+      }())
     let data = renderer.jpegData(withCompressionQuality: 0.9) { context in
       UIColor.systemTeal.setFill()
       context.fill(CGRect(x: 0, y: 0, width: width, height: height))

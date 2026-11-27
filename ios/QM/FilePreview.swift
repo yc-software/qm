@@ -10,7 +10,8 @@ struct FileAttachmentView: View {
   @State private var showingPreview = false
 
   static func rendersInline(_ file: DeliveredFile) -> Bool {
-    FilePreviewResource.rendersInline(file.name) && FilePreviewResource.path(for: file.artifactId) != nil
+    FilePreviewResource.rendersInline(file.name)
+      && FilePreviewResource.path(for: file.artifactId) != nil
   }
 
   /// An image in a message that was just sent, before the server has returned the file.

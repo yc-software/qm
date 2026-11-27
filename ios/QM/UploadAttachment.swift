@@ -290,9 +290,12 @@ struct PickedMedia: Transferable {
       let url = try await load()
       defer { try? FileManager.default.removeItem(at: url) }
       let source = url
-      if let compacted = await Task.detached(priority: .userInitiated, operation: {
-        ImageCompaction.compact(source)
-      }).value {
+      if let compacted = await Task.detached(
+        priority: .userInitiated,
+        operation: {
+          ImageCompaction.compact(source)
+        }
+      ).value {
         defer { try? FileManager.default.removeItem(at: compacted) }
         return try await AttachmentUpload.prepare(
           compacted, name: "\(name).\(compacted.pathExtension)")

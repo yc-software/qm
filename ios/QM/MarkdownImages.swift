@@ -1,8 +1,8 @@
 import CryptoKit
 import ImageIO
-import UniformTypeIdentifiers
 import MarkdownUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum MarkdownImageResource {
   static func path(_ url: URL, baseURL: URL, files: [DeliveredFile] = []) -> String? {
@@ -304,8 +304,11 @@ enum InlineImageCache {
       files.count > maximumDiskFiles
     else { return }
     let dated = files.map {
-      ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
-        .contentModificationDate ?? .distantPast)
+      (
+        $0,
+        (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
+          .contentModificationDate ?? .distantPast
+      )
     }
     for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(files.count - maximumDiskFiles) {
       try? FileManager.default.removeItem(at: file)
@@ -324,9 +327,12 @@ enum InlineImageLoader {
     let key = InlineImageCache.key(
       baseURL: client.baseURL, path: path, maximumPixels: maximumPixels)
     if let image = InlineImageCache.memoryImage(key) { return image }
-    if let cached = await Task.detached(priority: .userInitiated, operation: {
-      InlineImageCache.diskImage(key).map(DecodedImage.init)
-    }).value {
+    if let cached = await Task.detached(
+      priority: .userInitiated,
+      operation: {
+        InlineImageCache.diskImage(key).map(DecodedImage.init)
+      }
+    ).value {
       return cached.image
     }
     let data = try await client.imageData(path)
