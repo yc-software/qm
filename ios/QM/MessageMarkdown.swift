@@ -11,7 +11,7 @@ struct MessageMarkdown: View {
   @State private var previewFile: DeliveredFile?
 
   var body: some View {
-    Markdown(text, baseURL: client.baseURL)
+    Markdown(GitHubLinkMark.decorate(text), baseURL: client.baseURL)
       .markdownImageProvider(WorkspaceMarkdownImages(client: client, files: files))
       .markdownInlineImageProvider(WorkspaceInlineImages(client: client, files: files))
       .id(files.map { "\($0.name ?? ""):\($0.artifactId ?? "")" }.sorted())
