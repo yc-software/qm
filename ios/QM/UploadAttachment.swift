@@ -339,20 +339,9 @@ struct AttachmentPicker: View {
     .popover(isPresented: $showingOptions, arrowEdge: .bottom) {
       options
         .presentationCompactAdaptation(.popover)
-    }
-    // Open the chosen picker only once the popover has gone, so the two presentations never
-    // overlap (UIKit drops a presentation requested while another is still dismissing).
-    .onChange(of: showingOptions) { _, showing in
-      guard !showing, let option = pending else { return }
-      pending = nil
-      Task {
-        try? await Task.sleep(for: .milliseconds(250))
-        switch option {
-        case .camera: showingCamera = true
-        case .photos: showingPhotos = true
-        case .files: showingImporter = true
-        }
-      }
+        // Open the chosen picker only once the popover is gone, so the two presentations never
+        // overlap (UIKit drops a presentation requested while another is still on screen).
+        .onDisappear(perform: openPending)
     }
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
@@ -413,6 +402,16 @@ extension AttachmentPicker {
       }
     }
     .padding(10)
+  }
+
+  private func openPending() {
+    guard let option = pending else { return }
+    pending = nil
+    switch option {
+    case .camera: showingCamera = true
+    case .photos: showingPhotos = true
+    case .files: showingImporter = true
+    }
   }
 
   private static let tileShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
