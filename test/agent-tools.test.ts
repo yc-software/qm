@@ -993,6 +993,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
     {
       command: "execute",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
+      source: undefined,
       kind: "approval",
       approvalKey: "security-screen-release:execute",
       grantModes: { session: false, always: false },
@@ -1323,6 +1324,7 @@ test("a strict external-content verdict routes through HiLo approval instead of 
     {
       command: "slack",
       reason: "Security screen quarantined this tool's output — release it to the agent?",
+      source: undefined,
       kind: "approval",
       approvalKey: "security-screen-release:slack",
       grantModes: { session: false, always: false },

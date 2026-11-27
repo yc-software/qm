@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
+import { compactTranscript, estimateItemTokens, INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
 
 function at(item: NewItem, seq = 0, createdAt = 0) {
@@ -123,4 +123,15 @@ test("a tool_result marked interrupted still leaves its call reported as interru
     at({ kind: "ToolResult", callId: "c1", text: "[exit 143]", body: { interrupted: true } }, 2, 2),
   ]);
   assert.ok(out.includes(`ToolResult for ToolCall#1 (none recorded): ${INTERRUPTED_TOOL_RESULT}`));
+});
+
+test("source provenance stays out of summaries and token estimates without changing recorded approval data", () => {
+  const call = { tool: "records", input: { source: "document" } };
+  const decision = at({ kind: "ElicitationResponse", elicitId: "approval", approved: true, body: { call } });
+  const source = { origin: { kind: "human", messageTs: "1.2" } };
+  const recorded = { ...decision, body: { call: { ...call, source }, source } };
+  assert.equal(compactTranscript([recorded]), compactTranscript([decision]));
+  assert.equal(estimateItemTokens(recorded), estimateItemTokens(decision));
+  assert.deepEqual(recorded.body.source, source);
+  assert.deepEqual(recorded.body.call.source, source);
 });
