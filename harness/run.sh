@@ -5,9 +5,10 @@ R=https://raw.githubusercontent.com/yc-software/qm/eve/ios-ai-data-consent-scree
 B=~/qm-ios-build
 rm -rf /tmp/qm-consent-shots; mkdir -p /tmp/qm-consent-shots
 git -C $B fetch -q origin +main:refs/qmshots/before +eve/ios-ai-data-consent:refs/qmshots/after || exit 1
-UDID=$(xcrun simctl list devices available | grep 'iPad Air' | grep -m1 -oE '[0-9A-F-]{36}')
+UDID=$(xcrun simctl list devices available | grep 'iPad Air 11-inch' | grep -m1 -oE '[0-9A-F-]{36}')
 xcrun simctl list devices available | grep 'iPad Air'
 echo "UDID=$UDID"
+xcrun simctl boot $UDID 2>/dev/null; xcrun simctl bootstatus $UDID -b | tail -1
 for side in before after; do
   W=/tmp/qm-consent-$side
   git -C $B worktree remove --force $W 2>/dev/null; rm -rf $W
