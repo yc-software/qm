@@ -9,6 +9,10 @@ struct FileAttachmentView: View {
   let client: APIClient
   @State private var showingPreview = false
 
+  static func rendersInline(_ file: DeliveredFile) -> Bool {
+    FilePreviewResource.rendersInline(file.name) && FilePreviewResource.path(for: file.artifactId) != nil
+  }
+
   var body: some View {
     if FilePreviewResource.rendersInline(file.name),
       let path = FilePreviewResource.path(for: file.artifactId)

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -278,6 +279,14 @@ struct PickedMedia: Transferable {
     case .media(let name, let load):
       let url = try await load()
       defer { try? FileManager.default.removeItem(at: url) }
+      let source = url
+      if let compacted = await Task.detached(priority: .userInitiated, operation: {
+        ImageCompaction.compact(source)
+      }).value {
+        defer { try? FileManager.default.removeItem(at: compacted) }
+        return try await AttachmentUpload.prepare(
+          compacted, name: "\(name).\(compacted.pathExtension)")
+      }
       let suffix = url.pathExtension
       return try await AttachmentUpload.prepare(
         url, name: suffix.isEmpty ? name : "\(name).\(suffix)")
@@ -299,7 +308,16 @@ struct PickedMedia: Transferable {
             guard let url else {
               throw error ?? QMError.message("The image could not be read. Copy it and try again.")
             }
-            continuation.resume(returning: try AttachmentUpload.read(url, name: name, type: type))
+            if let compacted = ImageCompaction.compact(url) {
+              defer { try? FileManager.default.removeItem(at: compacted) }
+              let base = (name as NSString).deletingPathExtension
+              continuation.resume(
+                returning: try AttachmentUpload.read(
+                  compacted, name: "\(base).\(compacted.pathExtension)"))
+            } else {
+              continuation.resume(
+                returning: try AttachmentUpload.read(url, name: name, type: type))
+            }
           } catch {
             continuation.resume(throwing: error)
           }
@@ -546,5 +564,70 @@ extension ChatModel {
       }
     }
     if !Task.isCancelled, !failures.isEmpty { error = failures.joined(separator: "\n") }
+  }
+}
+
+/// Shrinks photos before upload so they send and render quickly. A photo whose long side is
+/// over 2048 px, or that is over 1.5 MB, or that is in a format other than JPEG/PNG (HEIC),
+/// is re-encoded as a JPEG at most 2048 px on the long side. Images with transparency stay PNG.
+/// GIFs and multi-frame images are left alone, and so are files picked from Files. Location and
+/// other metadata are not copied.
+enum ImageCompaction {
+  static let maximumPixels = 2048
+  static let compactAboveBytes = 1_500_000
+  static let quality = 0.82
+
+  static func compact(_ url: URL) -> URL? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+      CGImageSourceGetCount(source) == 1,
+      let typeID = CGImageSourceGetType(source) as String?,
+      let type = UTType(typeID), type.conforms(to: .image), !type.conforms(to: .gif),
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+      let width = properties[kCGImagePropertyPixelWidth] as? Int,
+      let height = properties[kCGImagePropertyPixelHeight] as? Int,
+      width > 0, height > 0
+    else { return nil }
+    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    let longSide = max(width, height)
+    let hasAlpha = properties[kCGImagePropertyHasAlpha] as? Bool ?? false
+    let plainFormat = type.conforms(to: .jpeg) || type.conforms(to: .png)
+    if hasAlpha {
+      guard longSide > maximumPixels else { return nil }
+    } else {
+      guard longSide > maximumPixels || size > compactAboveBytes || !plainFormat else {
+        return nil
+      }
+    }
+    guard
+      let image = CGImageSourceCreateThumbnailAtIndex(
+        source, 0,
+        [
+          kCGImageSourceCreateThumbnailFromImageAlways: true,
+          kCGImageSourceCreateThumbnailWithTransform: true,
+          kCGImageSourceThumbnailMaxPixelSize: min(longSide, maximumPixels),
+        ] as CFDictionary)
+    else { return nil }
+    let output: UTType = hasAlpha ? .png : .jpeg
+    let destinationURL = PickedMedia.scratch(output == .png ? "png" : "jpg")
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        destinationURL as CFURL, output.identifier as CFString, 1, nil)
+    else { return nil }
+    CGImageDestinationAddImage(
+      destination, image,
+      (hasAlpha
+        ? [CFString: Double]() : [kCGImageDestinationLossyCompressionQuality: quality])
+        as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+      try? FileManager.default.removeItem(at: destinationURL)
+      return nil
+    }
+    let compactedSize =
+      (try? destinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
+    if plainFormat, longSide <= maximumPixels, compactedSize >= size {
+      try? FileManager.default.removeItem(at: destinationURL)
+      return nil
+    }
+    return destinationURL
   }
 }
