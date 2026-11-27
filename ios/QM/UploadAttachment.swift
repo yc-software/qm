@@ -313,21 +313,18 @@ struct AttachmentPicker: View {
   let uploading: Bool
   @Binding var error: String?
   let onSelect: ([AttachmentSource]) -> Void
+  @State private var showingOptions = false
+  @State private var pending: Option?
   @State private var showingImporter = false
   @State private var showingPhotos = false
   @State private var showingCamera = false
   @State private var photoSelection: [PhotosPickerItem] = []
 
+  private enum Option { case camera, photos, files }
+
   var body: some View {
-    Menu {
-      Button("Photo library", systemImage: "photo.on.rectangle") { showingPhotos = true }
-      if UIImagePickerController.isSourceTypeAvailable(.camera) {
-        Button("Take photo", systemImage: "camera") { showingCamera = true }
-      }
-      Button("Choose files", systemImage: "doc") { showingImporter = true }
-      PasteButton(supportedContentTypes: [.image]) { providers in
-        onSelect(providers.map(AttachmentSource.image))
-      }
+    Button {
+      showingOptions = true
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 15, weight: .medium))
@@ -336,6 +333,26 @@ struct AttachmentPicker: View {
         .background(QMTheme.ink.opacity(0.08), in: Circle())
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .sensoryFeedback(.impact(weight: .light), trigger: showingOptions) { _, new in new }
+    .popover(isPresented: $showingOptions, arrowEdge: .bottom) {
+      options
+        .presentationCompactAdaptation(.popover)
+    }
+    // Open the chosen picker only once the popover has gone, so the two presentations never
+    // overlap (UIKit drops a presentation requested while another is still dismissing).
+    .onChange(of: showingOptions) { _, showing in
+      guard !showing, let option = pending else { return }
+      pending = nil
+      Task {
+        try? await Task.sleep(for: .milliseconds(250))
+        switch option {
+        case .camera: showingCamera = true
+        case .photos: showingPhotos = true
+        case .files: showingImporter = true
+        }
+      }
     }
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
@@ -368,6 +385,67 @@ struct AttachmentPicker: View {
         }
       }
     }
+  }
+}
+
+extension AttachmentPicker {
+  fileprivate var options: some View {
+    VStack(spacing: 8) {
+      HStack(spacing: 8) {
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+          tile("Camera", systemImage: "camera", option: .camera)
+        }
+        tile("Photos", systemImage: "photo.on.rectangle", option: .photos)
+        tile("Files", systemImage: "doc", option: .files)
+      }
+      // The system paste control reads the clipboard without iOS's "Allow Paste" prompt; it is
+      // only offered when the clipboard actually holds an image (checking does not prompt).
+      if UIPasteboard.general.hasImages {
+        PasteButton(supportedContentTypes: [.image]) { providers in
+          showingOptions = false
+          onSelect(providers.map(AttachmentSource.image))
+        }
+        .labelStyle(.titleAndIcon)
+        .buttonBorderShape(.roundedRectangle(radius: 14))
+        .controlSize(.large)
+        .tint(QMTheme.ink.opacity(0.08))
+        .foregroundStyle(QMTheme.ink)
+      }
+    }
+    .padding(10)
+  }
+
+  private static let tileShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+
+  private func tile(_ title: String, systemImage: String, option: Option) -> some View {
+    Button {
+      pending = option
+      showingOptions = false
+    } label: {
+      VStack(spacing: 8) {
+        Image(systemName: systemImage)
+          .font(.system(size: 22, weight: .regular))
+          .frame(height: 26)
+        Text(title)
+          .font(.system(size: 14, weight: .medium))
+      }
+      .foregroundStyle(QMTheme.ink)
+      .frame(width: 92, height: 84)
+      .background(QMTheme.ink.opacity(0.06), in: Self.tileShape)
+      .contentShape(Self.tileShape)
+    }
+    .buttonStyle(AttachmentTileStyle())
+    .accessibilityLabel(title)
+  }
+}
+
+/// Presses the tile down a touch so each option feels like a physical key.
+private struct AttachmentTileStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.95 : 1)
+      .opacity(configuration.isPressed ? 0.75 : 1)
+      .animation(.spring(duration: 0.2), value: configuration.isPressed)
   }
 }
 
