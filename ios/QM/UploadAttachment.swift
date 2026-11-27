@@ -625,19 +625,26 @@ enum ImageCompaction {
           kCGImageSourceCreateThumbnailWithTransform: true,
           kCGImageSourceThumbnailMaxPixelSize: min(longSide, maximumPixels),
         ] as CFDictionary)
-    else { return nil }
+    else {
+      Log.images.error("Compacting photo failed: could not decode it")
+      return nil
+    }
     let output: UTType = hasAlpha ? .png : .jpeg
     let destinationURL = PickedMedia.scratch(output == .png ? "png" : "jpg")
     guard
       let destination = CGImageDestinationCreateWithURL(
         destinationURL as CFURL, output.identifier as CFString, 1, nil)
-    else { return nil }
+    else {
+      Log.images.error("Compacting photo failed: no encoder")
+      return nil
+    }
     CGImageDestinationAddImage(
       destination, image,
       (hasAlpha
         ? [CFString: Double]() : [kCGImageDestinationLossyCompressionQuality: quality])
         as CFDictionary)
     guard CGImageDestinationFinalize(destination) else {
+      Log.images.error("Compacting photo failed: encoding did not finish")
       try? FileManager.default.removeItem(at: destinationURL)
       return nil
     }

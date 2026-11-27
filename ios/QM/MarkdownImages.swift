@@ -216,12 +216,14 @@ struct DraftImageThumbnail: View {
       guard let sha = attachment.localSHA else { return }
       let account = account
       let worker = Task.detached(priority: .userInitiated) {
-        try AttachmentCache.read(account: account, sha: sha)
+        let prepared = try AttachmentCache.read(account: account, sha: sha)
+        return try withExtendedLifetime(prepared) {
+          DecodedImage(
+            try MarkdownImageResource.thumbnail(contentsOf: prepared.url, maximumPixels: 240))
+        }
       }
       do {
-        let prepared = try await worker.value
-        defer { withExtendedLifetime(prepared) {} }
-        image = try MarkdownImageResource.thumbnail(contentsOf: prepared.url, maximumPixels: 240)
+        image = try await worker.value.image
       } catch {
         Log.images.failure("Loading draft thumbnail", error)
       }
