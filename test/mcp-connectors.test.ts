@@ -464,7 +464,12 @@ test("attested MCP calls and catalogs keep each turn's source separate", async (
   for (const account of ["first", "second", undefined]) {
     const author = { surface: "test", account: account ?? "", id: "U1" };
     const turn = account
-      ? { surfaceOrigin: { author, workspace: account, audience: "internal" as const }, messageTs: "1.2" }
+      ? {
+          source: {
+            surfaceOrigin: { author, workspace: account, audience: "internal" as const },
+            origin: { kind: "human" as const, messageTs: "1.2" },
+          },
+        }
       : undefined;
     sources.length = 0;
     const before = mcp.requests.filter((request) => request.rpc === "tools/list").length;

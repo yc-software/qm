@@ -530,8 +530,7 @@ export interface ToolContextDeps {
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
-  surfaceOrigin?: AttestingTurn["surfaceOrigin"];
-  messageTs?: string;
+  mcpSource?: AttestingTurn["source"];
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -1268,8 +1267,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
-        surfaceOrigin: deps.surfaceOrigin,
-        messageTs: deps.messageTs,
+        source: deps.mcpSource,
       });
     },
 
@@ -1292,8 +1290,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
-        surfaceOrigin: deps.surfaceOrigin,
-        messageTs: deps.messageTs,
+        source: deps.mcpSource,
       });
     },
 

@@ -218,14 +218,17 @@ function headersFor(
 ): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
+  const origin = turn?.source?.origin;
+  const messageTs =
+    origin?.kind === "human" ? origin.messageTs : origin?.kind === "ambient" ? origin.entryTs : undefined;
   return {
     ...attestedActorHeaders(actor),
     ...(approval ? { "x-qm-approval": approval } : {}),
-    ...(turn?.surfaceOrigin
+    ...(turn?.source?.surfaceOrigin
       ? {
-          "x-qm-source": Buffer.from(
-            JSON.stringify({ ...turn.surfaceOrigin.author, messageTs: turn.messageTs }),
-          ).toString("base64url"),
+          "x-qm-source": Buffer.from(JSON.stringify({ ...turn.source.surfaceOrigin.author, messageTs })).toString(
+            "base64url",
+          ),
         }
       : {}),
   };

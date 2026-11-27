@@ -71,7 +71,7 @@ export function isPersonFire(request: Pick<OrchestratorInput, "origin" | "botAct
 export async function delegatedAuthorization(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<{ origin: OrchestratorInput["origin"] } | undefined> {
+): Promise<Pick<OrchestratorInput, "origin" | "surfaceOrigin"> | undefined> {
   const seen = new Set<string>();
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
@@ -130,7 +130,7 @@ export async function delegatedAuthorization(
         isPersonFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return { origin: parent.origin };
+      return { origin: parent.origin, surfaceOrigin: parent.surfaceOrigin };
     current = parent;
   }
 }
