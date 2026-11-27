@@ -44,7 +44,6 @@ async function fixture() {
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable", card: "on" },
     useMemory: true,
-    botActor: false,
     ownScopeBotWork: false,
     memory,
     files,

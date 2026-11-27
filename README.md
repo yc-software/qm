@@ -140,8 +140,9 @@ every posture, Dangerous included.
 Sharing posture is independent:
 
 - **Isolated** (default) — resources stay in their scope unless explicitly shared.
-- **Open** — on a live authenticated internal human turn, the speaker's opted-in personal
-  files, artifacts, skills, and memory may be read in an opted-in shared room.
+- **Open** — on an authenticated internal turn that carries a person's authority, that
+  person's opted-in personal files, artifacts, skills, and memory may be read in an opted-in
+  shared room.
 
 [`SECURITY.md`](./SECURITY.md) has the threat model, the operator assumptions, and the
 known limitations.
