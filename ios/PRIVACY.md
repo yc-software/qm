@@ -37,11 +37,11 @@ What you do in the app, plus your device's time zone and what iOS adds to any we
 
 ## AI providers
 
-QM answers you with AI models run by third-party companies. The app shows what is shared and with whom, and asks you to agree, before you first send a message, dictate, or start a voice call. Until you agree, those features stay off. You can review or withdraw your agreement at any time in **Settings > AI data sharing**; withdrawing turns them off again.
+QM answers you with AI models run by third-party companies. The app shows what is shared and with whom, and asks you to agree, before you first send a message, ask QM about an inbox item, dictate, or start a voice call. Until you agree, those features stay off and the app does not ask your workspace for suggested activities, which it generates from your data. You can review or withdraw your agreement at any time in **Settings > AI data sharing**; withdrawing turns them off again.
 
-- **What is sent:** the messages you send; the files, photos, and videos you attach; and content QM reads on your behalf from apps you connect to your workspace, such as Slack, Gmail, or GitHub, while working on your request. Conversation history and the results of QM's work are sent along so the model has context.
+- **What is sent:** the messages you send, including questions about inbox items; the files, photos, and videos you attach; and content QM reads on your behalf from apps you connect to your workspace, such as Slack, Gmail, or GitHub, while working on your request. Conversation history and the results of QM's work are sent along so the model has context.
 - **How:** the app sends your messages and attachments to your workspace, and the workspace sends them to the provider of the model the conversation uses. The app does not send them to a model provider itself. Live voice is the exception, described below.
-- **Who receives it:** the provider of the model you choose in the model picker, which shows each model's provider. Y Combinator's QM workspace uses **Anthropic** (Claude models) and **OpenAI** (GPT models); the operator of another workspace may set up other providers, such as OpenRouter. Live voice audio goes to **OpenAI**.
+- **Who receives it:** the provider of the model the conversation uses, which the model picker shows: **Anthropic** for Claude models and **OpenAI** for GPT models. A workspace's operator can also set up other providers, such as OpenRouter, and those appear in the picker under their own names. Live voice audio goes to **OpenAI**.
 - **What it is used for:** to generate replies, carry out the tasks you ask for, transcribe and voice live calls, and, in your workspace, to search and summarize your past work. It is not used by the app or its publisher for advertising, tracking, or profiling.
 
 Each provider handles the data under its own terms and privacy policy, and under the agreement the workspace's operator has with it.

@@ -95,12 +95,27 @@ struct AIConsentSettings: View {
   }
 }
 
+/// Runs an action now if the person has agreed to share data with AI providers; otherwise
+/// asks first and runs it only if they agree.
+@MainActor @Observable final class AIConsentGate {
+  var asking = false
+  private var pending: () -> Void = {}
+
+  func run(_ action: @escaping () -> Void) {
+    if UserDefaults.standard.bool(forKey: AIConsent.key) { return action() }
+    pending = action
+    asking = true
+  }
+
+  fileprivate func finish() {
+    if UserDefaults.standard.bool(forKey: AIConsent.key) { pending() }
+    pending = {}
+  }
+}
+
 extension View {
-  /// Shows the consent sheet; `action` runs after it closes, only if the person agreed.
-  func aiConsentSheet(isPresented: Binding<Bool>, then action: @escaping () -> Void) -> some View {
-    sheet(
-      isPresented: isPresented,
-      onDismiss: { if UserDefaults.standard.bool(forKey: AIConsent.key) { action() } },
-      content: { AIConsentSheet() })
+  func aiConsentSheet(_ gate: AIConsentGate) -> some View {
+    @Bindable var gate = gate
+    return sheet(isPresented: $gate.asking, onDismiss: gate.finish, content: { AIConsentSheet() })
   }
 }

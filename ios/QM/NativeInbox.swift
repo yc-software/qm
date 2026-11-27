@@ -623,6 +623,7 @@ struct NativeInboxItemView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var sending = false
   @State private var discarding = false
+  @State private var aiConsent = AIConsentGate()
   @State private var output: NativeLoopOutput?
   @State private var note = ""
   @State private var decision = "ship"
@@ -664,6 +665,7 @@ struct NativeInboxItemView: View {
         do { try await Task.sleep(for: .seconds(10)) } catch { return }
       }
     }.refreshable { await refresh() }
+    .aiConsentSheet(aiConsent)
     .onChange(of: model.followup) { model.persistDraft() }
     .onChange(of: phase) { if phase != .active { model.persistDraft() } }
     .onChange(of: model.draft) { model.persistDraft() }
@@ -783,7 +785,9 @@ struct NativeInboxItemView: View {
         Button("Send reply", systemImage: "paperplane") { sending = true }.disabled(
           model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         if model.item.proposal == nil {
-          Button("Ask QM to draft a reply") { Task { _ = await model.requestDraft() } }.disabled(
+          Button("Ask QM to draft a reply") {
+            aiConsent.run { Task { _ = await model.requestDraft() } }
+          }.disabled(
             model.dirty)
         }
       }
@@ -823,12 +827,14 @@ struct NativeInboxItemView: View {
       TextField("Ask QM about this item", text: $model.followup, axis: .vertical).disabled(
         !model.loaded)
       Button("Ask QM") {
-        Task {
-          if await model.action(
-            "followup", message: model.followup.trimmingCharacters(in: .whitespacesAndNewlines))
-          {
-            model.followup = ""
-            model.persistDraft()
+        aiConsent.run {
+          Task {
+            if await model.action(
+              "followup", message: model.followup.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+              model.followup = ""
+              model.persistDraft()
+            }
           }
         }
       }.disabled(
