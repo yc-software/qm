@@ -1,0 +1,80 @@
+    cd /tmp/aiconsent-after/ios
+    builtin-swiftStdLibTool --copy --verbose --sign - --scan-executable /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/QMTests --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Frameworks --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/PlugIns --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/SystemExtensions --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Extensions --platform iphonesimulator --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.x27Dwy/Metal.xctoolchain --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+
+ExtractAppIntentsMetadata (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.x27Dwy/Metal.xctoolchain --module-name QMTests --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.2.sdk --xcode-version 27B52 --platform-family iOS --deployment-target 18.0 --bundle-identifier org.qm.QMTests --output /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest --target-triple arm64-apple-ios18.0-simulator --binary-file /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/QMTests --dependency-file /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests_dependency_info.dat --stringsdata-file /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.SwiftFileList --metadata-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/QMTests.DependencyMetadataFileList --static-metadata-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/QMTests.DependencyStaticMetadataFileList --swift-const-vals-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-11-27 10:09:58.808 appintentsmetadataprocessor[95036:4887554] Starting App Intents metadata extraction
+2026-11-27 10:09:58.878 appintentsmetadataprocessor[95036:4887554] Extracted no relevant App Intents symbols, skipping writing output
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib
+/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib: replacing existing signature
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+Validate /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    builtin-validationUtility /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app -shallow-bundle -infoplist-subpath Info.plist
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/SDKExplicitPrecompiledModules
+
+Test Suite 'Selected tests' started at 2026-11-27 10:10:01.302.
+Test Suite 'QMTests.xctest' started at 2026-11-27 10:10:01.302.
+Test Suite 'ConsentShots' started at 2026-11-27 10:10:01.302.
+Test Case '-[QMTests.ConsentShots testConsentScreen]' started.
+2026-11-27 10:10:03.313275-0800 QM[95041:4887802] [Snapshotting] Rendering a window (0x101f0a180, UIWindow) requires it to be in a foreground scene.
+2026-11-27 10:10:05.346198-0800 QM[95041:4887802] [Snapshotting] Rendering a window (0x101b38480, UIWindow) requires it to be in a foreground scene.
+Test Case '-[QMTests.ConsentShots testConsentScreen]' passed (4.077 seconds).
+Test Case '-[QMTests.ConsentShots testConsentSettings]' started.
+2026-11-27 10:10:07.384594-0800 QM[95041:4887802] [Snapshotting] Rendering a window (0x101c26700, UIWindow) requires it to be in a foreground scene.
+Test Case '-[QMTests.ConsentShots testConsentSettings]' passed (2.033 seconds).
+Test Suite 'ConsentShots' passed at 2026-11-27 10:10:07.414.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 6.110 (6.111) seconds
+Test Suite 'SettingsShots' started at 2026-11-27 10:10:07.414.
+Test Case '-[QMTests.SettingsShots testSettings]' started.
+2026-11-27 10:10:09.422929-0800 QM[95041:4887802] [Snapshotting] Rendering a window (0x101b2ef80, UIWindow) requires it to be in a foreground scene.
+Test Case '-[QMTests.SettingsShots testSettings]' passed (2.040 seconds).
+Test Suite 'SettingsShots' passed at 2026-11-27 10:10:09.455.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.040 (2.041) seconds
+Test Suite 'QMTests.xctest' passed at 2026-11-27 10:10:09.455.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 8.150 (8.153) seconds
+Test Suite 'Selected tests' passed at 2026-11-27 10:10:09.455.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 8.150 (8.153) seconds
+2026-11-27 10:10:09.769 xcodebuild[94834:4885837] [MT] IDETestOperationsObserverDebug: 10.486 elapsed -- Testing started completed.
+2026-11-27 10:10:09.769 xcodebuild[94834:4885837] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-27 10:10:09.769 xcodebuild[94834:4885837] [MT] IDETestOperationsObserverDebug: 10.486 sec, +10.486 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/aiconsent-dd/Logs/Test/Test-QM-2026.11.27_10-09-41--0800.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started

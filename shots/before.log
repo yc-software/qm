@@ -1,0 +1,60 @@
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+RegisterExecutionPolicyException /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    builtin-RegisterExecutionPolicyException /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+Validate /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    builtin-validationUtility /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app -shallow-bundle -infoplist-subpath Info.plist
+
+Touch /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    /usr/bin/touch -c /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/SDKExplicitPrecompiledModules
+
+Test Suite 'Selected tests' started at 2026-11-27 10:09:35.174.
+Test Suite 'QMTests.xctest' started at 2026-11-27 10:09:35.174.
+Test Suite 'SettingsShots' started at 2026-11-27 10:09:35.174.
+Test Case '-[QMTests.SettingsShots testSettings]' started.
+2026-11-27 10:09:37.186024-0800 QM[94802:4885389] [Snapshotting] Rendering a window (0x1026109e0, UIWindow) requires it to be in a foreground scene.
+Test Case '-[QMTests.SettingsShots testSettings]' passed (2.048 seconds).
+Test Suite 'SettingsShots' passed at 2026-11-27 10:09:37.223.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.048 (2.049) seconds
+Test Suite 'QMTests.xctest' passed at 2026-11-27 10:09:37.224.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.048 (2.050) seconds
+Test Suite 'Selected tests' passed at 2026-11-27 10:09:37.224.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.048 (2.050) seconds
+2026-11-27 10:09:37.559 xcodebuild[94142:4880819] [MT] IDETestOperationsObserverDebug: 9.730 elapsed -- Testing started completed.
+2026-11-27 10:09:37.559 xcodebuild[94142:4880819] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-27 10:09:37.559 xcodebuild[94142:4880819] [MT] IDETestOperationsObserverDebug: 9.730 sec, +9.730 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/aiconsent-dd/Logs/Test/Test-QM-2026.11.27_10-08-58--0800.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started
