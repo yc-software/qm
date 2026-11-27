@@ -39,8 +39,8 @@ export interface CreateCronInput extends CreateTriggerInput {
 export interface CronPatch {
   runtime?: Cron["runtime"];
   title?: string;
-  action?: string;
-  message?: string;
+  action?: string | null;
+  message?: string | null;
   schedule?: CronSchedule;
   enabled?: boolean;
   archived?: boolean;
@@ -111,8 +111,8 @@ function cronFields(patch: CronPatch): Partial<Cron> {
   const fields: Partial<Cron> = {};
   if (patch.runtime !== undefined) fields.runtime = patch.runtime;
   if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
-  if (patch.action !== undefined) fields.action = patch.action;
-  if (patch.message !== undefined) fields.message = patch.message;
+  if (patch.action !== undefined) fields.action = patch.action ?? undefined;
+  if (patch.message !== undefined) fields.message = patch.message ?? undefined;
   if (patch.schedule !== undefined) {
     const normalized = normalizeSchedule(patch.schedule, Date.now());
     fields.schedule = normalized.schedule;
@@ -185,17 +185,18 @@ export function createCronStore(
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
-      assertCronRuntime({ ...before, ...patch });
-      return backing.merge(id, cronFields(patch));
+      const own = cronFields(patch);
+      assertCronRuntime({ ...before, ...own });
+      return backing.merge(id, own);
     },
     async updateLinked(id, patch, linked) {
       const before = await backing.get(id);
       if (!before) return [];
-      assertCronRuntime({ ...before, ...patch });
+      const own = cronFields(patch);
+      assertCronRuntime({ ...before, ...own });
       const copies = (await backing.select({ where: { field: "sharedFrom", anyOfFold: [id] } }))
         .filter((c) => c.sharedFrom === id && !c.forkedAt)
         .map((c) => c.id);
-      const own = cronFields(patch);
       const shared = cronFields(linked);
       return backing.mutateMany([
         { id, apply: (c) => ({ ...c!, ...own }) },

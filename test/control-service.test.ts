@@ -102,6 +102,16 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   assert.ok(asText.ok, JSON.stringify(asText));
   assert.equal(asText.cron.owner, "U1", "a `text` rewrite by someone else hands ownership back the same way");
   assert.equal(asText.cron.message, "digest is done");
+  assert.equal(asText.cron.action, undefined);
+  const backToTask = await control.patchCron(id, { action: "digest again" }, chanClaims("U1"));
+  assert.ok(backToTask.ok);
+  assert.equal(backToTask.cron.action, "digest again");
+  assert.equal(backToTask.cron.message, undefined);
+  assert.equal(
+    (await control.createCron({ schedule: { everyMs: 60_000 }, action: "a", text: "b" }, chanClaims("U1"))).ok,
+    false,
+  );
+  assert.equal((await control.patchCron(id, { action: "a", text: "b" }, chanClaims("U1"))).ok, false);
 });
 
 test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {

@@ -652,6 +652,16 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(patched.cron.id, id);
     assert.equal(patched.cron.action, "edited");
     assert.equal(patched.cron.schedule.cron, "0 9 * * *");
+    const asText = (await (
+      await patch(`/v1/crons/${id}`, { text: "verbatim" }, { "x-agent-capability": await capFor("U1") })
+    ).json()) as any;
+    assert.equal(asText.cron?.message, "verbatim");
+    assert.equal(asText.cron?.action, undefined);
+    const back = (await (
+      await patch(`/v1/crons/${id}`, { action: "edited" }, { "x-agent-capability": await capFor("U1") })
+    ).json()) as any;
+    assert.equal(back.cron?.action, "edited");
+    assert.equal(back.cron?.message, undefined);
     const same = (await (
       await patch(
         `/v1/crons/${id}`,
