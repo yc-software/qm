@@ -3,7 +3,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { boundedResponse } from "../util/bytes.ts";
@@ -29,16 +29,11 @@ export class McpCallError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
   readonly unsent: boolean;
-  readonly answered: boolean;
-  constructor(
-    message: string,
-    detail: { status?: number; code?: string; unsent?: boolean; answered?: boolean; cause?: unknown },
-  ) {
+  constructor(message: string, detail: { status?: number; code?: string; unsent?: boolean; cause?: unknown }) {
     super(message, { cause: detail.cause });
     this.status = detail.status;
     this.code = detail.code;
     this.unsent = detail.unsent ?? false;
-    this.answered = detail.answered ?? false;
   }
 }
 
@@ -271,17 +266,12 @@ export function createMcpClient(opts: {
       return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
+      const rpcCode = e instanceof McpError ? envelopeOf(e.data).code : undefined;
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
         ...(status ? { status } : {}),
         ...(e instanceof OAuthError ? { code: e.errorCode } : {}),
-        ...(opened
-          ? {
-              answered:
-                e instanceof McpError
-                  ? e.code !== ErrorCode.RequestTimeout && e.code !== ErrorCode.ConnectionClosed
-                  : (status ?? 500) < 500,
-            }
-          : { unsent: true }),
+        ...(rpcCode ? { code: rpcCode } : {}),
+        ...(opened ? {} : { unsent: true }),
         cause: e,
       });
     } finally {
@@ -344,7 +334,7 @@ export function createMcpClient(opts: {
         const detail =
           mcpResultText(result) ||
           (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
-        throw new McpCallError(`mcp tool ${name} error: ${detail}`, { ...(code ? { code } : {}), answered: true });
+        throw new McpCallError(`mcp tool ${name} error: ${detail}`, code ? { code } : {});
       }
       return result;
     },

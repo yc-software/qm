@@ -240,10 +240,7 @@ export function createMcpMemoryProvider(opts: {
             );
             const { code } = mcpEnvelope(result);
             if (code && DENIED_CODES.has(code))
-              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, {
-                code,
-                answered: true,
-              });
+              throw new McpCallError(`memory provider refused ${tool} (${code}): ${resultText(result)}`, { code });
             return result;
           },
         }
