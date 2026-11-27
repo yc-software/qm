@@ -423,29 +423,52 @@ test("opening a title-only search hit opens the chat at its latest messages", as
   }
 });
 
-test("a file link opens that file in the viewer with its Markdown rendered", async () => {
-  const h = await harness({
-    path: "/files?file=doc1",
-    api: (path) => {
-      if (path === "/api/files/doc1")
-        return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
-      if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
-      return undefined;
-    },
-  });
+const markdownFile = (path: string): Response | undefined => {
+  if (path === "/api/files/doc1")
+    return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
+  if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
+  return undefined;
+};
+const stubShowModal = (): void => {
   document.defaultView!.HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
+};
+const viewerShows = async (): Promise<string | undefined> => {
+  const shown = () => document.querySelector<HTMLElement & { content?: string }>(".file-viewer qm-markdown")?.content;
+  for (let i = 0; i < 1000 && !shown(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  return shown();
+};
+
+test("a file link opens that file in the viewer with its Markdown rendered", async () => {
+  const h = await harness({ path: "/files?file=doc1", api: markdownFile });
+  stubShowModal();
   const booted = h.boot();
   try {
-    const shown = () => document.querySelector<HTMLElement & { content?: string }>(".file-viewer qm-markdown")?.content;
-    for (let i = 0; i < 1000 && !shown(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(shown(), "# Housing index");
+    assert.equal(await viewerShows(), "# Housing index");
     assert.equal(document.querySelector(".file-viewer-head strong")?.textContent, "housing index.md");
   } finally {
     h.releaseRemoteSplit();
     h.releaseSessions();
     await booted;
+    await h.close();
+  }
+});
+
+test("a file link clicked in a chat previews the file over that chat", async () => {
+  const h = await harness({ path: "/s/sess-deep", api: markdownFile });
+  stubShowModal();
+  try {
+    await h.boot();
+    const link = Object.assign(document.createElement("a"), { href: "/files?file=doc1", target: "_blank" });
+    document.body.append(link);
+    const click = new document.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    assert.equal(click.defaultPrevented, true, "the link must not open another window");
+    assert.equal(await viewerShows(), "# Housing index");
+    assert.equal(location.pathname, "/s/sess-deep");
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
+  } finally {
     await h.close();
   }
 });
