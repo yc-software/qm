@@ -70,7 +70,7 @@ struct WorkspaceMarkdownImage: View {
     if let url, let path = MarkdownImageResource.path(url, baseURL: client.baseURL, files: files) {
       let key = InlineImageCache.key(
         baseURL: client.baseURL, path: path, maximumPixels: maximumPixels)
-      _image = State(initialValue: InlineImageCache.memoryImage(key))
+      _image = State(initialValue: InlineImageCache.image(key))
     }
   }
 
