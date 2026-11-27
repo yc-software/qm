@@ -14,7 +14,7 @@ func shoot<V: View>(_ view: V, _ name: String, dark: Bool = false) throws {
   let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
     _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
   }
-  let dir = URL(fileURLWithPath: "/tmp/qm-consent-shots")
+  let dir = URL(fileURLWithPath: "/tmp/aiconsent-shots")
   try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
   try image.pngData()!.write(to: dir.appendingPathComponent(name + ".png"))
   window.isHidden = true
