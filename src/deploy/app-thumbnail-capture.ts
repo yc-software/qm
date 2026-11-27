@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+let captureScript: string | undefined;
+
 export function appThumbnailCaptureScript(): string {
-  return readFileSync(fileURLToPath(import.meta.resolve("html-to-image/dist/html-to-image.js")), "utf8");
+  captureScript ??= readFileSync(fileURLToPath(import.meta.resolve("html-to-image/dist/html-to-image.js")), "utf8");
+  return captureScript;
 }
 
 export const THUMBNAIL_JS = String.raw`

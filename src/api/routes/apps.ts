@@ -946,8 +946,14 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       .catch(reportFailureAs("app page view log", undefined, publishedApp.id));
   };
   if (((ctx.method === "GET" && !bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
-    const annotationsEnabled =
-      !!sub && (await deps.featureFlags.enabled("app_annotations", scopeId("personal", sub))) === true;
+    const [annotationsEnabled, thumbnailVersion] = await Promise.all([
+      sub ? deps.featureFlags.enabled("app_annotations", scopeId("personal", sub)).then((on) => on === true) : false,
+      publishedApp && deps.appThumbnails && !isShellRequest
+        ? deps.appThumbnails
+            .versions(tenantOf(ctx), [publishedApp.id])
+            .then((versions) => versions.get(publishedApp.id) ?? 0)
+        : undefined,
+    ]);
     if (signInAttempted) {
       cleanUrlRedirect();
       return true;
@@ -993,10 +999,6 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    const thumbnailVersion =
-      publishedApp && deps.appThumbnails
-        ? ((await deps.appThumbnails.versions(tenantOf(ctx), [publishedApp.id])).get(publishedApp.id) ?? 0)
-        : undefined;
     res.end(
       appShellHtml({
         annotationsEnabled,
