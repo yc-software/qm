@@ -18,7 +18,7 @@ import {
   isGatedEnvelope,
 } from "../slack/deferred-ack.ts";
 import { sendJson } from "../api/http.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { buildSlackAppManifest, slackBotManifestCreationUrl, slackOAuthAuthorizeUrl } from "./slack-manifest.ts";
 
 const MAX_EVENT_BODY_BYTES = 5 * 1024 * 1024;
@@ -158,11 +158,17 @@ export interface SlackInstallationStore {
     personaId?: string;
     name: string;
     description?: string;
+    iconUrl?: string;
     configToken?: string;
     saveOrgConfigToken?: boolean;
     orgDeploy?: boolean;
     updatedBy: string;
-  }): Promise<{ status: SlackAppProvisionStatus; oauthAuthorizeUrl: string; appId: string }>;
+  }): Promise<{ status: SlackAppProvisionStatus; oauthAuthorizeUrl: string; appId: string; iconWarning?: string }>;
+  setAppIcon(input: {
+    personaId?: string;
+    iconUrl: string;
+    updatedBy: string;
+  }): Promise<{ ok: true } | { ok: false; error: string } | null>;
   completeOAuth(input: {
     code: string;
     state: string;
@@ -316,6 +322,16 @@ export function createSlackInstallationStore(
     const data = (await res.json()) as SlackApiResult;
     if (!res.ok || !data.ok) throw new Error(formatSlackError(method, data));
     return data;
+  };
+
+  const applyAppIcon = async (accessToken: string, appId: string, iconUrl: string): Promise<string | undefined> => {
+    try {
+      await callSlack("apps.icon.set", accessToken, { app_id: appId, url: iconUrl });
+      return undefined;
+    } catch (error) {
+      swallowAs("slack-app: set icon", undefined)(error);
+      return errMessage(error);
+    }
   };
 
   const rotateRefreshToken = async (
@@ -764,6 +780,7 @@ export function createSlackInstallationStore(
       if (!appId || !creds?.client_id || !creds.client_secret || !creds.signing_secret) {
         throw new Error("apps.manifest.create returned incomplete app credentials");
       }
+      const iconWarning = input.iconUrl ? await applyAppIcon(accessToken, appId, input.iconUrl) : undefined;
       const oauthState = `${target}.${randomBytes(24).toString("hex")}`;
       const updatedAt = Date.now();
       const [clientSecretEnc, signingSecretEnc] = await Promise.all([
@@ -792,7 +809,21 @@ export function createSlackInstallationStore(
       await deleteDroppedInstallSecrets(previous, record);
       const oauthAuthorizeUrl = slackOAuthAuthorizeUrl(creds.client_id, redirectUri, oauthState);
       const status = await toProvisionStatus(record, input.name);
-      return { status, oauthAuthorizeUrl, appId };
+      return { status, oauthAuthorizeUrl, appId, ...(iconWarning ? { iconWarning } : {}) };
+    },
+
+    async setAppIcon(input) {
+      const rec = await map.get(keyFor(input.personaId));
+      if (!isInstallationRecord(rec) || rec.disabled || !rec.appId) return null;
+      if (!(await getStoredConfigToken())) return null;
+      try {
+        const accessToken = await resolveConfigAccessToken(undefined, false, input.updatedBy);
+        const error = await applyAppIcon(accessToken, rec.appId, input.iconUrl);
+        return error ? { ok: false, error } : { ok: true };
+      } catch (error) {
+        swallowAs("slack-app: set icon", undefined)(error);
+        return { ok: false, error: errMessage(error) };
+      }
     },
 
     async completeOAuth(input) {

@@ -135,7 +135,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/personas/:id/slack/create",
         summary:
-          "{configToken?,refreshToken?,orgDeploy?} creates a dedicated HTTP-Events Slack app via Slack's App Manifest API (uses saved org config token if omitted) and returns oauthAuthorizeUrl for one-click install (org admin or persona owner)",
+          "{configToken?,refreshToken?,orgDeploy?} creates a dedicated HTTP-Events Slack app via Slack's App Manifest API (uses saved org config token if omitted), automatically applies the persona's custom/image icon via apps.icon.set if set, and returns oauthAuthorizeUrl for one-click install (org admin or persona owner)",
       },
       {
         method: "PUT",
