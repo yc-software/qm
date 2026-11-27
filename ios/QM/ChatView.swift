@@ -919,7 +919,7 @@ struct ChatView: View {
   /// them rather than stacking a separate row above it.
   private var attachmentStrip: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack {
+      HStack(spacing: 8) {
         ForEach(model.attachments) { attachment in
           if attachment.mimetype.hasPrefix("image/") {
             Button {
@@ -927,8 +927,8 @@ struct ChatView: View {
               previewingAttachment = attachment
             } label: {
               DraftImageThumbnail(attachment: attachment, account: model.attachmentAccount)
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Preview \(attachment.name)")
@@ -936,11 +936,12 @@ struct ChatView: View {
               Button {
                 model.attachments.removeAll { $0.id == attachment.id }
               } label: {
-                Image(systemName: "xmark.circle.fill")
-                  .symbolRenderingMode(.palette)
-                  .foregroundStyle(.white, .black.opacity(0.6))
-                  .font(.body)
-                  .padding(4)
+                Image(systemName: "xmark")
+                  .font(.system(size: 10, weight: .bold))
+                  .foregroundStyle(.white)
+                  .frame(width: 22, height: 22)
+                  .background(.black.opacity(0.65), in: Circle())
+                  .padding(6)
                   .frame(width: 44, height: 44, alignment: .topTrailing)
                   .contentShape(Rectangle())
               }
