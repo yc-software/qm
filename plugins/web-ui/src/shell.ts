@@ -1188,7 +1188,10 @@ document.addEventListener("click", (e) => {
   const file = fileLinkTarget(anchor.href, location.origin, UI_BASE);
   if (file) {
     e.preventDefault();
-    void previewFileById(file).catch(() => location.assign(anchor.href));
+    void previewFileById(file).then(
+      (unpreviewed) => unpreviewed && window.open(unpreviewed, "_blank", "noopener,noreferrer"),
+      () => location.assign(anchor.href),
+    );
     return;
   }
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
@@ -1343,7 +1346,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
-    const linkedFile = wanted === "files" ? params.get("file") : null;
+    const linkedFile = fileLinkTarget(location.href, location.origin, UI_BASE);
     if (linkedFile) openFileById(linkedFile);
     openViewAt(wanted as View, wantedItem, "push");
     return;

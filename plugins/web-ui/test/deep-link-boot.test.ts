@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CoreSession } from "../src/core-bridge.ts";
-import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
+import { harness, SESSION, settle, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
   const h = await harness({ path: "/s/sess-deep" });
@@ -427,6 +427,7 @@ const markdownFile = (path: string): Response | undefined => {
   if (path === "/api/files/doc1")
     return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
   if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
+  if (path === "/api/files/pdf1") return Response.json({ id: "pdf1", name: "report.pdf", mimetype: "application/pdf" });
   return undefined;
 };
 const stubShowModal = (): void => {
@@ -458,15 +459,20 @@ test("a file link opens that file in the viewer with its Markdown rendered", asy
 test("a file link clicked in a chat previews the file over that chat", async () => {
   const h = await harness({ path: "/s/sess-deep", api: markdownFile });
   stubShowModal();
+  const windows: unknown[] = [];
+  document.defaultView!.open = (url) => (windows.push(url), null);
+  const click = (file: string): boolean => {
+    const link = Object.assign(document.createElement("a"), { href: `/files?file=${file}`, target: "_blank" });
+    document.body.append(link);
+    return !link.dispatchEvent(new document.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true }));
+  };
   try {
     await h.boot();
-    const link = Object.assign(document.createElement("a"), { href: "/files?file=doc1", target: "_blank" });
-    document.body.append(link);
-    const click = new document.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true });
-    link.dispatchEvent(click);
-    assert.equal(click.defaultPrevented, true, "the link must not open another window");
+    assert.equal(click("doc1"), true, "the link must not open the app in another window");
     assert.equal(await viewerShows(), "# Housing index");
-    assert.equal(location.pathname, "/s/sess-deep");
+    assert.equal(click("pdf1"), true);
+    await settle(() => windows.length > 0);
+    assert.deepEqual(windows, ["/api/files/pdf1/content/report.pdf"], "a file with no preview opens on its own");
     assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
   } finally {
     await h.close();

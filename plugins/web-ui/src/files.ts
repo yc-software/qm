@@ -469,10 +469,10 @@ export function openFileById(id: string): void {
   linkedFileId = id;
 }
 
-export async function previewFileById(id: string): Promise<void> {
+export async function previewFileById(id: string): Promise<string | undefined> {
   const file = await api<FileItem>(`/api/files/${encodeURIComponent(id)}`);
   const href = fileContentUrl(file.id, file.name);
-  if (!openFilePreview(file.name, href, file.mimetype)) window.location.assign(href);
+  return openFilePreview(file.name, href, file.mimetype) ? undefined : href;
 }
 
 async function openLinkedFile(): Promise<void> {
@@ -480,7 +480,8 @@ async function openLinkedFile(): Promise<void> {
   linkedFileId = null;
   if (!id) return;
   try {
-    await previewFileById(id);
+    const unpreviewed = await previewFileById(id);
+    if (unpreviewed) window.location.assign(unpreviewed);
   } catch (e) {
     filesNotice =
       e instanceof ApiError && e.status === 404
