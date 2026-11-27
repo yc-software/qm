@@ -977,6 +977,7 @@ struct ChatView: View {
         }
         ForEach(0..<model.pendingImageUploads, id: \.self) { index in
           UploadingImageTile(phase: Double(model.attachments.count + index))
+            .frame(width: 80, height: 80)
         }
       }
     }
@@ -1089,6 +1090,7 @@ private struct DrawerOpenWatcher: View {
 /// phase so a row of them doesn't move in lockstep. Reduce Motion holds them still.
 struct UploadingImageTile: View {
   var phase: Double = 0
+  var cornerRadius: CGFloat = 16
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.colorScheme) private var colorScheme
 
@@ -1106,7 +1108,7 @@ struct UploadingImageTile: View {
   ]
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: 16)
+    let shape = RoundedRectangle(cornerRadius: cornerRadius)
     TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
       let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
       ZStack {
@@ -1122,7 +1124,6 @@ struct UploadingImageTile: View {
         }
       }
     }
-    .frame(width: 80, height: 80)
     .clipShape(shape)
     .accessibilityElement()
     .accessibilityLabel("Uploading photo")

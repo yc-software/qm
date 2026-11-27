@@ -13,8 +13,22 @@ struct FileAttachmentView: View {
     FilePreviewResource.rendersInline(file.name) && FilePreviewResource.path(for: file.artifactId) != nil
   }
 
+  /// An image in a message that was just sent, before the server has returned the file.
+  /// It shows as a loading tile rather than a filename card.
+  static func isPendingImage(_ file: DeliveredFile) -> Bool {
+    file.artifactId == nil && FilePreviewResource.rendersInline(file.name)
+  }
+
+  static func showsAsImage(_ file: DeliveredFile) -> Bool {
+    rendersInline(file) || isPendingImage(file)
+  }
+
   var body: some View {
-    if FilePreviewResource.rendersInline(file.name),
+    if Self.isPendingImage(file) {
+      UploadingImageTile()
+        .frame(width: 220, height: 220)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    } else if FilePreviewResource.rendersInline(file.name),
       let path = FilePreviewResource.path(for: file.artifactId)
     {
       WorkspaceMarkdownImage(url: client.url(path), client: client, files: [file])

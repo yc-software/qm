@@ -73,7 +73,7 @@ struct NativeChatMessageView: View {
   }
 
   private var inlineImages: [DeliveredFile] {
-    message.files.filter { FileAttachmentView.rendersInline($0) }
+    message.files.filter { FileAttachmentView.showsAsImage($0) }
   }
 
   @ViewBuilder private var content: some View {
@@ -95,7 +95,7 @@ struct NativeChatMessageView: View {
       AttachmentImageGrid(files: inlineImages, client: client)
     }
     ForEach(Array(message.files.enumerated()), id: \.offset) { _, file in
-      if inlineImages.count <= 1 || !FileAttachmentView.rendersInline(file) {
+      if inlineImages.count <= 1 || !FileAttachmentView.showsAsImage(file) {
         FileAttachmentView(file: file, client: client)
       }
     }

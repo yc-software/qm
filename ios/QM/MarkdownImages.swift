@@ -92,11 +92,13 @@ struct WorkspaceMarkdownImage: View {
         Image(image, scale: 1, label: Text("Image")).resizable()
           .aspectRatio(CGFloat(image.width) / CGFloat(image.height), contentMode: .fit)
       } else if fill {
-        ZStack {
-          QMTheme.surface
-          if error != nil {
+        if error != nil {
+          ZStack {
+            QMTheme.surface
             Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
           }
+        } else {
+          UploadingImageTile(phase: Double(maximumPixels % 7), cornerRadius: 0)
         }
       } else if let error {
         VStack(alignment: .leading, spacing: 8) {
@@ -400,9 +402,15 @@ struct AttachmentImageGrid: View {
   private func tile(_ index: Int, width: CGFloat, height: CGFloat, more: Int = 0) -> some View {
     let file = files[index]
     let url = FilePreviewResource.path(for: file.artifactId).map { client.url($0) }
-    return WorkspaceMarkdownImage(
-      url: url, client: client, files: [file], maximumPixels: 600, fill: true
-    )
+    return Group {
+      if url == nil {
+        // Just sent: the server hasn't returned the file yet.
+        UploadingImageTile(phase: Double(index), cornerRadius: 0)
+      } else {
+        WorkspaceMarkdownImage(
+          url: url, client: client, files: [file], maximumPixels: 600, fill: true)
+      }
+    }
     .frame(width: width, height: height)
     .overlay {
       if more > 0 {
