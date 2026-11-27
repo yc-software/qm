@@ -275,9 +275,9 @@ private struct NativeDictationWaves: View {
     let width: CGFloat
   }
 
-  private static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
+  static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
   private static let mid = Color(red: 0.43, green: 0.61, blue: 0.97)
-  private static let sky = Color(red: 0.29, green: 0.52, blue: 0.96)
+  static let sky = Color(red: 0.29, green: 0.52, blue: 0.96)
   private static let lines = [
     Line(frequency: 1.5, speed: 2.1, phase: 0.0, weight: 1.0, color: blue, width: 2),
     Line(frequency: 2.2, speed: -2.6, phase: 1.1, weight: 0.84, color: mid, width: 1.5),
@@ -346,9 +346,9 @@ struct NativeDictationGlow: View {
 
   private static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
   private static let sky = Color(red: 0.43, green: 0.61, blue: 0.97)
-  private static let violet = Color(red: 0.55, green: 0.40, blue: 0.98)
-  private static let pink = Color(red: 0.98, green: 0.45, blue: 0.62)
-  private static let coral = Color(red: 1.00, green: 0.55, blue: 0.47)
+  static let violet = Color(red: 0.55, green: 0.40, blue: 0.98)
+  static let pink = Color(red: 0.98, green: 0.45, blue: 0.62)
+  static let coral = Color(red: 1.00, green: 0.55, blue: 0.47)
   private static let bands = [
     Band(
       colors: [

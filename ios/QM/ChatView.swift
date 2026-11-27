@@ -975,8 +975,8 @@ struct ChatView: View {
             .overlay { Capsule().strokeBorder(QMTheme.border, lineWidth: 1) }
           }
         }
-        ForEach(0..<model.pendingImageUploads, id: \.self) { _ in
-          UploadingImageTile()
+        ForEach(0..<model.pendingImageUploads, id: \.self) { index in
+          UploadingImageTile(phase: Double(model.attachments.count + index))
         }
       }
     }
@@ -1084,13 +1084,47 @@ private struct DrawerOpenWatcher: View {
 }
 
 /// Stands in for a photo while it uploads: the same size and shape as the thumbnail it
-/// becomes, so the composer doesn't shift when the image arrives.
+/// becomes, so the composer doesn't shift when the image arrives. Soft patches in the
+/// dictation glow's colours drift slowly across a quiet grey; each tile starts at its own
+/// phase so a row of them doesn't move in lockstep. Reduce Motion holds them still.
 struct UploadingImageTile: View {
+  var phase: Double = 0
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorScheme) private var colorScheme
+
+  private struct Patch {
+    let color: Color
+    let speed: Double
+    let offset: Double
+  }
+
+  private static let patches = [
+    Patch(color: NativeDictationGlow.blue, speed: 0.9, offset: 0),
+    Patch(color: NativeDictationGlow.violet, speed: 0.7, offset: 2.1),
+    Patch(color: NativeDictationGlow.pink, speed: 0.8, offset: 4.2),
+    Patch(color: NativeDictationGlow.sky, speed: 0.6, offset: 5.3),
+  ]
+
   var body: some View {
-    RoundedRectangle(cornerRadius: 16)
-      .fill(Color.primary.opacity(0.08))
-      .frame(width: 80, height: 80)
-      .overlay { ProgressView().controlSize(.small) }
-      .accessibilityLabel("Uploading photo")
+    let shape = RoundedRectangle(cornerRadius: 16)
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
+      let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+      ZStack {
+        Color.primary.opacity(0.06)
+        ForEach(Self.patches.indices, id: \.self) { index in
+          let patch = Self.patches[index]
+          let t = time * patch.speed + patch.offset + phase * 1.3
+          Circle()
+            .fill(patch.color.opacity(colorScheme == .dark ? 0.32 : 0.22))
+            .frame(width: 60, height: 60)
+            .blur(radius: 16)
+            .offset(x: 22 * cos(t), y: 22 * sin(t * 1.3 + 0.5))
+        }
+      }
+    }
+    .frame(width: 80, height: 80)
+    .clipShape(shape)
+    .accessibilityElement()
+    .accessibilityLabel("Uploading photo")
   }
 }
