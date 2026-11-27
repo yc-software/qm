@@ -5,8 +5,9 @@ import XCTest
 
 @MainActor
 func shoot<V: View>(_ view: V, _ name: String, dark: Bool = false) throws {
-  let size = CGSize(width: 820, height: 1180)  // iPad Air 11-inch, portrait
-  let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+  let scene = try XCTUnwrap(
+    UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+  let window = UIWindow(windowScene: scene)
   window.overrideUserInterfaceStyle = dark ? .dark : .light
   window.rootViewController = UIHostingController(rootView: view)
   window.makeKeyAndVisible()
