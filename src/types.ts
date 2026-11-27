@@ -383,6 +383,8 @@ export interface ClientToolDeclaration {
   timeoutMs?: number;
 }
 
+export type TurnSource = Pick<TurnRequest, "origin" | "surfaceOrigin">;
+
 export interface ClientToolResult {
   images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
   content: string;
@@ -396,6 +398,7 @@ export interface TurnRequest {
   midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
+  delegatingThroughSeq?: number;
   delegatingRunId?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
@@ -486,6 +489,7 @@ export interface ApprovedToolCallSpec {
 export const APPROVAL_LIFETIME_MS = 60 * 60_000;
 
 export interface PendingApprovalRecord {
+  source?: TurnSource;
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;

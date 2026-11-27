@@ -1,19 +1,27 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { freshApp, internalActor, dm, channel } from "./support/orchestrator-app.ts";
-import { mockHeldTurns } from "./support/mock-agent.ts";
+import { buildApp, freshApp, internalActor, dm, channel } from "./support/orchestrator-app.ts";
+import { createMockAgent, mockHeldTurns } from "./support/mock-agent.ts";
+import { testConfig } from "./support/test-config.ts";
+import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import { approvalCardId } from "../src/core/approval-id.ts";
 import {
   BOT_REQUESTER_APPROVAL_NOTE,
   BOT_REQUESTER_REFUSAL,
   undeliverableApprovalNote,
 } from "../src/core/approval-requester.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, type TurnSource } from "../src/types.ts";
 import { withCommandRules } from "./support/command-rules.ts";
 import { isHidden, isUserItem } from "../src/sessions/items.ts";
 import { principalDestination } from "../src/reach/reach.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+
+const surfaceOrigin = {
+  author: { surface: "test", account: "partner", id: "U1" },
+  workspace: "T1",
+  audience: "internal" as const,
+};
 
 test("read/write round-trip through the workspace", async () => {
   const { app } = freshApp();
@@ -40,8 +48,12 @@ test("an approval pause persists timing on its boundary entry", async () => {
 });
 
 test("dangerous command pauses for HiLO approval, then proceeds when approved", async () => {
-  const { app } = await withCommandRules(freshApp());
-  const first = await app.turn(dm("!run git push --force origin main"));
+  const { app, runs } = await withCommandRules(freshApp());
+  const request = dm("!run git push --force origin main", {
+    surfaceOrigin,
+    origin: { kind: "human", messageTs: "1.2" },
+  });
+  const first = await app.turn(request);
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals?.[0];
   assert.ok(pending);
@@ -50,9 +62,15 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
   const approved = await app.turn(
     dm("!run git push --force origin main", {
       approval: { requestId: pending!.requestId, approved: true },
+      origin: { kind: "human", messageTs: "9.9" },
     }),
   );
   assert.equal(approved.status, "ok");
+  const resumedRequest = (await runs.list()).find(
+    (run) => run.request.approval?.requestId === pending!.requestId,
+  )!.request;
+  assert.deepEqual(resumedRequest.surfaceOrigin, surfaceOrigin);
+  assert.deepEqual(resumedRequest.origin, request.origin);
 
   const found = await app.getSession(approved.sessionId!);
   const userEntries = found!.items.filter(isUserItem);
@@ -64,6 +82,45 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
     true,
     "the continuation's replay is hidden so the chat never shows the human saying it twice",
   );
+});
+
+test("command approval retains accepted steering while its automation authorization stays unchanged", async () => {
+  const source: TurnSource = {
+    origin: { kind: "human", messageTs: "2.2" },
+    surfaceOrigin: { author: { surface: "test", account: "partner", id: "U1" }, workspace: "T1", audience: "internal" },
+  };
+  const request = dm("!run git push --force origin main", { ...source, origin: { kind: "automation" } });
+  const agent = createMockAgent();
+  let firstTurn = true;
+  const built = await withCommandRules(
+    buildApp(testConfig(), {
+      agent: {
+        ...agent,
+        runTurn: async (turn) => {
+          if (firstTurn) {
+            firstTurn = false;
+            const prepared = await turn.prepareSteer!("proceed", { ...request, ...source, text: "proceed" });
+            await recordSteerIntake(turn, { ...prepared, text: "proceed", ts: "2.2" });
+          }
+          await turn.tools.callMcpTool("records", {});
+          return agent.runTurn(turn);
+        },
+      },
+    }),
+  );
+  const observed: Array<TurnSource | undefined> = [];
+  built.mcpToolService.call = async (...args) => {
+    observed.push(args[5]?.source);
+    return "ok";
+  };
+  const first = await built.app.turn(request);
+  const requestId = first.pendingApprovals![0]!.requestId;
+  const resumed = await built.app.turn({ ...request, approval: { requestId, approved: true } });
+  assert.equal(resumed.status, "ok");
+  assert.deepEqual(observed, [source, source]);
+  const replay = (await built.runs.list()).find((run) => run.request.approval?.requestId === requestId)!;
+  assert.equal(replay.request.origin.kind, "automation");
+  assert.deepEqual(await built.sessions.latestTurnSource(tenant, replay.id), source);
 });
 
 test("a bot-requested turn never opens an approval when a command is gated", async () => {
@@ -162,8 +219,8 @@ test("a second click on an already-consumed approval refuses instead of re-runni
 });
 
 test("an approval id from another conversation refuses there and stays approvable where it was requested", async () => {
-  const { app, auditLog } = await withCommandRules(freshApp());
-  const first = await app.turn(dm("!run git push --force origin main"));
+  const { app, auditLog, runs } = await withCommandRules(freshApp());
+  const first = await app.turn(dm("!run git push --force origin main", { surfaceOrigin }));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
 
@@ -174,6 +231,10 @@ test("an approval id from another conversation refuses there and stays approvabl
     }),
   );
   assert.equal(elsewhere.status, "refused");
+  const refusedRequest = (await runs.list()).find(
+    (run) => run.request.approval?.requestId === pending.requestId,
+  )!.request;
+  assert.equal(refusedRequest.surfaceOrigin, undefined);
   assert.match(elsewhere.reason ?? "", /approval request expired/);
   const refusal = (await auditLog.events(tenant)).find(
     (event) => event.action === "command_approval.approve" && event.status === "refused",
@@ -519,6 +580,7 @@ for (const approved of [true, false]) {
         assert.deepEqual(outcome.kind === "run" ? outcome.call : null, {
           ...(outcome.kind === "run" ? { callId: outcome.call.callId } : {}),
           requestId,
+          source: { origin: { kind: "direct" } },
           tool: "example_send",
           input: args,
         });
@@ -718,7 +780,12 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const { elicitId, approved: recorded, turnId, body } = decisions[0]!;
     assert.deepEqual(
       { elicitId, approved: recorded, turnId, body },
-      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+      {
+        elicitId: requestId,
+        approved,
+        turnId: replay.id,
+        body: { command, ...(approved ? { scope: "once", source: { origin: { kind: "direct" } } } : {}) },
+      },
     );
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.flatMap((entry) =>
@@ -728,7 +795,12 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const shown = liveDecisions![0]!;
     assert.deepEqual(
       { elicitId: shown.elicitId, approved: shown.approved, turnId: shown.turnId, body: shown.body },
-      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+      {
+        elicitId: requestId,
+        approved,
+        turnId: replay.id,
+        body: { command, ...(approved ? { scope: "once", source: { origin: { kind: "direct" } } } : {}) },
+      },
     );
   }
 });

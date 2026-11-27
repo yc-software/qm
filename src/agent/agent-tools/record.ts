@@ -223,6 +223,7 @@ export function createRecorder(ref: ToolContextRef, holdMailWhenTurnEnds = false
           if (releaseRequested) {
             if (!screen.approvalRequested)
               ref.pendingApprovals!.push({
+                source: ref.current?.mcpSource?.(),
                 command: tool,
                 reason: "Security screen quarantined this tool's output — release it to the agent?",
                 kind: "approval",

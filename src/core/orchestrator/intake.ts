@@ -23,6 +23,7 @@ import type { TurnOrigin } from "../turn-origin.ts";
 import { senderNote } from "./prompt-blocks.ts";
 import { isScreenableTextAttachment } from "./turn-helpers.ts";
 import type { Tenant } from "../../tenants/context.ts";
+import { delegatedAuthorization } from "../../sessions/session-syscalls.ts";
 
 export interface IncomingMessage {
   text: string;
@@ -179,11 +180,6 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
           origin: { kind: "direct" },
           fromSession: false,
         };
-    const by = {
-      author,
-      ...(speaker.origin.kind !== "automation" && !speaker.fromSession ? { speakerId: author } : {}),
-      ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
-    };
     let said =
       request?.sessionSenderId && request.text.trim()
         ? midTurnSessionMessage(request.text, request.sessionSenderId === session.parentSessionId)
@@ -215,6 +211,39 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
         };
       if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
     }
+    let source;
+    if (
+      request &&
+      !request.botActor &&
+      !request.readOnly &&
+      !request.privateSessionMessage &&
+      request.surface !== "swarm" &&
+      samePerson(author, actor.id) &&
+      request.conversation.threadRef === conversation.threadRef
+    ) {
+      if (request.spawned && request.sessionSenderId === session.parentSessionId && deps.runs) {
+        source = (
+          await delegatedAuthorization(
+            tenant,
+            { ...request, actor: steerer, conversation, origin: request.origin ?? { kind: "automation" } },
+            { runs: deps.runs, sessions: deps.sessions },
+          )
+        )?.source;
+      } else if (
+        !isSessionTurn(request) &&
+        request.surfaceOrigin?.audience === "internal" &&
+        ((request.origin?.kind === "human" && request.origin.messageTs) ||
+          (request.origin?.kind === "ambient" && request.origin.live && request.origin.entryTs))
+      ) {
+        source = { origin: request.origin, surfaceOrigin: request.surfaceOrigin };
+      }
+    }
+    const by = {
+      author,
+      ...(source ? { source } : {}),
+      ...(speaker.origin.kind !== "automation" && !speaker.fromSession ? { speakerId: author } : {}),
+      ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
+    };
     if (request && introducesUser(speaker.origin, request)) await recordUser(deps.users, author, request.botActor);
     const refreshedInbox =
       input.surface === "web" &&

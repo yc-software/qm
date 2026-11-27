@@ -1,3 +1,4 @@
+import { testTenant as tenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -63,6 +64,27 @@ test("forking copies the transcript into a fresh independent web session", async
     forkItems.some((item) => item.kind === "UserMessage" && item.author === "U1"),
     "the fork keeps message authors",
   );
+
+  const originalRunId = source.items.findLast((item) => item.turnId)!.turnId!;
+  const writer = { sessionId: sid, turnId: originalRunId };
+  const [, receipt] = await sessions.appendMany(writer, [
+    { kind: "UserMessage", text: "request", externalId: "1.1" },
+    { kind: "UserMessage", text: "receipt", externalId: "1.1", body: { slackReplyReceipt: true } },
+  ]);
+  const laterSource = {
+    origin: { kind: "human" as const, messageTs: "2.2" },
+    surfaceOrigin: {
+      author: { surface: "test", account: "account", id: "U1" },
+      workspace: "account",
+      audience: "internal" as const,
+    },
+  };
+  await sessions.append(writer, { kind: "SteeringMessage", text: "later task", body: { source: laterSource } });
+  assert.equal(await sessions.latestTurnSource(tenant, originalRunId, receipt!.seq), undefined);
+  const laterFork = await app.forkSession(sid, "U1");
+  assert.ok(laterFork!.items.some((item) => item.body.source && item.seq <= receipt!.seq));
+  assert.equal(await sessions.latestTurnSource(tenant, originalRunId, receipt!.seq), undefined);
+  assert.deepEqual(await sessions.latestTurnSource(tenant, originalRunId), laterSource);
 });
 
 test("upToSeq truncates the copy at the cut point", async () => {

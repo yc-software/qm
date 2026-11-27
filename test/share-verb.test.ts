@@ -25,6 +25,7 @@ import { signOffs } from "./support/signed-off-action.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import type { Tenant } from "../src/tenants/context.ts";
+import { testTenant } from "./support/test-tenant.ts";
 
 const ORG = "default-org";
 
@@ -711,6 +712,7 @@ function callShareRoute(state: FakeState, capability: CapabilityClaims | null, b
   const run = { actorId: capability?.actorId ?? "", sessionId: "dm:live", runId: `live:${capability?.actorId}` };
   const headers = capability && signOff ? signedOff.approve(run, { method: "POST", path: "/v1/share", body }) : {};
   const ctx = {
+    tenant: testTenant,
     res,
     method: "POST",
     url: new URL("http://localhost/v1/share"),

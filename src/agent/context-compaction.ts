@@ -11,6 +11,7 @@ import {
 } from "../sessions/items.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
+import { isObj } from "../util/objects.ts";
 import { replayableDocumentMetas } from "../core/documents.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
@@ -83,6 +84,18 @@ export function forSearchView(items: Item[]): Item[] {
   );
 }
 
+function compactItemFields(item: Item): Record<string, unknown> {
+  const fields = itemFields(item);
+  if (item.kind === "SteeringMessage" || item.kind === "ElicitationResponse") {
+    delete fields.source;
+    if (isObj(fields.call)) {
+      const { source: _source, ...call } = fields.call;
+      fields.call = call;
+    }
+  }
+  return fields;
+}
+
 const itemTokenCache = new Map<string, number>();
 const ITEM_TOKEN_CACHE_MAX = 50_000;
 
@@ -92,7 +105,7 @@ export function estimateItemTokens(item: Item): number {
   const text =
     prose !== null
       ? [prose, environment].filter((s) => typeof s === "string" && s).join("\n\n")
-      : JSON.stringify(itemFields(item));
+      : JSON.stringify(compactItemFields(item));
   const key = `${item.sessionId}:${item.seq}:${text.length}`;
   const hit = itemTokenCache.get(key);
   if (hit !== undefined) return hit;
@@ -155,7 +168,7 @@ export function compactTranscript(history: Item[]): string {
     if (text) push(`${label}: ${text}${files.length ? ` (files: ${files.join(", ")})` : ""}`);
     else if (ov && ovFiles.length) push(`${label}: (shared file) (files: ${ovFiles.join(", ")})`);
     else if (!ov) {
-      const fields = { ...itemFields(item), memoryRecall: undefined, memoryRecallOutcomes: undefined };
+      const fields = { ...compactItemFields(item), memoryRecall: undefined, memoryRecallOutcomes: undefined };
       push(`${label}:${item.isError === true ? " [isError]" : ""} ${JSON.stringify(fields)}`);
     }
     if (item.kind === "ToolCall" && item.callId && !recorded.has(item.callId))

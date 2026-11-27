@@ -691,6 +691,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                       speakerId: prepared?.speakerId,
                       authorName: prepared?.authorName,
                       withheld: prepared?.withheld,
+                      source: prepared?.source,
                       acknowledge,
                     };
                     pendingSteers.push(steer);

@@ -110,6 +110,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const {
     surfaceOrigin: _surfaceOrigin,
     spawned: _spawned,
+    delegatingThroughSeq: _delegatingThroughSeq,
     cronScript: _cronScript,
     infrequentCron: _infrequentCron,
     redeliveryKey: _redeliveryKey,

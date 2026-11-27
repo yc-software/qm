@@ -54,6 +54,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
     if (ref.approvalUnavailable)
       return approvalUnavailableResult(callId, { ...summary, reason: e.approvalReason }, e.approvalReason);
     ref.pendingApprovals?.push({
+      source: e.source ?? ref.current?.mcpSource?.(),
       command: e.command,
       reason: e.approvalReason,
       kind: e.kind,

@@ -147,14 +147,6 @@ export function createTurnMethods(
   const stopRun = (run: Run, tree: boolean, botRunsOnly = false) => stopThread(run.sessionId, run, tree, botRunsOnly);
   const methods: ReturnType<typeof createTurnMethods> = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
-      const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
-        ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        : false;
-      if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
-        return {
-          status: "refused",
-          reason: "External Slack requests require their current authenticated source context.",
-        };
       await deps.refreshModels?.();
       await deps.identity.refresh();
       const personNames = createPersonNames({ users: deps.users });
@@ -181,6 +173,31 @@ export function createTurnMethods(
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
+      const approvalRecord = req.approval ? await deps.approvals?.get(req.approval.requestId) : undefined;
+      const approvedRequest = approvalRecord?.request;
+      const sameApprovedMessage =
+        approvedRequest?.text === req.text &&
+        samePerson(approvedRequest.actor.externalId, req.actor.externalId) &&
+        approvedRequest.conversation.threadRef === req.conversation.threadRef;
+      if (
+        sameApprovedMessage &&
+        approvedRequest?.surfaceOrigin &&
+        approvedRequest.surface === req.surface &&
+        approvedRequest.conversation.kind === req.conversation.kind &&
+        approvedRequest.conversation.channelRef === req.conversation.channelRef
+      ) {
+        const approvalSession = await deps.sessions.getByThread(req.conversation.threadRef);
+        if (approvalSession && (await approvalResumable(approvalSession, actor.id, approvalRecord)) === "ok")
+          req = { ...req, surfaceOrigin: approvedRequest.surfaceOrigin, origin: approvedRequest.origin };
+      }
+      const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
+        ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
+        : false;
+      if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
+        return {
+          status: "refused",
+          reason: "External Slack requests require their current authenticated source context.",
+        };
       const access = await conversationWriteAccess(deps, h, req, actor);
       if (!access.ok) return { status: "refused", reason: access.reason };
       const project = access.project;
@@ -250,11 +267,6 @@ export function createTurnMethods(
           : { status: "queued", runId: live.id, steered: true };
       }
 
-      const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
-      const sameApprovedMessage =
-        approvedRequest?.text === req.text &&
-        samePerson(approvedRequest.actor.externalId, req.actor.externalId) &&
-        approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
       const storedApproval = privateRequest && privateRequest === approvedRequest ? privateRequest : undefined;
@@ -313,11 +325,17 @@ export function createTurnMethods(
         ...(req.surfaceOrigin ? { surfaceOrigin: req.surfaceOrigin } : {}),
         ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),
         ...(req.spawned && req.delegatingRunId ? { delegatingRunId: req.delegatingRunId } : {}),
+        ...(req.spawned && req.delegatingThroughSeq !== undefined
+          ? { delegatingThroughSeq: req.delegatingThroughSeq }
+          : {}),
         ...(sameApprovedMessage && approvedRequest?.sessionSenderId
           ? { sessionSenderId: approvedRequest.sessionSenderId }
           : {}),
         ...(sameApprovedMessage && approvedRequest?.delegatingRunId
           ? { delegatingRunId: approvedRequest.delegatingRunId }
+          : {}),
+        ...(sameApprovedMessage && approvedRequest?.delegatingThroughSeq !== undefined
+          ? { delegatingThroughSeq: approvedRequest.delegatingThroughSeq }
           : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
         ...(req.idempotencyKey ? { idempotencyKey: req.idempotencyKey } : {}),

@@ -1,3 +1,4 @@
+import type { TurnSource } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isSystemActor, parseScopeId } from "../types.ts";
 
@@ -51,6 +52,7 @@ export function ownPrivateConversation(
 export type AttestAudience = "personal" | "any";
 
 export interface AttestingTurn {
+  source?: TurnSource;
   actAsActor?: boolean;
   botActor?: boolean;
 }
@@ -80,7 +82,7 @@ export function personIds(id: string): string[] {
   return [canonical, ...(principalLinks()?.aliases(foldPrincipalId(canonical)) ?? [])];
 }
 
-export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases"];
+export const ACTOR_HEADERS: readonly string[] = ["x-qm-actor", "x-qm-actor-aliases", "x-qm-source"];
 
 export function attestedActorHeaders(actor: string): Record<string, string> {
   const aliases = [...new Set(personIds(actor))].filter((id) => id !== actor && attestableActor(id));

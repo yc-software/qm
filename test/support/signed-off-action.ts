@@ -16,6 +16,7 @@ export function signOffs<S extends ItemSource>(sessions: S) {
   let next = 0;
   const store = new Proxy(sessions, {
     get(target, prop, receiver) {
+      if (prop === "latestTurnSource") return async () => undefined;
       if (prop === "getItems")
         return async (sessionId: string, opts?: { turnId?: string }) =>
           decided.get(`${sessionId}/${opts?.turnId}`) ?? target.getItems(sessionId, opts as never);

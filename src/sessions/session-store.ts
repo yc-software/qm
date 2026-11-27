@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { TenantLookup } from "../tenants/lookup.ts";
 import type { Tenant } from "../tenants/context.ts";
-import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SessionType, SpawnMeta, TurnSource } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 import { isUserItem, type Item, type NewItem } from "./items.ts";
 
@@ -439,6 +439,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
   latestItemSeq(sessionId: string): Promise<number>;
+  latestTurnSource(tenant: Tenant, runId: string, throughSeq?: number): Promise<TurnSource | undefined>;
   latestToolSteps(turnIds: readonly string[]): Promise<Map<string, ToolStep>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;

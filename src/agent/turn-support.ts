@@ -10,6 +10,7 @@ import { DuplicateCallError } from "../sessions/session-store.ts";
 import type { StepFields } from "./step-recorder.ts";
 import type { SelfApiCall } from "../tools/self-api.ts";
 import { APPROVED_ACTION_HEADER, API_ACTION_TOOL } from "../api/contract.ts";
+import type { TurnSource } from "../types.ts";
 
 type SelfApiMethod = Parameters<SelfApiCall>[0];
 
@@ -36,6 +37,7 @@ export interface SteerIntake {
   speakerId?: string;
   authorName?: string;
   withheld?: boolean;
+  source?: TurnSource;
   acknowledge?: () => Promise<void>;
 }
 
@@ -57,6 +59,7 @@ export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake
       text: steer.text,
       author: steer.author ?? null,
       body: {
+        ...(steer.source ? { source: steer.source } : {}),
         ...(steer.authorName ? { name: steer.authorName } : {}),
         ...(steer.speakerId ? { speakerId: steer.speakerId } : {}),
         ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
@@ -266,15 +269,21 @@ export async function runApprovedToolCall(
   opts: { cancel?: AbortSignal },
 ): Promise<ApprovedToolCallOutcome> {
   if (call.tool === API_ACTION_TOOL) tools = [approvedApiTool(call, ref)];
-  const { items, text, isError } = await runToolCallOnce(call, ref, tools, {
-    ...opts,
-    fresh: { approvedRequestId: call.requestId },
-    notRun: (reason) =>
-      reason === "unavailable"
-        ? `[error] the approved tool ${call.tool} is not available on this turn, so it did not run`
-        : "[error] the turn was cancelled before the approved call ran",
-  });
-  return { items, text, isError };
+  const approved = (ref.approvedToolCalls ??= new Map());
+  approved.set(call.callId, { source: call.source ?? {} });
+  try {
+    const { items, text, isError } = await runToolCallOnce(call, ref, tools, {
+      ...opts,
+      fresh: { approvedRequestId: call.requestId },
+      notRun: (reason) =>
+        reason === "unavailable"
+          ? `[error] the approved tool ${call.tool} is not available on this turn, so it did not run`
+          : "[error] the turn was cancelled before the approved call ran",
+    });
+    return { items, text, isError };
+  } finally {
+    approved.delete(call.callId);
+  }
 }
 
 export function approvedCallSteerNote(

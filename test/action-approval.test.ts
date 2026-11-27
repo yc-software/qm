@@ -1,3 +1,4 @@
+import { testTenant as tenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { actionApproved } from "../src/api/action-approval.ts";
@@ -24,6 +25,7 @@ function harness(items: Item[] = [], headers: Record<string, string> = {}, body:
     },
   };
   const ctx = {
+    tenant,
     req: { headers },
     res,
     method: "PUT",
@@ -43,7 +45,10 @@ function harness(items: Item[] = [], headers: Record<string, string> = {}, body:
           },
         }),
       },
-      sessions: { getItems: async () => items },
+      sessions: {
+        getItems: async () => items,
+        latestTurnSource: async () => ({ origin: { kind: "human", messageTs: "2.2" } }),
+      },
     },
   } as unknown as ApiCtx;
   return { ctx, approvals, sent };
@@ -74,6 +79,8 @@ test("an agent request without an approval raises one card for that exact reques
   const record = entry?.[1];
   assert.deepEqual(record!.call, { tool: API_ACTION_TOOL, input: { method: "PUT", path: PATH, body: BODY } });
   assert.equal(record!.request?.actor.externalId, "owner@example.com");
+  assert.deepEqual(record!.source, { origin: { kind: "human", messageTs: "2.2" } });
+  assert.equal(record!.request?.origin?.kind, "automation");
   assert.equal(record!.blocksInput, false);
   await actionApproved(harness().ctx, { summary: "again" });
   assert.equal((await approvals.entries()).length, 1);
