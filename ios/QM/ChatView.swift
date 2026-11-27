@@ -53,6 +53,11 @@ struct ChatView: View {
     _inheritedExpanded = State(initialValue: initialSequence != nil)
   }
 
+  private var hasDraft: Bool {
+    !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !model.attachments.isEmpty
+  }
+
   private var canSend: Bool {
     (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !model.attachments.isEmpty)
@@ -902,7 +907,8 @@ struct ChatView: View {
             .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
             .disabled(stopping)
             .transition(.opacity)
-          } else {
+          } else if hasDraft || model.sending {
+            // Hidden until there is something to send, so an empty composer shows no dead button.
             Button {
               send(proxy)
             } label: {
@@ -911,10 +917,11 @@ struct ChatView: View {
             }
             .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
             .disabled(!canSend)
-            .transition(.opacity)
+            .transition(.opacity.combined(with: .scale(scale: 0.6)))
           }
         }
       }
+      .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: hasDraft)
       if !dictation.busy, dynamicTypeSize.isAccessibilitySize, verticalSizeClass != .compact {
         modelSelector
       }
