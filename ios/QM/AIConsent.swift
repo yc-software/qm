@@ -24,8 +24,10 @@ struct AIConsentView: View {
         Text("Dictation in the message box stays on this device. You can change this in Settings.")
           .foregroundStyle(.secondary)
         Link("Privacy policy", destination: aiPrivacyPolicy)
-        Button("Allow") { consent = "agreed" }.buttonStyle(.borderedProminent)
-        Button("Don’t allow") { consent = "declined" }.buttonStyle(.bordered)
+        choice("Allow", fill: QMTheme.ink, text: QMTheme.paper) { consent = "agreed" }
+        choice("Don’t allow", fill: QMTheme.ink.opacity(0.08), text: QMTheme.ink) {
+          consent = "declined"
+        }
         Button("Sign out", action: signOut).buttonStyle(.borderless)
       }
       .padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
@@ -33,6 +35,19 @@ struct AIConsentView: View {
     }
     .background(QMTheme.paper.ignoresSafeArea())
     .accessibilityAddTraits(.isModal)
+  }
+
+  // Explicit fill and label colours: the themed tint can match the label and hide it.
+  private func choice(
+    _ title: LocalizedStringKey, fill: Color, text: Color, action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Text(title).font(.headline).foregroundStyle(text)
+        .frame(maxWidth: .infinity, minHeight: 50)
+        .background(fill, in: .capsule)
+        .contentShape(.capsule)
+    }
+    .buttonStyle(.plain)
   }
 }
 
