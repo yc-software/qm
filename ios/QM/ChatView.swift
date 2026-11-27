@@ -751,64 +751,6 @@ struct ChatView: View {
         .padding(.bottom, 10)
         .accessibilityIdentifier("goalStrip")
       }
-      if model.conversation.canReply, !model.attachments.isEmpty, !dictation.busy {
-        ScrollView(.horizontal) {
-          HStack {
-            ForEach(model.attachments) { attachment in
-              if attachment.mimetype.hasPrefix("image/") {
-                Button {
-                  composerFocused = false
-                  previewingAttachment = attachment
-                } label: {
-                  DraftImageThumbnail(attachment: attachment, account: model.attachmentAccount)
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Preview \(attachment.name)")
-                .overlay(alignment: .topTrailing) {
-                  Button {
-                    model.attachments.removeAll { $0.id == attachment.id }
-                  } label: {
-                    Image(systemName: "xmark.circle.fill")
-                      .symbolRenderingMode(.palette)
-                      .foregroundStyle(.white, .black.opacity(0.6))
-                      .font(.body)
-                      .padding(4)
-                      .frame(width: 44, height: 44, alignment: .topTrailing)
-                      .contentShape(Rectangle())
-                  }
-                  .accessibilityLabel("Remove \(attachment.name)")
-                  .disabled(model.sending)
-                }
-              } else {
-                HStack(spacing: 8) {
-                  Button {
-                    composerFocused = false
-                    previewingAttachment = attachment
-                  } label: {
-                    Label(attachment.name, systemImage: "doc")
-                      .lineLimit(1).frame(minHeight: 44)
-                  }
-                  .buttonStyle(.plain)
-                  .accessibilityLabel("Preview \(attachment.name)")
-                  Button {
-                    model.attachments.removeAll { $0.id == attachment.id }
-                  } label: {
-                    Image(systemName: "xmark.circle.fill")
-                      .frame(width: 44, height: 44)
-                      .contentShape(Rectangle())
-                  }.accessibilityLabel("Remove \(attachment.name)")
-                    .disabled(model.sending)
-                }
-                .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
-                .frame(minHeight: 44).background(QMTheme.surface, in: Capsule())
-              }
-            }
-          }
-        }
-        .padding(.bottom, 10)
-      }
       if model.conversation.canReply {
         composer(proxy)
       } else if !model.conversation.isSubagent {
@@ -867,6 +809,9 @@ struct ChatView: View {
                 insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
         } else {
           VStack(alignment: .leading, spacing: 6) {
+            if !model.attachments.isEmpty {
+              attachmentStrip
+            }
             composerTextField
             if let error = dictation.error {
               NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
@@ -968,6 +913,68 @@ struct ChatView: View {
       model.saveDraft()
       if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
     }
+  }
+
+  /// Draft attachments sit inside the composer, above the text, so the field grows to hold
+  /// them rather than stacking a separate row above it.
+  private var attachmentStrip: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack {
+        ForEach(model.attachments) { attachment in
+          if attachment.mimetype.hasPrefix("image/") {
+            Button {
+              composerFocused = false
+              previewingAttachment = attachment
+            } label: {
+              DraftImageThumbnail(attachment: attachment, account: model.attachmentAccount)
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview \(attachment.name)")
+            .overlay(alignment: .topTrailing) {
+              Button {
+                model.attachments.removeAll { $0.id == attachment.id }
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .symbolRenderingMode(.palette)
+                  .foregroundStyle(.white, .black.opacity(0.6))
+                  .font(.body)
+                  .padding(4)
+                  .frame(width: 44, height: 44, alignment: .topTrailing)
+                  .contentShape(Rectangle())
+              }
+              .accessibilityLabel("Remove \(attachment.name)")
+              .disabled(model.sending)
+            }
+          } else {
+            HStack(spacing: 8) {
+              Button {
+                composerFocused = false
+                previewingAttachment = attachment
+              } label: {
+                Label(attachment.name, systemImage: "doc")
+                  .lineLimit(1).frame(minHeight: 44)
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Preview \(attachment.name)")
+              Button {
+                model.attachments.removeAll { $0.id == attachment.id }
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }.accessibilityLabel("Remove \(attachment.name)")
+                .disabled(model.sending)
+            }
+            .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
+            .frame(minHeight: 44)
+            .overlay { Capsule().strokeBorder(QMTheme.border, lineWidth: 1) }
+          }
+        }
+      }
+    }
+    .padding(.horizontal, 4).padding(.top, 4)
   }
 
   private var composerTextField: some View {
