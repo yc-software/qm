@@ -37,7 +37,7 @@ What you do in the app, plus your device's time zone and what iOS adds to any we
 
 ## AI providers
 
-QM answers you with AI models run by third-party companies. After you sign in, and before you can chat, dictate, or start a voice call, the app shows what is shared and with whom and asks you to agree. Until you agree, the app does not open your conversations or send anything for QM to work on. You can review or withdraw your agreement at any time in **Settings > AI data sharing**; withdrawing brings the request back until you agree again.
+QM answers you with AI models run by third-party companies. After you sign in to a workspace, and before you can use QM there, the app shows what is shared and with whom and asks you to agree. Until you agree, the app does not open your conversations or send anything for QM to work on. The app asks again for each workspace you switch to, since its operator may use other providers. You can review or withdraw your agreement at any time in **Settings > AI data sharing**; withdrawing closes QM in that workspace until you agree again.
 
 - **What is sent:** the messages you send, including questions about inbox items and spoken requests; the files, photos, and videos you attach; and content QM reads on your behalf from apps you connect to your workspace, such as Slack, Gmail, or GitHub, while working on your request. Conversation history and the results of QM's work are sent along so the model has context.
 - **How:** the app sends your messages and attachments to your workspace, and the workspace sends them to the provider of the model the conversation uses. The app does not send them to a model provider itself. Live voice is the exception, described below.

@@ -149,11 +149,10 @@ struct NativeSettingsView: View {
       }
       Section("Privacy") {
         NavigationLink {
-          AIConsentSettings()
+          AIConsentSettings(workspace: client.baseURL)
         } label: {
           Label("AI data sharing", systemImage: "hand.raised")
         }
-        Link("Privacy policy", destination: AIConsent.policyURL)
       }
       Section("Defaults") {
         NavigationLink("Model and effort") {

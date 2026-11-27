@@ -26,7 +26,7 @@ struct RootView: View {
   @State private var showingConversations = false
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
-  @AppStorage(AIConsent.key) private var aiConsent = false
+  @AppStorage(AIConsent.key) private var aiConsentWorkspace = ""
   @State private var rename: Conversation?
   @State private var renamedTitle = ""
   @State private var choosingWorkspace = false
@@ -118,8 +118,10 @@ struct RootView: View {
 
   var body: some View {
     Group {
-      if model.identity != nil, !aiConsent {
-        AIConsentScreen { confirmingSignOut = true }
+      if model.identity != nil, let workspace = model.client?.baseURL,
+        aiConsentWorkspace != workspace.absoluteString
+      {
+        AIConsentScreen(workspace: workspace) { confirmingSignOut = true }
       } else {
         NativeConversationDrawer(
           isOpen: $showingConversations,

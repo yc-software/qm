@@ -3,7 +3,8 @@ import SwiftUI
 /// App Review 5.1.1(i)/5.1.2(i): say what goes to AI providers, and who they are, and get
 /// the person's agreement in the app before chat, dictation or voice sends anything.
 enum AIConsent {
-  static let key = "aiDataSharingConsent"
+  /// The workspace address the person agreed for; another workspace may use other providers.
+  static let key = "aiDataSharingWorkspace"
   static let policyURL = URL(
     string: "https://github.com/yc-software/qm/blob/main/ios/PRIVACY.md#ai-providers")!
 }
@@ -51,8 +52,9 @@ struct AIConsentDetails: View {
 /// Shown in place of the signed-in app until the person agrees, so nothing they write, attach
 /// or say reaches an AI provider first. Withdrawing in Settings brings it back.
 struct AIConsentScreen: View {
-  @AppStorage(AIConsent.key) private var consented = false
+  @AppStorage(AIConsent.key) private var consented = ""
   @State private var declined = false
+  let workspace: URL
   let signOut: () -> Void
   var body: some View {
     NavigationStack {
@@ -60,7 +62,7 @@ struct AIConsentScreen: View {
         Group {
           if declined {
             Text(
-              "Chat, dictation and Talk to QM need your agreement to share data with AI providers."
+              "QM needs your agreement to share data with AI providers before you can use it in this workspace."
             )
           } else {
             AIConsentDetails()
@@ -71,7 +73,7 @@ struct AIConsentScreen: View {
       .safeAreaInset(edge: .bottom) {
         VStack(spacing: 8) {
           Button {
-            if declined { declined = false } else { consented = true }
+            if declined { declined = false } else { consented = workspace.absoluteString }
           } label: {
             Text(declined ? "Review" : "Agree").frame(maxWidth: .infinity)
           }
@@ -94,14 +96,19 @@ struct AIConsentScreen: View {
 
 /// Settings entry to review the disclosure and withdraw consent.
 struct AIConsentSettings: View {
-  @AppStorage(AIConsent.key) private var consented = false
+  @AppStorage(AIConsent.key) private var consented = ""
+  let workspace: URL
   var body: some View {
     QMForm {
       Section { AIConsentDetails() }
       Section {
-        Toggle("Share with AI providers", isOn: $consented)
+        Toggle(
+          "Share with AI providers",
+          isOn: Binding(
+            get: { consented == workspace.absoluteString },
+            set: { consented = $0 ? workspace.absoluteString : "" }))
       } footer: {
-        Text("Turning this off stops chat, dictation and Talk to QM until you agree again.")
+        Text("Turning this off closes QM in this workspace until you agree again.")
       }
     }
     .navigationTitle("AI data sharing").scrollContentBackground(.hidden).background(QMTheme.paper)
