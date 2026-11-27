@@ -55,8 +55,14 @@ function setup(
     golden = { ref, snapshotId: fake.seedGolden(ref) };
     return golden.snapshotId;
   };
-  const make = (checkpointIntervalMs = -1, goldens = base, egressProxyUrl?: string) =>
+  const make = (
+    checkpointIntervalMs = -1,
+    goldens = base,
+    egressProxyUrl?: string,
+    extra: Partial<Parameters<typeof createRenderSandbox>[0]> = {},
+  ) =>
     createRenderSandbox({
+      ...extra,
       client,
       base: goldens,
       ...(egressProxyUrl ? { egressProxyUrl } : {}),
@@ -1487,4 +1493,18 @@ test("Render does not report a command that exits 124 or 137 on its own as a tim
     assert.equal(result.code, code);
     assert.equal(result.timedOut, false);
   }
+});
+
+test("a computer with a chosen image starts from that image's base", async (t) => {
+  const { fake, store, scope, make } = setup(t);
+  const chosenRef = BASE_REF.replace("sandbox-base", "toolchain");
+  const chosenBase: RenderBase = {
+    ready: async () => ({ ref: chosenRef, snapshotId: fake.seedGolden(chosenRef) }),
+    prepare: async () => {},
+  };
+  const chosen = (image: string) =>
+    make(-1, undefined, undefined, { imageFor: async () => image, chosenBases: new Map([[chosenRef, chosenBase]]) });
+  await assert.rejects(chosen("elsewhere").provision(scope), /Render sandbox image elsewhere has no prepared base/);
+  await chosen(chosenRef).provision(scope);
+  assert.equal((await store.get(scope))?.baseImage, chosenRef);
 });

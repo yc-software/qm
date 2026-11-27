@@ -30,6 +30,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDeployBackings, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { freePort } from "../scripts/dev/lib/proc.ts";
+import { testCore } from "./support/build-app.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -118,6 +119,7 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     sessions: createPostgresSessionStore(backings.databaseUrl),
   } as unknown as Parameters<typeof createApp>[0]);
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret,
     identity,

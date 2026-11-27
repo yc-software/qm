@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
@@ -38,7 +39,7 @@ test("GET /v1/sessions rows carry no spawn metadata or entry flag", async () => 
     actor: { id: "U1", type: "internal" },
   } as unknown as SpawnMeta);
   await built.sessions.addParticipant(child.id, "U1", "Research task");
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const port = (server.address() as AddressInfo).port;

@@ -31,7 +31,7 @@ async function search(ctx: ApiCtx): Promise<void> {
     botActor: ctx.capability.botActor,
     ownScopeBotWork: isOwnScopeBotWork(ctx.capability),
   });
-  ctx.deps.auditLog?.record(tenantOf(ctx), {
+  ctx.deps.auditLog.record(tenantOf(ctx), {
     at: Date.now(),
     principalId: ctx.capability.actorId,
     action: "search.query",

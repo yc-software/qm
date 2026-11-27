@@ -1,9 +1,10 @@
 import { sendJson } from "../http.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { audit, isObj, isOrgAdmin, requirePersonAuthority } from "./shared.ts";
+import { audit, isObj, isOrgAdmin, orgScope, requirePersonAuthority } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { KeychainError } from "../../credentials/keychain.ts";
 import type { PersonaResult } from "../../personas/persona-service.ts";
+import type { ProjectIcon } from "../../projects/project-store.ts";
 import type { Cron } from "../../triggers/types.ts";
 import { isOwnScopeBotWork } from "../../resolution/context-filter.ts";
 import { sessionVisibleTo } from "../../sessions/session-rows.ts";
@@ -74,8 +75,7 @@ async function personaCrons(ctx: ApiCtx, principalId: string, personaId: string,
   const { owned, visible } = await ctx.app.listCronsForViewer(principalId);
   const crons = [...new Map([...owned, ...visible].map((c) => [c.id, c])).values()].filter((c) => !c.archived);
   const refsOf = (c: Cron) => [...new Set([c.destination?.target, c.sessionRef])].filter((ref) => ref !== undefined);
-  const personaThreads =
-    (await ctx.deps.sessions?.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))])) ?? new Set();
+  const personaThreads = await ctx.deps.sessions.threadsWithPersona(personaId, [...new Set(crons.flatMap(refsOf))]);
   return crons
     .filter(
       (c) =>
@@ -106,11 +106,37 @@ async function createPersona(ctx: ApiCtx): Promise<void> {
   respond(ctx, await personas.create(principalId, ctx.body), "persona", 201);
 }
 
+async function resolvePersonaIconUrl(ctx: ApiCtx, icon: ProjectIcon | undefined): Promise<string | undefined> {
+  if (icon?.kind === "image") return icon.url.startsWith("https://") ? icon.url : undefined;
+  if (icon?.kind !== "custom") return undefined;
+  const raw = (await ctx.deps.config.getSlackEmojiCatalogDurable(orgScope(ctx.deps)))?.emoji ?? {};
+  const value = raw[icon.name];
+  const url = value?.startsWith("alias:") ? raw[value.slice("alias:".length)] : value;
+  return url?.startsWith("https://") ? url : undefined;
+}
+
+async function syncPersonaSlackIcon(
+  ctx: ApiCtx,
+  personaId: string,
+  icon: ProjectIcon | undefined,
+  updatedBy: string,
+): Promise<string | undefined> {
+  const iconUrl = await resolvePersonaIconUrl(ctx, icon);
+  if (!iconUrl) return undefined;
+  const outcome = await ctx.deps.slackInstallation?.setAppIcon({ personaId, iconUrl, updatedBy });
+  return outcome && !outcome.ok ? outcome.error : undefined;
+}
+
 async function updatePersona(ctx: ApiCtx): Promise<void> {
   const personas = service(ctx);
   const principalId = personas && principalOf(ctx, "body");
   if (!personas || !principalId) return;
-  respond(ctx, await personas.update(principalId, ctx.params.id!, ctx.body), "persona");
+  const result = await personas.update(principalId, ctx.params.id!, ctx.body);
+  if (result.status === "ok" && isObj(ctx.body) && "icon" in ctx.body && result.value.icon) {
+    const slackIconWarning = await syncPersonaSlackIcon(ctx, result.value.id, result.value.icon, principalId);
+    if (slackIconWarning) return sendJson(ctx.res, 200, { persona: result.value, slackIconWarning });
+  }
+  respond(ctx, result, "persona");
 }
 
 function auditPersona(ctx: ApiCtx, principalId: string, personaId: string, action: string, resource: string): void {
@@ -165,7 +191,12 @@ async function restorePersonaVersion(ctx: ApiCtx): Promise<void> {
   const version = positiveInt(ctx.params.version);
   if (version === undefined)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "version must be a positive integer" });
-  respond(ctx, await personas.restore(principalId, ctx.params.id!, version), "persona");
+  const result = await personas.restore(principalId, ctx.params.id!, version);
+  if (result.status === "ok" && result.value.icon) {
+    const slackIconWarning = await syncPersonaSlackIcon(ctx, result.value.id, result.value.icon, principalId);
+    if (slackIconWarning) return sendJson(ctx.res, 200, { persona: result.value, slackIconWarning });
+  }
+  respond(ctx, result, "persona");
 }
 
 async function setPersonaAccess(ctx: ApiCtx): Promise<void> {
@@ -232,7 +263,7 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
   const viewed = await ctx.app.getSessionForViewer(sessionId, ctx.capability ?? { actorId: principalId }, {
     tailTurns: 1,
   });
-  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions?.get(sessionId) : null;
+  const stored = !viewed && ctx.capability?.botActor ? await ctx.deps.sessions.get(sessionId) : null;
   if (stored && !sessionVisibleTo(ctx.capability!, stored))
     return sendJson(ctx.res, 403, { error: "forbidden", message: "this conversation is no longer accessible" });
   if (!viewed) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -245,18 +276,19 @@ async function setSessionPersona(ctx: ApiCtx): Promise<void> {
 async function authorizePersonaSlack(
   ctx: ApiCtx,
   principalId: string,
-): Promise<{ id: string; name: string; description: string } | null> {
+): Promise<{ id: string; name: string; description: string; icon?: ProjectIcon } | null> {
   const personas = service(ctx);
   if (!personas) return null;
-  if (!ctx.deps.slackInstallation) {
-    sendJson(ctx.res, 404, { error: "not_configured" });
-    return null;
-  }
   const id = ctx.params.id!;
   const detail = await personas.detail(principalId, id);
   if (detail.status === "ok") {
     if (detail.value.role === "owner" || (await isOrgAdmin(ctx, principalId))) {
-      return { id: detail.value.id, name: detail.value.name, description: detail.value.description };
+      return {
+        id: detail.value.id,
+        name: detail.value.name,
+        description: detail.value.description,
+        icon: detail.value.icon,
+      };
     }
     sendJson(ctx.res, 403, { error: "forbidden", message: "only an org admin or persona owner can manage Slack apps" });
     return null;
@@ -270,7 +302,7 @@ async function getPersonaSlack(ctx: ApiCtx): Promise<void> {
   if (!principalId) return;
   const persona = await authorizePersonaSlack(ctx, principalId);
   if (!persona) return;
-  sendJson(ctx.res, 200, await ctx.deps.slackInstallation!.appStatus(persona.id, persona.name));
+  sendJson(ctx.res, 200, await ctx.deps.slackInstallation.appStatus(persona.id, persona.name));
 }
 
 async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
@@ -283,10 +315,12 @@ async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
   if (typeof body.refreshToken === "string" && body.refreshToken.trim()) configToken = body.refreshToken;
   else if (typeof body.configToken === "string") configToken = body.configToken;
   try {
-    const created = await ctx.deps.slackInstallation!.createApp({
+    const iconUrl = await resolvePersonaIconUrl(ctx, persona.icon);
+    const created = await ctx.deps.slackInstallation.createApp({
       personaId: persona.id,
       name: persona.name,
       description: persona.description,
+      ...(iconUrl ? { iconUrl } : {}),
       ...(configToken ? { configToken } : {}),
       saveOrgConfigToken: false,
       ...(body.orgDeploy === true ? { orgDeploy: true } : {}),
@@ -298,7 +332,10 @@ async function createPersonaSlack(ctx: ApiCtx): Promise<void> {
       resource: "persona-slack",
       scopeLabel: scopeId("persona", persona.id),
     });
-    sendJson(ctx.res, 200, created.status);
+    sendJson(ctx.res, 200, {
+      ...created.status,
+      ...(created.iconWarning ? { slackIconWarning: created.iconWarning } : {}),
+    });
   } catch (error) {
     sendJson(ctx.res, 400, { error: "slack_app_create_failed", message: errMessage(error) });
   }
@@ -314,7 +351,7 @@ async function putPersonaSlack(ctx: ApiCtx): Promise<void> {
   const signingSecret = typeof body.signingSecret === "string" ? body.signingSecret : "";
   const appId = typeof body.appId === "string" ? body.appId : undefined;
   try {
-    const status = await ctx.deps.slackInstallation!.attachHttpApp({
+    const status = await ctx.deps.slackInstallation.attachHttpApp({
       personaId: persona.id,
       botToken,
       signingSecret,
@@ -341,7 +378,7 @@ async function deletePersonaSlack(ctx: ApiCtx): Promise<void> {
   const deleteRemote =
     ctx.url.searchParams.get("deleteRemote") === "true" || (isObj(ctx.body) && ctx.body.deleteRemote === true);
   try {
-    await ctx.deps.slackInstallation!.deleteApp({
+    await ctx.deps.slackInstallation.deleteApp({
       personaId: persona.id,
       updatedBy: principalId,
       deleteRemote,
@@ -352,7 +389,7 @@ async function deletePersonaSlack(ctx: ApiCtx): Promise<void> {
       resource: "persona-slack",
       scopeLabel: scopeId("persona", persona.id),
     });
-    sendJson(ctx.res, 200, await ctx.deps.slackInstallation!.appStatus(persona.id, persona.name));
+    sendJson(ctx.res, 200, await ctx.deps.slackInstallation.appStatus(persona.id, persona.name));
   } catch (error) {
     sendJson(ctx.res, 400, { error: "slack_app_delete_failed", message: errMessage(error) });
   }

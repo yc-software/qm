@@ -7,7 +7,7 @@ export interface PrincipalLinkResolver {
   claim(key: string, userId: string): void;
 }
 
-export const USER_ID_NAMESPACE = "8f0b6a52-3c1e-5d7a-9b4e-2f6c1d8a7e30";
+const USER_ID_NAMESPACE = "8f0b6a52-3c1e-5d7a-9b4e-2f6c1d8a7e30";
 
 let links: PrincipalLinkResolver | null = null;
 
@@ -50,12 +50,18 @@ export function foundingUserId(alias: string): string {
   return id;
 }
 
+export function knownUserId(id: string): string | undefined {
+  const key = foldPrincipalId(id);
+  const linked = key ? links?.userId(key) : undefined;
+  if (linked || !key) return linked;
+  if (isUuid(key)) return key.toLowerCase();
+  return links ? undefined : foundingUserId(key);
+}
+
 export function personUserId(id: string): string {
   const key = foldPrincipalId(id);
-  if (!key) return key;
-  const linked = links?.userId(key);
-  if (linked) return linked;
-  if (isUuid(key)) return key.toLowerCase();
+  const known = knownUserId(key);
+  if (known || !key) return known ?? key;
   const alias = links?.canonical(key) ?? key;
   const founded = foundingUserId(alias);
   links?.claim(alias, founded);

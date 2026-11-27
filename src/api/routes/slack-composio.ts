@@ -7,7 +7,7 @@ import type { ApiCtx } from "./route.ts";
 
 export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {
   for (const id of personIds(ctx.actor!.p)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
+    const record = await ctx.deps.slackAccounts.get(id);
     if (record && samePerson(record.memberId, ctx.actor!.p)) return true;
   }
   return false;
@@ -25,7 +25,7 @@ export async function composioSlackConnection(ctx: ApiCtx) {
     }
   };
   for (const id of personIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
+    const record = await ctx.deps.slackAccounts.get(id);
     if (!record || !samePerson(record.memberId, access.principal)) continue;
     const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
     if (
@@ -55,7 +55,7 @@ export async function composioSlackConnection(ctx: ApiCtx) {
         { ok?: boolean; bot_id?: string; user_id?: string; team_id?: string; ts?: string; error?: string } | undefined;
     };
     const identity = await proxy("auth.test");
-    const installation = await ctx.deps.slackInstallation?.get();
+    const installation = await ctx.deps.slackInstallation.get();
     if (
       !identity?.ok ||
       identity.bot_id ||

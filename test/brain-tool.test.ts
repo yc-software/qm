@@ -15,7 +15,7 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { AddressFetch } from "../src/util/network.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { contract, contractTools } from "./support/gbrain-contract.ts";
 import { routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { connectorTool } from "../src/mcp/mcp-tool-service.ts";
@@ -120,13 +120,7 @@ async function brainApp(t: { after(fn: () => Promise<void>): void }, config = te
   const memoryRegistryFetch: AddressFetch = (url, init) =>
     routedTo(new URL(url).host === "brain.beta.example" ? beta.url : acme.url)(url, init);
   const built = buildApp(config, { memoryRegistryFetch, agent });
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    auditLog: built.auditLog,
-    memory: built.memory,
-    memoryRegistry: built.memoryRegistry,
-    capabilitySecret: TEST_CAPABILITY_SECRET,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), capabilitySecret: TEST_CAPABILITY_SECRET });
   server.listen(0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const admin = async (method: string, path: string, body?: unknown) => {

@@ -925,3 +925,17 @@ test("run refuses to execute when its workspace directory is missing", async () 
   assert.notEqual(result.code, 0);
   assert.equal(result.stdout, "");
 });
+
+test("a computer's chosen image is its template, and a later core keeps it rather than replacing it", async () => {
+  const chosen = {
+    template: "qm-agent-1.0.0",
+    imageFor: async (id: string) => (id === scope ? "toolchain" : undefined),
+  };
+  const h = await make(chosen).provision(scope);
+  const id = fake.current(scopeName())!.id;
+  assert.equal(fake.current(scopeName())?.template, "toolchain");
+  assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.template], "toolchain");
+  await sandbox.teardown(h);
+  assert.equal((await make(chosen).provision(scope)).coldStart, false);
+  assert.equal(fake.current(scopeName())!.id, id);
+});

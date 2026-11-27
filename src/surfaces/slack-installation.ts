@@ -3,7 +3,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { App as BoltApp, Receiver } from "@slack/bolt";
 import { isValidSlackRequest } from "@slack/bolt";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { deriveConnectorKey } from "../connectors/connector-client-store.ts";
+import {
+  createEncryptedSecretStore,
+  deleteReplacedSecrets,
+  type SecretStoreFactory,
+} from "../credentials/secret-store.ts";
 import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
 import type { EnvelopeStaging } from "../slack/envelope-staging.ts";
 import {
@@ -13,7 +18,7 @@ import {
   isGatedEnvelope,
 } from "../slack/deferred-ack.ts";
 import { sendJson } from "../api/http.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { buildSlackAppManifest, slackBotManifestCreationUrl, slackOAuthAuthorizeUrl } from "./slack-manifest.ts";
 
 const MAX_EVENT_BODY_BYTES = 5 * 1024 * 1024;
@@ -153,11 +158,17 @@ export interface SlackInstallationStore {
     personaId?: string;
     name: string;
     description?: string;
+    iconUrl?: string;
     configToken?: string;
     saveOrgConfigToken?: boolean;
     orgDeploy?: boolean;
     updatedBy: string;
-  }): Promise<{ status: SlackAppProvisionStatus; oauthAuthorizeUrl: string; appId: string }>;
+  }): Promise<{ status: SlackAppProvisionStatus; oauthAuthorizeUrl: string; appId: string; iconWarning?: string }>;
+  setAppIcon(input: {
+    personaId?: string;
+    iconUrl: string;
+    updatedBy: string;
+  }): Promise<{ ok: true } | { ok: false; error: string } | null>;
   completeOAuth(input: {
     code: string;
     state: string;
@@ -244,9 +255,30 @@ export function createSlackInstallationStore(
   orgId: string,
   map: DurableMap<StoredSlackInstallation>,
   keyMaterial: Buffer | string,
-  opts?: { publicUrl?: string; fetchImpl?: typeof fetch },
+  opts?: { publicUrl?: string; fetchImpl?: typeof fetch; secrets?: SecretStoreFactory },
 ): SlackInstallationStore {
-  const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const secrets = (opts?.secrets ?? createEncryptedSecretStore)(deriveConnectorKey(keyMaterial, "slack-installation"));
+  const secretName = (slot: string, personaId?: string) =>
+    `slack-installation/${orgId}/${personaId ? `persona-${personaId}/` : ""}${slot}`;
+  const liveInstallSecrets = (record: StoredSlackInstallation | null | undefined) =>
+    isInstallationRecord(record) && !record.disabled
+      ? [record.botTokenEnc, record.appTokenEnc, record.signingSecretEnc, record.clientSecretEnc]
+      : [];
+  const liveConfigSecrets = (record: StoredSlackConfigToken | null | undefined) =>
+    record ? [record.accessTokenEnc, record.refreshTokenEnc] : [];
+  const deleteDroppedInstallSecrets = (
+    previous: StoredSlackInstallation | null | undefined,
+    next: StoredSlackInstallation | null | undefined,
+    written: readonly (string | undefined)[] = [],
+  ) => deleteReplacedSecrets(secrets, [...written, ...liveInstallSecrets(previous)], liveInstallSecrets(next));
+  const putConfigToken = async (
+    record: StoredSlackConfigToken,
+    previous?: StoredSlackConfigToken | null,
+  ): Promise<void> => {
+    const prior = previous === undefined ? await getStoredConfigToken() : previous;
+    await map.put(configTokenKey, record);
+    await deleteReplacedSecrets(secrets, liveConfigSecrets(prior), liveConfigSecrets(record));
+  };
   const fetchImpl = opts?.fetchImpl ?? fetch;
   const baseUrl = opts?.publicUrl?.replace(/\/+$/, "");
 
@@ -292,6 +324,16 @@ export function createSlackInstallationStore(
     return data;
   };
 
+  const applyAppIcon = async (accessToken: string, appId: string, iconUrl: string): Promise<string | undefined> => {
+    try {
+      await callSlack("apps.icon.set", accessToken, { app_id: appId, url: iconUrl });
+      return undefined;
+    } catch (error) {
+      swallowAs("slack-app: set icon", undefined)(error);
+      return errMessage(error);
+    }
+  };
+
   const rotateRefreshToken = async (
     refreshToken: string,
   ): Promise<{ accessToken: string; refreshToken: string; expiresAt: number }> => {
@@ -326,11 +368,15 @@ export function createSlackInstallationStore(
       if (trimmed.startsWith("xoxe-")) {
         const rotated = await rotateRefreshToken(trimmed);
         if (saveToOrg) {
-          await map.put(configTokenKey, {
+          const [accessTokenEnc, refreshTokenEnc] = await Promise.all([
+            secrets.put(secretName("config-access"), rotated.accessToken),
+            secrets.put(secretName("config-refresh"), rotated.refreshToken),
+          ]);
+          await putConfigToken({
             kind: "config-token",
             orgId,
-            accessTokenEnc: encryptSecret(rotated.accessToken, key),
-            refreshTokenEnc: encryptSecret(rotated.refreshToken, key),
+            accessTokenEnc,
+            refreshTokenEnc,
             expiresAt: rotated.expiresAt,
             updatedAt: Date.now(),
             updatedBy,
@@ -340,10 +386,11 @@ export function createSlackInstallationStore(
       }
       if (trimmed.startsWith("xoxe.xoxp-")) {
         if (saveToOrg) {
-          await map.put(configTokenKey, {
+          const accessTokenEnc = await secrets.put(secretName("config-access"), trimmed);
+          await putConfigToken({
             kind: "config-token",
             orgId,
-            accessTokenEnc: encryptSecret(trimmed, key),
+            accessTokenEnc,
             expiresAt: Date.now() + 11 * 3600_000,
             updatedAt: Date.now(),
             updatedBy,
@@ -363,40 +410,54 @@ export function createSlackInstallationStore(
     }
     const hasFreshAccess =
       stored.accessTokenEnc && stored.expiresAt && stored.expiresAt - Date.now() > CONFIG_TOKEN_REFRESH_BUFFER_MS;
-    if (hasFreshAccess) return decryptSecret(stored.accessTokenEnc!, key);
+    if (hasFreshAccess) return secrets.get(stored.accessTokenEnc!);
     if (stored.refreshTokenEnc) {
-      const rotated = await rotateRefreshToken(decryptSecret(stored.refreshTokenEnc, key));
-      await map.put(configTokenKey, {
-        kind: "config-token",
-        orgId,
-        accessTokenEnc: encryptSecret(rotated.accessToken, key),
-        refreshTokenEnc: encryptSecret(rotated.refreshToken, key),
-        expiresAt: rotated.expiresAt,
-        updatedAt: Date.now(),
-        updatedBy,
-      });
+      const rotated = await rotateRefreshToken(await secrets.get(stored.refreshTokenEnc));
+      const [accessTokenEnc, refreshTokenEnc] = await Promise.all([
+        secrets.put(secretName("config-access"), rotated.accessToken),
+        secrets.put(secretName("config-refresh"), rotated.refreshToken),
+      ]);
+      await putConfigToken(
+        {
+          kind: "config-token",
+          orgId,
+          accessTokenEnc,
+          refreshTokenEnc,
+          expiresAt: rotated.expiresAt,
+          updatedAt: Date.now(),
+          updatedBy,
+        },
+        stored,
+      );
       return rotated.accessToken;
     }
-    if (stored.accessTokenEnc) return decryptSecret(stored.accessTokenEnc, key);
+    if (stored.accessTokenEnc) return secrets.get(stored.accessTokenEnc);
     throw new Error(
       "Stored Slack App Configuration Token is expired; generate a new one at https://api.slack.com/apps.",
     );
   };
 
-  const decryptInstallation = (record: ActiveSlackInstallation): SlackInstallation => ({
-    ...(record.personaId ? { personaId: record.personaId } : {}),
-    botToken: decryptSecret(record.botTokenEnc!, key),
-    ...(record.appTokenEnc ? { appToken: decryptSecret(record.appTokenEnc, key) } : {}),
-    ...(record.signingSecretEnc ? { signingSecret: decryptSecret(record.signingSecretEnc, key) } : {}),
-    ...(record.appId ? { appId: record.appId } : {}),
-    ...(record.installId ? { installId: record.installId } : {}),
-    ...(record.installedAt ? { installedAt: record.installedAt } : {}),
-    ...(record.teamId ? { teamId: record.teamId } : {}),
-    ...(record.teamName ? { teamName: record.teamName } : {}),
-    updatedAt: record.updatedAt,
-    updatedBy: record.updatedBy,
-    version: record.version,
-  });
+  const decryptInstallation = async (record: ActiveSlackInstallation): Promise<SlackInstallation> => {
+    const [botToken, appToken, signingSecret] = await Promise.all([
+      secrets.get(record.botTokenEnc!),
+      record.appTokenEnc ? secrets.get(record.appTokenEnc) : Promise.resolve(undefined),
+      record.signingSecretEnc ? secrets.get(record.signingSecretEnc) : Promise.resolve(undefined),
+    ]);
+    return {
+      ...(record.personaId ? { personaId: record.personaId } : {}),
+      botToken,
+      ...(appToken ? { appToken } : {}),
+      ...(signingSecret ? { signingSecret } : {}),
+      ...(record.appId ? { appId: record.appId } : {}),
+      ...(record.installId ? { installId: record.installId } : {}),
+      ...(record.installedAt ? { installedAt: record.installedAt } : {}),
+      ...(record.teamId ? { teamId: record.teamId } : {}),
+      ...(record.teamName ? { teamName: record.teamName } : {}),
+      updatedAt: record.updatedAt,
+      updatedBy: record.updatedBy,
+      version: record.version,
+    };
+  };
 
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus => {
     if (isActiveConnected(record)) {
@@ -466,7 +527,7 @@ export function createSlackInstallationStore(
     async get() {
       const record = await map.get(orgId);
       if (!isActiveConnected(record)) return null;
-      return decryptInstallation(record);
+      return await decryptInstallation(record);
     },
 
     async status() {
@@ -475,14 +536,21 @@ export function createSlackInstallationStore(
 
     async set(input) {
       const updatedAt = Date.now();
+      const [botTokenEnc, appTokenEnc, signingSecretEnc] = await Promise.all([
+        secrets.put(secretName("bot"), input.botToken),
+        input.appToken ? secrets.put(secretName("app"), input.appToken) : Promise.resolve(undefined),
+        input.signingSecret
+          ? secrets.put(secretName("signing-secret"), input.signingSecret)
+          : Promise.resolve(undefined),
+      ]);
       const record: ActiveSlackInstallation = {
         kind: "installation",
         orgId,
         disabled: false,
         serviceBlocked: true,
-        botTokenEnc: encryptSecret(input.botToken, key),
-        ...(input.appToken ? { appTokenEnc: encryptSecret(input.appToken, key) } : {}),
-        ...(input.signingSecret ? { signingSecretEnc: encryptSecret(input.signingSecret, key) } : {}),
+        botTokenEnc,
+        ...(appTokenEnc ? { appTokenEnc } : {}),
+        ...(signingSecretEnc ? { signingSecretEnc } : {}),
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.installId ? { installId: input.installId } : {}),
         ...(input.teamId ? { teamId: input.teamId } : {}),
@@ -492,18 +560,24 @@ export function createSlackInstallationStore(
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
       await map.putIfAbsent(orgId, record);
-      const stored = await map.update(orgId, (current) => ({
-        ...record,
-        ...(isInstallationRecord(current) && current.installedAt !== undefined
-          ? { installedAt: current.installedAt }
-          : {}),
-      }));
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (current) => {
+        previous = current;
+        return {
+          ...record,
+          ...(isInstallationRecord(current) && current.installedAt !== undefined
+            ? { installedAt: current.installedAt }
+            : {}),
+        };
+      });
       if (!stored) throw new Error("Slack installation disappeared during update");
+      await deleteDroppedInstallSecrets(previous, stored, [botTokenEnc, appTokenEnc, signingSecretEnc]);
       notifySet();
       return publicStatus(stored);
     },
 
     async setManaged(input) {
+      const botTokenEnc = await secrets.put(secretName("bot"), input.botToken);
       await map.putIfAbsent(orgId, {
         kind: "installation",
         orgId,
@@ -513,7 +587,9 @@ export function createSlackInstallationStore(
         version: "initial",
       });
       let accepted = false;
-      await map.update(orgId, (record) => {
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (record) => {
+        previous = record;
         if (!isInstallationRecord(record)) return record;
         if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
         if (!record.disabled && record.installId === input.installId) {
@@ -528,7 +604,7 @@ export function createSlackInstallationStore(
           kind: "installation",
           orgId,
           disabled: false,
-          botTokenEnc: encryptSecret(input.botToken, key),
+          botTokenEnc,
           appId: input.appId,
           installId: input.installId,
           installedAt: input.installedAt,
@@ -539,6 +615,7 @@ export function createSlackInstallationStore(
           version: crypto.randomUUID(),
         };
       });
+      await deleteDroppedInstallSecrets(previous, stored, [botTokenEnc]);
       return accepted;
     },
 
@@ -557,9 +634,11 @@ export function createSlackInstallationStore(
 
     async disableManaged(installId) {
       let disabled = false;
-      await map.update(orgId, (record) => {
+      let previous: StoredSlackInstallation | undefined;
+      const stored = await map.update(orgId, (record) => {
         if (!isInstallationRecord(record) || record.disabled || record.installId !== installId) return record;
         disabled = true;
+        previous = record;
         return {
           kind: "installation",
           orgId,
@@ -570,11 +649,14 @@ export function createSlackInstallationStore(
           version: crypto.randomUUID(),
         };
       });
+      if (disabled) await deleteDroppedInstallSecrets(previous, stored);
       return disabled;
     },
 
     async delete(updatedBy) {
+      let previous: StoredSlackInstallation | undefined;
       const record = await map.update(orgId, (current) => {
+        previous = current;
         const inst = isInstallationRecord(current) ? current : null;
         return {
           kind: "installation",
@@ -588,6 +670,7 @@ export function createSlackInstallationStore(
         };
       });
       if (record) {
+        await deleteDroppedInstallSecrets(previous, record);
         notifySet();
         return;
       }
@@ -634,11 +717,15 @@ export function createSlackInstallationStore(
         throw new Error("Slack App Configuration access token must start with xoxe.xoxp-.");
       }
       const updatedAt = Date.now();
-      await map.put(configTokenKey, {
+      const [accessTokenEnc, refreshTokenEnc] = await Promise.all([
+        accessToken ? secrets.put(secretName("config-access"), accessToken) : Promise.resolve(undefined),
+        refreshToken ? secrets.put(secretName("config-refresh"), refreshToken) : Promise.resolve(undefined),
+      ]);
+      await putConfigToken({
         kind: "config-token",
         orgId,
-        ...(accessToken ? { accessTokenEnc: encryptSecret(accessToken, key) } : {}),
-        ...(refreshToken ? { refreshTokenEnc: encryptSecret(refreshToken, key) } : {}),
+        ...(accessTokenEnc ? { accessTokenEnc } : {}),
+        ...(refreshTokenEnc ? { refreshTokenEnc } : {}),
         expiresAt,
         updatedAt,
         updatedBy: input.updatedBy,
@@ -653,7 +740,9 @@ export function createSlackInstallationStore(
     },
 
     async deleteConfigToken() {
+      const prior = await getStoredConfigToken();
       await map.delete(configTokenKey);
+      await deleteReplacedSecrets(secrets, liveConfigSecrets(prior), []);
     },
 
     async appStatus(personaId, displayName) {
@@ -691,8 +780,15 @@ export function createSlackInstallationStore(
       if (!appId || !creds?.client_id || !creds.client_secret || !creds.signing_secret) {
         throw new Error("apps.manifest.create returned incomplete app credentials");
       }
+      const iconWarning = input.iconUrl ? await applyAppIcon(accessToken, appId, input.iconUrl) : undefined;
       const oauthState = `${target}.${randomBytes(24).toString("hex")}`;
       const updatedAt = Date.now();
+      const [clientSecretEnc, signingSecretEnc] = await Promise.all([
+        secrets.put(secretName("client-secret", input.personaId), creds.client_secret),
+        secrets.put(secretName("signing-secret", input.personaId), creds.signing_secret),
+      ]);
+      const storageKey = keyFor(input.personaId);
+      const previous = await map.get(storageKey);
       const record: ActiveSlackInstallation = {
         kind: "installation",
         orgId,
@@ -702,17 +798,32 @@ export function createSlackInstallationStore(
         serviceBlocked: true,
         appId,
         clientId: creds.client_id,
-        clientSecretEnc: encryptSecret(creds.client_secret, key),
-        signingSecretEnc: encryptSecret(creds.signing_secret, key),
+        clientSecretEnc,
+        signingSecretEnc,
         oauthState,
         updatedAt,
         updatedBy: input.updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
-      await map.put(keyFor(input.personaId), record);
+      await map.put(storageKey, record);
+      await deleteDroppedInstallSecrets(previous, record);
       const oauthAuthorizeUrl = slackOAuthAuthorizeUrl(creds.client_id, redirectUri, oauthState);
       const status = await toProvisionStatus(record, input.name);
-      return { status, oauthAuthorizeUrl, appId };
+      return { status, oauthAuthorizeUrl, appId, ...(iconWarning ? { iconWarning } : {}) };
+    },
+
+    async setAppIcon(input) {
+      const rec = await map.get(keyFor(input.personaId));
+      if (!isInstallationRecord(rec) || rec.disabled || !rec.appId) return null;
+      if (!(await getStoredConfigToken())) return null;
+      try {
+        const accessToken = await resolveConfigAccessToken(undefined, false, input.updatedBy);
+        const error = await applyAppIcon(accessToken, rec.appId, input.iconUrl);
+        return error ? { ok: false, error } : { ok: true };
+      } catch (error) {
+        swallowAs("slack-app: set icon", undefined)(error);
+        return { ok: false, error: errMessage(error) };
+      }
     },
 
     async completeOAuth(input) {
@@ -739,7 +850,7 @@ export function createSlackInstallationStore(
         undefined,
         new URLSearchParams({
           client_id: rec.clientId,
-          client_secret: decryptSecret(rec.clientSecretEnc, key),
+          client_secret: await secrets.get(rec.clientSecretEnc),
           code: input.code,
           redirect_uri: redirectUri,
         }).toString(),
@@ -753,10 +864,11 @@ export function createSlackInstallationStore(
       const teamId = teamObj?.id ?? exchanged.team_id;
       const teamName = teamObj?.name ?? (typeof exchanged.team === "string" ? exchanged.team : undefined);
       const updatedAt = Date.now();
+      const botTokenEnc = await secrets.put(secretName("bot", personaId), botToken);
       const updated: ActiveSlackInstallation = {
         ...rec,
         pending: false,
-        botTokenEnc: encryptSecret(botToken, key),
+        botTokenEnc,
         ...(teamId ? { teamId } : {}),
         ...(teamName ? { teamName } : {}),
         updatedAt,
@@ -764,6 +876,7 @@ export function createSlackInstallationStore(
       };
       delete updated.oauthState;
       await map.put(storageKey, updated);
+      await deleteDroppedInstallSecrets(rec, updated);
       notifySet();
       return {
         ...(personaId ? { personaId } : {}),
@@ -783,6 +896,12 @@ export function createSlackInstallationStore(
       const teamName = typeof auth.team === "string" ? auth.team : undefined;
       const appId = input.appId?.trim() || auth.app_id;
       const updatedAt = Date.now();
+      const [botTokenEnc, signingSecretEnc] = await Promise.all([
+        secrets.put(secretName("bot", input.personaId), botToken),
+        secrets.put(secretName("signing-secret", input.personaId), signingSecret),
+      ]);
+      const storageKey = keyFor(input.personaId);
+      const previous = await map.get(storageKey);
       const record: ActiveSlackInstallation = {
         kind: "installation",
         orgId,
@@ -790,8 +909,8 @@ export function createSlackInstallationStore(
         disabled: false,
         pending: false,
         serviceBlocked: true,
-        botTokenEnc: encryptSecret(botToken, key),
-        signingSecretEnc: encryptSecret(signingSecret, key),
+        botTokenEnc,
+        signingSecretEnc,
         ...(appId ? { appId } : {}),
         ...(teamId ? { teamId } : {}),
         ...(teamName ? { teamName } : {}),
@@ -799,7 +918,8 @@ export function createSlackInstallationStore(
         updatedBy: input.updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
-      await map.put(keyFor(input.personaId), record);
+      await map.put(storageKey, record);
+      await deleteDroppedInstallSecrets(previous, record);
       notifySet();
       return toProvisionStatus(record);
     },
@@ -816,18 +936,16 @@ export function createSlackInstallationStore(
         return;
       }
       await map.delete(storageKey);
+      await deleteDroppedInstallSecrets(rec, null);
       notifySet();
     },
 
     async listPersonaApps() {
       const entries = await map.entries();
-      const out: SlackInstallation[] = [];
-      for (const [k, rec] of entries) {
-        if (!k.startsWith(personaPrefix)) continue;
-        if (!isActiveConnected(rec)) continue;
-        out.push(decryptInstallation(rec));
-      }
-      return out;
+      const active = entries
+        .filter(([k, rec]) => k.startsWith(personaPrefix) && isActiveConnected(rec))
+        .map(([, rec]) => rec as ActiveSlackInstallation);
+      return Promise.all(active.map(decryptInstallation));
     },
 
     receiver(target, signingSecret, staging) {
@@ -869,7 +987,7 @@ export function createSlackInstallationStore(
       if (!signingSecret) {
         const stored = await map.get(keyFor(target === BASE_TARGET ? undefined : target));
         if (isInstallationRecord(stored) && !stored.disabled && stored.signingSecretEnc) {
-          signingSecret = decryptSecret(stored.signingSecretEnc, key);
+          signingSecret = await secrets.get(stored.signingSecretEnc);
         }
       }
       if (!signingSecret) return sendJson(res, 404, { error: "not_configured" });

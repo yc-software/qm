@@ -38,7 +38,6 @@ async function validateKey(
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
   audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.read",
@@ -51,7 +50,6 @@ export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
 export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
   const id = ctx.params.provider;
   if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
   const body = ctx.body as {
@@ -92,7 +90,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
   }
-  await ctx.deps.refreshCustomProviders?.();
+  await ctx.deps.refreshCustomProviders();
   audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.update",
@@ -106,12 +104,11 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
 export async function deleteCustomProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.customProviders) return sendJson(ctx.res, 404, { error: "not_found" });
   const id = ctx.params.provider;
   if (!id) return sendJson(ctx.res, 404, { error: "not_found" });
   const removed = await ctx.deps.customProviders.delete(id, authorized.id);
   if (!removed) return sendJson(ctx.res, 404, { error: "not_found" });
-  await ctx.deps.refreshCustomProviders?.();
+  await ctx.deps.refreshCustomProviders();
   audit(ctx, {
     principalId: authorized.id,
     action: "custom-providers.delete",

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
-import { buildApp, serverDeps } from "./wiring.ts";
+import { buildApp } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
@@ -13,7 +13,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { migrateDatabase } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant, perTenant } from "./tenants/cache.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
@@ -58,7 +58,7 @@ export async function startQm(
   { env = {}, ...overrides }: Parameters<typeof buildApp>[1] & { env?: NodeJS.ProcessEnv } = {},
 ) {
   const built = buildApp(config, overrides);
-  await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl) await migrateDatabase(config.databaseUrl);
   if (config.databaseUrl)
     await installCronQueue(config.databaseUrl).catch((error: unknown) => {
       if (!cronQueueMisconfigured(error)) throw error;
@@ -92,9 +92,11 @@ export async function startQm(
           ),
         };
   const server = createServer(built.app, {
-    ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
+    ...built,
+    slackEnvironmentState,
+    slackEnvBotToken: slackConfig?.botToken,
     managedSlack,
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    openaiApiKey: config.openaiApiKey,
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
@@ -110,7 +112,7 @@ export async function startQm(
 
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
-    await built.deploymentLayerReady;
+    await built.deploymentLayerReady();
   });
   server.listen(config.port);
   await once(server, "listening");

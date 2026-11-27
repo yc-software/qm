@@ -188,7 +188,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       : {}),
     ...(deps.sessionStatus
       ? {
-          sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, Date.now, deps.statusActivity),
+          sessionStatus: createSlackSessionStatus(deps.sessionStatus, lease, deps.runs, Date.now, {
+            ...deps.statusActivity,
+            persona: (runId) => deps.turnStream.persona(runId),
+          }),
         }
       : {}),
     async externalSlackParticipants() {

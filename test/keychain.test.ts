@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
@@ -1052,7 +1052,7 @@ const SECRET = "keychain-route-secret".repeat(3);
 describe("/v1/keychain routes (capability-authed)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
@@ -1086,16 +1086,10 @@ describe("/v1/keychain routes (capability-authed)", () => {
       { groupId: "G_CONN", principalId: "carol@conn" },
     ]);
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
-      sessions: built.sessions,
       runs: liveRunStore(built.runs),
-      secretDrops: built.secretDrops,
-      signals: built.signals,
-      identity: built.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

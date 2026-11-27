@@ -5,8 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -23,7 +23,7 @@ const SECRET = "dm-relay-secret".repeat(3);
 describe("agent → teammate DM: the cron recipient route (§10)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
@@ -80,6 +80,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
       { groupId: "G-jrs", principalId: "U-sam1" },
     ]);
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });

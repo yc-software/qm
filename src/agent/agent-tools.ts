@@ -94,6 +94,7 @@ export interface AgentToolsOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
+  sandboxImages?: string[];
   readOnly?: boolean;
   ephemeral?: boolean;
   botActor?: boolean;

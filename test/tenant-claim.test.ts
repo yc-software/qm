@@ -4,6 +4,7 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { claimThenBind, claimThenLoad } from "../src/tenants/claim.ts";
 import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
+import { createTestMapTables } from "./support/test-database.ts";
 
 withoutTenant(() =>
   describe("claim then bind", () => {
@@ -11,7 +12,7 @@ withoutTenant(() =>
 
     before(async () => {
       db = await twoTenants();
-      await createPostgresMap<{ n: number }>(db.owner, "claim_probe").claimIds();
+      await createTestMapTables(db.ownerDatabaseUrl, { claim_probe: [], claim_probe_at: [] });
     });
 
     after(() => db?.close());
@@ -34,7 +35,6 @@ withoutTenant(() =>
 
     it("claims each tenant once and prunes old rows under that tenant", async () => {
       const map = createPostgresMap<{ at: number }>(db.app, "claim_probe_at");
-      await createPostgresMap(db.owner, "claim_probe_at").claimIds();
       const [a, b] = db.tenants;
       for (const tenant of [a, b])
         await withTenant(tenant, async () => {

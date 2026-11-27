@@ -59,6 +59,8 @@ test("the same person in two tenants only hears their own tenant's session state
   const pending = { [a]: [delivery("d-a", "pat")], [b]: [delivery("d-b", "pat")] };
   const fake = hub(pending, acked);
   const events = createWebEvents(fake.app, {
+    identity: {} as never,
+    loops: {} as never,
     deliveries: { undeliveredTenants: async () => [a, b].map((tenantId) => ({ tenantId, id: "web" })) },
   });
   withoutTenant(() => events.start());
@@ -86,6 +88,7 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
   const fake = hub({}, []);
   const looked: Array<string | undefined> = [];
   const events = createWebEvents(fake.app, {
+    identity: {} as never,
     loops: {
       store: {
         get: async () => {
@@ -112,6 +115,7 @@ test("an inbox event from one tenant never reaches another tenant's browsers", a
 test("an inbox event emitted outside any tenant binding is forwarded inside the event's tenant", async () => {
   const fake = hub({}, []);
   const events = createWebEvents(fake.app, {
+    identity: {} as never,
     loops: {
       store: {
         get: async () => {

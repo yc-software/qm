@@ -6,7 +6,6 @@ import {
   putMemberBrain,
   readRegistry,
   redactBrain,
-  resolveMemoryRegistry,
   type MemoryRegistry,
   type MemoryRegistryStore,
   type RegistryChange,
@@ -25,14 +24,10 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
     return null;
   }
-  if (!deps.memoryRegistry) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   if (!requirePersonAuthority(ctx)) return null;
   if (
     parseScopeId(capability.scopeId).kind !== "personal" &&
-    (await deps.config?.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
+    (await deps.config.resolveSharingPostureDurable(scopeId("personal", capability.actorId), capability.scopeId)) !==
       "open"
   ) {
     sendJson(res, 403, { error: "forbidden", message: PRIVATE });
@@ -46,16 +41,17 @@ async function member(ctx: ApiCtx) {
   return { owner, registry: deps.memoryRegistry };
 }
 
-function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
+async function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
   const id = memberBrainId(owner);
   const brain = record.brains.find((entry) => entry.id === id && entry.owner === owner);
   const bindings = brain ? record.bindings.filter((binding) => binding.brain === id) : [];
+  const own = brain ? { ...record, brains: [brain], bindings } : undefined;
   return {
     principalId: owner,
     memberBrains: memberBrainsOn(record),
     brain: brain ? redactBrain(brain) : null,
     binding: bindings[0] ?? null,
-    disabled: brain ? resolveMemoryRegistry({ ...record, brains: [brain], bindings }, registry).disabled : [],
+    disabled: own ? (await registry.resolve(own)).disabled : [],
   };
 }
 
@@ -75,7 +71,7 @@ async function getOwnBrain(ctx: ApiCtx): Promise<void> {
   } catch (error) {
     return registryError(ctx, error);
   }
-  return sendJson(ctx.res, 200, ownBrain(record, registry, owner));
+  return sendJson(ctx.res, 200, await ownBrain(record, registry, owner));
 }
 
 async function changeOwnBrain(

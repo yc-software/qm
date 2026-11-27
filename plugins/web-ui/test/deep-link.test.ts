@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deepLinkPath, parseDeepLink, sessionLink, sessionLinkTarget } from "../src/deep-link.ts";
+import { deepLinkPath, fileLinkTarget, parseDeepLink, sessionLink, sessionLinkTarget } from "../src/deep-link.ts";
 
 test("chats view with an active session is addressed by /s/<id>", () => {
   assert.equal(deepLinkPath("", "chats", "abc-123"), "/s/abc-123");
@@ -163,6 +163,15 @@ test("other links are not treated as session links", () => {
   assert.equal(sessionLinkTarget(`${origin}/apps`, origin, ""), null);
   assert.equal(sessionLinkTarget(`${origin}/s/abc`, origin, "/ui"), null);
   assert.equal(sessionLinkTarget("not a url", "null", ""), null);
+});
+
+test("in-app file links resolve to the file id", () => {
+  const origin = "https://qm.example.com";
+  assert.equal(fileLinkTarget(`${origin}/files?file=doc1`, origin, ""), "doc1");
+  assert.equal(fileLinkTarget("/ui/files?file=doc1", origin, "/ui"), "doc1");
+  assert.equal(fileLinkTarget(`${origin}/files`, origin, ""), null);
+  assert.equal(fileLinkTarget(`${origin}/s/abc?file=doc1`, origin, ""), null);
+  assert.equal(fileLinkTarget("https://elsewhere.example.com/files?file=doc1", origin, ""), null);
 });
 
 test("legacy /sessions/<id> links resolve to the session", () => {

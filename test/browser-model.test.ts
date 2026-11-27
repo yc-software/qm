@@ -5,7 +5,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
@@ -81,7 +80,7 @@ test("company browser inference runs on the session route through the gateway", 
     },
   });
   const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/browser-model/chat/completions`;
@@ -283,7 +282,7 @@ test("company browsing without a gateway uses current deployment credentials and
     providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
   });
   const built = buildApp(config);
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   await selectDefaultSandbox(built, "U1", personalScope("U1"));

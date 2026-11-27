@@ -44,7 +44,7 @@ mock.module("./support/mock-agent.ts", {
     },
   },
 });
-const { buildApp } = await import("./support/build-app.ts");
+const { buildApp, testCore } = await import("./support/build-app.ts");
 const { createServer } = await import("../src/api/server.ts");
 const SECRET = "synthetic-continuity-http-signing-key";
 const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const }));
@@ -53,7 +53,7 @@ async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   await b.app.upsertDirectory(
     ["alice", "bob", "stranger"].map((principalId) => ({
       principalId,
@@ -71,11 +71,9 @@ async function fixture(t: TestContext) {
   const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
   await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
+    ...testCore(b),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: b.scheduler,
-    config: b.config,
-    admin: b.admin,
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

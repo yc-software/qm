@@ -42,7 +42,6 @@ function parseRecord(v: unknown): Omit<EgressAuditRecord, "ts"> | null {
 
 async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  if (!deps.egressAudit) return sendJson(res, 501, { error: "not_configured", message: "no egress audit sink wired" });
   const records = (body as { records?: unknown })?.records;
   if (!Array.isArray(records) || records.length === 0 || records.length > MAX_BATCH) {
     return sendJson(res, 400, {
@@ -51,7 +50,7 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
     });
   }
   const boot = bootTenant();
-  const lookup = deps.sessions?.tenantLookup;
+  const lookup = deps.sessions.tenantLookup;
   const exists = async (tenant: string): Promise<boolean> =>
     tenant === boot ||
     ((await lookup?.exists(tenant).catch(swallowAs(`egress audit: tenant ${tenant} lookup`, false))) ?? false);

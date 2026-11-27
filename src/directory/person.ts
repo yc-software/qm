@@ -5,6 +5,12 @@ import { foldPrincipalId, principalLinks } from "./person-refs.ts";
 
 export { foldPrincipalId, installPrincipalLinks, type PrincipalLinkResolver } from "./person-refs.ts";
 
+export const TRUSTED_SUBJECT_PREFIX = "oidc:";
+
+export function isTrustedSubject(id: string): boolean {
+  return id.startsWith(TRUSTED_SUBJECT_PREFIX);
+}
+
 export function canonicalPerson(id: string): string {
   const key = foldPrincipalId(id);
   if (!key) return id;

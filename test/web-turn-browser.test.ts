@@ -8,7 +8,6 @@ import type { App } from "../src/api/app-types.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import type { RunSignal } from "../src/runs/run-signal-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -89,7 +88,7 @@ const admin = {
 
 async function serve(deps: Partial<ServerDeps> = {}, t?: TestContext): Promise<string> {
   const server = createServer(app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     portalSession,
     admin,
@@ -427,19 +426,13 @@ test("inbox turns, steers and approvals need the inbox feature flag", async () =
   });
 });
 
-test("inbox chat fails closed when the flag service is missing or the inbox cannot be read", async (t) => {
-  const unflagged = await serve({ featureFlags: undefined }, t);
+test("inbox chat fails closed when the inbox cannot be read", async (t) => {
   const unreadable = await serve({ loops: undefined }, t);
   await withInbox(["alice"], async () => {
-    for (const [at, status] of [
-      [unflagged, 403],
-      [unreadable, 500],
-    ] as const) {
-      const count = turns.length;
-      const response = await post("/api/turn", { text: "Summarize", threadRef: "web:alice:inbox" }, { at });
-      assert.equal(response.status, status);
-      assert.equal(turns.length, count);
-    }
+    const count = turns.length;
+    const response = await post("/api/turn", { text: "Summarize", threadRef: "web:alice:inbox" }, { at: unreadable });
+    assert.equal(response.status, 500);
+    assert.equal(turns.length, count);
   });
 });
 

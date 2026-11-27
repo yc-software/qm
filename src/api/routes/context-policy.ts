@@ -28,8 +28,6 @@ export async function getContextPolicy(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "ambient policy applies to channel and group scopes only",
     });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
   if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
   const p = await deps.channelPolicy.get(container);
   return sendJson(res, 200, {
@@ -55,8 +53,6 @@ export async function setContextPolicy(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "ambient policy applies to channel and group scopes only",
     });
-  if (!deps.channelPolicy)
-    return sendJson(res, 404, { error: "not_found", message: "not available on this deployment" });
   if (!(await memberScope(ctx, principalId, scope))) return sendJson(res, 403, { error: "forbidden" });
   if (typeof b.orders !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "orders (string) required" });

@@ -268,6 +268,7 @@ export interface DeliveryProvenance {
   sourceScopeId: ScopeId;
   sourceThreadRef: string;
   sourceSessionId?: string;
+  sourceRunId?: string;
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
 }

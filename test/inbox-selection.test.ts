@@ -14,6 +14,7 @@ import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 function world(enabled = true) {
   const deps = {
@@ -37,6 +38,7 @@ function world(enabled = true) {
         actor: { p: actor },
         capability: null,
         deps: {
+          ...testCore(),
           loops: deps,
           uiState,
           featureFlags: { enabled: async () => enabled },

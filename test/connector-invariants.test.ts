@@ -6,10 +6,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
+import { PROVIDERS, createSecretClientResolver, sealOAuthState } from "../src/connectors/oauth.ts";
+import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
@@ -71,16 +72,17 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
 });
 
 const SECRET = "invariant-secret".repeat(3);
-const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
+const resolveClient = createSecretClientResolver(
+  createEnvSecretSource({ GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" }),
+);
 
 test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
+    resolveClient,
     oauthFetch: async () => {
       exchanged = true;
       return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
@@ -111,10 +113,9 @@ test("cross-org — the callback rejects sealed state minted for a different org
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
+    resolveClient,
     oauthFetch: async () => ({ ok: true, status: 200, json: async () => ({}) }),
   });
   server.listen(0);
@@ -145,7 +146,7 @@ test("status/selector parity — a personal-only connection reports connected (m
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -243,7 +244,7 @@ for (const surface of ["cron", "loop"]) {
 }
 
 test("a read-only wake never reaches the sandbox (execute stripped), so no exec env at all", async () => {
-  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
+  const built: Core = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-ro-")) }));
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
 
   fakeSprites.reset();

@@ -8,8 +8,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { scopeId, personalScope } from "../src/types.ts";
@@ -27,8 +27,8 @@ const SECRET = "route-test-secret".repeat(3);
 describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
-  let signOff: ReturnType<typeof signOffs<BuiltApp["sessions"]>>;
+  let built: Core;
+  let signOff: ReturnType<typeof signOffs<Core["sessions"]>>;
   const SESSION = "cap-routes-session";
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
@@ -90,11 +90,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
     );
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
-      config: built.config,
-      admin: built.admin,
       runs: liveRunStore(),
       sessions: signOff.sessions as never,
       approvals: testMap<PendingApprovalRecord>(),

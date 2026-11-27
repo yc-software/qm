@@ -164,7 +164,7 @@ export async function resolveTurnContext(input: ContextInput) {
       const notebooks = await tracePhase(
         "turn.memory_snapshot",
         () => Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) }))),
-        { counts: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
+        { attributes: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
       );
       for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
@@ -196,7 +196,7 @@ export async function resolveTurnContext(input: ContextInput) {
             },
             memoryLabels,
           ),
-        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
+        { attributes: (recalled) => ({ "qm.recalled": recalled.length }) },
       ),
     recallCards: async (text: string | undefined, personAuthority: boolean, history: readonly Item[]) => {
       const startedAt = Date.now();

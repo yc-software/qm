@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
@@ -62,15 +62,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-")) }));
   allowUpstream(upstreamUrl);
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    modelCredentialFetch: fetch,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), modelCredentialFetch: fetch });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
@@ -194,15 +186,7 @@ test("QA: openai-responses custom provider serves a real turn through the genera
   const upstreamUrl = `${upstream.url}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
   allowUpstream(upstreamUrl);
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    modelCredentialFetch: fetch,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), modelCredentialFetch: fetch });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const api = (path: string, init?: RequestInit) => fetch(`${base}${path}`, { headers: ADMIN, ...init });
@@ -308,15 +292,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-ant-")) }));
   allowUpstream(upstreamUrl);
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    modelCredentialFetch: fetch,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, { ...testCore(built), modelCredentialFetch: fetch });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -418,14 +394,7 @@ test("QA: a custom model named like a built-in registers and sends its own model
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-own-")) }));
   allowUpstream(upstreamUrl);
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -474,14 +443,7 @@ test("QA: a custom provider saved without a key check cannot reach a loopback ad
   const redirectorOrigin = `http://127.0.0.1:${(redirector.address() as AddressInfo).port}`;
 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-custom-loopback-")) }));
-  const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    admin: built.admin,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   allowUpstream(redirectorOrigin);

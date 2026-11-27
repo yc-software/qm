@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresMap, processLevelMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import type { PgPool } from "../src/persistence/pg-pool.ts";
 import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";
 import { parseRenderSandboxImage } from "../src/sandbox/render-limits.ts";
@@ -45,7 +45,7 @@ function setup(t: TestContext) {
 }
 
 const renderBaseStore = (pg: PgPool) =>
-  createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], [], [processLevelMap("render_sandbox_bases")]);
+  createPostgresMap<StoredRenderBase>(pg, "render_sandbox_bases", [], { tenanted: false });
 
 const prepare = (base: RenderBase) => base.prepare(new AbortController().signal);
 const source = async (base: RenderBase) => {
@@ -265,3 +265,13 @@ test(
     assert.ok(golden.snapshotId);
   },
 );
+
+test("a chosen image's base never stands in for the default image", async (t) => {
+  const { fake, store, prepareUntil } = setup(t);
+  const options = { client: fake.client, store, pollMs: 5, prepareMs: 5, retryMs: 5 };
+  const chosen = createRenderBase({ ...options, image: REF_A, chosenImage: "toolchain", waitMs: 2_000 });
+  await prepareUntil(chosen, async () => !!(await store.get(DIGEST_A))?.readyAtMs);
+  assert.equal((await chosen.ready()).ref, REF_A);
+  assert.equal((await store.get(DIGEST_A))?.chosenImage, "toolchain");
+  await assert.rejects(createRenderBase({ ...options, image: REF_B, waitMs: 20 }).ready(), /still being prepared/);
+});

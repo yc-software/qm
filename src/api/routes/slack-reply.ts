@@ -61,16 +61,11 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.clientMessageId))
   )
     return sendJson(ctx.res, 400, { error: "invalid_message" });
-  if (send && !ctx.deps.deliveries)
-    return sendJson(ctx.res, 503, {
-      error: "slack_unavailable",
-      message: "Slack replies are temporarily unavailable.",
-    });
   let slackConfirmed = false;
   const recordReply = async (ts: unknown, name: string) => {
     slackConfirmed = true;
     if (typeof ts !== "string" || !/^\d+\.\d+$/.test(ts)) throw new Error("Slack response missing timestamp");
-    await ctx.deps.deliveries!.enqueue({
+    await ctx.deps.deliveries.enqueue({
       destination: {
         type: "web",
         target: source.session.threadRef,
@@ -120,7 +115,7 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
         });
       const uploads = [];
       for (const file of files) {
-        const blob = await ctx.deps.blobTransfer?.open(file.blobId);
+        const blob = await ctx.deps.blobTransfer.open(file.blobId);
         if (!blob) return sendJson(ctx.res, 400, { error: "invalid_attachment" });
         const bytes = Buffer.concat(await blob.stream.toArray());
         const slot = (await connection.call("files.getUploadURLExternal", {

@@ -1,5 +1,6 @@
 import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
+import { traceElapsed } from "../../plugins/chassis/src/error-reporting.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
@@ -63,7 +64,7 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve", "local"]);
 
 function requireTenantSeparation(name: SandboxBackendName): void {
   if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
@@ -194,7 +195,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const result = await resources.use(resourceId, () =>
         forHandle(handle).run(handle, withLoadProbe(command), execOpts),
       );
-      const { stdout, sample } = takeLoadSample(result.stdout, Date.now());
+      const { stdout, sample, commandMs } = takeLoadSample(result.stdout, Date.now());
+      if (commandMs !== undefined) traceElapsed("exec.command", commandMs);
       if (!sample) return { ...result, stdout };
       notePressure(resourceId, handle, sample);
       if (sample.sampledAt - (loadWrites.get(resourceId) ?? 0) >= LOAD_WRITE_INTERVAL_MS) {

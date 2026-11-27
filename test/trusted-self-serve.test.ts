@@ -7,7 +7,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
+import { handleModelBudgetCap } from "../src/core/orchestrator/model-budget.ts";
 import { testConfig } from "./support/test-config.ts";
 import { twoTenants } from "./support/two-tenants.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -22,7 +23,7 @@ import { bindBootTenant } from "../src/tenants/boot.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 import { provisionerSigningKey } from "../src/tenants/self-serve.ts";
 import { orgId } from "../src/config.ts";
-import { scopeId } from "../src/types.ts";
+import { personalScope, scopeId } from "../src/types.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
@@ -40,14 +41,13 @@ function start(databaseUrl: string, extra: Parameters<typeof testConfig>[0] = {}
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),
     ...(enabled ? { portalIdentitySecret: identitySecret, requireSignedPortalIdentity: true } : {}),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
     ...(built.selfServe ? { selfServe: built.selfServe } : {}),
-    identity: built.identity,
-    auditLog: built.auditLog,
+    trustedOidcIssuer: issuer,
   });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -148,6 +148,18 @@ test("cofounders signing in at once share one new workspace and every one of the
     deploymentModelKey: false,
   });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
+  const told = await withTenant(tenant, async (token) => {
+    await s.built.identity.refresh(true);
+    const onChat = ["f0@acme.test", "f1@acme.test"];
+    await s.built.app.upsertDirectory(onChat.map((id) => ({ principalId: id, displayName: id, type: "internal" })));
+    const deps = { ...s.built, publicWebUrl: "https://qm.example.test" };
+    const reply = await handleModelBudgetCap(deps, token, { kind: "dm" }, s.built.identity.classify(onChat[1]!), false);
+    assert.match(reply, /\/settings\/onboarding/, "a chat member linked to a trusted sign-in is the admin it is");
+    const targets = async (type: string) => (await s.built.deliveries.pending(type)).map((d) => d.destination.target);
+    return [await targets("principal"), (await targets("web")).sort()];
+  });
+  const webOnly = founders.slice(2).map((subject) => `web:${trustedPrincipal(issuer, subject)}:direct`);
+  assert.deepEqual(told, [["f0@acme.test"], webOnly.sort()], "each other admin is told where they can be reached");
   await withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "founder-2")), [
       { id: tenant, brandName: "Acme Robotics" },
@@ -347,4 +359,57 @@ test("self-serve never creates a deployment's first workspace", async (t) => {
     403,
   );
   assert.deepEqual((await db.owner.q("SELECT count(*)::int AS n FROM tenants"))[0], { n: 0 });
+});
+
+function offboardSubject(base: string, body: unknown, secret = signingSecret) {
+  const raw = JSON.stringify(body);
+  const path = withSourceAuthNonce("/v1/auth/broker/offboard-trusted-subject", secret);
+  const ts = Math.floor(Date.now() / 1000);
+  const headers = { "x-timestamp": String(ts), "x-signature": signRequest(secret, ts, `POST\n${path}\n${raw}`) };
+  return withoutTenant(() => fetch(base + path, { method: "POST", body: raw, headers }));
+}
+
+test("a trusted subject is previewed, then cut off in every workspace, even as its last admin, with its turns stopped", async (t) => {
+  const { s, isAdmin } = await shared(t, { trustedOidcAdminRole: "owner", trustedOidcAdminIssuer: issuer });
+  const built = s.built;
+  const enroll = (subject: string, org: { id: string; name: string }) =>
+    withoutTenant(() => selfServeWorkspace(s.config, { subject, email: `${subject}@acme.test` }, org));
+  const offboard = (body: unknown) => offboardSubject(s.base, body);
+  const principal = trustedPrincipal(issuer, "1234");
+  const acme = await enroll("1234", { id: "42", name: "Acme Robotics" });
+  const beta = await enroll("1234", { id: "43", name: "Beta Labs" });
+  await enroll("5678", { id: "43", name: "Beta Labs" });
+  const owner = { ownerScopeId: personalScope(principal), owner: principal, createdBy: principal };
+  const cron = await withTenant(acme, () =>
+    built.app.createCron({ ...owner, schedule: { everyMs: 60_000 }, action: "x" }),
+  );
+  const actor = { id: principal, type: "internal" as const };
+  const conversation = { kind: "dm" as const, threadRef: "web:t", audience: [actor] };
+  const request = { actor, conversation, origin: { kind: "automation" as const }, text: "x" };
+  const { run } = await withTenant(acme, () => built.runs.enqueue({ sessionId: "web:t", request }));
+  const planned = (await (await offboard({ subject: "1234" })).json()) as any;
+  assert.equal(planned.applied, false);
+  const names = planned.workspaces.map((w: any) => w.name);
+  assert.ok(names.includes("Acme Robotics") && names.includes("Beta Labs"), JSON.stringify(names));
+  assert.equal(await isAdmin(acme, "1234"), true);
+
+  const applied = (await (await offboard({ subject: "1234", apply: true })).json()) as any;
+  assert.ok(applied.workspaces.every((w: any) => w.changes.every((c: any) => c.result === "done")));
+  assert.equal(await isAdmin(acme, "1234"), false);
+  assert.equal(await isAdmin(beta, "1234"), false);
+  assert.equal(await isAdmin(beta, "5678"), true);
+  assert.equal(await withTenant(beta, async () => built.identity.deactivationSource(principal)), "manual");
+  assert.equal((await withTenant(acme, () => built.app.getCron(cron.id)))?.enabled, false);
+  const signals = await withTenant(acme, () => built.signals.pending(run.id));
+  assert.ok(signals.some(({ signal }) => signal.kind === "abort"));
+  const events = await withTenant(acme, (token) => built.auditLog.events(token));
+  assert.ok(events.some((e) => e.principalId === "system:trusted-issuer"));
+});
+
+test("the trusted offboard needs the source signature and a well-formed body", async (t) => {
+  const { s } = await shared(t, { trustedOidcAdminIssuer: issuer });
+  const offboard = (body: unknown, secret?: string) => offboardSubject(s.base, body, secret);
+  assert.equal((await offboard({ subject: "1234" }, "wrong-secret".repeat(4))).status, 401);
+  assert.equal((await offboard({ subject: "1", apply: "yes" })).status, 400);
+  assert.deepEqual(((await (await offboard({ subject: "999" })).json()) as any).workspaces, []);
 });

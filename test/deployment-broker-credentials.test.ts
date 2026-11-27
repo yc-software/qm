@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
@@ -200,20 +200,12 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
       brokerCredentials,
     }),
   );
-  const deps = {
-    config: built.config,
-    serviceCreds: built.serviceCreds,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    brokerFetch: fetchImpl,
-  };
+  const deps = { ...testCore(built), brokerFetch: fetchImpl };
   const server = admin
     ? createInsecureTestServer(built.app, deps)
     : createServer(built.app, {
-        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
         ...deps,
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
         signingSecret: SECRET,
       });
   server.listen(0);
@@ -358,6 +350,7 @@ test("a deployment credential cannot back a decision provider", async () => {
       body,
       tenant,
       deps: {
+        ...testCore(),
         serviceCreds,
         decisions: {
           saveProvider: async (_tenant: unknown, provider: unknown) => void saved.push(provider),

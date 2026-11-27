@@ -73,6 +73,8 @@ export interface AgentComputerProfile {
   sizesMemory?: boolean;
 }
 
+export type ImageFor = (scopeId: string) => Promise<string | undefined>;
+
 export function effectiveEgressEnforcement(
   profile: AgentComputerProfile,
   controlPlane: { signingSecret?: string; apiBaseUrl?: string },

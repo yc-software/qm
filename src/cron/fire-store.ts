@@ -1,8 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows } from "../tenants/claim.ts";
+import { claimRows } from "../tenants/claim.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -49,19 +48,6 @@ const FIRE_COLUMNS = FIRE_COLUMN_DEFS.map((c) => c.name).join(", ");
 const VALUE_COLUMN_DEFS = FIRE_COLUMN_DEFS.filter((c) => c.name !== "cron_id" && c.name !== "fire_key");
 const UPSERT_SET = VALUE_COLUMN_DEFS.map((c) => `${c.name} = EXCLUDED.${c.name}`).join(", ");
 
-const HISTORY_FIELDS = [
-  "source.cron_id",
-  "source.fire_key",
-  "COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id)",
-  "source.json->>'sessionId'",
-  "source.fired_at",
-  "(source.json->>'scheduledAt')::bigint",
-  "COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END)",
-  "source.json->>'status'",
-  "source.json->>'note'",
-  "source.json->>'reply'",
-].join(", ");
-
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
    ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
@@ -91,88 +77,7 @@ function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
 }
 
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(connectionString, [
-    {
-      id: "cron/fires/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS cron_fires(
-        cron_id TEXT NOT NULL,
-        fire_key TEXT NOT NULL,
-        thread_ref TEXT NOT NULL,
-        session_id TEXT,
-        fired_at BIGINT NOT NULL,
-        scheduled_at BIGINT,
-        ended_at BIGINT,
-        status TEXT,
-        note TEXT,
-        reply TEXT,
-        PRIMARY KEY (cron_id, fire_key)
-      )`,
-        `CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)`,
-        `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
-      ],
-    },
-    ...tenantTables("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
-    {
-      id: "cron/fires/0003-claims",
-      statements: [
-        claimFunction(
-          "claim_stranded_cron_fires",
-          "ended bigint, stranded_note text, fired_before bigint",
-          `UPDATE cron_fires SET status = 'failed', ended_at = ended, note = stranded_note
-              WHERE status = 'running' AND fired_at <= fired_before
-              RETURNING tenant_id, jsonb_build_array(cron_id, fire_key)::text`,
-        ),
-        claimFunction(
-          "claim_pruned_cron_fires",
-          "keep_per_cron integer, ended_before bigint",
-          `DELETE FROM cron_fires cf
-              USING (SELECT tenant_id, cron_id, fire_key,
-                            ROW_NUMBER() OVER (PARTITION BY tenant_id, cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
-                       FROM cron_fires) ranked
-              WHERE cf.tenant_id = ranked.tenant_id AND cf.cron_id = ranked.cron_id AND cf.fire_key = ranked.fire_key
-                AND ranked.rn > keep_per_cron
-                AND cf.ended_at IS NOT NULL AND cf.ended_at < ended_before
-              RETURNING cf.tenant_id, jsonb_build_array(cf.cron_id, cf.fire_key)::text`,
-        ),
-      ],
-    },
-    {
-      id: "cron/fires/0004-copy-history",
-      statements: [
-        `DO $copy_history$
-         DECLARE
-           tenant uuid;
-         BEGIN
-           IF to_regclass('cron_fire_log') IS NULL THEN
-             RETURN;
-           END IF;
-           IF NOT EXISTS (SELECT 1 FROM cron_fire_log) THEN
-             RETURN;
-           END IF;
-           IF NOT EXISTS (SELECT 1 FROM tenants) THEN
-             INSERT INTO tenants DEFAULT VALUES;
-           END IF;
-           SELECT id INTO tenant FROM tenants ORDER BY created_at, id LIMIT 1;
-           INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
-             SELECT tenant, ${HISTORY_FIELDS} FROM cron_fire_log source
-           ON CONFLICT (tenant_id, cron_id, fire_key) DO NOTHING;
-         END $copy_history$`,
-      ],
-    },
-    {
-      id: "cron/fires/0004-drop-legacy-sync",
-      statements: [
-        `DO $body$ BEGIN
-            IF to_regclass('cron_fire_log') IS NOT NULL THEN
-              DROP TRIGGER IF EXISTS qm_sync_legacy_cron_fire ON cron_fire_log;
-            END IF;
-          END $body$`,
-        `DROP FUNCTION IF EXISTS qm_sync_legacy_cron_fire()`,
-      ],
-    },
-    { id: "cron/fires/0005-drop-fire-log", statements: ["DROP TABLE IF EXISTS cron_fire_log"] },
-  ]);
+  const { q, query, pool } = createPgPool(connectionString);
 
   return {
     async record(cronId, entry) {

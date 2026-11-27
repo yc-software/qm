@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { withTenant } from "../src/tenants/context.ts";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
@@ -25,7 +25,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -208,7 +208,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
@@ -454,7 +454,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
   const registry = createModelOverlayStore(backing);
   let refreshes = 0;
   const deps = {
-    ...serverDeps(config, built),
+    ...built,
     modelRegistry: registry,
     refreshModels: async () => {
       refreshes++;

@@ -69,14 +69,14 @@ test("with web_dm_spine on, a web DM speaks by posting and a wake edits the post
   };
 
   const edited = (await wake(`!edit ${posted!.seq} Done: the repo is small`)).at(-1)!;
-  assert.deepEqual([edited.text, edited.body.supersedes], ["Done: the repo is small", posted!.seq]);
+  assert.deepEqual([edited.text, edited.body.supersedes], ["Done: the repo is small", [posted!.seq]]);
   assert.ok(turns.at(-1)!.environment.includes(`Your latest message here is ref ${posted!.seq}, beginning "On it"`));
   assert.ok(
     !/Your reply replaces|anything you write is shown/.test(turns.at(-1)!.environment),
     "with both flags on, this one governs",
   );
   const again = (await wake(`!edit ${edited.seq} Done: the repo is small and tidy`)).at(-1)!;
-  assert.equal(again.body.supersedes, edited.seq, "an edit chains onto the newest version");
+  assert.deepEqual(again.body.supersedes, [edited.seq], "an edit chains onto the newest version");
   assert.equal((await wake(`!edit ${posted!.seq} nope`)).length, 3, "only the newest message can be edited");
   assert.equal((await wake()).length, 3, "text written on a wake is never a message");
 

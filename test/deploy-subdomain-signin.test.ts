@@ -26,6 +26,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCore } from "./support/build-app.ts";
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -96,7 +97,10 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
+    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], {
+      ...testCore(),
+      ...config,
+    });
     server.listen(0);
     try {
       const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
@@ -133,6 +137,7 @@ test("app sign-in uses the configured trusted entry and preserves the app return
       getApp: async () => null,
     } as unknown as Parameters<typeof createInsecureTestServer>[0],
     {
+      ...testCore(),
       deployAppsDomain: "apps.example.com",
       deployGateSecret: "gate",
       deployAppsSessionSecret: SESSION_SECRET,
@@ -223,6 +228,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     deliveries.push(input);
   };
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -430,6 +436,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     name: "teamsite",
   });
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: { enabled: async () => false } as unknown as FeatureFlagStore,
     identity,
     deployAppsDomain: "apps.example.com",
@@ -514,6 +521,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     name: site,
   });
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",

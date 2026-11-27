@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,9 +6,7 @@ import { join } from "node:path";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
 import { createDeployStore, type PublishedApp, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testBareDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
-import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { APP_TABLES } from "../src/deploy/page-views.ts";
+import { testDeployBackings } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
@@ -23,16 +21,6 @@ async function raw(sql: string, params: unknown[] = []): Promise<Record<string, 
     await p.end();
   }
 }
-
-before(async () => {
-  if (!URL) return;
-  await raw("DROP TABLE IF EXISTS deployment_access CASCADE");
-  await raw("DROP TABLE IF EXISTS deployments CASCADE");
-  await raw(
-    "DELETE FROM qm_schema_migrations WHERE id LIKE 'deploy/access/%' OR id LIKE 'durable-map/deployments/%'",
-  ).catch(() => {});
-  await raw("DELETE FROM durable_map_versions WHERE tbl = 'deployments'").catch(() => {});
-});
 
 const factories: PostgresArtifactMaps[] = [];
 
@@ -50,7 +38,7 @@ function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStor
   const factory = makeFactory();
   const store = createDeployStore(
     testDeployBackings({
-      deployments: factory.map<PublishedApp>("deployments", undefined, APP_TABLES),
+      deployments: factory.map<PublishedApp>("deployments"),
       pg: factory.pool,
       git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
       ...opts,
@@ -142,9 +130,7 @@ test("renaming onto a taken name is rejected by the unique index", { skip }, asy
 test("rows never touched since the split fall back to the blob's legacy lastAccessAt", { skip }, async () => {
   const { store, factory } = makeStore({ touchDebounceMs: 0 });
   const d = await store.create(createInput());
-  await factory
-    .map<PublishedApp>("deployments", undefined, APP_TABLES)
-    .merge(d.id, { lastAccessAt: 777 } as Partial<PublishedApp>);
+  await factory.map<PublishedApp>("deployments").merge(d.id, { lastAccessAt: 777 } as Partial<PublishedApp>);
   assert.equal((await store.get(d.id))!.lastAccessAt, 777);
   await store.touch(d.id, 9_999);
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
@@ -152,7 +138,7 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
 
 test("pre-existing duplicate names degrade gracefully: no index, deterministic getByName", { skip }, async () => {
   await raw("DROP INDEX IF EXISTS deployments_name_unique");
-  const seed = makeFactory().map<PublishedApp>("deployments", undefined, APP_TABLES);
+  const seed = makeFactory().map<PublishedApp>("deployments");
   const dup = (id: string): PublishedApp => ({
     id,
     ownerScopeId: scopeId("personal", "U1"),
@@ -170,31 +156,6 @@ test("pre-existing duplicate names degrade gracefully: no index, deterministic g
   assert.equal((await store.getByName("doubled"))!.id, "dup-a", "lowest id wins, matching the old all().find order");
   const created = await store.create(createInput("fresh-name"));
   assert.equal((await store.getByName("fresh-name"))!.id, created.id);
-});
-
-test("the name index migration skips a tenant's duplicate names instead of failing", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  for (const duplicated of [true, false]) {
-    const owner = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
-    try {
-      const nameIndex = APP_TABLES.filter((m) => m.id.endsWith("-name-index")).map(definePgMigration);
-      const tables = APP_TABLES.filter((m) => !m.id.endsWith("-name-index")).map(definePgMigration);
-      await applyPgMigrations(owner, tables);
-      await owner.query("INSERT INTO tenants DEFAULT VALUES");
-      const tenant = (await owner.query("SELECT id FROM tenants LIMIT 1")).rows[0].id;
-      for (const id of duplicated ? ["a", "b"] : ["a"])
-        await owner.query("INSERT INTO deployments (tenant_id, id, json) VALUES ($1, $2, $3)", [
-          tenant,
-          id,
-          { name: "same" },
-        ]);
-      await applyPgMigrations(owner, nameIndex);
-      const index = await owner.query("SELECT to_regclass('deployments_name_unique') AS i");
-      assert.equal(index.rows[0].i === null, duplicated);
-    } finally {
-      await owner.end();
-    }
-  }
 });
 
 test("concurrent field writes and new versions from two instances all land", { skip }, async () => {

@@ -11,7 +11,7 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { scopeId, personalScope } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { bill } from "./support/spend-usage.ts";
@@ -22,23 +22,17 @@ const today = new Date(Math.floor(Date.now() / DAY) * DAY).toISOString().slice(0
 const tomorrow = new Date(Math.floor(Date.now() / DAY) * DAY + DAY).toISOString().slice(0, 10);
 const WINDOW = `from=${today}&to=${tomorrow}`;
 
-async function start(options: { sessions?: false; secret?: string } = {}) {
+async function start(options: { secret?: string } = {}) {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "self-spend-")), signingSecret: options.secret }),
   );
-  const deps = {
-    admin: built.admin,
-    sessions: options.sessions === false ? undefined : built.sessions,
-    auditLog: built.auditLog,
-    runs: built.runs,
-  };
   const server = options.secret
     ? createServer(built.app, {
-        ...deps,
+        ...testCore(built),
         signingSecret: options.secret,
         replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   await built.app.upsertDirectory([
@@ -232,17 +226,6 @@ test("self spend: rejects a window over 93 days, an unknown bucket and a missing
     assert.equal(await status(`${WINDOW}&bucket=month`), 400);
     assert.equal(await status(`${WINDOW}&bucket=week`), 200);
     assert.equal((await fetch(`${s.base}/v1/spend?${WINDOW}`)).status, 400);
-  } finally {
-    await s.close();
-  }
-});
-
-test("self spend: answers 503 without a session store", async () => {
-  const s = await start({ sessions: false });
-  try {
-    const response = await s.mine();
-    assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), { error: "spend_unavailable" });
   } finally {
     await s.close();
   }

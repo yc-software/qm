@@ -558,7 +558,7 @@ test("Slack names people set reach the screen as data, never in the trusted conv
   const raw = [{ ts: "1.000", thread_ts: "1.000", user: "U2", text: "kickoff" }];
   const serializer = createConversationSerializer({ ids, directory, readHistory: async () => ({ raw }) } as never);
   const callCore = (turn: Omit<TurnRequest, "surface">) => app.turn({ ...turn, surface: "slack" });
-  const deps = { flow: { callCore }, directory, mirror: {}, serializer, ids, threads: { mark() {} } };
+  const deps = { core: {}, flow: { callCore }, directory, mirror: {}, serializer, ids, threads: { mark() {} } };
   const files = [{ id: "F1", name: "Upload Name.key", size: 2e9, url_private: "https://files.slack.com/F1" }];
   const prefetched = { actor: internalActor, info: { name: "channel-name" }, audience: [internalActor] };
   const inc = { kind: "channel", channel: "C1", userId: "U1", rawText: "recap?", threadTs: "1.000", ts: "2.000" };
@@ -776,4 +776,42 @@ test("inventories ride a byte-stable system prompt; a warm turn's environment ca
   assert.equal(system2, system1);
   assert.match(environment2!, /^\nLocal time: \S+ \d\d:\d\d P[SD]T \(America\/Los_Angeles\)\n<\/environment>$/);
   assert.doesNotMatch(environment1!, /## /);
+});
+
+test("a Slack message records who wrote it and the names it mentions, addressed or not", async () => {
+  const { app } = freshApp();
+  const directory = { classifyUserCached: async () => ({ actor: { displayName: "Starter Name" } }) };
+  const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "agent" };
+  const raw = [{ ts: "1.000", thread_ts: "1.000", user: "UBOT", bot_id: "BBOT", text: "kickoff" }];
+  const serializer = createConversationSerializer({ ids, directory, readHistory: async () => ({ raw }) } as never);
+  const sessionIds: string[] = [];
+  const callCore = async (turn: Omit<TurnRequest, "surface">) => {
+    const res = await app.turn({ ...turn, surface: "slack" });
+    if (res.sessionId) sessionIds.push(res.sessionId);
+    return res;
+  };
+  const ackEmoji = { requestAckEmoji: async () => undefined, ackPickCandidates: () => [] };
+  const deps = {
+    core: {},
+    flow: { callCore },
+    directory,
+    mirror: {},
+    serializer,
+    ids,
+    ackEmoji,
+    threads: { mark() {} },
+  };
+  const prefetched = { actor: internalActor, info: { name: "c" }, audience: [internalActor] };
+  const inc = { kind: "channel", channel: "C1", userId: "U1", threadTs: "1.000", files: [], prefetched };
+  const handler = createTurnHandler(deps as never);
+  await handler.handleIncoming({ ...inc, ts: "2.000", rawText: "<@UBOT> ask <@U2>" } as never, {});
+  await handler.handleIncoming({ ...inc, ts: "3.000", rawText: "it's up", unprompted: true } as never, {});
+  const items = (await app.getSession(sessionIds[0]!))!.items.filter((e) => isUserItem(e) && !e.body.overheard);
+  assert.deepEqual(
+    items.slice(0, 2).map((e) => [e.body.display ?? e.text, e.body.speakerId]),
+    [
+      ["@agent ask @Starter Name", internalActor.externalId],
+      ["it's up", internalActor.externalId],
+    ],
+  );
 });

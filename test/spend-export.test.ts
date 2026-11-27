@@ -10,8 +10,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import type { AppPageViewLog } from "../src/deploy/page-views.ts";
 import { scopeId, personalScope } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -27,20 +26,18 @@ const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
 const apps = "/v1/apps/export?principalId=alice%40example.com";
 
-function fixture(options: { token?: string | null; sessions?: SessionStore | null; pageViews?: AppPageViewLog } = {}) {
+function fixture(options: { token?: string | null; sessions?: SessionStore; pageViews?: AppPageViewLog } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const sessions =
-    options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
+  const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
   const token = options.token === undefined ? exportToken : options.token;
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
     requireSignedPortalIdentity: true,
-    admin: built.admin,
-    auditLog: built.auditLog,
-    ...(sessions ? { sessions } : {}),
+    sessions,
     ...(token ? { spendExportToken: token } : {}),
     ...(options.pageViews ? { appPageViews: options.pageViews } : {}),
   });
@@ -284,17 +281,8 @@ test("spend export: the window is whole UTC days, ordered and at most 93 days", 
   }
 });
 
-test("spend export: an unavailable spend store is an error, not an empty export", async () => {
-  const s = fixture({ sessions: null });
-  try {
-    assert.equal((await s.get(`/v1/spend/export?${window}`)).status, 503);
-  } finally {
-    await s.close();
-  }
-});
-
 test("spend export: core receives the configured token", () => {
   const config = testConfig({ spendExportToken: exportToken });
-  assert.equal(serverDeps(config, buildApp(config)).spendExportToken, exportToken);
-  assert.equal(serverDeps(testConfig(), buildApp(testConfig())).spendExportToken, undefined);
+  assert.equal(buildApp(config).spendExportToken, exportToken);
+  assert.equal(buildApp(testConfig()).spendExportToken, undefined);
 });

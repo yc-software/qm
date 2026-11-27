@@ -22,6 +22,9 @@ import { testTenant as tenant } from "./support/test-tenant.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import { liveRun } from "./support/live-run.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
+import { createSecretClientResolver } from "../src/connectors/oauth.ts";
+import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { testCore } from "./support/build-app.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -38,12 +41,14 @@ function fixture() {
   const audits: Array<{ action: string; resource?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const deps: Partial<ServerDeps> = {
+    ...testCore(),
     approvals: testMap<PendingApprovalRecord>(),
     sessions: signOff.sessions as unknown as ServerDeps["sessions"],
     keychain,
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
+    config: { resolveSharingPostureDurable: async () => undefined } as unknown as ServerDeps["config"],
     composioReturns: testMap(),
     portalUrl: "https://qm.example",
     auditLog: {
@@ -729,6 +734,22 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   assert.equal(f.calls.length, 1);
 });
 
+test("unknown tools and connections are caller errors answered without reporting a failure", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.join(" ")));
+  const notFound = () => new Response("{}", { status: 404 });
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, notFound(), notFound());
+  const tool = await f.invoke("/v1/composio/execute", { ...execution, tool: "GMAIL_AUTH_TEST" }, null, privateCap);
+  const account = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.deepEqual(
+    [tool.status, tool.data.error, account.status, account.data.error],
+    [404, "tool_not_found", 403, "connection_not_authorized"],
+  );
+  assert.equal(logged.length, 0, logged.join("\n"));
+});
+
 test("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
@@ -1254,7 +1275,9 @@ async function nativeSlackFixture(linked = true) {
   const f = await slackReplyFixture();
   f.deps.slackAccounts = testMap();
   f.deps.connectorTokens = f.deps.keychain;
-  f.deps.oauthEnv = { SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" };
+  f.deps.resolveClient = createSecretClientResolver(
+    createEnvSecretSource({ SLACK_OAUTH_CLIENT_ID: "native-client", SLACK_OAUTH_CLIENT_SECRET: "native-secret" }),
+  );
   f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
   await f.deps.directory.replace([{ principalId: "alice", slackId: "U123", displayName: "Alice", type: "internal" }]);
   f.deps.slackEnvBotToken = "workspace-bot";

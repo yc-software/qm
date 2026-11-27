@@ -17,7 +17,7 @@ import { entitledOrgWide, entitledScopes } from "../../resolution/context-filter
 import { refuseImpersonated, sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
+import { errMessage, httpFailure, reportFailure, swallow } from "../../util/errors.ts";
 import { activePrincipal, audit, requirePersonAuthority } from "./shared.ts";
 import { tenantOf, type ApiCtx, type Route } from "./route.ts";
 import { connectorApps, isToolkitId, withConnectorApps, type ConnectorApp } from "../../mcp/connector-apps.ts";
@@ -70,7 +70,7 @@ export async function credential(
       cap.botActor ||
       (shared &&
         carriesPersonAuthority(cap) &&
-        (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
+        (await ctx.deps.config.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
     ) {
       sendJson(ctx.res, 403, {
         error: "private_connections",
@@ -97,24 +97,23 @@ export async function credential(
     return null;
   }
   const org = scopeId("org", orgId());
-  const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
+  const identity = ctx.deps.identity.classify(principal);
   const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
   if (!audience?.length || audience.some((member) => member.type !== "internal")) {
     sendJson(ctx.res, 403, { error: "unknown_audience" });
     return null;
   }
-  const grants =
-    (await ctx.deps.acl?.grantsOfKind(
-      tenantOf(ctx),
-      "service-cred",
-      audience,
-      ctx.capability?.scopeId ?? personal,
-      org,
-      entitledScopes(false),
-    )) ?? [];
+  const grants = await ctx.deps.acl.grantsOfKind(
+    tenantOf(ctx),
+    "service-cred",
+    audience,
+    ctx.capability?.scopeId ?? personal,
+    org,
+    entitledScopes(false),
+  );
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const orgWide = entitledOrgWide(audience, ctx.capability?.scopeId ?? personal, org);
-  const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
+  const records = (await ctx.deps.serviceCreds.listServiceCredentials(org)).filter(
     (c) => isUsableComposioKey(c) && (allowed.has(c.slug) || (orgWide && c.source === "deployment")),
   );
 
@@ -123,7 +122,7 @@ export async function credential(
     composioUnavailable(ctx, records.length ? 409 : 403);
     return null;
   }
-  const record = await ctx.deps.serviceCreds!.getServiceCredentialSecret(org, records[0]!.slug);
+  const record = await ctx.deps.serviceCreds.getServiceCredentialSecret(org, records[0]!.slug);
   if (!record?.enabled || record.delivery !== "env" || record.envKey !== COMPOSIO_ENV_KEY || !record.secret) {
     sendJson(ctx.res, 403, { error: "composio_unavailable" });
     return null;
@@ -200,7 +199,18 @@ export async function request(
 }
 
 export async function externalApps(ctx: ApiCtx): Promise<ConnectorApp[]> {
-  return connectorApps((await ctx.deps.mcpServers?.list()) ?? []);
+  return connectorApps(await ctx.deps.mcpServers.list());
+}
+
+function nullIfNotFound(key: string, lookup: string): (error: unknown) => null {
+  return (error) => {
+    if (!(error instanceof ComposioHttpError) || error.status !== 404) throw error;
+    swallow(
+      `composio: ${lookup} not found`,
+      new Error(createExactSecretValueMasker([key])(redactSecrets(error.message))),
+    );
+    return null;
+  };
 }
 
 async function catalog(ctx: ApiCtx): Promise<void> {
@@ -272,7 +282,7 @@ export async function activeOwnedAccount(
   access: { key: string; principal: string },
   accountId: string,
 ): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
-  const owned = await ownedAccount(ctx, access, accountId);
+  const owned = await ownedAccount(ctx, access, accountId).catch(nullIfNotFound(access.key, `account ${accountId}`));
   return owned && owned.account.status === "ACTIVE" && owned.account.is_disabled !== true ? owned : null;
 }
 
@@ -328,7 +338,7 @@ async function missingScopes(
 async function connections(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx, true);
   if (!access) return;
-  const servers = (await ctx.deps.mcpServers?.list()) ?? [];
+  const servers = await ctx.deps.mcpServers.list();
   if (!access.key && !connectorApps(servers).length) return composioUnavailable(ctx, 403);
   const cursor = ctx.url.searchParams.get("cursor") ?? "";
   if (cursor.length > 2048) return sendJson(ctx.res, 400, { error: "bad_cursor" });
@@ -338,7 +348,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const [data, external] = await Promise.all([
       access.key ? request(ctx, access.key, `/connected_accounts?${query}`) : NO_COMPOSIO,
-      cursor ? [] : (ctx.deps.mcpToolService?.appConnections(access.principal, servers) ?? []),
+      cursor ? [] : ctx.deps.mcpToolService.appConnections(access.principal, servers),
     ]);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
     const accounts = data.items.filter((item) => usableAccount(item, userIds));
@@ -489,7 +499,12 @@ async function execute(ctx: ApiCtx): Promise<void> {
       ctx,
       access.key,
       `/tools/${body.tool}?${new URLSearchParams({ toolkit_versions: body.version })}`,
-    );
+    ).catch(nullIfNotFound(access.key, `tool ${resource}`));
+    if (!tool)
+      return sendJson(ctx.res, 404, {
+        error: "tool_not_found",
+        message: "No such tool at this version. Search the toolkit's tools for its current slug and version.",
+      });
     if (
       tool.slug !== body.tool ||
       (tool.toolkit as { slug?: string } | undefined)?.slug !== toolkit ||
@@ -566,7 +581,7 @@ export interface SlackAccountLink {
 
 async function slackStatus(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
-  const installation = await ctx.deps.slackInstallation?.get();
+  const installation = await ctx.deps.slackInstallation.get();
   const workspaceInstalled = Boolean(installation?.botToken || ctx.deps.slackEnvBotToken);
   let nativeOAuth = false;
   if (ctx.actor && !ctx.actor.imp && !ctx.capability) {
@@ -595,7 +610,7 @@ async function slackStatus(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
   let failed = false;
   for (const id of personIds(access.principal)) {
-    const record = await ctx.deps.slackAccounts?.get(id);
+    const record = await ctx.deps.slackAccounts.get(id);
     if (!record || !samePerson(record.memberId, access.principal)) continue;
     try {
       const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(record.accountId)}`);
@@ -626,7 +641,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const { deps, res } = ctx;
-  if (!deps.signingSecret || !deps.principalLinks || !deps.directory || !deps.slackAccounts || ctx.actor?.imp)
+  if (!deps.signingSecret || ctx.actor?.imp)
     return sendJson(res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   const ticket = (ctx.body as { ticket?: unknown } | null)?.ticket;
   const proof =
@@ -683,7 +698,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         error: "not_user",
         message: "Connect your personal Slack account, not a bot account.",
       });
-    const installation = await deps.slackInstallation?.get();
+    const installation = await deps.slackInstallation.get();
     let teamId = installation?.teamId;
     const botToken = installation?.botToken ?? deps.slackEnvBotToken;
     if (!teamId && botToken) {
@@ -717,7 +732,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
           "QM could not find your company Slack membership. Message the bot and try again, or ask your administrator for help.",
       });
     const member = members[0]!;
-    await deps.identity?.refresh(true);
+    await deps.identity.refresh(true);
     if (!(await activePrincipal(deps, member.principalId)) || !(await activePrincipal(deps, access.principal)))
       return sendJson(res, 403, {
         error: "inactive_account",
@@ -726,10 +741,10 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     if (!samePerson(member.principalId, access.principal)) {
       const existingCredentials = (await deps.keychain?.listByOwner(member.principalId)) ?? [];
       const projectKeys = new Set([access.key]);
-      const companyCredentials = (await deps.serviceCreds?.listServiceCredentials(scopeId("org", orgId()))) ?? [];
+      const companyCredentials = await deps.serviceCreds.listServiceCredentials(scopeId("org", orgId()));
       for (const candidate of companyCredentials) {
         if (candidate.envKey !== COMPOSIO_ENV_KEY || !candidate.hasSecret) continue;
-        const material = await deps.serviceCreds!.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
+        const material = await deps.serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), candidate.slug);
         if (!material?.secret) throw Error("Could not inspect existing connections");
         projectKeys.add(material.secret);
       }
@@ -761,7 +776,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         evidence: `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
         linkedBy: access.principal,
       });
-      await deps.identity?.refresh(true);
+      await deps.identity.refresh(true);
       audit(ctx, {
         principalId: access.principal,
         action: "principal_link.create",

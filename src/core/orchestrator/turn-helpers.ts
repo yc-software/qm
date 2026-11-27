@@ -192,6 +192,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   return {
     surface: input.surface ?? "unknown",
     ...(input.surfaceOrigin ? { surfaceOrigin: input.surfaceOrigin } : {}),
+    ...(input.personaId ? { personaId: input.personaId } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),

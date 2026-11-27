@@ -145,6 +145,7 @@ export async function grantedCredential(
   slug: string,
   reader: ServiceCredentialReader,
   orgScopeId: ScopeId,
+  appBorrows: (deployment: string, slug: string) => Promise<boolean>,
 ): Promise<CredentialGrant> {
   if (!Array.isArray(claims.credentials) || !claims.credentials.includes(slug))
     return { status: 403, code: "not_entitled", message: "this session is not entitled to that credential", host: "" };
@@ -163,6 +164,13 @@ export async function grantedCredential(
       message: "this credential is switched off for published apps",
       host: rec.host,
     };
+  if (claims.deployment && !(await appBorrows(claims.deployment, slug)))
+    return {
+      status: 403,
+      code: "not_granted_to_app_audience",
+      message: "this credential is not granted to everyone who can use this app",
+      host: rec.host,
+    };
   return { rec };
 }
 
@@ -172,6 +180,7 @@ export async function brokerCredentialCall(opts: {
   body: BrokerRequest;
   orgScopeId: ScopeId;
   reader: ServiceCredentialReader;
+  appBorrows: (deployment: string, slug: string) => Promise<boolean>;
   fetchImpl: BrokerFetch;
   usage?: CredentialUsageSink;
   audit?: BrokerAudit;
@@ -203,7 +212,7 @@ export async function brokerCredentialCall(opts: {
   if (!slug || !rawUrl) {
     return { status: 400, json: { error: "bad_request", message: "credential (slug) and url are required" } };
   }
-  const grant = await grantedCredential(claims, slug, reader, orgScopeId);
+  const grant = await grantedCredential(claims, slug, reader, orgScopeId, opts.appBorrows);
   if (!grant.rec) return deny(grant.status, grant.code, grant.message, grant.host);
   const { rec } = grant;
   if (credentialInjectionError(rec.injection)) {

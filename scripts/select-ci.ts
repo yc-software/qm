@@ -15,9 +15,8 @@ const RUN_ALL = {
     "scripts/run-pg-tests.mjs",
     "scripts/run-root-test-shard.mjs",
     "scripts/select-ci.ts",
-    "test/support/test-template.ts",
   ],
-  prefixes: [".github/", "vendor/", "tsconfig"],
+  prefixes: [".github/", "vendor/", "tsconfig", "db/"],
 };
 const RUNNERS = ["test/support/boot-tenant-entry.ts", "test/support/test-tenant.ts"];
 const WEB_UI = ["plugins/web-ui/"];

@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -592,7 +592,7 @@ test("an ask's resolution is one event line, shown only to the first turn after 
 describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let approvals: KeychainApprovals;
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);
@@ -657,15 +657,11 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
       keychainApprovals: approvals,
-      deliveries: built.deliveries,
-      admin: built.admin,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-      auditLog: built.auditLog,
-      credentialUsage: built.credentialUsage,
       runs: liveRunStore(built.runs),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));

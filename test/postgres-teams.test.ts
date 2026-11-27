@@ -1,21 +1,18 @@
-import { test, beforeEach } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTeamStore } from "../src/teams/teams.ts";
 import { scopeId } from "../src/types.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
+let URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
+
+beforeEach(() => {
+  if (URL) URL = testDatabaseUrl();
+});
 const org = scopeId("org", "default-org");
 const room = scopeId("channel", "C1");
-
-beforeEach(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations, team_rooms, team_members, teams CASCADE");
-  await p.end();
-});
 
 const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, org);
 

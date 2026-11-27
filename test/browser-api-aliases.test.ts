@@ -7,7 +7,7 @@ import { apiRoutes } from "../src/api/routes/index.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { createServer } from "../src/api/server.ts";
 import { startQm } from "../src/start.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -51,7 +51,7 @@ async function core(t: TestContext, onBuilt: (built: ReturnType<typeof buildApp>
   const config = testConfig({ signingSecret: SIGNING, publicWebUrl: "https://qm.example.com" });
   const built = stopAtEnd(buildApp(config));
   onBuilt(built);
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -72,6 +72,8 @@ test("each aliased /api path resolves to the browser-enabled /v1 route that serv
     ["POST", "/api/crons"],
     ["PUT", "/api/inbox"],
     ["DELETE", "/api/loops/1/grants/2"],
+    ["GET", "/api/files/upload-client"],
+    ["GET", "/api/files/uploads"],
     ["GET", "/v1/sessions"],
   ] as const)
     assert.equal(apiAlias(method, path), null, `${method} ${path}`);

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -20,6 +20,7 @@ const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) }));
 built.runtime.start();
 const core = createServer(built.app, {
+  ...testCore(built),
   ...browserSessionDeps,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,

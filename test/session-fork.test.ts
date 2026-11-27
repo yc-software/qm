@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { isUserItem, type Item } from "../src/sessions/items.ts";
@@ -218,6 +218,7 @@ test("side-chat reads bind the query principal to the authenticated portal ident
   const sourceSecret = "side-chat-source-secret-for-http-tests";
   const identitySecret = "side-chat-identity-secret-for-http-tests";
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     capabilitySecret: "side-chat-capability-secret-for-http-tests",

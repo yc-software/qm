@@ -2785,6 +2785,33 @@ test("sandbox memory_gib reaches create and restart only", async () => {
   assert.deepEqual(restarts, [["box-a", 8]]);
 });
 
+test("sandbox offers image only when images are configured and passes it to create", async () => {
+  const operations: unknown[] = [];
+  const tools = (sandboxImages?: string[]) =>
+    createAgentTools(
+      {
+        current: {
+          ...fakeToolContext(),
+          sandboxResources: async (action, input) => {
+            operations.push({ action, input });
+            return { ok: true };
+          },
+        },
+        emit: async () => undefined,
+        scopeLabel: "personal:U1",
+      },
+      { sandboxResources: true, ...(sandboxImages ? { sandboxImages } : {}) },
+    ).find((t) => t.name === "sandbox")!;
+  const imageSchema = (sandbox: ReturnType<typeof tools>) =>
+    (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties.image;
+  assert.equal(imageSchema(tools()), undefined);
+  assert.deepEqual(imageSchema(tools(["toolchain"]))?.enum, ["toolchain"]);
+  await call(tools(["toolchain"]), { action: "create", backend: "e2b", name: "dev", image: "toolchain", purpose: "p" });
+  assert.deepEqual(operations, [
+    { action: "create", input: { backend: "e2b", name: "dev", sandboxId: undefined, image: "toolchain" } },
+  ]);
+});
+
 test("execute and background dispatch every process action and preserves cursors, signals, targets and watches", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const entries: Array<Record<string, unknown>> = [];
@@ -4846,7 +4873,7 @@ test("a failing approval check returns its error to the model and offers no card
     current: {
       ...fakeToolContext(),
       mcpToolNeedsApproval: async () => {
-        throw new Error("Unknown Records tool: nope. Search for it first.");
+        throw new Error("MCP server records is not available");
       },
       callMcpTool: async () => {
         ran = true;
@@ -4858,8 +4885,8 @@ test("a failing approval check returns its error to the model and offers no card
   };
   const catalog = catalogTools(ref).find((t) => t.name === "records");
   assert.match(
-    textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
-    /could not check whether this call needs approval: Unknown Records tool: nope/,
+    textOut(await call(catalog, { operation: "invoke", tool: "lookup" })),
+    /could not check whether this call needs approval: MCP server records is not available/,
   );
   assert.equal(ran, false);
   assert.deepEqual(ref.pendingApprovals, []);

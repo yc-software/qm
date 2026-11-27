@@ -5,8 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -23,19 +23,17 @@ const PID = "portal-only-identity-secret-for-tests-01";
 describe("user-scoped routes require a portal-verified actor when enforcement is on", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const token = async (p: string, secret = PID) => mintSignedPayload({ p, exp: Date.now() + 60_000 }, secret);
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
     server = createInsecureTestServer(built.app, {
+      ...testCore(built),
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      scheduler: built.scheduler,
-      identity: built.identity,
-      sessionShares: built.sessionShares,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -78,6 +76,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.ok(claimed?.leaseToken);
     await built.runs.complete(run.id, claimed.leaseToken, { status: "ok", reply: "owner-only result" });
     const strictServer = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
@@ -113,7 +112,11 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("production implies signed identity on the raw app proxy", async () => {
-    const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
+    const prodServer = createInsecureTestServer(built.app, {
+      ...testCore(built),
+      production: true,
+      portalIdentitySecret: PID,
+    });
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
     try {
       const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;
@@ -135,7 +138,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     for (const path of [
       "/v1/memory?principalId=",
       "/v1/spend?principalId=",
-      "/v1/contexts/channel%3AC1/ambient-policy?principalId=",
+      "/v1/contexts/personal%3AU1/ambient-policy?principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",
       "/v1/shared-sessions/token/files/file?viewer=",
@@ -432,7 +435,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("app, cron and webhook handlers refuse a missing principal even without enforced identity", async () => {
-    const open = createInsecureTestServer(built.app, {});
+    const open = createInsecureTestServer(built.app, testCore(built));
     await new Promise<void>((resolve) => open.listen(0, resolve));
     try {
       const openBase = `http://localhost:${(open.address() as AddressInfo).port}`;
