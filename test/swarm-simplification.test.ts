@@ -69,10 +69,14 @@ test("waiting reads reauthorize after sleeping and separate requests never cache
   await assert.rejects(service.inspect(f.caller), /scope access denied/);
 });
 
-test("a first spawn in a project is authorized at the project version its turn carries", async () => {
+test("a first spawn in a project is authorized at the project version and audience its turn carries", async () => {
   const f = await swarmFixture({ request: { scopeVersion: "v7" }, claims: { scopeVersion: "v7" } });
-  const service = createSwarmService({ ...f.serviceOptions, authorize: async (c) => c.scopeVersion === "v7" });
+  const service = createSwarmService({
+    ...f.serviceOptions,
+    authorize: async (c) => c.scopeVersion === "v7" && c.members?.[0]?.id === "alice",
+  });
   assert.equal((await service.spawn(f.caller, { requestId: "initial", text: "work" })).length, 1);
+  assert.equal(f.caller.kind === "agent" && (await service.authorizes(f.caller.claims)), true);
 });
 test("a replaced run cannot commit the initial pool after admission", async () => {
   const f = await swarmFixture();

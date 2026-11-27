@@ -94,7 +94,9 @@ export interface SwarmService {
     turn: { actorId: string; threadRef: string; sessionId: string },
   ): Promise<boolean>;
   botComputerRule(swarmIds: readonly string[]): Promise<Pick<SwarmService, "botMayUseComputer">>;
-  authorizes(claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members">): Promise<boolean>;
+  authorizes(
+    claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "members" | "runId">,
+  ): Promise<boolean>;
   notePersonUse(computer: Pick<SandboxResource, "swarmId">): Promise<void>;
   binding(
     tenant: Tenant,
@@ -309,6 +311,7 @@ export function createSwarmService(deps: {
     const participants = await sessions.participantsOf(session.id);
     if (!participants.includes(actorId)) throw new Error("session access denied");
     let fence: SwarmRunFence | undefined;
+    let members: CapabilityClaims["members"];
     if (caller.kind === "agent") {
       if (caller.claims.scopeId !== session.scopeId || !caller.claims.runId)
         throw new Error("session-bound capability required");
@@ -333,6 +336,7 @@ export function createSwarmService(deps: {
       };
       if (!run.leaseExpiresAt) throw new Error("active capability run required");
       assertSwarmRun(fence, run);
+      members = run.request.conversation.audience;
     }
     const identity = threadIdentity(session.threadRef, session.id);
     const swarm = await store.get(identity.rootId);
@@ -343,7 +347,7 @@ export function createSwarmService(deps: {
         actorId,
         scopeId: session.scopeId,
         ...(scopeVersion ? { scopeVersion } : {}),
-        ...(caller.kind === "agent" && caller.claims.members ? { members: caller.claims.members } : {}),
+        ...(members ? { members } : {}),
       }))
     )
       throw new Error("scope access denied");
@@ -934,7 +938,17 @@ export function createSwarmService(deps: {
         ({ auth, swarm } = await load(caller));
       }
     },
-    authorizes: (claims) => deps.authorize(claims),
+    authorizes: async (claims) => {
+      const run = claims.runId ? await runs.get(claims.runId) : null;
+      if (!run) return deps.authorize(claims);
+      const { actorId, scopeId, scopeVersion } = claims;
+      return deps.authorize({
+        actorId,
+        scopeId,
+        ...(scopeVersion ? { scopeVersion } : {}),
+        members: run.request.conversation.audience,
+      });
+    },
     botComputerRule,
     botMayUseComputer: async (computer, turn) => (await botComputerRule([])).botMayUseComputer(computer, turn),
     notePersonUse,
