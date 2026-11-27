@@ -1,0 +1,80 @@
+    cd /tmp/aiconsent-after/ios
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-ios18.0-simulator -bundle -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.2.sdk -O0 -Xlinker -no_warn_duplicate_libraries -L/tmp/aiconsent-dd/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphonesimulator -L/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator -L/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib -F/tmp/aiconsent-dd/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphonesimulator -F/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/PackageFrameworks -F/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator -iframework /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks -iframework /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.2.sdk/Developer/Library/Frameworks -filelist /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.LinkFileList -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker @loader_path -Xlinker -rpath -Xlinker /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/PackageFrameworks -Xlinker -rpath -Xlinker @loader_path/Frameworks -Xlinker -rpath -Xlinker @executable_path/Frameworks -Xlinker -dead_strip -bundle_loader /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM -Xlinker -object_path_lto -Xlinker /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests_lto.o -rdynamic -Xlinker -no_deduplicate -Xlinker -objc_abi_version -Xlinker 2 -Xlinker -dependency_info -Xlinker /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphonesimulator -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.swiftmodule -Xlinker -needed_framework -Xlinker XCTest -framework XCTest -Xlinker -needed-lXCTestSwiftSupport -lXCTestSwiftSupport /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib -Xlinker -no_adhoc_codesign -o /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/QMTests
+
+CopySwiftLibs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    builtin-swiftStdLibTool --copy --verbose --sign - --scan-executable /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/QMTests --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Frameworks --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/PlugIns --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/SystemExtensions --scan-folder /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Extensions --platform iphonesimulator --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.x27Dwy/Metal.xctoolchain --toolchain /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/Frameworks --strip-bitcode --scan-executable /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/libXCTestSwiftSupport.dylib --strip-bitcode-tool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+
+ExtractAppIntentsMetadata (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.x27Dwy/Metal.xctoolchain --module-name QMTests --sdk-root /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.2.sdk --xcode-version 27B52 --platform-family iOS --deployment-target 18.0 --bundle-identifier org.qm.QMTests --output /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest --target-triple arm64-apple-ios18.0-simulator --binary-file /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest/QMTests --dependency-file /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests_dependency_info.dat --stringsdata-file /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.SwiftFileList --metadata-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/QMTests.DependencyMetadataFileList --static-metadata-file-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/QMTests.DependencyStaticMetadataFileList --swift-const-vals-list /tmp/aiconsent-dd/Build/Intermediates.noindex/QM.build/Debug-iphonesimulator/QMTests.build/Objects-normal/arm64/QMTests.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --no-app-shortcuts-localization
+2026-11-27 10:13:34.582 appintentsmetadataprocessor[95804:4896096] Starting App Intents metadata extraction
+2026-11-27 10:13:34.653 appintentsmetadataprocessor[95804:4896096] Extracted no relevant App Intents symbols, skipping writing output
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib
+/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib: replacing existing signature
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+Validate /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-after/ios
+    builtin-validationUtility /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app -shallow-bundle -infoplist-subpath Info.plist
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/SDKExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+Test Suite 'Selected tests' started at 2026-11-27 10:13:37.034.
+Test Suite 'QMTests.xctest' started at 2026-11-27 10:13:37.034.
+Test Suite 'ConsentShots' started at 2026-11-27 10:13:37.034.
+Test Case '-[QMTests.ConsentShots testConsentScreen]' started.
+Test Case '-[QMTests.ConsentShots testConsentScreen]' passed (4.174 seconds).
+Test Case '-[QMTests.ConsentShots testConsentSettings]' started.
+Test Case '-[QMTests.ConsentShots testConsentSettings]' passed (2.083 seconds).
+Test Suite 'ConsentShots' passed at 2026-11-27 10:13:43.293.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 6.257 (6.258) seconds
+Test Suite 'SettingsShots' started at 2026-11-27 10:13:43.293.
+Test Case '-[QMTests.SettingsShots testSettings]' started.
+Test Case '-[QMTests.SettingsShots testSettings]' passed (2.095 seconds).
+Test Suite 'SettingsShots' passed at 2026-11-27 10:13:45.389.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.095 (2.096) seconds
+Test Suite 'QMTests.xctest' passed at 2026-11-27 10:13:45.389.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 8.353 (8.355) seconds
+Test Suite 'Selected tests' passed at 2026-11-27 10:13:45.389.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 8.353 (8.356) seconds
+2026-11-27 10:13:45.718 xcodebuild[95600:4894544] [MT] IDETestOperationsObserverDebug: 10.682 elapsed -- Testing started completed.
+2026-11-27 10:13:45.718 xcodebuild[95600:4894544] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-27 10:13:45.718 xcodebuild[95600:4894544] [MT] IDETestOperationsObserverDebug: 10.682 sec, +10.682 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/aiconsent-dd/Logs/Test/Test-QM-2026.11.27_10-13-16--0800.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started

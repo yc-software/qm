@@ -1,0 +1,60 @@
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest (in target 'QMTests' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/PlugIns/QMTests.xctest
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/QM.debug.dylib
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib
+/tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app/__preview.dylib: replacing existing signature
+
+CodeSign /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    
+    Signing Identity:     "Sign to Run Locally"
+    
+    /usr/bin/codesign --force --sign - --timestamp\=none --generate-entitlement-der --strip-disallowed-xattrs /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app
+
+Validate /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app (in target 'QM' from project 'QM')
+    cd /tmp/aiconsent-before/ios
+    builtin-validationUtility /tmp/aiconsent-dd/Build/Products/Debug-iphonesimulator/QM.app -shallow-bundle -infoplist-subpath Info.plist
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/SDKExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/ExplicitPrecompiledModules
+
+PruneExplicitPrecompiledModules /tmp/aiconsent-dd/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+
+Test Suite 'Selected tests' started at 2026-11-27 10:13:11.015.
+Test Suite 'QMTests.xctest' started at 2026-11-27 10:13:11.015.
+Test Suite 'SettingsShots' started at 2026-11-27 10:13:11.015.
+Test Case '-[QMTests.SettingsShots testSettings]' started.
+Test Case '-[QMTests.SettingsShots testSettings]' passed (2.105 seconds).
+Test Suite 'SettingsShots' passed at 2026-11-27 10:13:13.121.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.105 (2.106) seconds
+Test Suite 'QMTests.xctest' passed at 2026-11-27 10:13:13.122.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.105 (2.106) seconds
+Test Suite 'Selected tests' passed at 2026-11-27 10:13:13.122.
+	 Executed 1 test, with 0 failures (0 unexpected) in 2.105 (2.107) seconds
+2026-11-27 10:13:13.450 xcodebuild[95397:4892420] [MT] IDETestOperationsObserverDebug: 4.391 elapsed -- Testing started completed.
+2026-11-27 10:13:13.450 xcodebuild[95397:4892420] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-11-27 10:13:13.450 xcodebuild[95397:4892420] [MT] IDETestOperationsObserverDebug: 4.391 sec, +4.391 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/aiconsent-dd/Logs/Test/Test-QM-2026.11.27_10-12-48--0800.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started
