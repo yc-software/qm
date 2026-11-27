@@ -461,6 +461,7 @@ test("attested MCP calls and catalogs keep each turn's source separate", async (
   t.after(() => service.close());
   await store.put(server({ id: "records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
+  const invocation = { operation: "invoke", tool: "query", arguments: {} };
   for (const account of ["first", "second", undefined]) {
     const author = { surface: "test", account: account ?? "", id: "U1" };
     const turn = account
@@ -473,14 +474,7 @@ test("attested MCP calls and catalogs keep each turn's source separate", async (
       : undefined;
     sources.length = 0;
     const before = mcp.requests.filter((request) => request.rpc === "tools/list").length;
-    await service.call(
-      "records",
-      { operation: "invoke", tool: "query", arguments: {} },
-      "U1",
-      undefined,
-      personalScope("U1"),
-      turn,
-    );
+    await service.call("records", invocation, "U1", undefined, personalScope("U1"), turn);
     assert.equal(mcp.requests.filter((request) => request.rpc === "tools/list").length, before + 1);
     assert.ok(sources.length);
     assert.deepEqual(
