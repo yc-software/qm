@@ -59,9 +59,7 @@ struct ChatView: View {
   }
 
   private var canSend: Bool {
-    (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      || !model.attachments.isEmpty)
-      && !dictation.busy && !model.sending && !model.uploading
+    hasDraft && !dictation.busy && !model.sending && !model.uploading
       && !model.approvals.contains(where: \.blocksComposer)
   }
 
@@ -917,7 +915,7 @@ struct ChatView: View {
             }
             .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
             .disabled(!canSend)
-            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            .transition(.opacity)
           }
         }
       }
