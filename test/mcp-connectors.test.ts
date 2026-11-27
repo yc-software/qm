@@ -468,7 +468,10 @@ test("attested MCP calls and catalogs keep each turn's source separate", async (
       ? {
           source: {
             surfaceOrigin: { author, workspace: account, audience: "internal" as const },
-            origin: { kind: "human" as const, messageTs: "1.2" },
+            origin:
+              account === "first"
+                ? { kind: "human" as const, messageTs: "1.2" }
+                : { kind: "ambient" as const, entryTs: "1.2" },
           },
         }
       : undefined;
