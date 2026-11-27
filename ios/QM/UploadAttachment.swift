@@ -379,14 +379,12 @@ struct AttachmentPicker: View {
 
 extension AttachmentPicker {
   fileprivate var options: some View {
-    VStack(spacing: 8) {
-      HStack(spacing: 8) {
-        if UIImagePickerController.isSourceTypeAvailable(.camera) {
-          tile("Camera", systemImage: "camera", option: .camera)
-        }
-        tile("Photos", systemImage: "photo.on.rectangle", option: .photos)
-        tile("Files", systemImage: "doc", option: .files)
+    VStack(alignment: .leading, spacing: 4) {
+      if UIImagePickerController.isSourceTypeAvailable(.camera) {
+        row("Camera", systemImage: "camera", option: .camera)
       }
+      row("Photos", systemImage: "photo", option: .photos)
+      row("Files", systemImage: "paperclip", option: .files)
       // The system paste control reads the clipboard without iOS's "Allow Paste" prompt; it is
       // only offered when the clipboard actually holds an image (checking does not prompt).
       if UIPasteboard.general.hasImages {
@@ -395,13 +393,16 @@ extension AttachmentPicker {
           onSelect(providers.map(AttachmentSource.image))
         }
         .labelStyle(.titleAndIcon)
-        .buttonBorderShape(.roundedRectangle(radius: 14))
+        .buttonBorderShape(.capsule)
         .controlSize(.large)
         .tint(QMTheme.ink.opacity(0.08))
         .foregroundStyle(QMTheme.ink)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
       }
     }
-    .padding(10)
+    .padding(.vertical, 12)
+    .frame(minWidth: 240, alignment: .leading)
   }
 
   private func openPending() {
@@ -414,35 +415,34 @@ extension AttachmentPicker {
     }
   }
 
-  private static let tileShape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-
-  private func tile(_ title: String, systemImage: String, option: Option) -> some View {
+  private func row(_ title: String, systemImage: String, option: Option) -> some View {
     Button {
       pending = option
       showingOptions = false
     } label: {
-      VStack(spacing: 8) {
+      HStack(spacing: 16) {
         Image(systemName: systemImage)
-          .font(.system(size: 22, weight: .regular))
-          .frame(height: 26)
+          .font(.system(size: 19, weight: .regular))
+          .frame(width: 48, height: 48)
+          .background(QMTheme.ink.opacity(0.08), in: Circle())
         Text(title)
-          .font(.system(size: 14, weight: .medium))
+          .font(.system(size: 19))
+        Spacer(minLength: 0)
       }
       .foregroundStyle(QMTheme.ink)
-      .frame(width: 92, height: 84)
-      .background(QMTheme.ink.opacity(0.06), in: Self.tileShape)
-      .contentShape(Self.tileShape)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 6)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(AttachmentTileStyle())
-    .accessibilityLabel(title)
+    .buttonStyle(AttachmentRowStyle())
   }
 }
 
-/// Presses the tile down a touch so each option feels like a physical key.
-private struct AttachmentTileStyle: ButtonStyle {
+/// Dims and presses a row down a touch so each option feels like a physical key.
+private struct AttachmentRowStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed ? 0.95 : 1)
+      .scaleEffect(configuration.isPressed ? 0.97 : 1)
       .opacity(configuration.isPressed ? 0.75 : 1)
       .animation(.spring(duration: 0.2), value: configuration.isPressed)
   }
