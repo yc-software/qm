@@ -934,3 +934,41 @@ test("a guest in the room: a person's turn without an internal audience gets a t
     await s.close();
   }
 });
+
+test("org admin can set and clear another user's session persona", async () => {
+  const s = await start();
+  try {
+    const [adminCap, memberCap] = await Promise.all([capFor("admin-alice"), capFor("U1")]);
+    await s.built.featureFlags.setEnabled("personas", ORG, true, "admin-alice");
+    const created = await s.built.app.personas!.create("admin-alice", { name: "Helper" });
+    assert.equal(created.status, "ok");
+    const session = await s.built.sessions.getOrCreateByThread(
+      "dm:D_U1",
+      "dm",
+      personalScope("U1"),
+      undefined,
+      "slack",
+    );
+    const put = (token: string, scope: string, personaId: unknown) =>
+      fetch(
+        `${s.base}/v1/admin/sessions/${encodeURIComponent(session.id)}/persona?scope=${encodeURIComponent(scope)}`,
+        {
+          method: "PUT",
+          headers: { "x-agent-capability": token, "content-type": "application/json" },
+          body: JSON.stringify({ personaId }),
+        },
+      );
+    assert.equal((await put(memberCap, session.scopeId, created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, "")).status, 400);
+    assert.equal((await put(adminCap, session.scopeId, "missing")).status, 404);
+    assert.equal((await put(adminCap, personalScope("admin-alice"), created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, created.value.id)).status, 200);
+    assert.equal((await s.built.sessions.get(session.id))?.personaId, created.value.id);
+    assert.equal((await put(adminCap, session.scopeId, null)).status, 200);
+    assert.equal((await s.built.sessions.get(session.id))?.personaId, undefined);
+    const audited = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "session.persona.update");
+    assert.equal(audited.length, 2);
+  } finally {
+    await s.close();
+  }
+});
