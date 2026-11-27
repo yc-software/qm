@@ -38,9 +38,9 @@ export const THUMBNAIL_JS = String.raw`
     if (status && status >= 400) return;
     if (!win.htmlToImage) await loadCapture(doc);
     const width = win.innerWidth;
-    const height = win.innerHeight;
+    const height = Math.round((width * 3) / 4);
     const dataUrl = await win.htmlToImage.toJpeg(doc.documentElement, {
-      quality: 0.8, width, height, canvasWidth: 640, canvasHeight: Math.round((640 * height) / width),
+      quality: 0.8, width, height, canvasWidth: 640, canvasHeight: 480,
       backgroundColor: pageBackground(doc),
     });
     const image = await (await fetch(dataUrl)).blob();
