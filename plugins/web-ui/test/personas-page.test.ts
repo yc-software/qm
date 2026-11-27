@@ -252,6 +252,14 @@ test("the list's buttons still work after the chat they opened is archived from 
   assert.equal(button(main, "Edit", "Bo").disabled, false);
 });
 
+test("opening a bot leaves the list at once, before its details arrive", async () => {
+  const { main } = await mountPage();
+  button(main, "Edit", "Ada").click();
+  assert.equal(main.querySelector('[role="status"]')?.textContent, "Loading…");
+  await settle();
+  assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "🧮Ada");
+});
+
 test("Fork hands off to QM in a new chat instead of copying on the page", async () => {
   const { main } = await mountPage();
   const { storedDraft, newChatDraftKey } = await vite.ssrLoadModule("/src/drafts.ts");

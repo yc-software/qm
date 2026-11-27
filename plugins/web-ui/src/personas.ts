@@ -369,6 +369,16 @@ async function fetchPersona(id: string): Promise<PersonaDetail> {
 }
 
 async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
+  if (appState.currentView !== "personas") return;
+  const host = paneHost(id);
+  if (host && !host.firstChild)
+    render(
+      html`<div class="resource-detail persona-detail">
+        ${listBackLink("Bots", backToList)}
+        <p class="hint" role="status">Loading…</p>
+      </div>`,
+      host,
+    );
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
