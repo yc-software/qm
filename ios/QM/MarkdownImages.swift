@@ -1,8 +1,6 @@
-import CryptoKit
 import ImageIO
 import MarkdownUI
 import SwiftUI
-import UniformTypeIdentifiers
 
 enum MarkdownImageResource {
   static func path(_ url: URL, baseURL: URL, files: [DeliveredFile] = []) -> String? {
@@ -237,101 +235,25 @@ final class DecodedImage: @unchecked Sendable {
   init(_ image: CGImage) { self.image = image }
 }
 
-/// Downscaled copies of inline images, in memory and on disk. Files are immutable once
-/// delivered, so a cached thumbnail never goes stale; reopening a conversation shows its
-/// images immediately instead of downloading the originals again.
+/// Downscaled copies of inline images for this launch, so reopening a conversation shows its
+/// images without decoding them again. The system evicts entries under memory pressure.
 enum InlineImageCache {
-  nonisolated(unsafe) private static let memory: NSCache<NSString, DecodedImage> = {
-    let cache = NSCache<NSString, DecodedImage>()
-    cache.totalCostLimit = 64 * 1024 * 1024
-    return cache
-  }()
-  static let maximumDiskFiles = 400
+  nonisolated(unsafe) private static let memory = NSCache<NSString, DecodedImage>()
 
   static func key(baseURL: URL, path: String, maximumPixels: Int) -> String {
-    let digest = SHA256.hash(
-      data: Data("\(baseURL.absoluteString)|\(path)#\(maximumPixels)".utf8))
-    return digest.map { String(format: "%02x", $0) }.joined()
+    "\(baseURL.absoluteString)|\(path)#\(maximumPixels)"
   }
 
-  static func memoryImage(_ key: String) -> CGImage? {
+  static func image(_ key: String) -> CGImage? {
     memory.object(forKey: key as NSString)?.image
   }
 
-  private static func remember(_ image: CGImage, key: String) {
-    memory.setObject(
-      DecodedImage(image), forKey: key as NSString, cost: image.bytesPerRow * image.height)
-  }
-
-  private static func directory() throws -> URL {
-    try FileManager.default.url(
-      for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
-    ).appendingPathComponent("InlineImages", isDirectory: true)
-  }
-
-  static func diskImage(_ key: String) -> CGImage? {
-    guard let file = try? directory().appendingPathComponent(key),
-      let source = CGImageSourceCreateWithURL(file as CFURL, nil),
-      let image = CGImageSourceCreateImageAtIndex(
-        source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-    else { return nil }
-    remember(image, key: key)
-    return image
-  }
-
   static func store(_ image: CGImage, key: String) {
-    remember(image, key: key)
-    do {
-      var folder = try directory()
-      try FileManager.default.createDirectory(
-        at: folder, withIntermediateDirectories: true,
-        attributes: [.protectionKey: FileProtectionType.complete])
-      var values = URLResourceValues()
-      values.isExcludedFromBackup = true
-      try? folder.setResourceValues(values)
-      let data = NSMutableData()
-      guard
-        let destination = CGImageDestinationCreateWithData(
-          data, UTType.jpeg.identifier as CFString, 1, nil)
-      else {
-        Log.images.error("Caching inline image failed: no JPEG encoder")
-        return
-      }
-      CGImageDestinationAddImage(
-        destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-      guard CGImageDestinationFinalize(destination) else {
-        Log.images.error("Caching inline image failed: JPEG encoding did not finish")
-        return
-      }
-      try (data as Data).write(
-        to: folder.appendingPathComponent(key), options: [.atomic, .completeFileProtection])
-      prune(folder)
-    } catch {
-      Log.images.failure("Caching inline image", error)
-    }
-  }
-
-  private static func prune(_ folder: URL) {
-    guard
-      let files = try? FileManager.default.contentsOfDirectory(
-        at: folder, includingPropertiesForKeys: [.contentModificationDateKey]),
-      files.count > maximumDiskFiles
-    else { return }
-    let dated = files.map {
-      (
-        $0,
-        (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
-          .contentModificationDate ?? .distantPast
-      )
-    }
-    for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(files.count - maximumDiskFiles) {
-      try? FileManager.default.removeItem(at: file)
-    }
+    memory.setObject(DecodedImage(image), forKey: key as NSString)
   }
 
   static func clear() {
     memory.removeAllObjects()
-    if let folder = try? directory() { try? FileManager.default.removeItem(at: folder) }
   }
 }
 
@@ -340,15 +262,7 @@ enum InlineImageLoader {
   static func load(path: String, client: APIClient, maximumPixels: Int) async throws -> CGImage {
     let key = InlineImageCache.key(
       baseURL: client.baseURL, path: path, maximumPixels: maximumPixels)
-    if let image = InlineImageCache.memoryImage(key) { return image }
-    if let cached = await Task.detached(
-      priority: .userInitiated,
-      operation: {
-        InlineImageCache.diskImage(key).map(DecodedImage.init)
-      }
-    ).value {
-      return cached.image
-    }
+    if let image = InlineImageCache.image(key) { return image }
     let data = try await client.imageData(path)
     return try await decode(data, maximumPixels: maximumPixels, key: key)
   }
