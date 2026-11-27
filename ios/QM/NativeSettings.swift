@@ -109,6 +109,7 @@ struct NativeSettingsView: View {
   let identity: Identity
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
+  @AppStorage("aiConsent") private var aiConsent = ""
   var body: some View {
     QMForm {
       Section("Workspace") {
@@ -151,6 +152,13 @@ struct NativeSettingsView: View {
         NavigationLink("Model and effort") {
           RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
         }
+      }
+      Section("Privacy") {
+        Toggle(
+          "Send my data to AI providers",
+          isOn: Binding(
+            get: { aiConsent == "agreed" }, set: { aiConsent = $0 ? "agreed" : "declined" }))
+        Link("Privacy policy", destination: aiPrivacyPolicy)
       }
       Section("About") {
         Link("About QM", destination: URL(string: "https://github.com/yc-software/qm")!)

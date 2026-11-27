@@ -26,6 +26,7 @@ struct RootView: View {
   @State private var showingConversations = false
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
+  @AppStorage("aiConsent") private var aiConsent = ""
   @State private var rename: Conversation?
   @State private var renamedTitle = ""
   @State private var choosingWorkspace = false
@@ -129,6 +130,9 @@ struct RootView: View {
         model: model, showingConversations: $showingConversations, showingMore: $showingMore,
         blankChat: blankChat, onNew: newChat)
     )
+    .overlay {
+      if model.identity != nil && aiConsent != "agreed" { AIConsentView { model.signOut() } }
+    }
     .environment(\.qmIdentity, model.identity)
     .environment(model)
     .alert(

@@ -1,6 +1,6 @@
 # Privacy policy for QM on iOS
 
-Last updated: 14 November 2026
+Last updated: 27 November 2026
 
 This policy describes what the QM app for iPhone and iPad does with your data. It is written about the app's own behaviour, so it holds for any unmodified build of the app from this repository. "The publisher" means whoever distributed the copy you installed.
 
@@ -14,6 +14,7 @@ QM is open source, so anyone can build and distribute the app. If you got your c
 
 - The app has no analytics, advertising, or tracking, and its publisher receives none of your content.
 - What you write and attach goes to your QM workspace: the one you choose, or the one your copy was set up with.
+- QM is an AI assistant. Your workspace sends your messages and attachments to an AI provider to produce replies. The app asks your permission before anything is sent, and sends nothing if you decline.
 - A live voice call also connects your device directly to OpenAI, which provides the voice.
 - Whoever operates your workspace decides how your data is stored and used on it. Ask them about retention, access, and deletion.
 
@@ -32,6 +33,17 @@ What you do in the app, plus your device's time zone and what iOS adds to any we
 - **Attachments.** Files, photos, videos, and pasted images you choose to attach, including photos you take with the camera from inside the app. The photo picker gives the app only the items you select, not your library. Photos and videos from your library may be converted to a widely supported format and can include metadata embedded in them, such as where they were taken.
 - **Credentials you enter.** API keys, authorization codes, and other secrets you type into the app's keychain and settings screens are sent to your workspace.
 - **Time zone.** Sent with each message, each voice task, and each request for suggested activities.
+
+## AI providers
+
+QM's replies are written by AI models run by other companies. The first time you sign in, the app shows what is sent and to whom, and asks your permission. If you choose Don't allow, the app sends no messages, attachments, or voice audio, and remembers that choice. You can change it at any time under Settings > Privacy.
+
+With your permission:
+
+- **Messages and attachments.** Your workspace sends the messages you write, the files, photos, videos, and pasted images you attach, and earlier messages in the conversation to the provider of the AI model in use: Anthropic, OpenAI, or OpenRouter (which passes them to the company that makes the chosen model), or another provider your workspace's operator has set up. The provider uses them to produce the reply.
+- **Voice.** During a live voice call, your device sends your microphone audio directly to OpenAI, as described below.
+
+The publisher shares this data with these providers only to provide QM's replies, and only with providers that give it the same or equal protection as this policy.
 
 ## Live voice
 
@@ -85,7 +97,7 @@ Apple provides app developers with crash reports and usage statistics from peopl
 
 ## Third parties
 
-The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above; pages you open are loaded by the browser.
+The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above; your workspace sends your messages and attachments to the AI providers described in [AI providers](#ai-providers); pages you open are loaded by the browser.
 
 The app is built with the open-source libraries declared in [`project.yml`](./project.yml). They run only on your device or as part of a call you start.
 
@@ -95,6 +107,7 @@ QM is a tool for work. It is not directed to children.
 
 ## Your choices
 
+- Turn sending to AI providers on or off under Settings > Privacy in the app.
 - Withdraw microphone, speech recognition, or camera access in iOS Settings.
 - Sign out to remove your session and drafts from the device.
 - For a copy of, or the deletion of, data held by a workspace, contact that workspace's operator.

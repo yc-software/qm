@@ -46,7 +46,7 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: Record spoken drafts on your device and talk to QM. Live voice audio is sent while connected.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Dictate messages on this device, and talk to QM in voice calls. During a call your audio is sent to OpenAI, QM's voice provider.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Convert your spoken message into editable text on this device.
     info:
       path: QM/Info.plist
