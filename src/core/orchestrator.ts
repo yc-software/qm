@@ -1852,7 +1852,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memory: context.memory,
           memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
+          ...(!external && deps.mcp
+            ? { mcp: deps.mcp, actAsActor, surfaceOrigin: input.surfaceOrigin, messageTs }
+            : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
           ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
