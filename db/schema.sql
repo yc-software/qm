@@ -1999,6 +1999,14 @@ CREATE SEQUENCE public.app_page_views_id_seq
 
 ALTER SEQUENCE public.app_page_views_id_seq OWNED BY public.app_page_views.id;
 
+CREATE TABLE public.app_thumbnails (
+    tenant_id uuid DEFAULT public.qm_bound_tenant() NOT NULL,
+    deployment_id text NOT NULL,
+    version integer NOT NULL,
+    image bytea NOT NULL,
+    captured_at bigint NOT NULL
+);
+
 CREATE TABLE public.approval_grant_modes (
     id text NOT NULL,
     json jsonb NOT NULL,
@@ -3467,6 +3475,9 @@ ALTER TABLE ONLY public.app_hosts
 ALTER TABLE ONLY public.app_page_views
     ADD CONSTRAINT app_page_views_pkey PRIMARY KEY (tenant_id, id);
 
+ALTER TABLE ONLY public.app_thumbnails
+    ADD CONSTRAINT app_thumbnails_pkey PRIMARY KEY (tenant_id, deployment_id);
+
 ALTER TABLE ONLY public.approval_grant_modes
     ADD CONSTRAINT approval_grant_modes_pkey PRIMARY KEY (tenant_id, id);
 
@@ -4337,6 +4348,12 @@ ALTER TABLE ONLY public.app_page_views
 ALTER TABLE ONLY public.app_page_views
     ADD CONSTRAINT app_page_views_tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
 
+ALTER TABLE ONLY public.app_thumbnails
+    ADD CONSTRAINT app_thumbnails_tenant_id_deployment_id_fkey FOREIGN KEY (tenant_id, deployment_id) REFERENCES public.deployments(tenant_id, id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.app_thumbnails
+    ADD CONSTRAINT app_thumbnails_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
+
 ALTER TABLE ONLY public.approval_grant_modes
     ADD CONSTRAINT approval_grant_modes_tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);
 
@@ -4837,6 +4854,8 @@ ALTER TABLE public.app_hosts ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.app_page_views ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE public.app_thumbnails ENABLE ROW LEVEL SECURITY;
+
 ALTER TABLE public.approval_grant_modes ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.approval_grants ENABLE ROW LEVEL SECURITY;
@@ -5128,6 +5147,8 @@ CREATE POLICY tenant_isolation ON public.ambient_cursors USING ((tenant_id = pub
 CREATE POLICY tenant_isolation ON public.ambient_judgments USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
 
 CREATE POLICY tenant_isolation ON public.app_page_views USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
+
+CREATE POLICY tenant_isolation ON public.app_thumbnails USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
 
 CREATE POLICY tenant_isolation ON public.approval_grant_modes USING ((tenant_id = public.qm_bound_tenant())) WITH CHECK ((tenant_id = public.qm_bound_tenant()));
 
@@ -5439,3 +5460,4 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand 
 
 INSERT INTO public.tenants DEFAULT VALUES;
 INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0001-mark-earlier-links', 'a6a108bdf7d224393a5fa175ff5416e14e22303e3d76503d8559ac96f145425f');
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0002-app-thumbnails', 'fddad50ef0c710c51060f945bd9873ed5399a06361d2ba5abe3799aa3d6f75cd');

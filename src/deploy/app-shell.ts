@@ -1,5 +1,6 @@
 import { SHARE_BUTTON, SHARE_CSS, SHARE_JS, shareMarkup } from "./app-share-control.ts";
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
+import { THUMBNAIL_JS } from "./app-thumbnail-capture.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
@@ -13,6 +14,7 @@ export function appShellHtml(opts: {
   portalUrl: string;
   path: string;
   annotationsEnabled?: boolean;
+  thumbnailVersion?: number;
 }): string {
   const slug = escAttr(opts.slug);
   const path = escAttr(opts.path);
@@ -253,6 +255,7 @@ ${SHARE_JS}
   void poll();
   setInterval(poll, 5000);
 ${opts.annotationsEnabled ? ANNOTATE_JS : ""}
+${opts.thumbnailVersion !== undefined ? `  const thumbnailVersion = ${opts.thumbnailVersion};\n${THUMBNAIL_JS}` : ""}
   upd.addEventListener("click", () => {
     void fetch("/__claw__/version", { cache: "no-store" })
       .then((r) => r.json())

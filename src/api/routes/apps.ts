@@ -28,12 +28,16 @@ import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { appAccess } from "../../deploy/app-access.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
+import type { AppThumbnailStore } from "../../deploy/app-thumbnails.ts";
+import { appThumbnailCaptureScript } from "../../deploy/app-thumbnail-capture.ts";
+import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
+import { collectBytes } from "../../util/bytes.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { appNameFromLabel, labelOfAppHost } from "../../tenants/app-handle.ts";
 import { isDnsLabel } from "../../../plugins/chassis/src/dns-label.ts";
 import { tenantAppHandle } from "../../tenants/settings.ts";
-import { appSubdomainUrlOf } from "../../deploy/deploy-store.ts";
+import { appSubdomainUrlOf, type PublishedApp } from "../../deploy/deploy-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
@@ -941,7 +945,7 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       })
       .catch(reportFailureAs("app page view log", undefined, publishedApp.id));
   };
-  if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
+  if (((ctx.method === "GET" && !bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
       !!sub && (await deps.featureFlags.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
@@ -949,7 +953,18 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
       return true;
     }
     if (isShellRequest) {
-      if (pathname === "/__claw__/version" && publishedApp) {
+      if (ctx.method === "POST" && pathname === APP_THUMBNAIL_PATH && publishedApp && deps.appThumbnails) {
+        await saveAppThumbnail(ctx, publishedApp, deps.appThumbnails);
+      } else if (ctx.method !== "GET") {
+        sendJson(res, 404, { error: "not_found" });
+      } else if (pathname === `${APP_THUMBNAIL_PATH}.js` && deps.appThumbnails) {
+        res.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-cache",
+          "x-content-type-options": "nosniff",
+        });
+        res.end(appThumbnailCaptureScript());
+      } else if (pathname === "/__claw__/version" && publishedApp) {
         const [draft, grantees, canEdit] = await Promise.all([
           app.appLiveEdit(publishedApp.id).then((edit) => edit?.draft),
           app.appGrantees(publishedApp.id),
@@ -978,9 +993,14 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
     }
     recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    const thumbnailVersion =
+      publishedApp && deps.appThumbnails
+        ? ((await deps.appThumbnails.versions(tenantOf(ctx), [publishedApp.id])).get(publishedApp.id) ?? 0)
+        : undefined;
     res.end(
       appShellHtml({
         annotationsEnabled,
+        ...(thumbnailVersion !== undefined ? { thumbnailVersion } : {}),
         slug,
         name: publishedApp?.displayName ?? slug,
         portalUrl: loginUrl,
@@ -1063,6 +1083,57 @@ export async function proxyAppSubdomain(ctx: BaseCtx): Promise<boolean> {
     frameAncestors: embedAncestors,
   });
   return true;
+}
+
+const APP_THUMBNAIL_PATH = "/__claw__/thumbnail";
+const APP_THUMBNAIL_MAX_BYTES = 1024 * 1024;
+
+async function saveAppThumbnail(
+  ctx: BaseCtx,
+  publishedApp: PublishedApp,
+  thumbnails: AppThumbnailStore,
+): Promise<void> {
+  const { req, res, url } = ctx;
+  const version = Number(url.searchParams.get("version"));
+  if (version !== (publishedApp.appliedVersion ?? publishedApp.currentVersion)) {
+    sendJson(res, 409, { error: "stale_version", message: "the app has moved to another version" });
+    return;
+  }
+  if (req.headers["content-type"] !== "image/jpeg") {
+    sendJson(res, 415, { error: "unsupported_media_type", message: "thumbnails must be image/jpeg" });
+    return;
+  }
+  let image: Buffer;
+  try {
+    image = (
+      await collectBytes(req, { maxBytes: APP_THUMBNAIL_MAX_BYTES, tooLarge: () => new ByteSourceTooLargeError() })
+    ).data;
+  } catch (e) {
+    if (!(e instanceof ByteSourceTooLargeError)) throw e;
+    sendJson(res, 413, { error: "too_large", message: e.message });
+    return;
+  }
+  await thumbnails.save(tenantOf(ctx), publishedApp.id, { version, image });
+  res.writeHead(204, { "cache-control": "no-store" });
+  res.end();
+}
+
+async function appThumbnail(ctx: ApiCtx): Promise<void> {
+  const { res, app, url, capability, actor, params, deps } = ctx;
+  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
+  if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const stored = await app.getApp(params.id!);
+  const permission = stored ? await app.appGitPermissionFor(stored.id, capability ?? { actorId: principalId }) : null;
+  const thumbnail = stored && permission ? await deps.appThumbnails?.open(tenantOf(ctx), stored.id) : null;
+  if (!thumbnail) return sendJson(res, 404, { error: "not_found" });
+  res.writeHead(200, {
+    "content-type": "image/jpeg",
+    "content-length": String(thumbnail.image.length),
+    "cache-control": "private, max-age=86400",
+    "content-security-policy": "default-src 'none'; sandbox",
+    "x-content-type-options": "nosniff",
+  });
+  res.end(thumbnail.image);
 }
 
 function gateCardHtml(title: string, paragraphsHtml: string): string {
@@ -1340,9 +1411,15 @@ async function listApps(ctx: ApiCtx): Promise<void> {
     if (!managed.has(key)) managed.set(key, app.canManageArtifactHome(ownerScopeId, createdBy, principalId));
     return managed.get(key)!;
   };
+  const thumbnails =
+    (await ctx.deps.appThumbnails?.versions(
+      tenantOf(ctx),
+      visible.map((d) => d.id),
+    )) ?? new Map<string, number>();
   const publishedApps = await Promise.all(
     visible.map(async (d) => {
       const owner = ownerOf(d);
+      const thumbnailVersion = thumbnails.get(d.id);
       const canShare = !!d.ownerScopeId && (await canShareFor(d.ownerScopeId, d.createdBy));
       const named = {
         ...d,
@@ -1350,6 +1427,7 @@ async function listApps(ctx: ApiCtx): Promise<void> {
         ...(owner ? { ownerName: names.get(owner)! } : {}),
         ...(d.createdBy ? { createdByName: names.get(d.createdBy)! } : {}),
         ...(d.createdBy && d.ownerScopeId === personalScope(d.createdBy) ? { ownedByCreator: true } : {}),
+        ...(thumbnailVersion !== undefined ? { thumbnailVersion } : {}),
       };
       if (!secret) return named;
       const git = await app.appGitUrlFor(d.id, viewer, { secret, baseUrl });
@@ -1670,6 +1748,14 @@ export const appRoutes: ReadonlyArray<Route<ApiCtx>> = [
     actor: "query.principalId",
     auth: "either",
     handle: getApp,
+  },
+  {
+    method: "GET",
+    path: "/v1/apps/:id/thumbnail",
+    browser: true,
+    actor: "query.principalId",
+    auth: "either",
+    handle: appThumbnail,
   },
   { method: "GET", path: "/v1/apps/:id/fetch", auth: "either", handle: fetchApp },
   { method: "GET", path: "/v1/apps/:id/logs", auth: "either", handle: appLogs },

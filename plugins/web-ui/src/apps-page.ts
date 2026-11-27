@@ -2,7 +2,7 @@ import { shareButton } from "./share-dialog";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { AppWindow, Archive, Check, Copy, ExternalLink, Plus, RotateCcw, Trash2, X } from "lucide";
-import { api } from "./core-bridge";
+import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
@@ -153,9 +153,9 @@ function appThumb(d: AppView): TemplateResult {
   return html`<span class="app-card-screen" aria-hidden="true">
     <span class="app-card-fallback">${icon(AppWindow, 20)}</span>
     ${
-      d.thumbnailUrl
+      d.thumbnailVersion !== undefined
         ? html`<img
-            src=${d.thumbnailUrl}
+            src=${withBase(`/api/apps/${encodeURIComponent(d.id)}/thumbnail?v=${d.thumbnailVersion}`)}
             alt=""
             loading="lazy"
             decoding="async"
