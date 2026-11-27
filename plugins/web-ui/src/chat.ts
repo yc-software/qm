@@ -563,7 +563,7 @@ export function createChatSurface(
   }
 
   function newTemporaryChat(): string {
-    appState.currentView = "chats";
+    if (ctx.ownsUrl) appState.currentView = "chats";
     renderSidebarTop();
     const threadRef = `web:${appState.me?.user ?? "anon"}:${crypto.randomUUID()}`;
     ctx.composer.resetComposer();
@@ -578,7 +578,7 @@ export function createChatSurface(
     context?: { scopeId: string; name: string | null },
     threadRef = `web:${appState.me?.user ?? "anon"}:${crypto.randomUUID()}`,
   ): string {
-    appState.currentView = "chats";
+    if (ctx.ownsUrl) appState.currentView = "chats";
     renderSidebarTop();
     const user = appState.me?.user ?? "anon";
     const carried = storedDraft(newChatDraftKey(user));
