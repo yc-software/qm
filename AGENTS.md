@@ -196,8 +196,7 @@ Name upstream work in plain words instead.
 ## Database
 
 - `db/schema.sql` is the single generated source of truth for the current Postgres schema
-  (never edit by hand); `db/vector.sql` is the optional pgvector schema, applied by the migration
-  command when pgvector is available and otherwise on first use.
+  (never edit by hand); `db/vector.sql` is the optional pgvector schema.
 - To change the schema or add a data migration, add `db/migrations/NNNN-what-it-does.sql`,
   run `DATABASE_URL=... npm run db:schema` against Postgres 16 (or set `PG_DUMP` to a
   Postgres 16 `pg_dump`), and commit both files. CI regenerates `db/schema.sql` and fails on

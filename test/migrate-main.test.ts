@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
-import { pgvectorAvailable } from "../src/persistence/pg-pool.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testBareDatabaseUrl } from "./support/test-database.ts";
 import { APP_ROLE, boundUrl, seedTestTenant } from "./support/test-tenant.ts";
 
@@ -34,7 +34,10 @@ test(
         killSignal: "SIGKILL",
       });
       assert.match(stdout, /\[qm:migrate\] database migrations applied/);
-      if (!(await pgvectorAvailable(databaseUrl))) return;
+      const owner = createPgPool(databaseUrl);
+      const offered = await owner.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
+      await owner.close();
+      if (!offered.length) return;
       const vectors = createPostgresVectorStore(boundUrl(databaseUrl, APP_ROLE));
       assert.deepEqual(await vectors.claimTenants().finally(() => vectors.close()), []);
     } finally {
