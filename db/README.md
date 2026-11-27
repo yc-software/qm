@@ -4,7 +4,7 @@
   generated; never edit it by hand.
 - `db/migrations/*.sql` are changes made since, applied in name order.
 - `db/vector.sql` adds the optional pgvector tables. The migration command applies it when the
-  server offers pgvector; otherwise the first use of semantic memory does.
+  server offers pgvector; a core whose login may migrate applies it on first use of semantic memory.
 
 A new database loads `schema.sql`, which records the migrations it already contains, so they
 are skipped. An existing database applies the migrations it has not recorded yet. Both happen

@@ -40,8 +40,8 @@ scope in SQL and returns compact ranked matches. No approximate vector index is 
 
 Semantic recall requires the PostgreSQL `vector` extension. The migration command
 (`node src/migrate-main.ts`) applies `db/vector.sql` when the server offers the extension, so a
-core that runs as a login without migration authority finds it in place. Otherwise core applies it
-the first time it uses the vector index.
+core that runs as a login without migration authority finds it in place. A core whose login may
+migrate applies it the first time it uses the vector index.
 If the migrating database role cannot install extensions, an administrator must install
 `vector` first. File-backed installations use newest-first recall, even with a model selected.
 

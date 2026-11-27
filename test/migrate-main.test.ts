@@ -35,8 +35,9 @@ test(
       });
       assert.match(stdout, /\[qm:migrate\] database migrations applied/);
       const owner = createPgPool(databaseUrl);
-      const offered = await owner.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'");
-      await owner.close();
+      const offered = await owner
+        .q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
+        .finally(() => owner.close());
       if (!offered.length) return;
       const vectors = createPostgresVectorStore(boundUrl(databaseUrl, APP_ROLE));
       assert.deepEqual(await vectors.claimTenants().finally(() => vectors.close()), []);
