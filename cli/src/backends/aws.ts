@@ -278,7 +278,7 @@ function awsArgs(aws: AwsConfig, args: string[]): string[] {
   return [...args, "--region", aws.region];
 }
 
-function awsJson<T>(aws: AwsConfig, args: string[]): T {
+export function awsJson<T>(aws: AwsConfig, args: string[]): T {
   const raw = capture(process.env.AWS_BIN ?? "aws", awsArgs(aws, [...args, "--output", "json"]));
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
@@ -3734,6 +3734,19 @@ export function assertAwsPublicRouting(
   config: QmConfig,
   ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
 ): ReadonlyMap<string, string> {
+  return awsPublicRouting(config, ecsServices).targets;
+}
+
+export interface AwsPublicRoutingState {
+  loadBalancerArn: string;
+  targets: ReadonlyMap<string, string>;
+  colorRoutes: ReadonlyMap<string, AwsColorRoute>;
+}
+
+export function awsPublicRouting(
+  config: QmConfig,
+  ecsServices?: ReadonlyMap<string, AwsEcsRoutingService>,
+): AwsPublicRoutingState {
   const aws = requireAws(config);
   const routes = awsIngressRoutes(config);
   const ingress = [...routes.keys()];
@@ -3796,6 +3809,15 @@ export function assertAwsPublicRouting(
       expectedTargetArns.add(alternate);
     }
   }
+  const defaults = listener.DefaultActions ?? [];
+  const colorPair =
+    !aws.sharedAlb &&
+    !alternateTargets.size &&
+    defaults.length === 1 &&
+    defaults[0]?.Type === "fixed-response" &&
+    defaults[0].FixedResponseConfig?.StatusCode === "404" &&
+    !defaults[0].TargetGroupArn;
+  const blueGreen = alternateTargets.size > 0 || colorPair;
   const ingressServices = new Set([...routes.values()].map((route) => route.service));
   for (const name of deployedAwsServices(aws)) {
     if (
@@ -3806,21 +3828,23 @@ export function assertAwsPublicRouting(
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
   }
-  if (
-    !aws.sharedAlb &&
-    (targetGroups.length !== expectedTargetArns.size ||
-      targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn)))
-  ) {
-    throw new Error("ALB has target groups for private or unknown services");
-  }
+  const requireKnownTargetGroups = (): void => {
+    if (
+      !aws.sharedAlb &&
+      (targetGroups.length !== expectedTargetArns.size ||
+        targetGroups.some((group) => !group.TargetGroupArn || !expectedTargetArns.has(group.TargetGroupArn)))
+    ) {
+      throw new Error("ALB has target groups for private or unknown services");
+    }
+  };
+  if (!colorPair) requireKnownTargetGroups();
   if (alternateTargets.size && alternateTargets.size !== ingress.length) {
     throw new Error("ALB cannot mix rolling and blue/green ingress services");
   }
   if (aws.sharedAlb && (ingress.length !== 1 || alternateTargets.size !== 1 || awsCoreHostnames(config).length)) {
     throw new Error("shared ALB requires one blue/green core front-door ingress without additional public routes");
   }
-  const defaults = listener.DefaultActions ?? [];
-  if (alternateTargets.size) {
+  if (blueGreen) {
     if (
       defaults.length !== 1 ||
       defaults[0]?.Type !== "fixed-response" ||
@@ -3857,6 +3881,30 @@ export function assertAwsPublicRouting(
     }>(aws, ["elbv2", "describe-rules", "--listener-arn", listener.ListenerArn!]).Rules ?? [];
   const operatorRules = aws.sharedAlb ? new Set<string>() : operatorManagedRules(aws, rules);
   let nonDefault = rules.filter((rule) => !rule.IsDefault && !operatorRules.has(rule.RuleArn ?? ""));
+  if (colorPair) {
+    for (const name of ingress) {
+      const own = targets.get(name)!;
+      const routing = nonDefault.filter((rule) =>
+        rule.Actions?.some(
+          (action) =>
+            action.TargetGroupArn === own ||
+            action.ForwardConfig?.TargetGroups?.some((target) => target.TargetGroupArn === own),
+        ),
+      );
+      const peers = (routing[0]?.Actions?.[0]?.ForwardConfig?.TargetGroups ?? [])
+        .map((target) => target.TargetGroupArn)
+        .filter((arn) => arn && arn !== own);
+      if (routing.length !== 1 || !routing[0]!.RuleArn || peers.length !== 1) {
+        throw new Error(
+          `with a fixed-404 listener default and no ECS alternate target groups, ${name} must be routed by exactly one rule forwarding to this stack's target group and one peer stack's`,
+        );
+      }
+      productionRules.set(name, routing[0]!.RuleArn);
+      alternateTargets.set(name, peers[0]!);
+      expectedTargetArns.add(peers[0]!);
+    }
+    requireKnownTargetGroups();
+  }
   if (aws.sharedAlb) {
     const hostname = new URL(config.publicUrl).hostname.toLowerCase();
     const portalAppsDomain = awsPortalAppsDomain(config);
@@ -3914,7 +3962,7 @@ export function assertAwsPublicRouting(
   const pluginRules = new Set<(typeof nonDefault)[number]>();
   for (const [name, paths] of publicPaths) {
     const matches = nonDefault.filter((rule) =>
-      alternateTargets.size
+      blueGreen
         ? rule.RuleArn === productionRules.get(name)
         : rule.Actions?.length === 1 &&
           rule.Actions[0]?.Type === "forward" &&
@@ -3948,7 +3996,13 @@ export function assertAwsPublicRouting(
     }
   }
 
-  if (alternateTargets.size) {
+  const colorRoutes = new Map<string, AwsColorRoute>();
+  const state = (): AwsPublicRoutingState => ({
+    loadBalancerArn,
+    targets,
+    colorRoutes,
+  });
+  if (blueGreen) {
     if (nonDefault.length !== ingress.length) {
       throw new Error("blue/green ALB has unexpected non-default rules");
     }
@@ -3984,9 +4038,19 @@ export function assertAwsPublicRouting(
       if (values.length !== expectedValues.length || expectedValues.some((value) => !values.includes(value))) {
         throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
       }
-      targets.set(name, active[0].TargetGroupArn);
+      const weight = (arn: string) => weightedTargets.find((target) => target.TargetGroupArn === arn)?.Weight ?? 0;
+      if (colorPair)
+        colorRoutes.set(name, {
+          route: name,
+          ruleArn: rule!.RuleArn!,
+          own: primary,
+          peer: alternate,
+          ownWeight: weight(primary),
+          peerWeight: weight(alternate),
+        });
+      else targets.set(name, active[0].TargetGroupArn);
     }
-    return targets;
+    return state();
   }
   nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
   if (coreHosts.length) {
@@ -4015,7 +4079,7 @@ export function assertAwsPublicRouting(
     nonDefault = nonDefault.filter((rule) => !hostRules.includes(rule));
   }
   if (nonDefault.length) throw new Error("ALB has non-default rules beyond the declared plugin and core API routes");
-  return targets;
+  return state();
 }
 
 const AWS_OPERATOR_RULE_TAG = "qm:operator-managed";
@@ -4045,6 +4109,15 @@ function assertAwsPublicFrontDoor(config: QmConfig): void {
   } catch (error) {
     throw new CliError(`AWS public front door is not ready for deployment: ${errMessage(error)}`);
   }
+}
+
+export interface AwsColorRoute {
+  route: string;
+  ruleArn: string;
+  own: string;
+  peer: string;
+  ownWeight: number;
+  peerWeight: number;
 }
 
 async function assertAwsPublicNetwork(config: QmConfig, rejectServerErrors = false): Promise<void> {
