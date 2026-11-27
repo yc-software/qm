@@ -721,8 +721,10 @@ struct VoiceView: View {
         .defaultScrollAnchor(.top, for: .alignment)
         .mask(
           LinearGradient(
-            stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
-                    .init(color: .black, location: 0.92), .init(color: .clear, location: 1)],
+            stops: [
+              .init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+              .init(color: .black, location: 0.92), .init(color: .clear, location: 1),
+            ],
             startPoint: .top, endPoint: .bottom))
         if !model.status.isEmpty {
           Text(model.status).font(.footnote).foregroundStyle(.secondary)

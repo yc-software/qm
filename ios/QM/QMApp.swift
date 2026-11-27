@@ -302,7 +302,8 @@ struct RootView: View {
   }
 
   private var blankChat: Bool {
-    !showingMore && !showingVoice && selectedConversation?.localOnly == true }
+    !showingMore && !showingVoice && selectedConversation?.localOnly == true
+  }
 
   private func newChat() {
     // Already on a blank chat: just bring it back instead of doing nothing.
