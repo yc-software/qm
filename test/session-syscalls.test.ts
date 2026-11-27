@@ -2809,7 +2809,14 @@ test("completion wakes run Slack parents as coordinators unless the author is ex
 });
 
 test("delegated human origin retains live authority boundaries", async () => {
-  const r = await delegatedHumanRig();
+  const surfaceOrigin = {
+    author: { surface: "test", account: "account", id: actor.id },
+    workspace: "account",
+    audience: "internal" as const,
+  };
+  const origin = { kind: "human" as const, messageTs: "123.456" };
+  const r = await delegatedHumanRig({ surfaceOrigin, origin });
+  assert.deepEqual(await delegatedAuthorization(r.run.request, r), { surfaceOrigin, origin, attended: true });
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   const parentClaim = await r.runs.claimById(r.parent.id, "parent", 60_000);

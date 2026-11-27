@@ -68,7 +68,7 @@ export function isOwnerFire(request: Pick<OrchestratorInput, "origin" | "botActo
 export async function delegatedAuthorization(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<{ origin: OrchestratorInput["origin"]; attended: boolean } | undefined> {
+): Promise<(Pick<OrchestratorInput, "origin" | "surfaceOrigin"> & { attended: boolean }) | undefined> {
   const seen = new Set<string>();
   const startedAt = request.runStartedAt ?? Date.now();
   let attended = true;
@@ -130,7 +130,7 @@ export async function delegatedAuthorization(
         isOwnerFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return { origin: parent.origin, attended };
+      return { origin: parent.origin, surfaceOrigin: parent.surfaceOrigin, attended };
     current = parent;
   }
 }
