@@ -12,7 +12,7 @@ struct AIConsentDetails: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(
-        "QM answers you with AI models run by other companies. Before you use chat, dictation or Talk to QM, here is what they receive."
+        "QM answers you with AI models run by other companies. Before you use it, here is what they receive."
       )
       Label {
         Text(
@@ -48,38 +48,51 @@ struct AIConsentDetails: View {
   }
 }
 
-/// Asked before the first message, dictation or voice call; AI features stay off until agreed.
-struct AIConsentSheet: View {
+/// Shown in place of the signed-in app until the person agrees, so nothing they write, attach
+/// or say reaches an AI provider first. Withdrawing in Settings brings it back.
+struct AIConsentScreen: View {
   @AppStorage(AIConsent.key) private var consented = false
-  @Environment(\.dismiss) private var dismiss
+  @State private var declined = false
+  let signOut: () -> Void
   var body: some View {
     NavigationStack {
       ScrollView {
-        AIConsentDetails().padding(24).frame(maxWidth: 560, alignment: .leading)
-          .frame(maxWidth: .infinity)
+        Group {
+          if declined {
+            Text(
+              "Chat, dictation and Talk to QM need your agreement to share data with AI providers."
+            )
+          } else {
+            AIConsentDetails()
+          }
+        }
+        .padding(24).frame(maxWidth: 560, alignment: .leading).frame(maxWidth: .infinity)
       }
       .safeAreaInset(edge: .bottom) {
         VStack(spacing: 8) {
           Button {
-            consented = true
-            dismiss()
+            if declined { declined = false } else { consented = true }
           } label: {
-            Text("Agree").frame(maxWidth: .infinity, minHeight: 32)
-          }.buttonStyle(.borderedProminent)
-          Button("Not now") { dismiss() }.frame(minHeight: 44)
-          Text("You can change this in Settings.").font(.footnote).foregroundStyle(.secondary)
+            Text(declined ? "Review" : "Agree").frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent).controlSize(.large)
+          if declined {
+            Button("Sign out", role: .destructive, action: signOut).frame(minHeight: 44)
+          } else {
+            Button("Not now") { declined = true }.frame(minHeight: 44)
+          }
         }
         .frame(maxWidth: 560).padding(.horizontal, 24).padding(.vertical, 12)
-        .frame(maxWidth: .infinity).background(.bar)
+        .frame(maxWidth: .infinity)
       }
+      .background(QMTheme.paper)
       .navigationTitle("Sharing data with AI")
       .navigationBarTitleDisplayMode(.inline)
     }
-    .interactiveDismissDisabled()
   }
 }
 
-/// Settings entry to review the disclosure and give or withdraw consent.
+/// Settings entry to review the disclosure and withdraw consent.
 struct AIConsentSettings: View {
   @AppStorage(AIConsent.key) private var consented = false
   var body: some View {
@@ -88,34 +101,9 @@ struct AIConsentSettings: View {
       Section {
         Toggle("Share with AI providers", isOn: $consented)
       } footer: {
-        Text("While this is off, QM asks again before chat, dictation or Talk to QM can be used.")
+        Text("Turning this off stops chat, dictation and Talk to QM until you agree again.")
       }
     }
     .navigationTitle("AI data sharing").scrollContentBackground(.hidden).background(QMTheme.paper)
-  }
-}
-
-/// Runs an action now if the person has agreed to share data with AI providers; otherwise
-/// asks first and runs it only if they agree.
-@MainActor @Observable final class AIConsentGate {
-  var asking = false
-  private var pending: () -> Void = {}
-
-  func run(_ action: @escaping () -> Void) {
-    if UserDefaults.standard.bool(forKey: AIConsent.key) { return action() }
-    pending = action
-    asking = true
-  }
-
-  fileprivate func finish() {
-    if UserDefaults.standard.bool(forKey: AIConsent.key) { pending() }
-    pending = {}
-  }
-}
-
-extension View {
-  func aiConsentSheet(_ gate: AIConsentGate) -> some View {
-    @Bindable var gate = gate
-    return sheet(isPresented: $gate.asking, onDismiss: gate.finish, content: { AIConsentSheet() })
   }
 }

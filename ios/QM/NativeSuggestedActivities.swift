@@ -60,7 +60,6 @@ struct NativeSuggestedActivities: View {
   let identity: Identity
   let select: (SuggestedActivity) -> Void
   @State private var appeared = false
-  @AppStorage(AIConsent.key) private var aiConsent = false
 
   var dismissible: Bool { identity.suggestedActivitiesGeneration == true }
 
@@ -111,10 +110,6 @@ struct NativeSuggestedActivities: View {
     }
     .padding(.horizontal, 4)
     .onAppear { appeared = true }
-    // Generating suggestions has the workspace's model read the person's data, so it waits for
-    // their agreement to share data with AI providers.
-    .task(id: "\(identity.user) \(aiConsent)") {
-      if aiConsent { await model.generate(for: identity) }
-    }
+    .task(id: identity.user) { await model.generate(for: identity) }
   }
 }
