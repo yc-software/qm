@@ -24,14 +24,23 @@ struct AIConsentView: View {
         Text("Dictation in the message box stays on this device. You can change this in Settings.")
           .foregroundStyle(.secondary)
         Link("Privacy policy", destination: aiPrivacyPolicy)
+      }
+      .padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
+      .frame(maxWidth: .infinity)
+    }
+    // Centred when it fits; scrolls from the top when it doesn't.
+    .defaultScrollAnchor(.center, for: .alignment)
+    .safeAreaInset(edge: .bottom) {
+      VStack(spacing: 12) {
         choice("Allow", fill: QMTheme.ink, text: QMTheme.paper) { consent = "agreed" }
         choice("Don’t allow", fill: QMTheme.ink.opacity(0.08), text: QMTheme.ink) {
           consent = "declined"
         }
         Button("Sign out", action: signOut).buttonStyle(.borderless)
       }
-      .padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
-      .frame(maxWidth: .infinity)
+      .padding(.horizontal, 24).padding(.vertical, 12)
+      .frame(maxWidth: QMTheme.conversationWidth).frame(maxWidth: .infinity)
+      .background(QMTheme.paper)
     }
     .background(QMTheme.paper.ignoresSafeArea())
     .accessibilityAddTraits(.isModal)
