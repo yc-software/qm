@@ -159,18 +159,32 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     }
   }
 
-  func imageData(_ path: String, query: [URLQueryItem] = [], maximumBytes: Int = 32 * 1024 * 1024)
+  func imageData(_ path: String, query: [URLQueryItem] = [], maximumBytes: Int = 8 * 1024 * 1024)
     async throws -> Data
   {
     let current = generation
     var request = try request(path, query: query)
     request.setValue("image/*", forHTTPHeaderField: "Accept")
-    // One buffered read off the main actor; iterating AsyncBytes byte by byte on the main actor
-    // made multi-megabyte photos take seconds to appear.
-    let (data, response) = try await session.data(for: request, delegate: redirects)
+    let (bytes, response) = try await session.bytes(for: request, delegate: redirects)
+    defer { bytes.task.cancel() }
     try check(response, generation: current)
-    guard data.count <= maximumBytes else {
+    guard response.expectedContentLength <= maximumBytes else {
       throw QMError.message("This image is too large for an inline preview.")
+    }
+    let data = try await Self.collect(bytes, maximumBytes: maximumBytes)
+    try check(response, generation: current)
+    return data
+  }
+
+  nonisolated private static func collect(_ bytes: URLSession.AsyncBytes, maximumBytes: Int)
+    async throws -> Data
+  {
+    var data = Data()
+    for try await byte in bytes {
+      guard data.count < maximumBytes else {
+        throw QMError.message("This image is too large for an inline preview.")
+      }
+      data.append(byte)
     }
     return data
   }

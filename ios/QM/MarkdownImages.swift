@@ -218,9 +218,13 @@ struct DraftImageThumbnail: View {
       let worker = Task.detached(priority: .userInitiated) {
         try AttachmentCache.read(account: account, sha: sha)
       }
-      guard let prepared = try? await worker.value else { return }
-      defer { withExtendedLifetime(prepared) {} }
-      image = try? MarkdownImageResource.thumbnail(contentsOf: prepared.url, maximumPixels: 240)
+      do {
+        let prepared = try await worker.value
+        defer { withExtendedLifetime(prepared) {} }
+        image = try MarkdownImageResource.thumbnail(contentsOf: prepared.url, maximumPixels: 240)
+      } catch {
+        Log.images.failure("Loading draft thumbnail", error)
+      }
     }
   }
 }
@@ -287,14 +291,22 @@ enum InlineImageCache {
       guard
         let destination = CGImageDestinationCreateWithData(
           data, UTType.jpeg.identifier as CFString, 1, nil)
-      else { return }
+      else {
+        Log.images.error("Caching inline image failed: no JPEG encoder")
+        return
+      }
       CGImageDestinationAddImage(
         destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
-      guard CGImageDestinationFinalize(destination) else { return }
+      guard CGImageDestinationFinalize(destination) else {
+        Log.images.error("Caching inline image failed: JPEG encoding did not finish")
+        return
+      }
       try (data as Data).write(
         to: folder.appendingPathComponent(key), options: [.atomic, .completeFileProtection])
       prune(folder)
-    } catch {}
+    } catch {
+      Log.images.failure("Caching inline image", error)
+    }
   }
 
   private static func prune(_ folder: URL) {
