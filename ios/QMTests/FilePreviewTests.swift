@@ -165,6 +165,15 @@ final class FilePreviewTests: XCTestCase {
     XCTAssertEqual(FilePreviewResource.typeDescription(nil), "File")
   }
 
+  func testOnlyHTMLPreviewsUseTheWebView() throws {
+    for (name, isHTML) in [
+      ("page.html", true), ("Page.HTM", true), ("report.pdf", false), ("notes.md", false),
+      ("html", false),
+    ] {
+      XCTAssertEqual(try TemporaryPreviewFile(data: Data(), name: name).isHTML, isHTML, name)
+    }
+  }
+
   func testSameNamedPreviewsAreIsolatedAndDeletedAfterRelease() throws {
     var first: TemporaryPreviewFile? = try TemporaryPreviewFile(
       data: Data("first".utf8), name: "../report.txt")

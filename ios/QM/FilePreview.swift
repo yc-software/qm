@@ -2,6 +2,7 @@ import Foundation
 import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 struct FileAttachmentView: View {
   let file: DeliveredFile
@@ -204,6 +205,8 @@ final class TemporaryPreviewFile {
     }
   }
 
+  var isHTML: Bool { ["html", "htm"].contains(url.pathExtension.lowercased()) }
+
   deinit {
     try? FileManager.default.removeItem(at: directory)
   }
@@ -241,6 +244,8 @@ struct FilePreviewSheet: View {
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .background(QMTheme.paper)
+          } else if preview.isHTML {
+            NativeHTMLPreview(file: preview)
           } else {
             NativeFilePreview(file: preview)
           }
@@ -362,6 +367,67 @@ private struct NativeFilePreview: UIViewControllerRepresentable {
       -> any QLPreviewItem
     {
       file.url as NSURL
+    }
+  }
+}
+
+// QuickLook renders HTML out of process and discards it when the app is backgrounded, so the
+// page reloads on return. An app-owned web view keeps its page, scroll position and state.
+private struct NativeHTMLPreview: UIViewRepresentable {
+  let file: TemporaryPreviewFile
+
+  func makeCoordinator() -> Coordinator { Coordinator(file: file) }
+
+  func makeUIView(context: Context) -> WKWebView {
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    let view = WKWebView(frame: .zero, configuration: configuration)
+    view.navigationDelegate = context.coordinator
+    view.uiDelegate = context.coordinator
+    context.coordinator.load(in: view)
+    return view
+  }
+
+  func updateUIView(_ view: WKWebView, context: Context) {}
+
+  @MainActor
+  final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    let file: TemporaryPreviewFile
+
+    init(file: TemporaryPreviewFile) { self.file = file }
+
+    func load(in view: WKWebView) {
+      view.loadFileURL(file.url, allowingReadAccessTo: file.url.deletingLastPathComponent())
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async
+      -> WKNavigationActionPolicy
+    {
+      guard let url = navigationAction.request.url else { return .cancel }
+      if navigationAction.targetFrame?.isMainFrame == false || url.isFileURL
+        || url.absoluteString == "about:blank"
+      {
+        return .allow
+      }
+      if navigationAction.navigationType == .linkActivated { openExternally(url) }
+      return .cancel
+    }
+
+    func webView(
+      _ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+      if let url = navigationAction.request.url, !url.isFileURL { openExternally(url) }
+      return nil
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { load(in: webView) }
+
+    private func openExternally(_ url: URL) {
+      guard let scheme = url.scheme?.lowercased(),
+        !["file", "about", "javascript"].contains(scheme)
+      else { return }
+      UIApplication.shared.open(url)
     }
   }
 }

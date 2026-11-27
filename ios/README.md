@@ -1,6 +1,6 @@
 # QM for iOS
 
-An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. App-catalog SVG logos use SVGView with URLSession’s HTTP cache; there is no embedded WebKit UI. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
+An iOS 18+ SwiftUI client for QM deployments. Product screens, navigation, editors, conversation controls, and voice controls are native. App-catalog SVG logos use SVGView with URLSession’s HTTP cache; HTML file previews render in an app-owned WKWebView, and there is no other embedded WebKit UI. It uses the existing authenticated APIs and runs no agent or model on the phone. External authentication uses ASWebAuthenticationSession; external links and user-created web apps open in the browser.
 
 ## Run
 
