@@ -6,24 +6,29 @@ enum ShellNavItem {
   case conversations, new, voice, more
 }
 
+/// The screen under the conversation list: the open conversation, Talk to QM, or More.
+enum ShellPage {
+  case main, voice, more
+}
+
 struct ShellNav: View {
   /// Room kept above the home indicator: a 52pt glass island plus a little air.
   static let height: CGFloat = 60
 
   // Read here rather than in RootView, so opening or closing the list re-renders only the nav.
   @Binding var showingConversations: Bool
-  let showingMore: Bool
-  let showingVoice: Bool
+  @Binding var page: ShellPage
   let blankChat: Bool
   let waiting: Int
   let onNew: () -> Void
-  let onVoice: () -> Void
-  let onMore: () -> Void
 
   private var selected: ShellNavItem {
-    showingConversations
-      ? .conversations
-      : showingVoice ? .voice : showingMore ? .more : blankChat ? .new : .conversations
+    if showingConversations { return .conversations }
+    switch page {
+    case .voice: return .voice
+    case .more: return .more
+    case .main: return blankChat ? .new : .conversations
+    }
   }
 
   var body: some View {
@@ -51,8 +56,12 @@ struct ShellNav: View {
       switch target {
       case .conversations: showingConversations = true
       case .new: onNew()
-      case .voice: onVoice()
-      case .more: onMore()
+      case .voice:
+        page = .voice
+        showingConversations = false
+      case .more:
+        page = .more
+        showingConversations = false
       }
     } label: {
       Image(systemName: isSelected ? selectedIcon ?? icon : icon)
@@ -110,8 +119,7 @@ extension EnvironmentValues {
 struct ShellChrome: ViewModifier {
   let model: AppModel
   @Binding var showingConversations: Bool
-  @Binding var showingMore: Bool
-  @Binding var showingVoice: Bool
+  @Binding var page: ShellPage
   let blankChat: Bool
   let onNew: () -> Void
   @State private var keyboardUp = false
@@ -137,20 +145,10 @@ struct ShellChrome: ViewModifier {
       .overlay(alignment: .bottom) {
         if showsNav {
           ShellNav(
-            showingConversations: $showingConversations, showingMore: showingMore,
-            showingVoice: showingVoice, blankChat: blankChat,
+            showingConversations: $showingConversations, page: $page, blankChat: blankChat,
             waiting: model.conversations.filter(ConversationFilter.waiting.includes).count,
-            onNew: onNew,
-            onVoice: {
-              showingVoice = true
-              showingMore = false
-              showingConversations = false
-            }
-          ) {
-            showingMore = true
-            showingVoice = false
-            showingConversations = false
-          }
+            onNew: onNew
+          )
           .transition(.opacity.combined(with: .offset(y: 24)))
         }
       }
@@ -180,7 +178,7 @@ struct ShellChrome: ViewModifier {
 }
 
 /// Shrinks on touch-down so a tap registers immediately.
-private struct NavPressStyle: ButtonStyle {
+struct NavPressStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .scaleEffect(configuration.isPressed ? 0.88 : 1)

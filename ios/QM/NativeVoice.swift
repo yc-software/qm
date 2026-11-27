@@ -128,7 +128,7 @@ final class NativeVoiceModel: NSObject {
     let current = UUID()
     revision = current
     connecting = true
-    status = "Connecting…"
+    status = ""
     muted = false
     taskStatus = nil
     transcript = NativeVoiceTranscript()
@@ -651,7 +651,6 @@ struct VoiceView: View {
   @State private var followsLatest = true
   @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
-  @Environment(\.shellNavHeight) private var navHeight
   init(client: APIClient, conversation: Conversation? = nil) {
     self.init(model: NativeVoiceModel(client: client, conversation: conversation))
   }
@@ -737,8 +736,6 @@ struct VoiceView: View {
         .foregroundStyle(.tertiary).multilineTextAlignment(.center).padding(.horizontal, 28)
         .padding(.top, 14).padding(.bottom, 8)
     }
-    // Clear the floating glass island, which sits over every screen.
-    .padding(.bottom, navHeight)
     .onChange(of: model.transcript.items.isEmpty) { _, empty in
       if empty { followsLatest = true }
     }
@@ -785,7 +782,6 @@ struct VoiceView: View {
 
   private var heroTitle: String {
     if model.connecting { return "Connecting…" }
-    if model.stopping { return "Wrapping up" }
     if model.connected { return model.muted ? "Muted" : "Listening" }
     return "Let’s talk"
   }
@@ -837,34 +833,26 @@ private struct VoiceCircleButton: View {
 
   var body: some View {
     Button(action: action) {
-      Image(systemName: icon)
-        .font(.system(size: size * 0.36, weight: .semibold))
-        .contentTransition(.symbolEffect(.replace))
-        .frame(width: size, height: size)
-        .foregroundStyle(tint == nil ? QMTheme.ink : QMTheme.paper)
-        .background { background }
-        .opacity(enabled ? 1 : 0.45)
+      disc(
+        Image(systemName: icon)
+          .font(.system(size: size * 0.36, weight: .semibold))
+          .contentTransition(.symbolEffect(.replace))
+          .frame(width: size, height: size)
+      )
+      .opacity(enabled ? 1 : 0.45)
     }
-    .buttonStyle(VoicePressStyle())
+    .buttonStyle(NavPressStyle())
     .accessibilityLabel(label)
   }
 
-  @ViewBuilder private var background: some View {
+  // A square capsule is a circle, so the untinted control reuses the nav's glass.
+  @ViewBuilder private func disc(_ icon: some View) -> some View {
     if let tint {
-      Circle().fill(tint).shadow(color: tint.opacity(0.25), radius: 12, y: 4)
-    } else if #available(iOS 26.0, *) {
-      Color.clear.glassEffect(.regular.interactive(), in: .circle)
+      icon.foregroundStyle(QMTheme.paper)
+        .background(Circle().fill(tint).shadow(color: tint.opacity(0.25), radius: 12, y: 4))
     } else {
-      Circle().fill(.thinMaterial).shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+      icon.modifier(GlassPill())
     }
-  }
-}
-
-private struct VoicePressStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.9 : 1)
-      .animation(.snappy(duration: 0.14), value: configuration.isPressed)
   }
 }
 
