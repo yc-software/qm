@@ -460,7 +460,8 @@ test("a file link clicked in a chat previews the file over that chat", async () 
   const h = await harness({ path: "/s/sess-deep", api: markdownFile });
   stubShowModal();
   const windows: unknown[] = [];
-  document.defaultView!.open = (url) => (windows.push(url), null);
+  const opened = { opener: document.defaultView };
+  document.defaultView!.open = (url) => (windows.push(url), opened as Window);
   const click = (file: string): boolean => {
     const link = Object.assign(document.createElement("a"), { href: `/files?file=${file}`, target: "_blank" });
     document.body.append(link);
@@ -473,6 +474,7 @@ test("a file link clicked in a chat previews the file over that chat", async () 
     assert.equal(click("pdf1"), true);
     await settle(() => windows.length > 0);
     assert.deepEqual(windows, ["/api/files/pdf1/content/report.pdf"], "a file with no preview opens on its own");
+    assert.equal(opened.opener, null);
     assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
   } finally {
     await h.close();

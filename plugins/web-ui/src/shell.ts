@@ -1189,7 +1189,12 @@ document.addEventListener("click", (e) => {
   if (file) {
     e.preventDefault();
     void previewFileById(file).then(
-      (unpreviewed) => unpreviewed && window.open(unpreviewed, "_blank", "noopener,noreferrer"),
+      (unpreviewed) => {
+        if (!unpreviewed) return;
+        const opened = window.open(unpreviewed, "_blank");
+        if (opened) opened.opener = null;
+        else location.assign(unpreviewed);
+      },
       () => location.assign(anchor.href),
     );
     return;
