@@ -48,6 +48,7 @@ struct Conversation: Codable, Identifiable, Hashable {
   var unread: Bool?
   var goal: Goal? = nil
   var subagents: Subagents? = nil
+  var personaId: String? = nil
 
   struct Subagents: Codable, Hashable {
     var running: Int
