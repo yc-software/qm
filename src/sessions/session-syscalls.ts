@@ -70,6 +70,7 @@ export function isPersonFire(request: Pick<OrchestratorInput, "origin" | "botAct
 }
 
 export async function delegatedAuthorization(
+  tenant: Tenant,
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "latestTurnSource"> },
 ): Promise<{ origin: TurnOrigin; source: TurnSource } | undefined> {
@@ -121,7 +122,7 @@ export async function delegatedAuthorization(
     )
       return;
     if (current.delegatingThroughSeq !== undefined)
-      inheritedSource ??= await deps.sessions.latestTurnSource(source.id, current.delegatingThroughSeq);
+      inheritedSource ??= await deps.sessions.latestTurnSource(tenant, source.id, current.delegatingThroughSeq);
     const internal =
       parent.conversation.audience.every((person) => person.type === "internal") &&
       (parent.conversation.kind === "dm" ||

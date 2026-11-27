@@ -560,7 +560,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const delegated =
         !external && deps.runs
-          ? await delegatedAuthorization(input, { runs: deps.runs, sessions: deps.sessions })
+          ? await delegatedAuthorization(tenant, input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const delegatedOrigin = delegated?.origin;
       let mcpSource: TurnSource | undefined = sessionTurn
@@ -1517,7 +1517,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const { grantOnce, recordApprovalDecision } = approvalDecisions;
         const approvalOutcome = await applyTurnApprovals(approvalTurn, approvalDecisions);
         if (approvalOutcome) return approvalOutcome;
-        if (isRetry && input.runId) mcpSource = (await deps.sessions.latestTurnSource(input.runId)) ?? mcpSource;
+        if (isRetry && input.runId)
+          mcpSource = (await deps.sessions.latestTurnSource(tenant, input.runId)) ?? mcpSource;
 
         systemPrompt = await appendTurnGuidance({
           deps,

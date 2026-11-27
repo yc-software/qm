@@ -335,16 +335,16 @@ export function createSessionItems(deps: {
 
     getItems: (sessionId, opts) => readItems(sessionId, opts),
 
-    async latestTurnSource(runId, throughSeq) {
-      const rows = await q(
+    async latestTurnSource(tenant, runId, throughSeq) {
+      const rows = await db.forTenant(tenant).q(
         `SELECT i.body->'source' AS source FROM items i
          JOIN sessions s ON s.tenant_id = i.tenant_id AND s.id = i.session_id
          JOIN runs r ON r.tenant_id = s.tenant_id AND r.session_id = s.thread_ref
-         WHERE i.tenant_id = ${TENANT} AND r.id = $1::text AND i.turn_id = $1::uuid
+         WHERE i.tenant_id = $1 AND r.id = $2::text AND i.turn_id = $2::uuid
            AND (i.kind = 'SteeringMessage' OR (i.kind = 'ElicitationResponse' AND i.approved = true))
-           AND i.body ? 'source' AND ($2::bigint IS NULL OR i.seq <= $2)
+           AND i.body ? 'source' AND ($3::bigint IS NULL OR i.seq <= $3)
          ORDER BY i.seq DESC LIMIT 1`,
-        [runId, throughSeq ?? null],
+        [tenant.id, runId, throughSeq ?? null],
       );
       return rows[0]?.source as TurnSource | undefined;
     },

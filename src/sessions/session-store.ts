@@ -439,7 +439,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
   latestItemSeq(sessionId: string): Promise<number>;
-  latestTurnSource(runId: string, throughSeq?: number): Promise<TurnSource | undefined>;
+  latestTurnSource(tenant: Tenant, runId: string, throughSeq?: number): Promise<TurnSource | undefined>;
   latestToolSteps(turnIds: readonly string[]): Promise<Map<string, ToolStep>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;

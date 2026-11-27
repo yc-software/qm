@@ -1,3 +1,4 @@
+import { testTenant as tenant } from "./support/test-tenant.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { actionApproved } from "../src/api/action-approval.ts";
@@ -24,6 +25,7 @@ function harness(items: Item[] = [], headers: Record<string, string> = {}, body:
     },
   };
   const ctx = {
+    tenant,
     req: { headers },
     res,
     method: "PUT",

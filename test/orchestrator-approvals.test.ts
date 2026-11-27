@@ -120,7 +120,7 @@ test("command approval retains accepted steering while its automation authorizat
   assert.deepEqual(observed, [source, source]);
   const replay = (await built.runs.list()).find((run) => run.request.approval?.requestId === requestId)!;
   assert.equal(replay.request.origin.kind, "automation");
-  assert.deepEqual(await built.sessions.latestTurnSource(replay.id), source);
+  assert.deepEqual(await built.sessions.latestTurnSource(tenant, replay.id), source);
 });
 
 test("a bot-requested turn never opens an approval when a command is gated", async () => {

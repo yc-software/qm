@@ -224,6 +224,7 @@ export function createSteerPreparer(turn: SteerTurn): NonNullable<AgentTurnInput
       if (request.spawned && request.sessionSenderId === session.parentSessionId && deps.runs) {
         source = (
           await delegatedAuthorization(
+            tenant,
             { ...request, actor: steerer, conversation, origin: request.origin ?? { kind: "automation" } },
             { runs: deps.runs, sessions: deps.sessions },
           )

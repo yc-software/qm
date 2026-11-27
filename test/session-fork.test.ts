@@ -1,3 +1,4 @@
+import { testTenant as tenant } from "./support/test-tenant.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -79,11 +80,11 @@ test("forking copies the transcript into a fresh independent web session", async
     },
   };
   await sessions.append(writer, { kind: "SteeringMessage", text: "later task", body: { source: laterSource } });
-  assert.equal(await sessions.latestTurnSource(originalRunId, receipt!.seq), undefined);
+  assert.equal(await sessions.latestTurnSource(tenant, originalRunId, receipt!.seq), undefined);
   const laterFork = await app.forkSession(sid, "U1");
   assert.ok(laterFork!.items.some((item) => item.body.source && item.seq <= receipt!.seq));
-  assert.equal(await sessions.latestTurnSource(originalRunId, receipt!.seq), undefined);
-  assert.deepEqual(await sessions.latestTurnSource(originalRunId), laterSource);
+  assert.equal(await sessions.latestTurnSource(tenant, originalRunId, receipt!.seq), undefined);
+  assert.deepEqual(await sessions.latestTurnSource(tenant, originalRunId), laterSource);
 });
 
 test("upToSeq truncates the copy at the cut point", async () => {
