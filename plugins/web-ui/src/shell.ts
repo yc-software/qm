@@ -1195,7 +1195,10 @@ document.addEventListener("click", (e) => {
         if (opened) opened.opener = null;
         else location.assign(unpreviewed);
       },
-      () => location.assign(anchor.href),
+      (error: unknown) => {
+        reportHandledError("web:file_link", error);
+        location.assign(anchor.href);
+      },
     );
     return;
   }
