@@ -1,5 +1,5 @@
 import type { DirectoryStore } from "../directory/directory-store.ts";
-import { samePerson } from "../directory/person.ts";
+import { isTrustedSubject, samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 import type { UserRecord, UserStore } from "./user-store.ts";
 
@@ -11,7 +11,7 @@ const isEmail = (value: string): boolean => /^[^\s@:]+@[^\s@]+$/.test(value.trim
 
 function realName(principalId: string, name: string | null | undefined): string | undefined {
   const trimmed = name?.trim();
-  if (!trimmed || samePerson(trimmed, principalId) || /^oidc:/i.test(trimmed)) return undefined;
+  if (!trimmed || samePerson(trimmed, principalId) || isTrustedSubject(trimmed)) return undefined;
   return trimmed;
 }
 
