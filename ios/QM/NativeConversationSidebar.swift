@@ -4,6 +4,7 @@ struct NativeConversationSection: Identifiable {
   let id: String
   let title: String
   let icon: String
+  var projectIcon: ProjectIcon? = nil
   var conversations: [Conversation]
   /// Mixes conversations from several scopes, so rows show their scope and never collapse.
   var crossScope = false
@@ -53,7 +54,8 @@ struct NativeConversationSection: Identifiable {
         indices[scope] = sections.count
         sections.append(
           Self(
-            id: "scope:\(scope)", title: title, icon: icon, conversations: [conversation],
+            id: "scope:\(scope)", title: title, icon: icon, projectIcon: context?.projectIcon,
+            conversations: [conversation],
             members: kind == .group && context?.project == nil ? context?.groupMembers ?? [] : []))
       }
     }
@@ -199,8 +201,12 @@ struct NativeConversationSections<Actions: View>: View {
       }
     } label: {
       HStack(spacing: 8) {
-        Image(systemName: expanded ? section.icon : "chevron.right")
-          .frame(width: 18)
+        if expanded, let projectIcon = section.projectIcon {
+          NativeProjectIcon(icon: projectIcon).frame(width: 18)
+        } else {
+          Image(systemName: expanded ? section.icon : "chevron.right")
+            .frame(width: 18)
+        }
         Text(section.title).lineLimit(1)
         Spacer(minLength: 0)
         if !section.members.isEmpty { NativeGroupAvatars(members: section.members) }
