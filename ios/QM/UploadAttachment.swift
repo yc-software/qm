@@ -381,24 +381,19 @@ extension AttachmentPicker {
   fileprivate var options: some View {
     VStack(alignment: .leading, spacing: 4) {
       if UIImagePickerController.isSourceTypeAvailable(.camera) {
-        row("Camera", systemImage: "camera", option: .camera)
+        row("Camera", systemImage: "camera") { choose(.camera) }
       }
-      row("Photos", systemImage: "photo", option: .photos)
-      row("Files", systemImage: "paperclip", option: .files)
-      // The system paste control reads the clipboard without iOS's "Allow Paste" prompt; it is
-      // only offered when the clipboard actually holds an image (checking does not prompt).
+      row("Photos", systemImage: "photo") { choose(.photos) }
+      row("Files", systemImage: "paperclip") { choose(.files) }
+      // Checking for images does not prompt; only reading them shows iOS's paste permission.
       if UIPasteboard.general.hasImages {
-        PasteButton(supportedContentTypes: [.image]) { providers in
+        row("Paste image", systemImage: "doc.on.clipboard") {
           showingOptions = false
-          onSelect(providers.map(AttachmentSource.image))
+          onSelect(
+            UIPasteboard.general.itemProviders
+              .filter { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }
+              .map(AttachmentSource.image))
         }
-        .labelStyle(.titleAndIcon)
-        .buttonBorderShape(.capsule)
-        .controlSize(.large)
-        .tint(QMTheme.ink.opacity(0.08))
-        .foregroundStyle(QMTheme.ink)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
       }
     }
     .padding(.vertical, 12)
@@ -415,18 +410,22 @@ extension AttachmentPicker {
     }
   }
 
-  private func row(_ title: String, systemImage: String, option: Option) -> some View {
-    Button {
-      pending = option
-      showingOptions = false
-    } label: {
+  private func choose(_ option: Option) {
+    pending = option
+    showingOptions = false
+  }
+
+  private func row(_ title: String, systemImage: String, action: @escaping () -> Void)
+    -> some View
+  {
+    Button(action: action) {
       HStack(spacing: 16) {
         Image(systemName: systemImage)
-          .font(.system(size: 19, weight: .regular))
+          .font(.title3)
           .frame(width: 48, height: 48)
           .background(QMTheme.ink.opacity(0.08), in: Circle())
         Text(title)
-          .font(.system(size: 19))
+          .font(.title3)
         Spacer(minLength: 0)
       }
       .foregroundStyle(QMTheme.ink)
