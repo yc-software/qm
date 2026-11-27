@@ -3,7 +3,7 @@ import UIKit
 
 /// Small icon-only nav under the main screen, in the style of the ChatGPT app.
 enum ShellNavItem {
-  case conversations, new, more
+  case conversations, new, voice, more
 }
 
 struct ShellNav: View {
@@ -13,13 +13,17 @@ struct ShellNav: View {
   // Read here rather than in RootView, so opening or closing the list re-renders only the nav.
   @Binding var showingConversations: Bool
   let showingMore: Bool
+  let showingVoice: Bool
   let blankChat: Bool
   let waiting: Int
   let onNew: () -> Void
+  let onVoice: () -> Void
   let onMore: () -> Void
 
   private var selected: ShellNavItem {
-    showingConversations ? .conversations : showingMore ? .more : blankChat ? .new : .conversations
+    showingConversations
+      ? .conversations
+      : showingVoice ? .voice : showingMore ? .more : blankChat ? .new : .conversations
   }
 
   var body: some View {
@@ -27,6 +31,7 @@ struct ShellNav: View {
     HStack(spacing: 2) {
       item(.conversations, icon: "line.3.horizontal", label: "Conversations")
       item(.new, icon: "square.and.pencil", label: "New chat")
+      item(.voice, icon: "waveform", label: "Talk to QM")
       item(.more, icon: "square.grid.2x2", selectedIcon: "square.grid.2x2.fill", label: "More")
     }
     .padding(4)
@@ -46,6 +51,7 @@ struct ShellNav: View {
       switch target {
       case .conversations: showingConversations = true
       case .new: onNew()
+      case .voice: onVoice()
       case .more: onMore()
       }
     } label: {
@@ -105,6 +111,7 @@ struct ShellChrome: ViewModifier {
   let model: AppModel
   @Binding var showingConversations: Bool
   @Binding var showingMore: Bool
+  @Binding var showingVoice: Bool
   let blankChat: Bool
   let onNew: () -> Void
   @State private var keyboardUp = false
@@ -131,11 +138,17 @@ struct ShellChrome: ViewModifier {
         if showsNav {
           ShellNav(
             showingConversations: $showingConversations, showingMore: showingMore,
-            blankChat: blankChat,
+            showingVoice: showingVoice, blankChat: blankChat,
             waiting: model.conversations.filter(ConversationFilter.waiting.includes).count,
-            onNew: onNew
+            onNew: onNew,
+            onVoice: {
+              showingVoice = true
+              showingMore = false
+              showingConversations = false
+            }
           ) {
             showingMore = true
+            showingVoice = false
             showingConversations = false
           }
           .transition(.opacity.combined(with: .offset(y: 24)))

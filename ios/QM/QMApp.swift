@@ -19,6 +19,7 @@ struct RootView: View {
   }
 
   @State private var showingMore = false
+  @State private var showingVoice = false
 
   @State private var homePath: [Page] = []
   @Bindable var model: AppModel
@@ -127,6 +128,7 @@ struct RootView: View {
     .modifier(
       ShellChrome(
         model: model, showingConversations: $showingConversations, showingMore: $showingMore,
+        showingVoice: $showingVoice,
         blankChat: blankChat, onNew: newChat)
     )
     .environment(\.qmIdentity, model.identity)
@@ -191,6 +193,7 @@ struct RootView: View {
     selectedConversation = conversation
     homePath = []
     showingMore = false
+    showingVoice = false
     showingConversations = false
   }
 
@@ -276,7 +279,9 @@ struct RootView: View {
   @ViewBuilder
   private var shell: some View {
     if let client = model.client, let identity = model.identity {
-      if showingMore {
+      if showingVoice {
+        NavigationStack { VoiceView(client: client) }
+      } else if showingMore {
         NavigationStack { MoreGrid(identity: identity, client: client) }
           .modifier(NavRoom())
       } else if let conversation = selectedConversation {
@@ -296,7 +301,8 @@ struct RootView: View {
     }
   }
 
-  private var blankChat: Bool { !showingMore && selectedConversation?.localOnly == true }
+  private var blankChat: Bool {
+    !showingMore && !showingVoice && selectedConversation?.localOnly == true }
 
   private func newChat() {
     // Already on a blank chat: just bring it back instead of doing nothing.

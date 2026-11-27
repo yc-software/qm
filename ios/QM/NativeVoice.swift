@@ -246,7 +246,7 @@ final class NativeVoiceModel: NSObject {
       muted.toggle()
       microphone?.isEnabled = !muted
       send(bridge.event(muted ? "session.input_audio.mute" : "session.input_audio.unmute"))
-      status = muted ? "Microphone muted" : "Listening · You can interrupt naturally"
+      status = ""
       flushEvents()
     } catch { fail("Could not resume audio. QM tasks continue in your history.") }
   }
@@ -270,7 +270,7 @@ final class NativeVoiceModel: NSObject {
         audioPaused = false
         updatePlaybackVolume()
         microphone?.isEnabled = !muted
-        status = muted ? "Microphone muted" : "Listening · You can interrupt naturally"
+        status = ""
         flushEvents()
       } catch { fail("Could not resume audio. QM tasks continue in your history.") }
     }
@@ -352,7 +352,7 @@ final class NativeVoiceModel: NSObject {
         updatePlaybackVolume()
         connecting = false
         connected = true
-        status = "Listening · You can interrupt naturally"
+        status = ""
         monitor?.cancel()
         let current = revision
         monitor = Task {
@@ -645,44 +645,13 @@ extension NativeVoiceModel: RTCPeerConnectionDelegate, RTCDataChannelDelegate {
   }
 }
 
-private struct NativeVoiceConnectionLoading: View {
-  let status: String
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      HStack(spacing: 14) {
-        Image(systemName: "mic").font(.system(size: 24))
-          .frame(width: 48, height: 48)
-          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-        HStack(spacing: 5) {
-          ForEach(0..<5) { _ in
-            Capsule().fill(.teal).frame(height: 2)
-          }
-        }
-        .frame(maxWidth: 132)
-        .modifier(NativeLoadingPulse())
-        Text("QM").font(.headline).frame(minWidth: 48, minHeight: 48)
-          .background(QMTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-      }
-      .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Voice connection").font(.subheadline).foregroundStyle(.secondary)
-        Text(status).font(.headline).fixedSize(horizontal: false, vertical: true)
-      }
-    }
-    .padding(.vertical, 20)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
-    .accessibilityAddTraits(.updatesFrequently)
-  }
-}
-
 struct VoiceView: View {
   @State private var model: NativeVoiceModel
   @State private var confirmingAgentVoice = false
   @State private var followsLatest = true
   @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
+  @Environment(\.shellNavHeight) private var navHeight
   init(client: APIClient, conversation: Conversation? = nil) {
     self.init(model: NativeVoiceModel(client: client, conversation: conversation))
   }
@@ -690,17 +659,30 @@ struct VoiceView: View {
     _model = State(initialValue: model)
   }
   var body: some View {
-    VStack(spacing: 24) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          Text("Talk to QM").font(.title2.weight(.semibold))
-          if model.connecting {
-            NativeVoiceConnectionLoading(status: model.status)
-          } else if let permission = model.permissionError {
+    VStack(spacing: 0) {
+      if model.transcript.items.isEmpty {
+        VStack(spacing: 18) {
+          NativeVoiceMark(active: model.connected && !model.muted, connecting: model.connecting)
+          Text(heroTitle)
+            .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
+            .foregroundStyle(QMTheme.ink)
+            .multilineTextAlignment(.center)
+            .contentTransition(.opacity)
+          if let permission = model.permissionError {
             NativeAudioPermissionNotice(message: model.status, permission: permission)
-          } else {
-            Text(model.status).font(.headline).accessibilityAddTraits(.updatesFrequently)
+              .padding(.horizontal, 24)
+          } else if !model.status.isEmpty {
+            Text(model.status).font(.subheadline).foregroundStyle(.secondary)
+              .multilineTextAlignment(.center).padding(.horizontal, 40)
+              .accessibilityAddTraits(.updatesFrequently)
+              .contentTransition(.opacity)
           }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.smooth(duration: 0.35), value: heroTitle)
+        .animation(.smooth(duration: 0.35), value: model.status)
+      } else {
+        ScrollView {
           LazyVStack(alignment: .leading, spacing: 20) {
             ForEach(model.transcript.items) { item in
               Group {
@@ -720,46 +702,46 @@ struct VoiceView: View {
                     client: model.client, showSpeaker: false, user: "")
                 }
               }
+              .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
           }
-        }.padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
-      }
-      .scrollPosition($transcriptPosition)
-      .onScrollPhaseChange { previous, phase, context in
-        if phase == .interacting { followsLatest = false }
-        if phase == .idle, previous == .interacting || previous == .decelerating {
-          followsLatest =
-            context.geometry.contentSize.height - context.geometry.visibleRect.maxY <= 44
+          .padding(24).frame(maxWidth: QMTheme.conversationWidth, alignment: .leading)
+          .animation(.smooth(duration: 0.3), value: model.transcript.items.count)
+        }
+        .scrollPosition($transcriptPosition)
+        .onScrollPhaseChange { previous, phase, context in
+          if phase == .interacting { followsLatest = false }
+          if phase == .idle, previous == .interacting || previous == .decelerating {
+            followsLatest =
+              context.geometry.contentSize.height - context.geometry.visibleRect.maxY <= 44
+          }
+        }
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
+        .defaultScrollAnchor(.top, for: .alignment)
+        .mask(
+          LinearGradient(
+            stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+                    .init(color: .black, location: 0.92), .init(color: .clear, location: 1)],
+            startPoint: .top, endPoint: .bottom))
+        if !model.status.isEmpty {
+          Text(model.status).font(.footnote).foregroundStyle(.secondary)
+            .padding(.top, 4).contentTransition(.opacity)
+            .animation(.smooth, value: model.status)
         }
       }
-      .onChange(of: model.transcript.items.isEmpty) { _, empty in
-        if empty { followsLatest = true }
-      }
-      .defaultScrollAnchor(.bottom, for: .initialOffset)
-      .defaultScrollAnchor(followsLatest ? .bottom : nil, for: .sizeChanges)
-      .defaultScrollAnchor(.top, for: .alignment)
-      if model.connected || model.connecting || model.stopping {
-        HStack(spacing: 24) {
-          Button(model.muted ? "Unmute" : "Mute", systemImage: model.muted ? "mic.slash" : "mic") {
-            model.toggleMute()
-          }.disabled(!model.connected || model.stopping)
-          Button("End voice", systemImage: "phone.down.fill", role: .destructive) { model.finish() }
-            .disabled(model.stopping)
-        }.buttonStyle(.bordered).controlSize(.large)
-      } else {
-        Button("Start voice", systemImage: "waveform") {
-          if model.conversation?.parentSessionId?.isEmpty == false {
-            confirmingAgentVoice = true
-          } else {
-            startVoice()
-          }
-        }.buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.available)
-      }
-      Text("Audio is sent to OpenAI while connected. Tasks and approvals stay in QM.").font(
-        .caption
-      ).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 28)
-        .padding(.bottom)
+      controls.padding(.top, 20)
+      Text("Audio goes to OpenAI while connected. Tasks stay in QM.").font(.caption2)
+        .foregroundStyle(.tertiary).multilineTextAlignment(.center).padding(.horizontal, 28)
+        .padding(.top, 14).padding(.bottom, 8)
     }
+    // Clear the floating glass island, which sits over every screen.
+    .padding(.bottom, navHeight)
+    .onChange(of: model.transcript.items.isEmpty) { _, empty in
+      if empty { followsLatest = true }
+    }
+    .sensoryFeedback(.impact(weight: .medium), trigger: model.connected)
+    .sensoryFeedback(.selection, trigger: model.muted)
     .background(QMTheme.paper).navigationBarTitleDisplayMode(.inline)
     .alert(
       "Talk to this agent directly?", isPresented: $confirmingAgentVoice
@@ -799,7 +781,119 @@ struct VoiceView: View {
     }
   }
 
+  private var heroTitle: String {
+    if model.connecting { return "Connecting…" }
+    if model.stopping { return "Wrapping up" }
+    if model.connected { return model.muted ? "Muted" : "Listening" }
+    return "Let’s talk"
+  }
+
+  @ViewBuilder private var controls: some View {
+    let live = model.connected || model.connecting || model.stopping
+    HStack(spacing: 28) {
+      if live {
+        VoiceCircleButton(
+          label: model.muted ? "Unmute" : "Mute", icon: model.muted ? "mic.slash.fill" : "mic.fill",
+          size: 60, tint: model.muted ? QMTheme.ink : nil
+        ) { model.toggleMute() }
+        .disabled(!model.connected || model.stopping)
+        .transition(.scale.combined(with: .opacity))
+        VoiceCircleButton(label: "End voice", icon: "xmark", size: 60, tint: QMTheme.ink) {
+          model.finish()
+        }
+        .disabled(model.stopping)
+        .transition(.scale.combined(with: .opacity))
+      } else {
+        VoiceCircleButton(label: "Start voice", icon: "waveform", size: 76, tint: QMTheme.unread) {
+          if model.conversation?.parentSessionId?.isEmpty == false {
+            confirmingAgentVoice = true
+          } else {
+            startVoice()
+          }
+        }
+        .disabled(!model.available)
+        .transition(.scale.combined(with: .opacity))
+      }
+    }
+    .frame(height: 80)
+    .animation(.spring(duration: 0.4, bounce: 0.25), value: live)
+  }
+
   private func startVoice() {
     Task { await model.start() }
+  }
+}
+
+/// A round voice control: glass when untinted, a solid disc when tinted.
+private struct VoiceCircleButton: View {
+  let label: String
+  let icon: String
+  let size: CGFloat
+  var tint: Color?
+  let action: () -> Void
+  @Environment(\.isEnabled) private var enabled
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: icon)
+        .font(.system(size: size * 0.36, weight: .semibold))
+        .contentTransition(.symbolEffect(.replace))
+        .frame(width: size, height: size)
+        .foregroundStyle(tint == nil ? QMTheme.ink : QMTheme.paper)
+        .background { background }
+        .opacity(enabled ? 1 : 0.45)
+    }
+    .buttonStyle(VoicePressStyle())
+    .accessibilityLabel(label)
+  }
+
+  @ViewBuilder private var background: some View {
+    if let tint {
+      Circle().fill(tint).shadow(color: tint.opacity(0.25), radius: 12, y: 4)
+    } else if #available(iOS 26.0, *) {
+      Color.clear.glassEffect(.regular.interactive(), in: .circle)
+    } else {
+      Circle().fill(.thinMaterial).shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+    }
+  }
+}
+
+private struct VoicePressStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.9 : 1)
+      .animation(.snappy(duration: 0.14), value: configuration.isPressed)
+  }
+}
+
+/// Five soft bars: still when idle, breathing while connecting, dancing while listening.
+private struct NativeVoiceMark: View {
+  let active: Bool
+  let connecting: Bool
+
+  var body: some View {
+    TimelineView(.animation(paused: !(active || connecting))) { timeline in
+      let t = timeline.date.timeIntervalSinceReferenceDate
+      HStack(spacing: 6) {
+        ForEach(0..<5, id: \.self) { i in
+          Capsule().fill(QMTheme.unread)
+            .frame(width: 7, height: height(i, t))
+        }
+      }
+      .frame(height: 56)
+    }
+    .accessibilityHidden(true)
+  }
+
+  private func height(_ i: Int, _ t: Double) -> CGFloat {
+    let rest: [CGFloat] = [14, 24, 34, 24, 14]
+    if active {
+      let wave = (sin(t * 5.2 + Double(i) * 1.1) + sin(t * 3.1 + Double(i) * 0.7)) / 2
+      return rest[i] + CGFloat(wave) * 12 + 6
+    }
+    if connecting {
+      return rest[i] * CGFloat(0.75 + 0.25 * sin(t * 3 - Double(i) * 0.6))
+    }
+    return rest[i]
   }
 }
