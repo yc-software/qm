@@ -93,10 +93,16 @@ export interface AdminServiceOptions {
   users: UserStore;
 }
 
+const TRUSTED_SUBJECT_PREFIX = "oidc:";
+
 export function trustedSubjectPrincipal(issuer: string, subject: string): string {
   if (!subject || subject.length > 255 || Buffer.from(subject).toString("utf8") !== subject)
     throw new AdminError(400, "invalid trusted subject");
-  return `oidc:${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
+  return `${TRUSTED_SUBJECT_PREFIX}${createHash("sha256").update(issuer).digest("hex")}:${Buffer.from(subject).toString("base64url")}`;
+}
+
+export function isTrustedSubject(principalId: string): boolean {
+  return principalId.startsWith(TRUSTED_SUBJECT_PREFIX);
 }
 
 export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {

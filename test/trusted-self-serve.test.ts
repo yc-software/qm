@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "../src/api/server.ts";
 import { buildApp, testCore } from "./support/build-app.ts";
+import { handleModelBudgetCap } from "../src/core/orchestrator/model-budget.ts";
 import { testConfig } from "./support/test-config.ts";
 import { twoTenants } from "./support/two-tenants.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -147,6 +148,18 @@ test("cofounders signing in at once share one new workspace and every one of the
     deploymentModelKey: false,
   });
   for (const subject of founders) assert.equal(await isAdmin(tenant, subject), true, subject);
+  const told = await withTenant(tenant, async (token) => {
+    await s.built.identity.refresh(true);
+    const onChat = ["f0@acme.test", "f1@acme.test"];
+    await s.built.app.upsertDirectory(onChat.map((id) => ({ principalId: id, displayName: id, type: "internal" })));
+    const deps = { ...s.built, publicWebUrl: "https://qm.example.test" };
+    const reply = await handleModelBudgetCap(deps, token, { kind: "dm" }, s.built.identity.classify(onChat[1]!), false);
+    assert.match(reply, /\/settings\/onboarding/, "a chat member linked to a trusted sign-in is the admin it is");
+    const targets = async (type: string) => (await s.built.deliveries.pending(type)).map((d) => d.destination.target);
+    return [await targets("principal"), (await targets("web")).sort()];
+  });
+  const webOnly = founders.slice(2).map((subject) => `web:${trustedPrincipal(issuer, subject)}:direct`);
+  assert.deepEqual(told, [["f0@acme.test"], webOnly.sort()], "each other admin is told where they can be reached");
   await withoutTenant(async () => {
     assert.deepEqual(await directory.tenantsForPrincipal!(trustedPrincipal(issuer, "founder-2")), [
       { id: tenant, brandName: "Acme Robotics" },
