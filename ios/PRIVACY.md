@@ -1,6 +1,6 @@
 # Privacy policy for QM on iOS
 
-Last updated: 14 November 2026
+Last updated: 27 November 2026
 
 This policy describes what the QM app for iPhone and iPad does with your data. It is written about the app's own behaviour, so it holds for any unmodified build of the app from this repository. "The publisher" means whoever distributed the copy you installed.
 
@@ -14,7 +14,9 @@ QM is open source, so anyone can build and distribute the app. If you got your c
 
 - The app has no analytics, advertising, or tracking, and its publisher receives none of your content.
 - What you write and attach goes to your QM workspace: the one you choose, or the one your copy was set up with.
+- Your workspace sends your messages, attachments, and content it reads from apps you connect to a third-party AI provider, such as Anthropic or OpenAI, to answer you. See [AI providers](#ai-providers).
 - A live voice call also connects your device directly to OpenAI, which provides the voice.
+- The app asks for your agreement before any of this happens, and you can withdraw it in Settings.
 - Whoever operates your workspace decides how your data is stored and used on it. Ask them about retention, access, and deletion.
 
 ## The app and your workspace are separate
@@ -33,6 +35,17 @@ What you do in the app, plus your device's time zone and what iOS adds to any we
 - **Credentials you enter.** API keys, authorization codes, and other secrets you type into the app's keychain and settings screens are sent to your workspace.
 - **Time zone.** Sent with each message, each voice task, and each request for suggested activities.
 
+## AI providers
+
+QM answers you with AI models run by third-party companies. The app shows what is shared and with whom, and asks you to agree, before you first send a message, dictate, or start a voice call. Until you agree, those features stay off. You can review or withdraw your agreement at any time in **Settings > AI data sharing**; withdrawing turns them off again.
+
+- **What is sent:** the messages you send; the files, photos, and videos you attach; and content QM reads on your behalf from apps you connect to your workspace, such as Slack, Gmail, or GitHub, while working on your request. Conversation history and the results of QM's work are sent along so the model has context.
+- **How:** the app sends your messages and attachments to your workspace, and the workspace sends them to the provider of the model the conversation uses. The app does not send them to a model provider itself. Live voice is the exception, described below.
+- **Who receives it:** the provider of the model you choose in the model picker, which shows each model's provider. Y Combinator's QM workspace uses **Anthropic** (Claude models) and **OpenAI** (GPT models); the operator of another workspace may set up other providers, such as OpenRouter. Live voice audio goes to **OpenAI**.
+- **What it is used for:** to generate replies, carry out the tasks you ask for, transcribe and voice live calls, and, in your workspace, to search and summarize your past work. It is not used by the app or its publisher for advertising, tracking, or profiling.
+
+Each provider handles the data under its own terms and privacy policy, and under the agreement the workspace's operator has with it.
+
 ## Live voice
 
 While a Talk to QM call is active, the app connects directly to OpenAI, the voice service QM uses, over an encrypted connection:
@@ -45,7 +58,7 @@ Ending the call or leaving the app ends the connection.
 
 ## Dictation
 
-Dictation is different from live voice. The composer microphone transcribes speech on your device with Apple's Speech framework, and dictation audio is never uploaded.
+Dictation is different from live voice. The composer microphone transcribes speech on your device with Apple's Speech framework, and dictation audio is never uploaded. The text becomes part of your message, and is sent to your workspace and its AI provider only when you send it.
 
 The temporary recording is deleted once it has been transcribed, or when you cancel, open another conversation or page, or leave the app. If transcription fails, the recording is kept so you can retry, until you cancel. If the app is closed unexpectedly while a recording exists, the protected temporary file remains until iOS clears temporary storage.
 
@@ -71,7 +84,7 @@ Signing out, or changing workspace, deletes the session token and the drafts for
 
 The app asks for a permission only when you first use the feature that needs it:
 
-- **Microphone:** dictation and live voice.
+- **Microphone:** dictation, transcribed on your device, and live voice, which sends your audio to OpenAI.
 - **Speech Recognition:** dictation.
 - **Camera:** taking a photo to attach.
 
@@ -85,7 +98,7 @@ Apple provides app developers with crash reports and usage statistics from peopl
 
 ## Third parties
 
-The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above; pages you open are loaded by the browser.
+The app does not sell your data or share it for advertising, and it contains no third-party advertising or analytics code. It sends data only to your workspace, to OpenAI during a live voice call, and to the image hosts listed above; pages you open are loaded by the browser. Your workspace shares your content with AI providers as described in [AI providers](#ai-providers).
 
 The app is built with the open-source libraries declared in [`project.yml`](./project.yml). They run only on your device or as part of a call you start.
 
@@ -95,6 +108,7 @@ QM is a tool for work. It is not directed to children.
 
 ## Your choices
 
+- Withdraw your agreement to share data with AI providers in the app's Settings, under AI data sharing.
 - Withdraw microphone, speech recognition, or camera access in iOS Settings.
 - Sign out to remove your session and drafts from the device.
 - For a copy of, or the deletion of, data held by a workspace, contact that workspace's operator.

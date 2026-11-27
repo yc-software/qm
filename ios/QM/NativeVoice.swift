@@ -680,6 +680,8 @@ private struct NativeVoiceConnectionLoading: View {
 struct VoiceView: View {
   @State private var model: NativeVoiceModel
   @State private var confirmingAgentVoice = false
+  @AppStorage(AIConsent.key) private var aiConsent = false
+  @State private var askingAIConsent = false
   @State private var followsLatest = true
   @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
@@ -773,6 +775,7 @@ struct VoiceView: View {
         )
       }
     }
+    .aiConsentSheet(isPresented: $askingAIConsent, then: startVoice)
     .task { await model.load() }
     .onDisappear { model.finish() }
     .onChange(of: phase) {
@@ -800,6 +803,10 @@ struct VoiceView: View {
   }
 
   private func startVoice() {
+    guard aiConsent else {
+      askingAIConsent = true
+      return
+    }
     Task { await model.start() }
   }
 }

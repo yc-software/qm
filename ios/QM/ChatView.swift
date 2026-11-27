@@ -38,6 +38,9 @@ struct ChatView: View {
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
   @State private var composerFocused = false
+  @AppStorage(AIConsent.key) private var aiConsent = false
+  @State private var askingAIConsent = false
+  @State private var afterAIConsent: () -> Void = {}
   @Environment(\.shellNavRoom) private var navRoom
 
   init(
@@ -181,6 +184,7 @@ struct ChatView: View {
         attachment: attachment, account: model.attachmentAccount, client: model.client)
     }
     .onChange(of: model.client.generation) { model.cancelAttachmentUpload() }
+    .aiConsentSheet(isPresented: $askingAIConsent) { afterAIConsent() }
     .sheet(isPresented: $showingWorkers) {
       if let swarm { NavigationStack { NativeSwarmWorkers(model: swarm) } }
     }
@@ -822,7 +826,14 @@ struct ChatView: View {
     dictation.busy ? .smooth(duration: 0.26) : .smooth(duration: 0.5)
   }
 
+  private func withAIConsent(_ action: @escaping () -> Void) {
+    if aiConsent { return action() }
+    afterAIConsent = action
+    askingAIConsent = true
+  }
+
   private func send(_ proxy: ScrollViewProxy) {
+    guard aiConsent else { return withAIConsent { send(proxy) } }
     showingAgents = false
     composerFocused = false
     targetSequence = nil
@@ -877,10 +888,12 @@ struct ChatView: View {
             .transition(.opacity)
         } else {
           Button {
-            composerFocused = false
-            liftsTranscript = followsLatest
-            dictationLift = expectedDictationLift
-            dictation.start()
+            withAIConsent {
+              composerFocused = false
+              liftsTranscript = followsLatest
+              dictationLift = expectedDictationLift
+              dictation.start()
+            }
           } label: {
             Image(systemName: "mic")
               .font(.system(size: 18)).frame(width: 44, height: 44)

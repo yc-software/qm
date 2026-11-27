@@ -147,6 +147,14 @@ struct NativeSettingsView: View {
           Label("Connections and credentials", systemImage: "key")
         }
       }
+      Section("Privacy") {
+        NavigationLink {
+          AIConsentSettings()
+        } label: {
+          Label("AI data sharing", systemImage: "hand.raised")
+        }
+        Link("Privacy policy", destination: AIConsent.policyURL)
+      }
       Section("Defaults") {
         NavigationLink("Model and effort") {
           RuntimeControlsView(client: client, scopeID: "personal:\(identity.user)")
