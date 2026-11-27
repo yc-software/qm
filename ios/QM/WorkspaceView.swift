@@ -4,6 +4,7 @@ struct WorkspaceDestination: Identifiable {
   let id: String
   let title: String
   let icon: String
+  var asset = false
   var section: String {
     switch id {
     case "inbox", "calendar", "voice.html", "contexts", "bots", "files": "Your work"
@@ -17,7 +18,9 @@ struct WorkspaceDestination: Identifiable {
       .init(id: "voice.html", title: "Talk to QM", icon: "waveform"),
       .init(id: "contexts", title: "Projects", icon: "folder"),
     ]
-    if bots { destinations.append(.init(id: "bots", title: "Bots", icon: "")) }
+    if bots {
+      destinations.append(.init(id: "bots", title: "Bots", icon: "Activity-bot", asset: true))
+    }
     destinations += [
       .init(id: "files", title: "Files", icon: "doc.on.doc"),
       .init(id: "crons", title: "Crons", icon: "clock"),
@@ -126,8 +129,9 @@ struct MoreGrid: View {
       VStack(alignment: .leading, spacing: 0) {
         Text(destination.title).font(.title3)
         Spacer(minLength: 20)
-        if destination.id == "bots" {
-          BotGlyph(size: 17)
+        if destination.asset {
+          Image(destination.icon).resizable().renderingMode(.template).scaledToFit()
+            .frame(width: 17, height: 17)
         } else {
           Image(systemName: destination.icon).font(.system(size: 17, weight: .medium))
         }

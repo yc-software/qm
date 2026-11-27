@@ -36,7 +36,8 @@ final class NativeBotsTests: XCTestCase {
     let model = BotsModel(
       client: server.client([
         "POST /api/sessions": [
-          .init(body: #"{"session":{"id":"s1","scopeId":"personal:test","threadRef":"web:test:s1"}}"#)
+          .init(
+            body: #"{"session":{"id":"s1","scopeId":"personal:test","threadRef":"web:test:s1"}}"#)
         ],
         "PUT /api/sessions/s1/persona": [.init(body: #"{"persona":{"sessionModelId":"m1"}}"#)],
       ]),
@@ -45,8 +46,10 @@ final class NativeBotsTests: XCTestCase {
     let chat = try await XCTUnwrap(model.startChat(with: bot))
     XCTAssertEqual(chat.conversation.personaId, "b1")
     XCTAssertEqual(chat.modelId, "m1")
-    XCTAssertEqual(server.calls(to: "POST /api/sessions").first?.json["scopeId"] as? String, "personal:test")
-    XCTAssertEqual(server.calls(to: "PUT /api/sessions/s1/persona").first?.json["personaId"] as? String, "b1")
+    XCTAssertEqual(
+      server.calls(to: "POST /api/sessions").first?.json["scopeId"] as? String, "personal:test")
+    XCTAssertEqual(
+      server.calls(to: "PUT /api/sessions/s1/persona").first?.json["personaId"] as? String, "b1")
     XCTAssertEqual(model.chatModel(chat).effectiveRuntime?.modelId, "m1")
   }
 

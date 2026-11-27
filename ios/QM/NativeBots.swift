@@ -169,11 +169,19 @@ struct NativeBotsView: View {
         NativeCollectionLoading(label: "Loading bots…")
       } else if model.loaded && !model.enabled {
         ContentUnavailableView {
-          Label { Text("Bots aren't turned on for you.") } icon: { BotGlyph(size: 40) }
+          Label {
+            Text("Bots aren't turned on for you.")
+          } icon: {
+            BotGlyph(size: 40)
+          }
         }
       } else if model.loaded && model.bots.isEmpty {
         ContentUnavailableView {
-          Label { Text("No bots yet") } icon: { BotGlyph(size: 40) }
+          Label {
+            Text("No bots yet")
+          } icon: {
+            BotGlyph(size: 40)
+          }
         } description: {
           Text("Create one to give QM a reusable role you can chat with anywhere.")
         }
@@ -190,7 +198,8 @@ struct NativeBotsView: View {
     .navigationTitle("Bots").navigationBarTitleDisplayMode(.inline)
     .searchable(text: $query, prompt: "Search bots")
     .modifier(
-      NativeCollectionRefresh(active: model.loading && model.loaded, label: "Refreshing bots"))
+      NativeCollectionRefresh(active: model.loading && model.loaded, label: "Refreshing bots")
+    )
     .task { await model.load() }
     .refreshable { await model.load() }
     .navigationDestination(item: $chat) { ChatView(model: model.chatModel($0)) }
@@ -212,9 +221,6 @@ struct NativeBotsView: View {
       }.padding(.vertical, 8)
     }
     .listRowBackground(QMTheme.paper)
-    .swipeActions(edge: .leading) {
-      Button("Chat", systemImage: "bubble.left") { start(bot) }.tint(.blue)
-    }
     .contextMenu {
       Button("Chat with \(bot.name)", systemImage: "bubble.left") { start(bot) }
     }
