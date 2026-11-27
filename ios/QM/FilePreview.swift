@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
@@ -9,6 +10,18 @@ struct FileAttachmentView: View {
   @State private var showingPreview = false
 
   var body: some View {
+    if FilePreviewResource.rendersInline(file.name),
+      let path = FilePreviewResource.path(for: file.artifactId)
+    {
+      WorkspaceMarkdownImage(url: client.url(path), client: client, files: [file])
+        .frame(maxWidth: 280, maxHeight: 360, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    } else {
+      card
+    }
+  }
+
+  private var card: some View {
     Button {
       showingPreview = true
     } label: {
@@ -157,6 +170,15 @@ enum FilePreviewResource {
         })
     ).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
     return safe.isEmpty ? "Attachment" : String(safe.suffix(180))
+  }
+
+  static func rendersInline(_ name: String?) -> Bool {
+    let fileExtension = URL(fileURLWithPath: filename(name)).pathExtension
+    guard let type = UTType(filenameExtension: fileExtension), type.conforms(to: .image) else {
+      return false
+    }
+    let decodable = CGImageSourceCopyTypeIdentifiers() as? [String] ?? []
+    return decodable.contains(type.identifier)
   }
 
   static func typeDescription(_ name: String?) -> String {

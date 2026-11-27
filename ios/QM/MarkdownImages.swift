@@ -11,7 +11,15 @@ enum MarkdownImageResource {
   }
 
   static func thumbnail(_ data: Data, maximumPixels: Int) throws -> CGImage {
-    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+    try thumbnail(CGImageSourceCreateWithData(data as CFData, nil), maximumPixels: maximumPixels)
+  }
+
+  static func thumbnail(contentsOf url: URL, maximumPixels: Int) throws -> CGImage {
+    try thumbnail(CGImageSourceCreateWithURL(url as CFURL, nil), maximumPixels: maximumPixels)
+  }
+
+  private static func thumbnail(_ source: CGImageSource?, maximumPixels: Int) throws -> CGImage {
+    guard let source,
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
       let width = properties[kCGImagePropertyPixelWidth] as? Int,
       let height = properties[kCGImagePropertyPixelHeight] as? Int,
@@ -39,7 +47,7 @@ struct WorkspaceMarkdownImages: MarkdownUI.ImageProvider {
   }
 }
 
-private struct WorkspaceMarkdownImage: View {
+struct WorkspaceMarkdownImage: View {
   let url: URL?
   let client: APIClient
   let files: [DeliveredFile]
@@ -160,6 +168,33 @@ struct WorkspaceInlineImages: InlineImageProvider {
       return Image(image, scale: 1, label: Text(label))
     } catch {
       return Image(systemName: "photo.badge.exclamationmark")
+    }
+  }
+}
+
+struct DraftImageThumbnail: View {
+  let attachment: UploadAttachment
+  let account: String
+  @State private var image: CGImage?
+
+  var body: some View {
+    ZStack {
+      QMTheme.surface
+      if let image {
+        Image(image, scale: 1, label: Text(attachment.name)).resizable().scaledToFill()
+      } else {
+        Image(systemName: "photo").foregroundStyle(.secondary)
+      }
+    }
+    .task(id: attachment.localSHA) {
+      guard let sha = attachment.localSHA else { return }
+      let account = account
+      let worker = Task.detached(priority: .userInitiated) {
+        try AttachmentCache.read(account: account, sha: sha)
+      }
+      guard let prepared = try? await worker.value else { return }
+      defer { withExtendedLifetime(prepared) {} }
+      image = try? MarkdownImageResource.thumbnail(contentsOf: prepared.url, maximumPixels: 240)
     }
   }
 }

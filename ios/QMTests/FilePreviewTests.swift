@@ -25,6 +25,15 @@ final class FilePreviewTests: XCTestCase {
         files: [DeliveredFile(name: "Quarterly Report.png", artifactId: "../private")]))
   }
 
+  func testOnlyDecodableImageAttachmentsRenderInline() {
+    for name in ["Photo 2026-11-27 07.12.03.jpeg", "screen.PNG", "IMG_0001.heic", "anim.gif"] {
+      XCTAssertTrue(FilePreviewResource.rendersInline(name), name)
+    }
+    for name in [nil, "", "report.pdf", "notes.md", "logo.svg", "photo", "archive.zip"] {
+      XCTAssertFalse(FilePreviewResource.rendersInline(name), name ?? "nil")
+    }
+  }
+
   func testArtifactPathCannotEscapeAuthenticatedFileEndpoint() {
     XCTAssertEqual(FilePreviewResource.path(for: "abc-123_4"), "api/files/abc-123_4/content")
     for id in [

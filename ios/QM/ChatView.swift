@@ -755,30 +755,55 @@ struct ChatView: View {
         ScrollView(.horizontal) {
           HStack {
             ForEach(model.attachments) { attachment in
-              HStack(spacing: 8) {
+              if attachment.mimetype.hasPrefix("image/") {
                 Button {
                   composerFocused = false
                   previewingAttachment = attachment
                 } label: {
-                  Label(
-                    attachment.name,
-                    systemImage: attachment.mimetype.hasPrefix("image/") ? "photo" : "doc"
-                  )
-                  .lineLimit(1).frame(minHeight: 44)
+                  DraftImageThumbnail(attachment: attachment, account: model.attachmentAccount)
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Preview \(attachment.name)")
-                Button {
-                  model.attachments.removeAll { $0.id == attachment.id }
-                } label: {
-                  Image(systemName: "xmark.circle.fill")
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                }.accessibilityLabel("Remove \(attachment.name)")
+                .overlay(alignment: .topTrailing) {
+                  Button {
+                    model.attachments.removeAll { $0.id == attachment.id }
+                  } label: {
+                    Image(systemName: "xmark.circle.fill")
+                      .symbolRenderingMode(.palette)
+                      .foregroundStyle(.white, .black.opacity(0.6))
+                      .font(.body)
+                      .padding(4)
+                      .frame(width: 44, height: 44, alignment: .topTrailing)
+                      .contentShape(Rectangle())
+                  }
+                  .accessibilityLabel("Remove \(attachment.name)")
                   .disabled(model.sending)
+                }
+              } else {
+                HStack(spacing: 8) {
+                  Button {
+                    composerFocused = false
+                    previewingAttachment = attachment
+                  } label: {
+                    Label(attachment.name, systemImage: "doc")
+                      .lineLimit(1).frame(minHeight: 44)
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityLabel("Preview \(attachment.name)")
+                  Button {
+                    model.attachments.removeAll { $0.id == attachment.id }
+                  } label: {
+                    Image(systemName: "xmark.circle.fill")
+                      .frame(width: 44, height: 44)
+                      .contentShape(Rectangle())
+                  }.accessibilityLabel("Remove \(attachment.name)")
+                    .disabled(model.sending)
+                }
+                .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
+                .frame(minHeight: 44).background(QMTheme.surface, in: Capsule())
               }
-              .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
-              .frame(minHeight: 44).background(QMTheme.surface, in: Capsule())
             }
           }
         }
