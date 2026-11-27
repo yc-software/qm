@@ -586,16 +586,13 @@ extension ChatModel {
   }
 }
 
-/// Shrinks photos before upload so they send and render quickly. A photo whose long side is
-/// over 2048 px, or that is over 1.5 MB, or that is in a format other than JPEG/PNG (HEIC),
-/// is re-encoded as a JPEG at most 2048 px on the long side. Images with transparency stay PNG.
-/// GIFs and multi-frame images are left alone, and so are files picked from Files. Location and
-/// other metadata are not copied.
 /// Shrinks photos before upload. Attachments are read by vision models, which downscale
 /// anything past about 2048 px on the long side (OpenAI fits images inside 2048×2048 and
 /// Anthropic's limit is lower), so extra pixels only add upload time on a phone connection.
-/// A JPEG or PNG at or under 1.5 MB within that size is already cheap to send and goes as is;
-/// re-encoding at quality 0.82 brings a typical 4–8 MB camera photo to a few hundred KB.
+/// A photo over 2048 px, over 1.5 MB, or in a format other than JPEG/PNG (HEIC) is re-encoded
+/// as a JPEG at quality 0.82, which brings a typical 4–8 MB camera photo to a few hundred KB.
+/// Images with transparency stay PNG; GIFs, multi-frame images and files picked from Files are
+/// left alone. Location and other metadata are not copied.
 enum ImageCompaction {
   static let maximumPixels = 2048
   static let compactAboveBytes = 1_500_000
