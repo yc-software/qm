@@ -107,7 +107,7 @@ import {
   routePersonasHistory,
 } from "./personas";
 import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
-import { openFileById, previewFileById, renderFiles } from "./files";
+import { openFileById, openFileLink, renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
@@ -1188,18 +1188,7 @@ document.addEventListener("click", (e) => {
   const file = fileLinkTarget(anchor.href, location.origin, UI_BASE);
   if (file) {
     e.preventDefault();
-    void previewFileById(file).then(
-      (unpreviewed) => {
-        if (!unpreviewed) return;
-        const opened = window.open(unpreviewed, "_blank");
-        if (opened) opened.opener = null;
-        else location.assign(unpreviewed);
-      },
-      (error: unknown) => {
-        reportHandledError("web:file_link", error);
-        location.assign(anchor.href);
-      },
-    );
+    openFileLink(file, anchor.href);
     return;
   }
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);

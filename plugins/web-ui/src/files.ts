@@ -18,6 +18,7 @@ import {
 } from "lucide";
 import { api, ApiError, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
+import { reportHandledError } from "./browser-errors";
 import { formatBytes, relTime } from "./ui";
 import { browserRenderableImage } from "./media-layout";
 import { icon } from "./icons";
@@ -469,10 +470,25 @@ export function openFileById(id: string): void {
   linkedFileId = id;
 }
 
-export async function previewFileById(id: string): Promise<string | undefined> {
+async function previewFileById(id: string): Promise<string | undefined> {
   const file = await api<FileItem>(`/api/files/${encodeURIComponent(id)}`);
   const href = fileContentUrl(file.id, file.name);
   return openFilePreview(file.name, href, file.mimetype) ? undefined : href;
+}
+
+export function openFileLink(id: string, link: string): void {
+  void previewFileById(id).then(
+    (unpreviewed) => {
+      if (!unpreviewed) return;
+      const opened = window.open(unpreviewed, "_blank");
+      if (opened) opened.opener = null;
+      else window.location.assign(unpreviewed);
+    },
+    (error: unknown) => {
+      reportHandledError("web:file_link", error);
+      window.location.assign(link);
+    },
+  );
 }
 
 async function openLinkedFile(): Promise<void> {
