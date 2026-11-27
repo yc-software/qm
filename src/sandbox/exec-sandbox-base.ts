@@ -18,18 +18,18 @@ const PREP_TIMEOUT_SEC = 60;
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
 
-export const sandboxScopeName = (prefix: string, id: string): string => {
+export const sandboxScopeName = (prefix: string, id: string, maxLength = MAX_SANDBOX_NAME): string => {
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const name = `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-  if (name.length <= MAX_SANDBOX_NAME) return name;
+  if (name.length <= maxLength) return name;
   const hash = shortHash(name);
-  const slugBudget = MAX_SANDBOX_NAME - prefix.length - HASH_LEN - 2;
+  const slugBudget = maxLength - prefix.length - HASH_LEN - 2;
   const slug = slugBudget > 0 ? cleaned.slice(0, slugBudget).replace(/-+$/, "") : "";
   if (slug) return `${prefix}-${slug}-${hash}`;
-  const head = prefix.slice(0, MAX_SANDBOX_NAME - HASH_LEN - 1).replace(/-+$/, "");
+  const head = prefix.slice(0, maxLength - HASH_LEN - 1).replace(/-+$/, "");
   return head ? `${head}-${hash}` : hash;
 };
 

@@ -20,6 +20,8 @@ import {
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
 import {
+  SANDBOX_BASE_IMAGE_SPEC,
+  SANDBOX_BASE_IMAGE_TOOLS,
   SandboxProvisionCleanupError,
   visibleNotInstalled,
   visibleTools,
@@ -40,7 +42,6 @@ import type { RenderBase } from "./render-base.ts";
 import {
   RENDER_COMPUTER_LIFETIME_SEC,
   RENDER_IDLE_STOP_MS,
-  RENDER_BASE_TOOLS,
   RENDER_SANDBOX_TTL_SEC,
   renderEgressAllowlist,
 } from "./render-limits.ts";
@@ -641,7 +642,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       egressEnforcement: egressAllowlist ? "domain" : "none",
       spec: {
         os: `Debian 12 — Render sandbox from the QM sandbox base image (it stops after ${RENDER_IDLE_STOP_MS / 60_000} idle minutes with no running processes and runs at most ${RENDER_COMPUTER_LIFETIME_SEC / 86400} days; it resumes from its last checkpoint with its files and running processes, but open network connections do not survive; publish durable work to git or Files)`,
-        runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
+        runtimes: [...SANDBOX_BASE_IMAGE_SPEC.runtimes],
         cpus: 2,
         memoryMb: 4096,
         diskGb: 10,
@@ -652,7 +653,9 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
         },
         get notInstalled() {
           const probed = baseTools;
-          const missing = probed ? RENDER_BASE_TOOLS.map(([label]) => label).filter((l) => !probed.includes(l)) : [];
+          const missing = probed
+            ? SANDBOX_BASE_IMAGE_TOOLS.map(([label]) => label).filter((l) => !probed.includes(l))
+            : [];
           return visibleNotInstalled(missing, opts.extraTools ?? []);
         },
       },

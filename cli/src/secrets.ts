@@ -237,6 +237,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
   },
   {
+    name: "BASETEN_API_KEY",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "baseten" } },
+    description: "Baseten API key for the agent-computer substrate (Baseten Sandboxes).",
+    generate: "create an API key at https://app.baseten.co/settings/api_keys",
+  },
+  {
     name: "SUPERSERVE_API_KEY",
     service: "core",
     required: { when: { kind: "sandbox-backend", backend: "superserve" } },

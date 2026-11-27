@@ -5,7 +5,8 @@ import { sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import type { RenderClient, RenderSnapshot } from "./render-client.ts";
-import { parseRenderSandboxImage, RENDER_BASE_TOOLS } from "./render-limits.ts";
+import { parseRenderSandboxImage } from "./render-limits.ts";
+import { SANDBOX_BASE_IMAGE_TOOLS } from "./sandbox.ts";
 
 const BUILDER_LIFETIME_SEC = 3600;
 const PREPARE_POLL_MS = 15_000;
@@ -13,7 +14,7 @@ const PREPARE_RETRY_MS = 5 * 60_000;
 const READY_POLL_MS = 5_000;
 const READY_WAIT_MS = 45 * 60_000;
 const TOOL_PROBE_SEC = 60;
-const TOOL_PROBE = `for c in ${RENDER_BASE_TOOLS.map(([, command]) => shq(command)).join(" ")}; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true`;
+const TOOL_PROBE = `for c in ${SANDBOX_BASE_IMAGE_TOOLS.map(([, command]) => shq(command)).join(" ")}; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done; true`;
 
 export interface StoredRenderBase {
   ref: string;
@@ -104,7 +105,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
       const probe = await client.runScript(builder.id, TOOL_PROBE, TOOL_PROBE_SEC);
       if (probe.exitCode !== 0) throw new Error(`Render could not list the tools in ${image.ref}: ${probe.stderr}`);
       const found = new Set(probe.stdout.split("\n"));
-      const tools = RENDER_BASE_TOOLS.filter(([, command]) => found.has(command)).map(([label]) => label);
+      const tools = SANDBOX_BASE_IMAGE_TOOLS.filter(([, command]) => found.has(command)).map(([label]) => label);
       const staged = await client.createSnapshot(builder.id, image.name, "runtime");
       await store.merge(image.digest, { snapshot: staged, tools });
       progress = await finish(staged);

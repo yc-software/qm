@@ -922,6 +922,25 @@ test("e2b is a deployment backend on every target and rejects unused Fly setting
   });
 });
 
+test("baseten backend requires its image in env.core", () => {
+  withConfig({ sandbox: { backend: "baseten" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /baseten sandbox backend requires env.core.BASETEN_SANDBOX_IMAGE/);
+  });
+  for (const target of ["docker", "fly"] as const) {
+    withConfig(
+      {
+        target,
+        sandbox: { backend: "baseten" },
+        env: { core: { BASETEN_SANDBOX_IMAGE: "sandbox/qm-sandbox-abc:latest" } },
+      },
+      ({ path }) => {
+        const { config } = loadConfigAt(path);
+        assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "baseten");
+      },
+    );
+  }
+});
+
 test("superserve backend requires the agent template in env.core", () => {
   withConfig({ sandbox: { backend: "superserve" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE/);

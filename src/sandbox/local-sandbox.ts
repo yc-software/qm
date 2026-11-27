@@ -1,4 +1,4 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
+import { cleanupFailedProvision, SANDBOX_BASE_IMAGE_SPEC } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -377,9 +377,9 @@ export function createLocalSandbox(opts: LocalSandboxOptions = {}): Sandbox {
     egressEnforcement: "none",
     spec: {
       os: `Debian 12 (bookworm), glibc — local Docker container on a ${arch()} host`,
-      runtimes: ["Node 24", "Python 3 (venv on PATH — `pip install` just works)"],
-      tools: ["git", "curl", "wget", "jq", "unzip", "gnupg", "python3", "gh", "aws (CLI v2)"],
-      notInstalled: ["gcloud", "kubectl", "flyctl", "glab"],
+      runtimes: [...SANDBOX_BASE_IMAGE_SPEC.runtimes],
+      tools: [...SANDBOX_BASE_IMAGE_SPEC.tools],
+      notInstalled: [...SANDBOX_BASE_IMAGE_SPEC.notInstalled],
       ...(opts.cpus ? { cpus: opts.cpus } : {}),
       homeDir,
       workdir: workspaceDir,
