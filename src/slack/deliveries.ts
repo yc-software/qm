@@ -83,6 +83,7 @@ function swallowUnlessRateLimited(label: string): (err: unknown) => undefined {
 
 export function createSlackDeliverer(deps: {
   clientForAccount?: (accountId: string, teamId?: string) => any;
+  inFlightRunsForAccount?: (accountId: string) => Pick<TurnFlow["inFlightRuns"], "has"> | undefined;
   externalNamespace?: (accountId: string) => string | undefined;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   core: SlackCoreClient;
@@ -172,7 +173,7 @@ export function createSlackDeliverer(deps: {
       await ackDelivery(d.id);
       return;
     }
-    if (liveRunHoldsDelivery(inFlightRuns, d)) return;
+    if (liveRunHoldsDelivery(deps.inFlightRunsForAccount?.(account?.id ?? "default") ?? inFlightRuns, d)) return;
     let slackApiMs: number | undefined;
     await deliverWithRetry({
       tracker: deliveryTracker,

@@ -867,7 +867,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : await routedPersonaTurn(
               deps.personas,
               routed,
-              storedSession?.personaId ?? input.personaId,
+              input.personaId ?? storedSession?.personaId,
               actor.id,
               scopeId,
             );
@@ -1102,9 +1102,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(input.ephemeral ? { ephemeral: true as const } : {}),
         },
       );
+      const adoptPersona =
+        persona &&
+        (persona.routedBy ||
+          (input.surface === "slack" && input.personaId === persona.persona.id && !threadSession.personaId));
       const session =
         persona && deps.personas
-          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+          ? await (adoptPersona ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
               threadSession,
               persona.persona.id,
             )
