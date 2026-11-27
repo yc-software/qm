@@ -43,7 +43,8 @@ final class NativeBotsTests: XCTestCase {
       ]),
       user: "test")
     let bot = Bot(id: "b1", name: "Reviewer", description: "", role: .read)
-    let chat = try await XCTUnwrap(model.startChat(with: bot))
+    let started = await model.startChat(with: bot)
+    let chat = try XCTUnwrap(started)
     XCTAssertEqual(chat.conversation.personaId, "b1")
     XCTAssertEqual(chat.modelId, "m1")
     XCTAssertEqual(
