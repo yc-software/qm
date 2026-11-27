@@ -2,11 +2,10 @@
 
 CREATE TABLE IF NOT EXISTS qm_personal_scope_rekey_work(
   seq integer PRIMARY KEY,
-  phase text NOT NULL,
-  kind text,
-  tbl text,
-  col text,
-  tenanted boolean,
+  kind text NOT NULL,
+  tbl text NOT NULL,
+  col text NOT NULL,
+  tenanted boolean NOT NULL,
   next_block bigint NOT NULL DEFAULT 0,
   done boolean NOT NULL DEFAULT false
 );
@@ -110,13 +109,13 @@ BEGIN
        WHERE c.table_schema = current_schema() AND c.udt_name = '_text'
       UNION ALL
       SELECT 'json', t.tbl, 'json', t.tenanted FROM tables t WHERE t.has_json AND t.has_text_id
-    ), steps AS (
-      SELECT 1 AS phase_order, 'scan' AS phase, kind, tbl, col, tenanted FROM targets
-      UNION ALL SELECT 2, 'users', NULL, NULL, NULL, NULL
-      UNION ALL SELECT 3, 'move', kind, tbl, col, tenanted FROM targets
     )
-    INSERT INTO qm_personal_scope_rekey_work(seq, phase, kind, tbl, col, tenanted)
-    SELECT row_number() OVER (ORDER BY phase_order, tbl, kind, col), phase, kind, tbl, col, tenanted FROM steps;
+    INSERT INTO qm_personal_scope_rekey_work(seq, kind, tbl, col, tenanted)
+    SELECT row_number() OVER (ORDER BY tenanted, tbl, kind, col), kind, tbl, col, tenanted FROM targets;
+    INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at)
+    SELECT u.tenant_id, u.primary_alias, u.id, 'primary', now() FROM users u
+     WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = u.tenant_id AND l.alias_id = u.primary_alias)
+    ON CONFLICT DO NOTHING;
     RETURN true;
   END IF;
 
@@ -153,27 +152,6 @@ BEGIN
     RETURN false;
   END IF;
 
-  IF w.phase = 'users' THEN
-    INSERT INTO users(tenant_id, id, primary_alias)
-    SELECT DISTINCT x.id,
-           (SELECT (substr(h, 1, 12) || '8' || substr(h, 14, 3)
-                    || to_hex((('x' || substr(h, 17, 1))::bit(4)::int & 3) | 8) || substr(h, 18, 15))::uuid
-              FROM (SELECT encode(sha256(decode('8f0b6a523c1e5d7a9b4e2f6c1d8a7e30', 'hex')
-                                         || convert_to(a.alias, 'UTF8')), 'hex') AS h) f),
-           a.alias
-      FROM (SELECT DISTINCT tenant_id, pg_temp.qm_scope_alias(scope) AS alias FROM qm_personal_scope_rekey_unmatched) a
-      JOIN tenants x ON x.id = a.tenant_id OR a.tenant_id IS NULL
-     WHERE a.alias <> ''
-       AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = x.id AND l.alias_id = a.alias)
-    ON CONFLICT DO NOTHING;
-    INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at)
-    SELECT u.tenant_id, u.primary_alias, u.id, 'primary', now() FROM users u
-     WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = u.tenant_id AND l.alias_id = u.primary_alias)
-    ON CONFLICT DO NOTHING;
-    UPDATE qm_personal_scope_rekey_work SET done = true WHERE seq = w.seq;
-    RETURN true;
-  END IF;
-
   IF to_regclass(quote_ident(w.tbl)) IS NULL THEN
     UPDATE qm_personal_scope_rekey_work SET done = true WHERE seq = w.seq;
     RETURN true;
@@ -187,35 +165,52 @@ BEGIN
   slice := format('t.ctid >= ''(%s,0)''::tid AND t.ctid < ''(%s,0)''::tid', w.next_block, upto);
   tenant_of := CASE WHEN w.tenanted THEN 't.tenant_id' ELSE 'NULL::uuid' END;
 
-  IF w.phase = 'scan' THEN
-    same_tenant := CASE WHEN w.tenanted THEN 'AND l.tenant_id = t.tenant_id' ELSE '' END;
-    IF w.kind = 'column' THEN
-      EXECUTE format(
-        'INSERT INTO qm_personal_scope_rekey_unmatched
-         SELECT DISTINCT %3$s, %1$L, t.%2$I FROM %1$I t
-          WHERE %4$s AND pg_temp.qm_alias_scope(t.%2$I)
-            AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(t.%2$I) %5$s)',
-        w.tbl, w.col, tenant_of, slice, same_tenant);
-    ELSIF w.kind = 'array' THEN
-      EXECUTE format(
-        'INSERT INTO qm_personal_scope_rekey_unmatched
-         SELECT DISTINCT %3$s, %1$L, u.e FROM %1$I t CROSS JOIN LATERAL unnest(t.%2$I) u(e)
-          WHERE %4$s AND pg_temp.qm_alias_scope(u.e)
-            AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(u.e) %5$s)',
-        w.tbl, w.col, tenant_of, slice, same_tenant);
-    ELSE
-      EXECUTE format(
-        'INSERT INTO qm_personal_scope_rekey_unmatched
-         SELECT DISTINCT %2$s, %1$L || ''.json'', v.s FROM %1$I t
-          CROSS JOIN LATERAL (SELECT x #>> ''{}'' AS s FROM jsonb_path_query(t.json,
-            ''strict $.** ? (@.type() == "string" && @ starts with "personal:")'') x) v
-          WHERE %3$s AND t.json::text LIKE ''%%"personal:%%'' AND pg_temp.qm_alias_scope(v.s)
-            AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(v.s) %4$s)',
-        w.tbl, tenant_of, slice, same_tenant);
-    END IF;
-    UPDATE qm_personal_scope_rekey_work SET next_block = upto WHERE seq = w.seq;
-    RETURN true;
+  CREATE TEMP TABLE IF NOT EXISTS qm_personal_scope_found(tenant_id uuid, tbl text, scope text) ON COMMIT DROP;
+  TRUNCATE qm_personal_scope_found;
+  same_tenant := CASE WHEN w.tenanted THEN 'AND l.tenant_id = t.tenant_id' ELSE '' END;
+  IF w.kind = 'column' THEN
+    EXECUTE format(
+      'INSERT INTO qm_personal_scope_found
+       SELECT DISTINCT %3$s, %1$L, t.%2$I FROM %1$I t
+        WHERE %4$s AND pg_temp.qm_alias_scope(t.%2$I)
+          AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(t.%2$I) %5$s)',
+      w.tbl, w.col, tenant_of, slice, same_tenant);
+  ELSIF w.kind = 'array' THEN
+    EXECUTE format(
+      'INSERT INTO qm_personal_scope_found
+       SELECT DISTINCT %3$s, %1$L, u.e FROM %1$I t CROSS JOIN LATERAL unnest(t.%2$I) u(e)
+        WHERE %4$s AND pg_temp.qm_alias_scope(u.e)
+          AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(u.e) %5$s)',
+      w.tbl, w.col, tenant_of, slice, same_tenant);
+  ELSE
+    EXECUTE format(
+      'INSERT INTO qm_personal_scope_found
+       SELECT DISTINCT %2$s, %1$L || ''.json'', v.s FROM %1$I t
+        CROSS JOIN LATERAL (SELECT x #>> ''{}'' AS s FROM jsonb_path_query(t.json,
+          ''strict $.** ? (@.type() == "string" && @ starts with "personal:")'') x) v
+        WHERE %3$s AND t.json::text LIKE ''%%"personal:%%'' AND pg_temp.qm_alias_scope(v.s)
+          AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = pg_temp.qm_scope_alias(v.s) %4$s)',
+      w.tbl, tenant_of, slice, same_tenant);
   END IF;
+  INSERT INTO qm_personal_scope_rekey_unmatched SELECT * FROM qm_personal_scope_found;
+  WITH fresh AS (
+    SELECT DISTINCT x.id AS tenant_id, a.alias,
+           (SELECT (substr(h, 1, 12) || '8' || substr(h, 14, 3)
+                    || to_hex((('x' || substr(h, 17, 1))::bit(4)::int & 3) | 8) || substr(h, 18, 15))::uuid
+              FROM (SELECT encode(sha256(decode('8f0b6a523c1e5d7a9b4e2f6c1d8a7e30', 'hex')
+                                         || convert_to(a.alias, 'UTF8')), 'hex') AS h) f) AS user_id
+      FROM (SELECT DISTINCT tenant_id, pg_temp.qm_scope_alias(scope) AS alias FROM qm_personal_scope_found) a
+      JOIN tenants x ON x.id = a.tenant_id OR a.tenant_id IS NULL
+     WHERE a.alias <> ''
+       AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = x.id AND l.alias_id = a.alias)
+  ), made AS (
+    INSERT INTO users(tenant_id, id, primary_alias) SELECT tenant_id, user_id, alias FROM fresh
+    ON CONFLICT DO NOTHING
+    RETURNING tenant_id, id, primary_alias
+  )
+  INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, created_at)
+  SELECT tenant_id, primary_alias, id, 'primary', now() FROM made
+  ON CONFLICT DO NOTHING;
 
   IF w.tenanted THEN
     moves := '(SELECT tenant_id, alias_id AS alias, ''personal:'' || user_id AS to_scope FROM user_links)';

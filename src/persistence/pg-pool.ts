@@ -282,13 +282,13 @@ function unmigrated(migration: PgMigration): Error {
   return new Error(message);
 }
 
-const BATCHED_MIGRATION = /^--\s*qm:batched\b/;
+const BATCHED_MIGRATION = "-- qm:batched\n";
 const BATCH_LOCK_TIMEOUT = "2s";
 const BATCH_RETRY_MS = 500;
 const BATCH_PROGRESS_MS = 10_000;
 
 export function batchedMigration(migration: PgMigration): boolean {
-  return migration.statements.length === 1 && BATCHED_MIGRATION.test(migration.statements[0]!);
+  return migration.statements.length === 1 && migration.statements[0]!.startsWith(BATCHED_MIGRATION);
 }
 
 function moreBatches(result: QueryResult | QueryResult[]): boolean {
@@ -346,6 +346,12 @@ async function runBatches(
       const code = (error as { code?: unknown }).code;
       if (!discard && (code === "55P03" || code === "40P01")) {
         retries++;
+        if (Date.now() - reported >= BATCH_PROGRESS_MS) {
+          reported = Date.now();
+          console.warn(
+            `[pg-pool] migration ${migration.id}: batch ${batches + 1} retried ${retries} times so far: ${describePgError(error)}`,
+          );
+        }
         await sleep(BATCH_RETRY_MS);
         continue;
       }
