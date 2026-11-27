@@ -19,6 +19,7 @@ export interface Me {
   slackWorkspaceUrl?: string | null;
   slackAppIconUrl?: string | null;
   chatSurfaces?: { kind: string; label: string; mark?: string }[];
+  appsDomain?: string | null;
   impersonatedBy?: string | null;
   displayName?: string | null;
   teammate?: string;

@@ -73,6 +73,7 @@ async function me(ctx: ApiCtx): Promise<void> {
     slackWorkspaceUrl: slack.workspaceUrl,
     slackAppIconUrl: slack.appIconUrl,
     chatSurfaces: app.chatSurfaces(),
+    appsDomain: deps.deployAppsDomain ?? null,
     individualModelAuth: auth.individualModelAuth,
     modelAuthConnected: auth.connections.some(
       (c) => !auth.account || auth.account === "personal" || auth.account === c.provider,

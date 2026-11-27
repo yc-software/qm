@@ -158,6 +158,7 @@ import {
 } from "./timeline";
 import { activityItems, retractedReason, type Item } from "./items";
 import "./slack-setup";
+import "./app-previews";
 import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
@@ -2557,6 +2558,10 @@ export function createChatSurface(
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }
+    if (!isStreaming && answered) {
+      const answer = message.content.flatMap((chunk) => (chunk.type === "text" ? [chunk.text] : [])).join("\n\n");
+      parts.push(html`<qm-app-previews .text=${answer}></qm-app-previews>`);
+    }
     const continuing = isStreaming ? undefined : (message as AssistantWork).continuing;
     if (continuing)
       parts.push(html`<div class="continuing-note">${icon(RefreshCw, 13)}<span>Continuing: ${continuing}</span></div>`);
@@ -3889,7 +3894,7 @@ export function createChatSurface(
       if (!src && a.content) {
         src = dataUrl(a.content, "text/html");
       }
-      if (src) return htmlPreviewCard(a.fileName, src, a.size, artifactHref);
+      if (src) return htmlPreviewCard({ name: a.fileName, src, size: a.size, download: artifactHref });
     }
     return fileChip(a.fileName, a.size, artifactHref ?? localContentUrl(a), a.mimeType);
   }
@@ -3911,7 +3916,8 @@ export function createChatSurface(
     if (!file.artifactId) return fileChip(file.name, file.sizeBytes);
     const href = fileContentUrl(file.artifactId, file.name);
     if (file.mimetype?.startsWith("image/")) return imageChip(file.name, file.sizeBytes, href);
-    if (inlineHtmlName(file.name, file.mimetype)) return htmlPreviewCard(file.name, href, file.sizeBytes, href);
+    if (inlineHtmlName(file.name, file.mimetype))
+      return htmlPreviewCard({ name: file.name, src: href, size: file.sizeBytes, download: href });
     return fileChip(file.name, file.sizeBytes, href, file.mimetype);
   }
 

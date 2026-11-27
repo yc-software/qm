@@ -10,7 +10,7 @@ test("an HTML attachment previews in a sandboxed frame and stays folded once the
     const href = "/api/files/a1/content/report.html";
     const mount = (): HTMLDetailsElement => {
       render(null, host);
-      render(htmlPreviewCard("report.html", href, 2048, href), host);
+      render(htmlPreviewCard({ name: "report.html", src: href, size: 2048, download: href }), host);
       return host.querySelector("details")!;
     };
     const card = mount();
