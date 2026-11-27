@@ -426,6 +426,44 @@ test("attested connectors send one canonical person and never call for an actor 
   service.close();
 });
 
+test("attested MCP calls and catalogs keep each turn's source separate", async (t) => {
+  const mcp = await startMcpTestServer(t);
+  const sources: (string | null)[] = [];
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({
+    servers: store,
+    fetch: (url, init) => {
+      sources.push(new Headers(init?.headers).get("x-qm-source"));
+      return loopbackFetch(url, init);
+    },
+  });
+  t.after(() => service.close());
+  await store.put(server({ id: "records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  for (const account of ["first", "second", undefined]) {
+    const author = { surface: "test", account: account ?? "", id: "U1" };
+    const turn = account
+      ? { surfaceOrigin: { author, workspace: account, audience: "internal" as const }, messageTs: "1.2" }
+      : undefined;
+    sources.length = 0;
+    const before = mcp.requests.filter((request) => request.rpc === "tools/list").length;
+    await service.call(
+      "records",
+      { operation: "invoke", tool: "query", arguments: {} },
+      "U1",
+      undefined,
+      personalScope("U1"),
+      turn,
+    );
+    assert.equal(mcp.requests.filter((request) => request.rpc === "tools/list").length, before + 1);
+    assert.ok(sources.length);
+    assert.deepEqual(
+      new Set(sources),
+      new Set([turn ? Buffer.from(JSON.stringify({ ...author, messageTs: "1.2" })).toString("base64url") : null]),
+    );
+  }
+});
+
 test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(testMap<McpServer>());

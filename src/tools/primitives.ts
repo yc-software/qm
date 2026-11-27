@@ -75,6 +75,7 @@ import {
   type MemoryWrite,
   type OutcomeReport,
 } from "../memory/provider-outcome.ts";
+import type { AttestingTurn } from "../directory/person.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type {
   ControlService,
@@ -523,6 +524,8 @@ export interface ToolContextDeps {
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
+  surfaceOrigin?: AttestingTurn["surfaceOrigin"];
+  messageTs?: string;
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -1236,6 +1239,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
+        surfaceOrigin: deps.surfaceOrigin,
+        messageTs: deps.messageTs,
       });
     },
 
@@ -1244,6 +1249,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
+        surfaceOrigin: deps.surfaceOrigin,
+        messageTs: deps.messageTs,
       });
     },
 

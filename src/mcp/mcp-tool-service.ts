@@ -184,10 +184,25 @@ function refuseOutsideAudience(
   throw new Error(`MCP server ${server.id} acts as the person, so a Slack bot's turn cannot use it`);
 }
 
-function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
+function headersFor(
+  server: McpServer,
+  principalId: string | undefined,
+  approval?: string,
+  turn?: AttestingTurn,
+): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
   const actor = attestedPerson(principalId, `MCP server ${server.id}`);
-  return { ...attestedActorHeaders(actor), ...(approval ? { "x-qm-approval": approval } : {}) };
+  return {
+    ...attestedActorHeaders(actor),
+    ...(approval ? { "x-qm-approval": approval } : {}),
+    ...(turn?.surfaceOrigin
+      ? {
+          "x-qm-source": Buffer.from(
+            JSON.stringify({ ...turn.surfaceOrigin.author, messageTs: turn.messageTs }),
+          ).toString("base64url"),
+        }
+      : {}),
+  };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
@@ -302,16 +317,15 @@ export function createMcpToolService(opts: {
     return createMcpClient({ url: server.url, auth: { mode: "bearer", token }, fetch: opts.fetch });
   }
 
-  async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
+  async function catalogTools(server: McpServer, principalId?: string, turn?: AttestingTurn): Promise<RemoteTool[]> {
     const { catalogs } = tenantState();
     const client = await callerClient(server, principalId);
     const perPerson = server.attestActor || server.credentialScope === "per-user";
-    const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
+    const headers = headersFor(server, principalId, undefined, turn);
+    const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}\0${headers["x-qm-source"] ?? ""}`;
     const cached = catalogs.get(key);
     if (cached) return cached;
-    const listing = client
-      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
-      .then((listed) => listed.tools);
+    const listing = client.listTools({ headers, maxTools: CATALOG_MAX_TOOLS }).then((listed) => listed.tools);
     catalogs.set(key, listing);
     listing.catch(() => {
       if (catalogs.peek(key) === listing) catalogs.delete(key);
@@ -319,9 +333,14 @@ export function createMcpToolService(opts: {
     return listing;
   }
 
-  async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
+  async function catalogEntry(
+    server: McpServer,
+    principalId: string | undefined,
+    name: unknown,
+    turn?: AttestingTurn,
+  ): Promise<RemoteTool> {
     if (typeof name !== "string" || !name) throw new Error("tool is required");
-    const entry = (await catalogTools(server, principalId)).find((t) => t.name === name);
+    const entry = (await catalogTools(server, principalId, turn)).find((t) => t.name === name);
     if (!entry) throw new Error(`Unknown ${server.name} tool: ${name}. Search for it first.`);
     return entry;
   }
@@ -331,12 +350,13 @@ export function createMcpToolService(opts: {
     args: Record<string, unknown>,
     principalId: string | undefined,
     approval: string | undefined,
+    turn?: AttestingTurn,
   ): Promise<string> {
     if (args.operation === "search") {
       const query = typeof args.query === "string" ? args.query : "";
-      return catalogSearch(server, await catalogTools(server, principalId), query);
+      return catalogSearch(server, await catalogTools(server, principalId, turn), query);
     }
-    const entry = await catalogEntry(server, principalId, args.tool);
+    const entry = await catalogEntry(server, principalId, args.tool, turn);
     if (args.operation === "describe") {
       return JSON.stringify({
         name: entry.name,
@@ -354,7 +374,7 @@ export function createMcpToolService(opts: {
     const result = await client.callTool(
       entry.name,
       input as Record<string, unknown>,
-      headersFor(server, principalId, approval),
+      headersFor(server, principalId, approval, turn),
     );
     record("call", `${server.id}/${entry.name}`, approval ? "ok approved" : "ok", principalId);
     return resultText(result);
@@ -525,7 +545,7 @@ export function createMcpToolService(opts: {
         const server = await opts.servers.get(def.serverId);
         if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
         refuseOutsideAudience(server, principalId, audienceScopeId, turn);
-        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool, turn)).annotations);
       } catch (e) {
         record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
         throw e;
@@ -538,7 +558,7 @@ export function createMcpToolService(opts: {
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
         refuseOutsideAudience(server, principalId, audienceScopeId, turn);
-        if (def.catalog) return await callCatalog(server, args, principalId, approval);
+        if (def.catalog) return await callCatalog(server, args, principalId, approval, turn);
         const client = await callerClient(server, principalId);
         if (def.signIn) {
           const { tools, about } = await client.listTools();
@@ -548,7 +568,7 @@ export function createMcpToolService(opts: {
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
           return `Signed in to ${server.name}. Tools now available on server "${server.id}": ${tools.map((t) => t.name).join(", ")}`;
         }
-        const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
+        const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval, turn));
         record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
         return resultText(result);
       } catch (e) {
