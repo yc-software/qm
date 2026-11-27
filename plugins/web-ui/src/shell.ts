@@ -58,7 +58,7 @@ import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas 
 import { reloadIntoServedRelease } from "./stale-release";
 import { notificationPrompt, onNotificationStateChange, startNotifications } from "./notifications";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
-import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
+import { deepLinkPath, fileLinkTarget, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
   beginPaneKindDrag,
@@ -107,7 +107,7 @@ import {
   routePersonasHistory,
 } from "./personas";
 import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
-import { openFileById, renderFiles } from "./files";
+import { openFileById, openFileLink, renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
@@ -1185,6 +1185,12 @@ document.addEventListener("click", (e) => {
   if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
   const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
   if (!anchor?.href || anchor.hasAttribute("download")) return;
+  const file = fileLinkTarget(anchor.href, location.origin, UI_BASE);
+  if (file) {
+    e.preventDefault();
+    openFileLink(file, anchor.href);
+    return;
+  }
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
   if (!target) return;
   e.preventDefault();
@@ -1337,7 +1343,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
-    const linkedFile = wanted === "files" ? params.get("file") : null;
+    const linkedFile = fileLinkTarget(location.href, location.origin, UI_BASE);
     if (linkedFile) openFileById(linkedFile);
     openViewAt(wanted as View, wantedItem, "push");
     return;
