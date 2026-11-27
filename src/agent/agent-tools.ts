@@ -2,7 +2,7 @@ import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ApprovedToolCallSpec, ClientToolDeclaration, ScopeId } from "../types.ts";
+import type { ApprovedToolCallSpec, ClientToolDeclaration, ScopeId, TurnSource } from "../types.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
@@ -34,6 +34,7 @@ export interface ToolContextRef {
   runtimeInFlight?: Set<Promise<unknown>>;
   current: ToolContext | null;
   pendingApprovals?: Array<{
+    source?: TurnSource;
     command: string;
     reason: string;
     kind?: "approval";
@@ -79,7 +80,7 @@ export interface ToolContextRef {
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
-  approvedToolCalls?: Map<string, string>;
+  approvedToolCalls?: Map<string, { approvalKey?: string; source?: TurnSource }>;
   stoppedCalls?: Set<string>;
 }
 

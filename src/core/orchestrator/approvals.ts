@@ -11,6 +11,7 @@ import type {
   Session,
   TurnRequest,
   TurnResult,
+  TurnSource,
 } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import type { SessionWriter } from "../../sessions/session-store.ts";
@@ -37,12 +38,13 @@ export function newApprovalRecord(
   input: OrchestratorInput,
   allowed: ApprovalGrantModes,
 ): PendingApprovalRecord {
-  const { grantModes, ...rest } = fields;
+  const { grantModes, source = input, ...rest } = fields;
   return {
     ...(Object.fromEntries(
       Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
     ) as typeof rest),
     createdAt: Date.now(),
+    source: structuredClone({ origin: source.origin, surfaceOrigin: source.surfaceOrigin }),
     request: replayableRequest(input),
     ...grantModesWithin(allowed, grantModes),
   };
@@ -109,7 +111,12 @@ function approvalRefusal(
 
 function approvedToolCall(requestId: string, record: PendingApprovalRecord): ApprovedToolCall | undefined {
   return record.call
-    ? { callId: approvedCallId(requestId, record.createdAt ?? 0), requestId, ...record.call }
+    ? {
+        callId: approvedCallId(requestId, record.createdAt ?? 0),
+        requestId,
+        ...record.call,
+        source: record.source,
+      }
     : undefined;
 }
 
@@ -345,6 +352,7 @@ export interface ApprovalDecisionTurn {
   approvedCalls: ApprovedToolCall[];
   turnEvents: string[];
   setReleasedToolOutput: (output: PendingApprovalRecord["screenedOutput"]) => void;
+  setSource: (source: TurnSource) => void;
 }
 
 export type ApprovalDecisions = ReturnType<typeof createApprovalDecisions>;
@@ -373,6 +381,9 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
           ...(record.purpose ? { purpose: record.purpose } : {}),
           ...(record.summary && record.call ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
+          ...(decided.approved && turn.input.approval?.requestId === requestId && record.source
+            ? { source: record.source }
+            : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
       }),
@@ -608,6 +619,7 @@ async function approveDecision(
   const call = quarantineRelease ? undefined : approvedToolCall(approval.requestId, p);
   if (!(await recordApprovalDecision(approval.requestId, p, { approved: true, scope }, actor.id, call)))
     return alreadyDecided(approval.requestId);
+  if (p.source) turn.setSource(p.source);
   const useKey = p.approvalKey ?? p.command;
   if (p.screenedOutput && quarantineRelease) {
     setReleasedToolOutput(p.screenedOutput);

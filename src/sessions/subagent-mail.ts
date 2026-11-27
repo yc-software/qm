@@ -221,6 +221,7 @@ async function parentTurn(
     "privateSessionMessage",
     "sessionMessageDepth",
     "delegatingRunId",
+    "delegatingThroughSeq",
     "swarm",
     "approval",
     "proactiveOpener",

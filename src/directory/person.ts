@@ -1,4 +1,4 @@
-import type { TurnRequest } from "../types.ts";
+import type { TurnSource } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isSystemActor, parseScopeId } from "../types.ts";
 
@@ -46,7 +46,7 @@ export function ownPrivateConversation(
 export type AttestAudience = "personal" | "any";
 
 export interface AttestingTurn {
-  source?: Pick<TurnRequest, "origin" | "surfaceOrigin">;
+  source?: TurnSource;
   actAsActor?: boolean;
   botActor?: boolean;
 }

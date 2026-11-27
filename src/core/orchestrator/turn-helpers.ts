@@ -194,6 +194,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.surfaceOrigin ? { surfaceOrigin: input.surfaceOrigin } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
+    ...(input.delegatingThroughSeq !== undefined ? { delegatingThroughSeq: input.delegatingThroughSeq } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),

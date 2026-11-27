@@ -66,6 +66,7 @@ import type {
   SessionType,
   TurnResult,
   TurnRuntime,
+  TurnSource,
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
@@ -562,6 +563,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? await delegatedAuthorization(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
       const delegatedOrigin = delegated?.origin;
+      let mcpSource: TurnSource | undefined = sessionTurn
+        ? delegated?.source
+        : { origin: input.origin, surfaceOrigin: input.surfaceOrigin };
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
       const internalAudience = allInternal && !external;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
@@ -665,7 +669,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
       ): Promise<PendingApproval> => {
-        const record = newApprovalRecord(fields, input, resolution.approvalGrantModes);
+        const record = newApprovalRecord(
+          { ...fields, source: fields.source ?? mcpSource ?? {} },
+          input,
+          resolution.approvalGrantModes,
+        );
         await pending.put(requestId, record);
         return approvalView(requestId, record);
       };
@@ -1501,11 +1509,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           setReleasedToolOutput: (output) => {
             releasedToolOutput = output;
           },
+          setSource: (source) => {
+            mcpSource = source;
+          },
         };
         const approvalDecisions = createApprovalDecisions(approvalTurn);
         const { grantOnce, recordApprovalDecision } = approvalDecisions;
         const approvalOutcome = await applyTurnApprovals(approvalTurn, approvalDecisions);
         if (approvalOutcome) return approvalOutcome;
+        if (isRetry && input.runId) mcpSource = (await deps.sessions.latestTurnSource(input.runId)) ?? mcpSource;
 
         systemPrompt = await appendTurnGuidance({
           deps,
@@ -1852,7 +1864,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memory: context.memory,
           memoryScopeId: notebookScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor, mcpSource: sessionTurn ? delegated : input } : {}),
+          mcpSource: () => mcpSource,
+          ...(!external && deps.mcp ? { mcp: deps.mcp, actAsActor } : {}),
           ...(audienceScopeId ? { audienceScopeId } : {}),
           ...(surface?.capabilities.nativeActor ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
@@ -2374,6 +2387,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ),
             );
             const appended = persisted[0]!;
+            if (appended.kind === "SteeringMessage" && appended.body.source)
+              mcpSource = appended.body.source as TurnSource;
             emittedEntries.push(...persisted);
             for (const post of persisted.slice(1)) if (isAgentReply(post) && post.text) publishPosted(post.text);
             if (mailbox && !continuation && appended.body.environment !== undefined) await mailbox.settle();
@@ -2800,6 +2815,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             approval = await withManagedRosterVersion(() =>
               issueApproval(commandApprovalId(session.id, err.command), {
+                source: err.source,
                 sessionId: session.id,
                 command: err.command,
                 reason: err.approvalReason,

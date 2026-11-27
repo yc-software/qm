@@ -67,9 +67,10 @@ async function rig(opts?: {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   liveReplies?: true;
 }): Promise<Rig> {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const databaseUrl = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(databaseUrl);
+  const { runs } = createPostgresRunStore(databaseUrl);
+  const signals = createPostgresRunSignalStore(databaseUrl);
   const mailbox = createSessionMailbox(testMap<SessionMessage>(["recipientId", "wake"]));
   const advisoryLock = testAdvisoryLock();
   const steerRun: SessionSyscallDeps["steerRun"] = async (run, signal) => ({
@@ -2757,7 +2758,36 @@ test("delegated human origin keeps its identity boundaries", async () => {
   };
   const origin = { kind: "human" as const, messageTs: "123.456" };
   const r = await delegatedHumanRig({ surfaceOrigin, origin });
-  assert.deepEqual(await delegatedAuthorization(r.run.request, r), { surfaceOrigin, origin });
+  assert.deepEqual(await delegatedAuthorization(r.run.request, r), { origin, source: { surfaceOrigin, origin } });
+  const steeredSource = { surfaceOrigin, origin: { kind: "human" as const, messageTs: "234.567" } };
+  await r.sessions.append(
+    { sessionId: r.room.id, turnId: r.parent.id },
+    { kind: "SteeringMessage", author: actor.id, text: "updated task", body: { source: steeredSource } },
+  );
+  const opened = await r.api.open({ task: "updated task", persistent: true });
+  assert.ok(opened.ok);
+  const newChild = await freshSession(r.sessions, opened.sessionId);
+  const newerRun = (await r.runs.inFlightForThread(newChild.threadRef))[0]!;
+  assert.deepEqual((await delegatedAuthorization(newerRun.request, r))?.source, steeredSource);
+  assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.source, { surfaceOrigin, origin });
+  await r.runs.claimById(r.run.id, "child", 60_000);
+  assert.ok((await r.api.write({ target: r.child.id, text: "updated task", wake: true })).ok);
+  const followup = (await r.signals.pending(r.run.id))[0]!.signal.request!;
+  await r.sessions.append(
+    { sessionId: r.room.id, turnId: r.parent.id },
+    { kind: "SteeringMessage", author: actor.id, text: "later task", body: { source: { ...steeredSource, origin } } },
+  );
+  const replayed = await r.runs.enqueue({ sessionId: newChild.threadRef, request: newerRun.request });
+  assert.deepEqual((await delegatedAuthorization(replayed.run.request, r))?.source, steeredSource);
+  assert.deepEqual(
+    (
+      await delegatedAuthorization(
+        { ...r.run.request, ...followup, actor, conversation: r.run.request.conversation },
+        r,
+      )
+    )?.source,
+    steeredSource,
+  );
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorization(r.run.request, r))?.origin.kind, "human");
   const parentClaim = await r.runs.claimById(r.parent.id, "parent", 60_000);
@@ -2802,6 +2832,23 @@ test("a subagent spawned by an owner's fire inherits the fire's automation autho
   const r = await delegatedHumanRig({ origin: { kind: "automation" } });
   assert.equal(r.run.request.origin.kind, "automation");
   assert.deepEqual((await delegatedAuthorization(r.run.request, r))?.origin, { kind: "automation" });
+  const source = {
+    origin: { kind: "human" as const, messageTs: "123.456" },
+    surfaceOrigin: {
+      author: { surface: "slack", account: "T1", id: "U1" },
+      workspace: "T1",
+      audience: "internal" as const,
+    },
+  };
+  await r.sessions.append(
+    { sessionId: r.room.id, turnId: r.parent.id },
+    { kind: "SteeringMessage", author: actor.id, text: "updated task", body: { source } },
+  );
+  const opened = await r.api.open({ task: "updated task" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const updated = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  assert.deepEqual(await delegatedAuthorization(updated.request, r), { origin: { kind: "automation" }, source });
   await r.sessions.removeParticipant(r.run.request.sessionSenderId!, actor.id);
   assert.equal(
     (await delegatedAuthorization(r.run.request, r))?.origin.kind,

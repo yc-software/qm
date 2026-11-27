@@ -7,6 +7,7 @@ import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
 import { reconcile } from "../src/core/turn-resume.ts";
+import { runApprovedToolCall, type BridgedTool } from "../src/agent/turn-support.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -4835,13 +4836,21 @@ function catalogTools(ref: ToolContextRef, name = "records") {
 
 test("a catalog tool asks per call and forwards the approval only on the approved call", async () => {
   const calls: Array<[Record<string, unknown>, string | undefined]> = [];
+  const source = { origin: { kind: "human" as const, messageTs: "2.2" } };
+  let currentSource = source;
+  const sources: unknown[] = [];
   const approved = new Set<string>();
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
-      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-message",
-      callMcpTool: async (_name, args, approval) => {
+      mcpSource: () => structuredClone(currentSource),
+      mcpToolNeedsApproval: async (_name, args) => {
+        currentSource = { origin: { kind: "human", messageTs: "3.3" } };
+        return args.operation === "invoke" && args.tool === "send-message";
+      },
+      callMcpTool: async (_name, args, approval, callSource) => {
         calls.push([args, approval]);
+        sources.push(callSource);
         return "ok";
       },
     },
@@ -4855,11 +4864,20 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   await call(catalog, send);
   assert.deepEqual(calls, [[{ operation: "invoke", tool: "find", arguments: {} }, undefined]]);
   const card = ref.pendingApprovals!.at(-1)!;
+  assert.deepEqual(sources[0], source);
+  assert.deepEqual(card.source, currentSource);
+  currentSource = { origin: { kind: "human", messageTs: "4.4" } };
   assert.equal(card.command, 'records {"arguments":{"to":"x"},"operation":"invoke","tool":"send-message"}');
   approved.add(card.approvalKey!);
   ref.pausedOnApproval = false;
-  await call(catalog, send);
+  await runApprovedToolCall(
+    { ...card.call!, callId: "approved", requestId: "request", source: card.source },
+    ref,
+    [catalog!] as unknown as BridgedTool[],
+    {},
+  );
   assert.deepEqual(calls.at(-1), [send, card.approvalKey]);
+  assert.deepEqual(sources.at(-1), card.source);
   approved.clear();
   ref.pausedOnApproval = false;
   await call(catalog, send);

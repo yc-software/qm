@@ -78,6 +78,7 @@ import {
   type OutcomeReport,
 } from "../memory/provider-outcome.ts";
 import type { AttestingTurn } from "../directory/person.ts";
+import type { TurnSource } from "../types.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type {
   ControlService,
@@ -143,6 +144,7 @@ export class NeedsApproval extends Error {
   matched?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
+  source?: TurnSource;
   constructor(
     command: string,
     reason: string,
@@ -150,6 +152,7 @@ export class NeedsApproval extends Error {
     matched?: string,
     approvalKey?: string,
     grantModes?: ApprovalGrantModes,
+    source?: TurnSource,
   ) {
     super(`command requires approval: ${command}`);
     this.name = "NeedsApproval";
@@ -159,6 +162,7 @@ export class NeedsApproval extends Error {
     this.matched = matched;
     this.approvalKey = approvalKey;
     this.grantModes = grantModes;
+    this.source = source;
   }
 }
 
@@ -262,9 +266,10 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[], callId: string): Promise<MemoryForget | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  mcpSource?(): TurnSource;
+  callMcpTool(name: string, args: Record<string, unknown>, approval?: string, source?: TurnSource): Promise<string>;
   lookupBrain(brain: string, tool: string, args: Record<string, unknown>): Promise<string>;
-  mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
+  mcpToolNeedsApproval(name: string, args: Record<string, unknown>, source?: TurnSource): Promise<boolean>;
   awaitClientResult(
     callId: string,
     timeoutMs: number,
@@ -530,7 +535,7 @@ export interface ToolContextDeps {
   mcp?: McpToolService;
   audienceScopeId?: ScopeId;
   actAsActor?: boolean;
-  mcpSource?: AttestingTurn["source"];
+  mcpSource?: () => AttestingTurn["source"];
   sessionHistory?: {
     search(q: string, limit?: number): Promise<string[]>;
     open(seq: number): Promise<string | null>;
@@ -565,6 +570,10 @@ const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =
     .join(", ");
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
+  const mcpSource = (): TurnSource => {
+    const source = deps.mcpSource?.();
+    return structuredClone({ origin: source?.origin, surfaceOrigin: source?.surfaceOrigin });
+  };
   const inWorkdir = (handle: SandboxHandle, command: string): string =>
     deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
@@ -624,6 +633,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           "approval",
           source.matched,
           source.approvalKey,
+          undefined,
+          mcpSource(),
         );
       return true;
     }
@@ -648,6 +659,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         required.matched,
         approvalKey,
         grantModes,
+        mcpSource(),
       );
     return true;
   };
@@ -1262,12 +1274,19 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.sessionHistory.open(seq);
     },
 
-    async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
+    mcpSource,
+
+    async callMcpTool(
+      name: string,
+      args: Record<string, unknown>,
+      approval?: string,
+      source?: TurnSource,
+    ): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.call(name, args, deps.createdBy, approval, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
-        source: deps.mcpSource,
+        source: source ?? deps.mcpSource?.(),
       });
     },
 
@@ -1285,12 +1304,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       );
     },
 
-    async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
+    async mcpToolNeedsApproval(name: string, args: Record<string, unknown>, source?: TurnSource): Promise<boolean> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
       return deps.mcp.needsApproval(name, args, deps.createdBy, deps.audienceScopeId, {
         actAsActor: deps.actAsActor,
         botActor: deps.botActor,
-        source: deps.mcpSource,
+        source: source ?? deps.mcpSource?.(),
       });
     },
 

@@ -1,6 +1,7 @@
 import { type PgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import type { GoalRecord } from "../agent/goal.ts";
+import type { TurnSource } from "../types.ts";
 import type { GetItemsOptions, SessionStore, SessionWriter } from "./session-store.ts";
 import { DuplicateCallError, userMessagePreview } from "./session-store.ts";
 import { ITEM_COLUMNS, type Item, isUserItem, msOf, type NewItem, storedItem, TENANT, userTurn } from "./items.ts";
@@ -73,6 +74,7 @@ export function createSessionItems(deps: {
   | "countItemsBefore"
   | "latestToolSteps"
   | "latestItemSeq"
+  | "latestTurnSource"
   | "goals"
   | "setGoal"
   | "appendDelivery"
@@ -332,6 +334,20 @@ export function createSessionItems(deps: {
     },
 
     getItems: (sessionId, opts) => readItems(sessionId, opts),
+
+    async latestTurnSource(runId, throughSeq) {
+      const rows = await q(
+        `SELECT i.body->'source' AS source FROM items i
+         JOIN sessions s ON s.tenant_id = i.tenant_id AND s.id = i.session_id
+         JOIN runs r ON r.tenant_id = s.tenant_id AND r.session_id = s.thread_ref
+         WHERE i.tenant_id = ${TENANT} AND r.id = $1::text AND i.turn_id = $1::uuid
+           AND (i.kind = 'SteeringMessage' OR (i.kind = 'ElicitationResponse' AND i.approved = true))
+           AND i.body ? 'source' AND ($2::bigint IS NULL OR i.seq <= $2)
+         ORDER BY i.seq DESC LIMIT 1`,
+        [runId, throughSeq ?? null],
+      );
+      return rows[0]?.source as TurnSource | undefined;
+    },
 
     async getContextWindow(sessionId) {
       const [meta, summary] = await Promise.all([

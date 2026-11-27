@@ -5,6 +5,7 @@ import { errMessage } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { text, type ToolKit } from "./kit.ts";
 import { withToolApprovalGate } from "./wrappers.ts";
+import type { TurnSource } from "../../types.ts";
 
 export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
   const { ref, opts, recordCall, recordResult, recordExternalResult } = kit;
@@ -21,9 +22,10 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
         await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
         try {
           const args = (params ?? {}) as Record<string, unknown>;
+          const approved = ref.approvedToolCalls?.get(callId);
           const out = d.brain
             ? await tc.lookupBrain(d.serverId, d.remoteName, args)
-            : await tc.callMcpTool(d.name, args, ref.approvedToolCalls?.get(callId));
+            : await tc.callMcpTool(d.name, args, approved?.approvalKey, approved?.source);
           return recordExternalResult(
             callId,
             { tool: d.name, mcpServer: d.serverId },
@@ -41,10 +43,10 @@ export function mcpTools(kit: ToolKit, nativeNames: Set<string>) {
       },
     }),
     needsApproval: d.catalog
-      ? async (params: unknown) => {
+      ? async (params: unknown, source?: TurnSource) => {
           const tc = ref.current;
           if (!tc) return true;
-          return tc.mcpToolNeedsApproval(d.name, (isObj(params) ? params : {}) as Record<string, unknown>);
+          return tc.mcpToolNeedsApproval(d.name, (isObj(params) ? params : {}) as Record<string, unknown>, source);
         }
       : d.needsApproval === true,
   }));

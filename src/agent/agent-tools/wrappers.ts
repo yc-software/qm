@@ -9,6 +9,7 @@ import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../util/objects.ts";
 import { withAbort } from "../../util/async.ts";
 import type { ToolContextRef } from "../agent-tools.ts";
+import type { TurnSource } from "../../types.ts";
 import { blockedForApprovalText, type ToolKit } from "./kit.ts";
 
 const RETRY_SAFE_FIELD = "retrySafe";
@@ -100,13 +101,17 @@ function splitCallLabel(params: unknown, labelled: boolean): { params: unknown; 
 }
 
 interface ToolApprovalDeclaration {
-  needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
+  needsApproval?: boolean | ((params: unknown, source?: TurnSource) => boolean | Promise<boolean>);
   approvalReason?: string;
 }
 
-async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
+async function declaredApprovalReason(
+  tool: ToolApprovalDeclaration,
+  params: unknown,
+  source?: TurnSource,
+): Promise<string | undefined> {
   const needed =
-    typeof tool.needsApproval === "function" ? await tool.needsApproval(params) : tool.needsApproval === true;
+    typeof tool.needsApproval === "function" ? await tool.needsApproval(params, source) : tool.needsApproval === true;
   return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
 }
 
@@ -136,6 +141,7 @@ export function withToolApprovalGate(
     ...(labelledParameters ? { parameters: labelledParameters as ToolDefinition["parameters"] } : {}),
     async execute(callId: string, rawParams: unknown) {
       const { params, label } = splitCallLabel(rawParams, !!labelledParameters);
+      const source = ref.approvedToolCalls?.get(callId)?.source ?? ref.current?.mcpSource?.();
       const gate = ref.toolApprovalGate;
       const resourceAction =
         RESOURCE_TOOL_NAMES.has(tool.name) && isObj(params) && typeof params.action === "string"
@@ -147,7 +153,7 @@ export function withToolApprovalGate(
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       let declaredReason: string | undefined;
       try {
-        declaredReason = await declaredApprovalReason(tool, params);
+        declaredReason = await declaredApprovalReason(tool, params, source);
       } catch (error) {
         reportFailure("tool approval: needsApproval check", error, tool.name);
         await recordCall(callId, { tool: tool.name, blocked: "approval_check_failed", error: errMessage(error) });
@@ -187,6 +193,7 @@ export function withToolApprovalGate(
         ref.pendingApprovals?.push(
           callKey
             ? {
+                source,
                 command: approvalCallText(commandLabel, params),
                 reason,
                 kind: "approval",
@@ -197,6 +204,7 @@ export function withToolApprovalGate(
                 ...(isObj(params) ? { call: { tool: tool.name, input: params } } : {}),
               }
             : {
+                source,
                 command: commandLabel,
                 reason,
                 kind: "approval",
@@ -235,9 +243,8 @@ export function withToolApprovalGate(
           true,
         );
       }
-      if (!callKey) return (inner as (callId: string, params: unknown) => unknown)(callId, params);
       const approved = (ref.approvedToolCalls ??= new Map());
-      approved.set(callId, callKey);
+      approved.set(callId, { approvalKey: callKey, source });
       try {
         return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
       } finally {

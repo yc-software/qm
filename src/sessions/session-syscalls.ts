@@ -18,6 +18,7 @@ import type {
   SpawnMeta,
   StopScope,
   TurnOrigin,
+  TurnSource,
 } from "../types.ts";
 import { isSystemActor } from "../types.ts";
 import { childIsolation } from "./child-isolation.ts";
@@ -70,10 +71,11 @@ export function isPersonFire(request: Pick<OrchestratorInput, "origin" | "botAct
 
 export async function delegatedAuthorization(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread"> },
-): Promise<Pick<OrchestratorInput, "origin" | "surfaceOrigin"> | undefined> {
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "latestTurnSource"> },
+): Promise<{ origin: TurnOrigin; source: TurnSource } | undefined> {
   const seen = new Set<string>();
   let current = request;
+  let inheritedSource: TurnSource | undefined;
   for (let depth = 0; depth < 32; depth++) {
     if (
       (current.origin.kind === "automation" && !isPersonFire(current)) ||
@@ -118,6 +120,8 @@ export async function delegatedAuthorization(
       current.conversation.audience.some((person) => !audience.has(person.id))
     )
       return;
+    if (current.delegatingThroughSeq !== undefined)
+      inheritedSource ??= await deps.sessions.latestTurnSource(source.id, current.delegatingThroughSeq);
     const internal =
       parent.conversation.audience.every((person) => person.type === "internal") &&
       (parent.conversation.kind === "dm" ||
@@ -130,7 +134,10 @@ export async function delegatedAuthorization(
         isPersonFire(parent) ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return { origin: parent.origin, surfaceOrigin: parent.surfaceOrigin };
+      return {
+        origin: parent.origin,
+        source: inheritedSource ?? { origin: parent.origin, surfaceOrigin: parent.surfaceOrigin },
+      };
     current = parent;
   }
 }
@@ -369,6 +376,7 @@ export interface SessionSyscallDeps {
     | "participantsOf"
     | "getForParticipant"
     | "descendantsOf"
+    | "latestItemSeq"
   > &
     SubagentActivityDeps["sessions"];
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
@@ -1058,6 +1066,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
+              if (binding.request.runId)
+                request.delegatingThroughSeq = await deps.sessions.latestItemSeq(binding.session.id);
               const steered =
                 input.interrupt || privateMessage
                   ? undefined

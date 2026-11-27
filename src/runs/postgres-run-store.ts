@@ -11,6 +11,7 @@ import { createRunReturns } from "./run-returns.ts";
 import { createRunReads } from "./run-reads.ts";
 import { parked, rowToRun, turnOrder } from "./run-rows.ts";
 import { claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
+import { TENANT } from "../sessions/items.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -139,7 +140,14 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       for (;;) {
         const { rows } = await q(
           `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at, claim_priority)
-           VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
+           VALUES ($1,$2,'pending',
+             CASE WHEN $8::uuid IS NULL THEN $3::text ELSE
+               (($3::text)::jsonb || jsonb_build_object('delegatingThroughSeq',
+                 COALESCE($9::bigint, (SELECT max(i.seq) FROM items i
+                   JOIN sessions s ON s.tenant_id = i.tenant_id AND s.id = i.session_id
+                   JOIN runs r ON r.tenant_id = s.tenant_id AND r.session_id = s.thread_ref
+                   WHERE i.tenant_id = ${TENANT} AND r.id = $8::text AND i.turn_id = $8::uuid), -1)))::text
+             END,$4,0,$5,$6,$7)
            ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
            RETURNING *, ${NOTIFY_SESSION_AVAILABLE}`,
           [
@@ -150,6 +158,8 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
             maxAttempts,
             Date.now(),
             priority,
+            delegating?.id ?? null,
+            request.delegatingThroughSeq ?? null,
           ],
         );
         if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };

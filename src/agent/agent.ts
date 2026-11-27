@@ -13,6 +13,7 @@ import type {
   StopScope,
   TurnRequest,
   TurnRuntime,
+  TurnSource,
 } from "../types.ts";
 import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
@@ -27,6 +28,7 @@ import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } f
 import type { TurnPark } from "../runs/run-store.ts";
 
 export interface ApprovedToolCall extends ApprovedToolCallSpec {
+  source?: TurnSource;
   callId: string;
   requestId: string;
 }
@@ -95,6 +97,7 @@ export interface AgentTurnInput {
     speakerId?: string;
     authorName?: string;
     withheld?: boolean;
+    source?: TurnSource;
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
@@ -170,6 +173,7 @@ export interface AgentTurnResult {
   stopScope?: StopScope;
   stoppedByUser?: true;
   pendingApprovals?: Array<{
+    source?: TurnSource;
     command: string;
     reason: string;
     kind?: "approval";

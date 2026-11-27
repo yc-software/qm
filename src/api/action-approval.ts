@@ -5,6 +5,8 @@ import { approvalCallText } from "../agent/agent-tools/wrappers.ts";
 import { APPROVED_ACTION_HEADER, API_ACTION_TOOL } from "./contract.ts";
 import { sendJson } from "./http.ts";
 import type { ApiCtx } from "./routes/route.ts";
+import { isSessionTurn } from "../core/turn-origin.ts";
+import { delegatedAuthorization } from "../sessions/session-syscalls.ts";
 
 interface ApiAction {
   method: string;
@@ -48,8 +50,16 @@ export async function actionApproved(ctx: ApiCtx, card: { summary: string; shown
   const approvalKey = toolCallApprovalKey(API_ACTION_TOOL, action);
   const requestId = commandApprovalId(claims.sessionId, command, approvalKey);
   if (!(await deps.approvals.get(requestId))) {
+    const source =
+      (await deps.sessions?.latestTurnSource(claims.runId!)) ??
+      (isSessionTurn(run.request)
+        ? deps.runs &&
+          deps.sessions &&
+          (await delegatedAuthorization(run.request, { runs: deps.runs, sessions: deps.sessions }))?.source
+        : run.request);
     const record = newApprovalRecord(
       {
+        source: source ?? {},
         sessionId: claims.sessionId,
         command,
         summary: card.summary,

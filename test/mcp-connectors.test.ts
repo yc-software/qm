@@ -410,7 +410,17 @@ test("attested connectors send one canonical person and never call for an actor 
   });
   const store = createMcpServerStore(testMap<McpServer>());
   const audit = createPostgresAuditLog(testDatabaseUrl());
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, audit, refreshIntervalMs: 3600_000 });
+  const sources: (string | null)[] = [];
+  const service = createMcpToolService({
+    servers: store,
+    audit,
+    refreshIntervalMs: 3600_000,
+    fetch: (url, init) => {
+      sources.push(new Headers(init?.headers).get("x-qm-source"));
+      return loopbackFetch(url, init);
+    },
+  });
+  t.after(() => service.close());
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
   for (const person of ["alice@example.com", "U_ALICE"])
@@ -444,24 +454,7 @@ test("attested connectors send one canonical person and never call for an actor 
     ).length,
     2,
   );
-  service.close();
-});
-
-test("attested MCP calls and catalogs keep each turn's source separate", async (t) => {
-  const mcp = await startMcpTestServer(t);
-  const sources: (string | null)[] = [];
-  const store = createMcpServerStore(testMap<McpServer>());
-  const service = createMcpToolService({
-    servers: store,
-    fetch: (url, init) => {
-      sources.push(new Headers(init?.headers).get("x-qm-source"));
-      return loopbackFetch(url, init);
-    },
-  });
-  t.after(() => service.close());
-  await store.put(server({ id: "records", url: mcp.url, catalog: true, attestActor: true }));
-  await service.refresh();
-  const invocation = { operation: "invoke", tool: "query", arguments: {} };
+  const invocation = { operation: "invoke", tool: "find-record", arguments: {} };
   for (const account of ["first", "second", undefined]) {
     const author = { surface: "test", account: account ?? "", id: "U1" };
     const turn = account
@@ -479,7 +472,6 @@ test("attested MCP calls and catalogs keep each turn's source separate", async (
     const before = mcp.requests.filter((request) => request.rpc === "tools/list").length;
     await service.call("records", invocation, "U1", undefined, personalScope("U1"), turn);
     assert.equal(mcp.requests.filter((request) => request.rpc === "tools/list").length, before + 1);
-    assert.ok(sources.length);
     assert.deepEqual(
       new Set(sources),
       new Set([turn ? Buffer.from(JSON.stringify({ ...author, messageTs: "1.2" })).toString("base64url") : null]),

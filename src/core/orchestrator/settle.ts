@@ -184,6 +184,7 @@ export async function selectTurnResult(turn: {
       issued.push([
         requestId,
         {
+          source: pa.source,
           sessionId: session.id,
           command: pa.command,
           reason: pa.reason,
