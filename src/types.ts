@@ -501,6 +501,7 @@ export interface PendingApprovalRecord {
   homeChannel?: string;
   people?: string[];
   classifiedAttachments?: string[];
+  allowedInputBy?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

@@ -679,6 +679,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(fields.kind !== "input" && releasedAttachments?.length
               ? { classifiedAttachments: releasedAttachments }
               : {}),
+            ...(fields.kind !== "input" && heldInputAllowedBy ? { allowedInputBy: heldInputAllowedBy } : {}),
+            ...(fields.kind !== "input" && heldInputAllowedBy && heldPeople.size ? { people: [...heldPeople] } : {}),
           },
           input,
           resolution.approvalGrantModes,
@@ -780,8 +782,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           canonicalJson(screenedFields(input, homeChannel?.channelName, []));
       const approvalReplaysOwnRequest =
         !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
+      const heldInputAllowedBy =
+        approvalReplaysOwnRequest &&
+        input.approval?.approved === true &&
+        (approvalRecord?.kind === "input" || samePerson(approvalRecord?.allowedInputBy, actor.id))
+          ? actor.id
+          : undefined;
       const replaysHeldInput =
-        approvalReplaysOwnRequest && approvalRecord?.kind === "input" && people.every((name) => heldPeople.has(name));
+        ((approvalReplaysOwnRequest && approvalRecord?.kind === "input") || !!heldInputAllowedBy) &&
+        people.every((name) => heldPeople.has(name));
       const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
