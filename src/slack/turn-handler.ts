@@ -255,6 +255,7 @@ export function createTurnHandler(deps: {
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
       ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
+      account: deps.accountId,
       ...(core.readSurfaceMessages ? { readSurfaceMessages: core.readSurfaceMessages.bind(core) } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),

@@ -40,6 +40,10 @@ export interface WornPersona {
   icon?: ProjectIcon;
 }
 
+export function personaSlackAccount(personaId: string): string {
+  return `persona:${personaId}`;
+}
+
 export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }

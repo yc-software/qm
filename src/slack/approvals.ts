@@ -152,6 +152,7 @@ export function createApprovals(deps: {
       threadOnly: ctx.threadOnly,
       unfurlLinks: false,
       persona,
+      account: ctx.turn.surfaceOrigin?.author.account,
       webUiPublicUrl: deps.webUiPublicUrl,
     });
     for (const batch of batchPostMessageArgs(args)) {

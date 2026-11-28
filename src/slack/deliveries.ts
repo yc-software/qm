@@ -119,6 +119,7 @@ export function createSlackDeliverer(deps: {
     const continues = await personaContinues(core.readSurfaceMessages?.bind(core), at, d.destination.persona);
     const origin = originContext({
       ...(continues ? {} : { persona: d.destination.persona, project: d.destination.project }),
+      account: d.destination.account?.id,
       webUiPublicUrl: deps.webUiPublicUrl,
       ...(source ? { source } : {}),
     });
@@ -292,6 +293,7 @@ export function createSlackDeliverer(deps: {
                 .postMessage(
                   slackPersonaReplyArgs(channel, uploadFailureNote(err), root, {
                     persona: d.destination.persona,
+                    account: d.destination.account?.id,
                     webUiPublicUrl: deps.webUiPublicUrl,
                   }),
                 )
@@ -458,6 +460,7 @@ export function createSlackDeliverer(deps: {
               .postMessage(
                 slackPersonaReplyArgs(channel, uploadFailureNote(uploadError), threadTs, {
                   persona: d.destination.persona,
+                  account: d.destination.account?.id,
                   webUiPublicUrl: deps.webUiPublicUrl,
                 }),
               )

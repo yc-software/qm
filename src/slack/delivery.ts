@@ -6,7 +6,7 @@ import type { WornPersona } from "../types.ts";
 import { emojiNameOf } from "./emoji-map.ts";
 import { blocksWithContext, escapeSlackText } from "./mrkdwn.ts";
 import { projectScopeId } from "../projects/project-store.ts";
-import { parseScopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, personaSlackAccount, type ScopeId } from "../types.ts";
 import type { CachedMessage, ReadMessagesOpts } from "../surface-cache/types.ts";
 
 export interface SlackReplyArgs {
@@ -60,6 +60,7 @@ export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
 
 export function originContext(opts: {
   persona?: WornPersona;
+  account: string | undefined;
   project?: { id: string; name: string };
   webUiPublicUrl?: string;
   source?: { page: "crons" | "webhooks"; id: string; title?: string };
@@ -70,7 +71,7 @@ export function originContext(opts: {
     return base ? `<${base}/${path}|${label}>` : label;
   };
   const origin = [
-    ...(opts.persona
+    ...(opts.persona && opts.account !== personaSlackAccount(opts.persona.id)
       ? [linked(opts.persona.name.trim() || "Persona", `personas/${encodeURIComponent(opts.persona.id)}`)]
       : []),
     ...(opts.project
@@ -144,6 +145,7 @@ export function slackPersonaReplyArgs(
     threadOnly?: boolean;
     unfurlLinks?: boolean;
     persona?: WornPersona;
+    account: string | undefined;
     webUiPublicUrl?: string;
     footer?: Array<Record<string, unknown>>;
     hideOrigin?: boolean;
@@ -151,7 +153,7 @@ export function slackPersonaReplyArgs(
 ): PostMessageArgs {
   const origin =
     opts?.persona && !opts.hideOrigin
-      ? originContext({ persona: opts.persona, webUiPublicUrl: opts.webUiPublicUrl })
+      ? originContext({ persona: opts.persona, account: opts.account, webUiPublicUrl: opts.webUiPublicUrl })
       : undefined;
   const footer = [...(opts?.footer ?? []), ...(origin ? [origin] : [])];
   return {

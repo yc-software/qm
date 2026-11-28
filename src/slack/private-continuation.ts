@@ -105,6 +105,7 @@ export async function continueInPrivate(
           slackPersonaReplyArgs(dm, text, undefined, {
             unfurlLinks: false,
             persona: outcome.persona,
+            account: origin.author.account,
             webUiPublicUrl,
           }),
           `run:${dmRunId}`,
