@@ -196,15 +196,11 @@ struct DemoState: Sendable {
 
   private func list(_ query: [String: String]) -> [Conversation] {
     let search = query["q"] ?? ""
-    return conversations.filter { row in
-      switch query["status"] {
-      case "archived": row.archived == true
-      case "waiting": row.archived != true && row.awaitingInput == true
-      default: row.archived != true
-      }
-    }
-    .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) }
-    .sorted { ($0.lastActivityAt ?? 0) > ($1.lastActivityAt ?? 0) }
+    let filter =
+      ConversationFilter.allCases.first { $0.rawValue.lowercased() == query["status"] } ?? .active
+    return conversations.filter(filter.includes)
+      .filter { search.isEmpty || ($0.title ?? "").localizedCaseInsensitiveContains(search) }
+      .sorted { ($0.lastActivityAt ?? 0) > ($1.lastActivityAt ?? 0) }
   }
 
   private func history(_ id: String) -> Reply {
