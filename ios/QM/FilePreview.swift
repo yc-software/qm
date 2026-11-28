@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
@@ -8,7 +9,38 @@ struct FileAttachmentView: View {
   let client: APIClient
   @State private var showingPreview = false
 
+  static func rendersInline(_ file: DeliveredFile) -> Bool {
+    FilePreviewResource.rendersInline(file.name)
+      && FilePreviewResource.path(for: file.artifactId) != nil
+  }
+
+  /// An image in a message that was just sent, before the server has returned the file.
+  /// It shows as a loading tile rather than a filename card.
+  static func isPendingImage(_ file: DeliveredFile) -> Bool {
+    file.artifactId == nil && FilePreviewResource.rendersInline(file.name)
+  }
+
+  static func showsAsImage(_ file: DeliveredFile) -> Bool {
+    rendersInline(file) || isPendingImage(file)
+  }
+
   var body: some View {
+    if Self.isPendingImage(file) {
+      UploadingImageTile()
+        .frame(width: 220, height: 220)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    } else if FilePreviewResource.rendersInline(file.name),
+      let path = FilePreviewResource.path(for: file.artifactId)
+    {
+      WorkspaceMarkdownImage(url: client.url(path), client: client, files: [file])
+        .frame(maxWidth: 280, maxHeight: 360, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    } else {
+      card
+    }
+  }
+
+  private var card: some View {
     Button {
       showingPreview = true
     } label: {
@@ -157,6 +189,15 @@ enum FilePreviewResource {
         })
     ).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
     return safe.isEmpty ? "Attachment" : String(safe.suffix(180))
+  }
+
+  static func rendersInline(_ name: String?) -> Bool {
+    let fileExtension = URL(fileURLWithPath: filename(name)).pathExtension
+    guard let type = UTType(filenameExtension: fileExtension), type.conforms(to: .image) else {
+      return false
+    }
+    let decodable = CGImageSourceCopyTypeIdentifiers() as? [String] ?? []
+    return decodable.contains(type.identifier)
   }
 
   static func typeDescription(_ name: String?) -> String {

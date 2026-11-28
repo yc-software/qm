@@ -171,6 +171,14 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     guard response.expectedContentLength <= maximumBytes else {
       throw QMError.message("This image is too large for an inline preview.")
     }
+    let data = try await Self.collect(bytes, maximumBytes: maximumBytes)
+    try check(response, generation: current)
+    return data
+  }
+
+  nonisolated private static func collect(_ bytes: URLSession.AsyncBytes, maximumBytes: Int)
+    async throws -> Data
+  {
     var data = Data()
     for try await byte in bytes {
       guard data.count < maximumBytes else {
@@ -178,7 +186,6 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
       }
       data.append(byte)
     }
-    try check(response, generation: current)
     return data
   }
 

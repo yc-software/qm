@@ -147,6 +147,7 @@ struct DraftStore {
           Log.drafts.failure("Removing account drafts", error)
         }
       }
+      InlineImageCache.clear()
       do {
         try AttachmentCache.removeAccount(account: account)
       } catch {

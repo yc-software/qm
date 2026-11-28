@@ -72,6 +72,10 @@ struct NativeChatMessageView: View {
     .contextMenu { if !streaming { messageActions } }
   }
 
+  private var inlineImages: [DeliveredFile] {
+    message.files.filter { FileAttachmentView.showsAsImage($0) }
+  }
+
   @ViewBuilder private var content: some View {
     if !message.text.isEmpty {
       MessageMarkdown(text: message.text, client: client, files: message.referencedFiles)
@@ -87,8 +91,13 @@ struct NativeChatMessageView: View {
     ForEach(message.playgrounds) { artifact in
       NativePlaygroundCard(artifact: artifact, client: client)
     }
+    if inlineImages.count > 1 {
+      AttachmentImageGrid(files: inlineImages, client: client)
+    }
     ForEach(Array(message.files.enumerated()), id: \.offset) { _, file in
-      FileAttachmentView(file: file, client: client)
+      if inlineImages.count <= 1 || !FileAttachmentView.showsAsImage(file) {
+        FileAttachmentView(file: file, client: client)
+      }
     }
     if forking {
       NativeActionLabel(

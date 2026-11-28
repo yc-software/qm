@@ -751,39 +751,6 @@ struct ChatView: View {
         .padding(.bottom, 10)
         .accessibilityIdentifier("goalStrip")
       }
-      if model.conversation.canReply, !model.attachments.isEmpty, !dictation.busy {
-        ScrollView(.horizontal) {
-          HStack {
-            ForEach(model.attachments) { attachment in
-              HStack(spacing: 8) {
-                Button {
-                  composerFocused = false
-                  previewingAttachment = attachment
-                } label: {
-                  Label(
-                    attachment.name,
-                    systemImage: attachment.mimetype.hasPrefix("image/") ? "photo" : "doc"
-                  )
-                  .lineLimit(1).frame(minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Preview \(attachment.name)")
-                Button {
-                  model.attachments.removeAll { $0.id == attachment.id }
-                } label: {
-                  Image(systemName: "xmark.circle.fill")
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-                }.accessibilityLabel("Remove \(attachment.name)")
-                  .disabled(model.sending)
-              }
-              .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
-              .frame(minHeight: 44).background(QMTheme.surface, in: Capsule())
-            }
-          }
-        }
-        .padding(.bottom, 10)
-      }
       if model.conversation.canReply {
         composer(proxy)
       } else if !model.conversation.isSubagent {
@@ -842,12 +809,17 @@ struct ChatView: View {
                 insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.12))))
         } else {
           VStack(alignment: .leading, spacing: 6) {
+            if !model.attachments.isEmpty || model.pendingImageUploads > 0 {
+              attachmentStrip
+            }
             composerTextField
             if let error = dictation.error {
               NativeAudioPermissionNotice(message: error, permission: dictation.permissionError)
                 .padding(.horizontal, 8)
             }
-            if model.uploading, let uploadingName = model.uploadingName {
+            if model.uploading, model.pendingImageUploads == 0,
+              let uploadingName = model.uploadingName
+            {
               NativeChatUploadStatus(filename: uploadingName)
                 .padding(.horizontal, 8)
             }
@@ -943,6 +915,73 @@ struct ChatView: View {
       model.saveDraft()
       if dictation.sendsWhenDone, canSend { send(proxy) } else { composerFocused = true }
     }
+  }
+
+  /// Draft attachments sit inside the composer, above the text, so the field grows to hold
+  /// them rather than stacking a separate row above it.
+  private var attachmentStrip: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 8) {
+        ForEach(model.attachments) { attachment in
+          if attachment.mimetype.hasPrefix("image/") {
+            Button {
+              composerFocused = false
+              previewingAttachment = attachment
+            } label: {
+              DraftImageThumbnail(attachment: attachment, account: model.attachmentAccount)
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview \(attachment.name)")
+            .overlay(alignment: .topTrailing) {
+              Button {
+                model.attachments.removeAll { $0.id == attachment.id }
+              } label: {
+                Image(systemName: "xmark")
+                  .font(.system(size: 10, weight: .bold))
+                  .foregroundStyle(.white)
+                  .frame(width: 22, height: 22)
+                  .background(.black.opacity(0.65), in: Circle())
+                  .padding(6)
+                  .frame(width: 44, height: 44, alignment: .topTrailing)
+                  .contentShape(Rectangle())
+              }
+              .accessibilityLabel("Remove \(attachment.name)")
+              .disabled(model.sending)
+            }
+          } else {
+            HStack(spacing: 8) {
+              Button {
+                composerFocused = false
+                previewingAttachment = attachment
+              } label: {
+                Label(attachment.name, systemImage: "doc")
+                  .lineLimit(1).frame(minHeight: 44)
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel("Preview \(attachment.name)")
+              Button {
+                model.attachments.removeAll { $0.id == attachment.id }
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .frame(width: 44, height: 44)
+                  .contentShape(Rectangle())
+              }.accessibilityLabel("Remove \(attachment.name)")
+                .disabled(model.sending)
+            }
+            .font(.footnote).padding(.leading, 12).padding(.trailing, 4)
+            .frame(minHeight: 44)
+            .overlay { Capsule().strokeBorder(QMTheme.border, lineWidth: 1) }
+          }
+        }
+        ForEach(0..<model.pendingImageUploads, id: \.self) { index in
+          UploadingImageTile(phase: Double(model.attachments.count + index))
+            .frame(width: 80, height: 80)
+        }
+      }
+    }
+    .padding(.horizontal, 4).padding(.top, 4)
   }
 
   private var composerTextField: some View {
@@ -1042,5 +1081,51 @@ private struct DrawerOpenWatcher: View {
     Color.clear.onChange(of: open) { _, open in
       if open { onOpen() }
     }
+  }
+}
+
+/// Stands in for a photo while it uploads: the same size and shape as the thumbnail it
+/// becomes, so the composer doesn't shift when the image arrives. Soft patches in the
+/// dictation glow's colours drift slowly across a quiet grey; each tile starts at its own
+/// phase so a row of them doesn't move in lockstep. Reduce Motion holds them still.
+struct UploadingImageTile: View {
+  var phase: Double = 0
+  var cornerRadius: CGFloat = 16
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorScheme) private var colorScheme
+
+  private struct Patch {
+    let color: Color
+    let speed: Double
+    let offset: Double
+  }
+
+  private static let patches = [
+    Patch(color: NativeDictationGlow.blue, speed: 0.9, offset: 0),
+    Patch(color: NativeDictationGlow.violet, speed: 0.7, offset: 2.1),
+    Patch(color: NativeDictationGlow.pink, speed: 0.8, offset: 4.2),
+    Patch(color: NativeDictationGlow.sky, speed: 0.6, offset: 5.3),
+  ]
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: cornerRadius)
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
+      let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+      ZStack {
+        Color.primary.opacity(0.06)
+        ForEach(Self.patches.indices, id: \.self) { index in
+          let patch = Self.patches[index]
+          let t = time * patch.speed + patch.offset + phase * 1.3
+          Circle()
+            .fill(patch.color.opacity(colorScheme == .dark ? 0.32 : 0.22))
+            .frame(width: 60, height: 60)
+            .blur(radius: 16)
+            .offset(x: 22 * cos(t), y: 22 * sin(t * 1.3 + 0.5))
+        }
+      }
+    }
+    .clipShape(shape)
+    .accessibilityElement()
+    .accessibilityLabel("Uploading photo")
   }
 }

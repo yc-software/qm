@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -263,6 +264,16 @@ struct PickedMedia: Transferable {
     return ordinal > 0 ? "\(name) (\(ordinal + 1))" : name
   }
 
+  /// Photos and pasted images become thumbnails, so they get a same-sized placeholder tile
+  /// while uploading instead of a filename row.
+  var showsAsTile: Bool {
+    switch self {
+    case .file: return false
+    case .image: return true
+    case .media(let name, _): return name.hasPrefix("Photo ")
+    }
+  }
+
   var name: String {
     switch self {
     case .file(let url): return url.lastPathComponent
@@ -278,6 +289,17 @@ struct PickedMedia: Transferable {
     case .media(let name, let load):
       let url = try await load()
       defer { try? FileManager.default.removeItem(at: url) }
+      let source = url
+      if let compacted = await Task.detached(
+        priority: .userInitiated,
+        operation: {
+          ImageCompaction.compact(source)
+        }
+      ).value {
+        defer { try? FileManager.default.removeItem(at: compacted) }
+        return try await AttachmentUpload.prepare(
+          compacted, name: "\(name).\(compacted.pathExtension)")
+      }
       let suffix = url.pathExtension
       return try await AttachmentUpload.prepare(
         url, name: suffix.isEmpty ? name : "\(name).\(suffix)")
@@ -299,7 +321,16 @@ struct PickedMedia: Transferable {
             guard let url else {
               throw error ?? QMError.message("The image could not be read. Copy it and try again.")
             }
-            continuation.resume(returning: try AttachmentUpload.read(url, name: name, type: type))
+            if let compacted = ImageCompaction.compact(url) {
+              defer { try? FileManager.default.removeItem(at: compacted) }
+              let base = (name as NSString).deletingPathExtension
+              continuation.resume(
+                returning: try AttachmentUpload.read(
+                  compacted, name: "\(base).\(compacted.pathExtension)"))
+            } else {
+              continuation.resume(
+                returning: try AttachmentUpload.read(url, name: name, type: type))
+            }
           } catch {
             continuation.resume(throwing: error)
           }
@@ -488,15 +519,18 @@ extension ChatModel {
     attachmentUploadTask = nil
     uploading = false
     uploadingName = nil
+    pendingImageUploads = 0
   }
 
   func uploadAttachments(_ sources: [AttachmentSource]) async {
     guard !conversation.isSubagent, !Task.isCancelled, !sending, !uploading else { return }
     uploading = true
+    pendingImageUploads = sources.filter(\.showsAsTile).count
     defer {
       if !Task.isCancelled {
         uploading = false
         uploadingName = nil
+        pendingImageUploads = 0
       }
     }
     error = nil
@@ -505,6 +539,9 @@ extension ChatModel {
     let account = attachmentAccount
     var failures: [String] = []
     for source in sources {
+      // Runs in the same main-actor turn as the append below, so a placeholder tile turns into
+      // its thumbnail without the strip shifting.
+      defer { if source.showsAsTile { pendingImageUploads = max(0, pendingImageUploads - 1) } }
       do {
         try Task.checkCancellation()
         guard generation == client.generation else { break }
@@ -546,5 +583,79 @@ extension ChatModel {
       }
     }
     if !Task.isCancelled, !failures.isEmpty { error = failures.joined(separator: "\n") }
+  }
+}
+
+/// Shrinks photos before upload. Attachments are read by vision models, which downscale
+/// anything past about 2048 px on the long side (OpenAI fits images inside 2048×2048 and
+/// Anthropic's limit is lower), so extra pixels only add upload time on a phone connection.
+/// A photo over 2048 px, over 1.5 MB, or in a format other than JPEG/PNG (HEIC) is re-encoded
+/// as a JPEG at quality 0.82, which brings a typical 4–8 MB camera photo to a few hundred KB.
+/// Images with transparency stay PNG; GIFs, multi-frame images and files picked from Files are
+/// left alone. Location and other metadata are not copied.
+enum ImageCompaction {
+  static let maximumPixels = 2048
+  static let compactAboveBytes = 1_500_000
+  static let quality = 0.82
+
+  static func compact(_ url: URL) -> URL? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+      CGImageSourceGetCount(source) == 1,
+      let typeID = CGImageSourceGetType(source) as String?,
+      let type = UTType(typeID), type.conforms(to: .image), !type.conforms(to: .gif),
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+      let width = properties[kCGImagePropertyPixelWidth] as? Int,
+      let height = properties[kCGImagePropertyPixelHeight] as? Int,
+      width > 0, height > 0
+    else { return nil }
+    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    let longSide = max(width, height)
+    let hasAlpha = properties[kCGImagePropertyHasAlpha] as? Bool ?? false
+    let plainFormat = type.conforms(to: .jpeg) || type.conforms(to: .png)
+    if hasAlpha {
+      guard longSide > maximumPixels else { return nil }
+    } else {
+      guard longSide > maximumPixels || size > compactAboveBytes || !plainFormat else {
+        return nil
+      }
+    }
+    guard
+      let image = CGImageSourceCreateThumbnailAtIndex(
+        source, 0,
+        [
+          kCGImageSourceCreateThumbnailFromImageAlways: true,
+          kCGImageSourceCreateThumbnailWithTransform: true,
+          kCGImageSourceThumbnailMaxPixelSize: min(longSide, maximumPixels),
+        ] as CFDictionary)
+    else {
+      Log.images.error("Compacting photo failed: could not decode it")
+      return nil
+    }
+    let output: UTType = hasAlpha ? .png : .jpeg
+    let destinationURL = PickedMedia.scratch(output == .png ? "png" : "jpg")
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        destinationURL as CFURL, output.identifier as CFString, 1, nil)
+    else {
+      Log.images.error("Compacting photo failed: no encoder")
+      return nil
+    }
+    CGImageDestinationAddImage(
+      destination, image,
+      (hasAlpha
+        ? [CFString: Double]() : [kCGImageDestinationLossyCompressionQuality: quality])
+        as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+      Log.images.error("Compacting photo failed: encoding did not finish")
+      try? FileManager.default.removeItem(at: destinationURL)
+      return nil
+    }
+    let compactedSize =
+      (try? destinationURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
+    if plainFormat, longSide <= maximumPixels, compactedSize >= size {
+      try? FileManager.default.removeItem(at: destinationURL)
+      return nil
+    }
+    return destinationURL
   }
 }

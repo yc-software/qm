@@ -344,11 +344,11 @@ struct NativeDictationGlow: View {
     let phase: Double
   }
 
-  private static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
-  private static let sky = Color(red: 0.43, green: 0.61, blue: 0.97)
-  private static let violet = Color(red: 0.55, green: 0.40, blue: 0.98)
-  private static let pink = Color(red: 0.98, green: 0.45, blue: 0.62)
-  private static let coral = Color(red: 1.00, green: 0.55, blue: 0.47)
+  static let blue = Color(red: 0.20, green: 0.39, blue: 0.88)
+  static let sky = Color(red: 0.43, green: 0.61, blue: 0.97)
+  static let violet = Color(red: 0.55, green: 0.40, blue: 0.98)
+  static let pink = Color(red: 0.98, green: 0.45, blue: 0.62)
+  static let coral = Color(red: 1.00, green: 0.55, blue: 0.47)
   private static let bands = [
     Band(
       colors: [

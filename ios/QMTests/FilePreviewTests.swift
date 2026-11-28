@@ -25,6 +25,15 @@ final class FilePreviewTests: XCTestCase {
         files: [DeliveredFile(name: "Quarterly Report.png", artifactId: "../private")]))
   }
 
+  func testOnlyDecodableImageAttachmentsRenderInline() {
+    for name in ["Photo 2026-11-27 07.12.03.jpeg", "screen.PNG", "IMG_0001.heic", "anim.gif"] {
+      XCTAssertTrue(FilePreviewResource.rendersInline(name), name)
+    }
+    for name in [nil, "", "report.pdf", "notes.md", "logo.svg", "photo", "archive.zip"] {
+      XCTAssertFalse(FilePreviewResource.rendersInline(name), name ?? "nil")
+    }
+  }
+
   func testArtifactPathCannotEscapeAuthenticatedFileEndpoint() {
     XCTAssertEqual(FilePreviewResource.path(for: "abc-123_4"), "api/files/abc-123_4/content")
     for id in [
@@ -177,5 +186,46 @@ final class FilePreviewTests: XCTestCase {
     XCTAssertFalse(
       FileManager.default.fileExists(atPath: firstURL.deletingLastPathComponent().path))
     XCTAssertEqual(try Data(contentsOf: second.url), Data("second".utf8))
+  }
+
+  func testInlineImageLayoutRule() {
+    XCTAssertEqual((1...12).map(InlineImageLayout.columns), [1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3])
+    XCTAssertEqual(
+      (1...12).map(InlineImageLayout.visibleCount), [1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 9])
+    XCTAssertEqual(InlineImageLayout.overflow(12), 3)
+    XCTAssertEqual(InlineImageLayout.overflow(4), 0)
+  }
+
+  func testLargePhotosAreCompactedBeforeUpload() throws {
+    let large = try writeJPEG(width: 4032, height: 3024)
+    defer { try? FileManager.default.removeItem(at: large) }
+    let compacted = try XCTUnwrap(ImageCompaction.compact(large))
+    defer { try? FileManager.default.removeItem(at: compacted) }
+    let image = try MarkdownImageResource.thumbnail(contentsOf: compacted, maximumPixels: 10_000)
+    XCTAssertEqual(max(image.width, image.height), ImageCompaction.maximumPixels)
+    XCTAssertEqual(compacted.pathExtension, "jpg")
+
+    let small = try writeJPEG(width: 800, height: 600)
+    defer { try? FileManager.default.removeItem(at: small) }
+    XCTAssertNil(ImageCompaction.compact(small))
+  }
+
+  private func writeJPEG(width: Int, height: Int) throws -> URL {
+    let renderer = UIGraphicsImageRenderer(
+      size: CGSize(width: width, height: height),
+      format: {
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 1
+        f.opaque = true
+        return f
+      }())
+    let data = renderer.jpegData(withCompressionQuality: 0.9) { context in
+      UIColor.systemTeal.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString + ".jpg")
+    try data.write(to: url)
+    return url
   }
 }
