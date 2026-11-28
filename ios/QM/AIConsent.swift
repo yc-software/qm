@@ -6,7 +6,9 @@ enum AIConsent {
   /// The workspace address the person agreed for; another workspace may use other providers.
   static let key = "aiDataSharingWorkspace"
   static let policyURL = URL(
-    string: "https://github.com/yc-software/qm/blob/main/ios/PRIVACY.md#ai-providers")!
+    string:
+      "https://github.com/yc-software/qm/blob/877149ad8d63482f4b3bbed528d24ec233d5b73e/ios/PRIVACY.md#ai-providers"
+  )!
 }
 
 struct AIConsentDetails: View {
