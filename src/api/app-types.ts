@@ -305,7 +305,7 @@ export interface App {
     requestId: string,
     viewer?: string,
   ): Promise<
-    | (Omit<PendingApprovalRecord, "call" | "classifiedAttachments"> & {
+    | (Omit<PendingApprovalRecord, "call" | "classifiedAttachments" | "allowedInputBy"> & {
         requestId: string;
         executesOnApprove?: boolean;
       })

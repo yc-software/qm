@@ -834,19 +834,30 @@ test("allowing held input lets in only the attachments the hold's screen classif
 for (const [card, securityPosture, text] of [
   ["tool approval", "strict", "!read notes"],
   ["quarantine release", "auto", "!screened-run printf SCREENING_FIXTURE_BLOCK"],
+  ["chain of command approvals", "strict", "!paused-approval echo hi"],
 ] as const) {
   test(`a ${card} inside an allowed held turn keeps the attachments the hold classified`, async () => {
     const built = freshApp({ securityPosture }, fixtureScreen());
-    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
-    const request = dm(text, { attachments: [{ name: "tool.txt", mimetype: "text/plain", ...blob }] });
-    const turn = async (requestId: string, scope?: "session") =>
-      built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+    const file = async (name: string) => ({
+      name,
+      mimetype: "text/plain",
+      ...(await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"))),
+    });
+    const request = dm(text, { attachments: [await file("tool.txt"), await file("SCREENING_FIXTURE_BLOCK.txt")] });
+    const turn = async (requestId: string, approved = true) =>
+      built.app.turn({ ...request, approval: { requestId, approved } });
     const held = await built.app.turn(request);
-    const tool = (await turn(held.pendingApprovals![0]!.requestId, "session")).pendingApprovals![0]!;
-    assert.equal("classifiedAttachments" in ((await built.app.getApproval(tool.requestId)) ?? {}), false);
-    await turn(tool.requestId);
+    let card = (await turn(held.pendingApprovals![0]!.requestId)).pendingApprovals?.[0];
+    const view = (await built.app.getApproval(card!.requestId)) ?? {};
+    assert.equal("classifiedAttachments" in view || "allowedInputBy" in view, false);
+    for (let step = 0; card && step < 3; step++) {
+      assert.notEqual(card.command, "security-screen");
+      card = (await turn(card.requestId)).pendingApprovals?.[0];
+    }
+    if (card) assert.equal((await turn(card.requestId, false)).pendingApprovals?.length ?? 0, 0);
     const last = (await built.sessions.listLlmRequests(held.sessionId!)).findLast((r) => r.model === "mock");
     assert.match(JSON.stringify(last), /shared tool\.txt \(Files ID/);
+    assert.doesNotMatch(JSON.stringify(last), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
   });
 }
 
