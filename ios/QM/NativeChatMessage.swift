@@ -14,6 +14,7 @@ struct NativeChatMessageView: View {
   var slack: NativeSlackRowStyle? = nil
 
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @State private var selectingText = false
 
   private var isUser: Bool { message.role == "user" }
 
@@ -70,6 +71,7 @@ struct NativeChatMessageView: View {
     }
     .tint(.brown)
     .contextMenu { if !streaming { messageActions } }
+    .sheet(isPresented: $selectingText) { NativeTextSelectionSheet(text: message.text) }
   }
 
   @ViewBuilder private var content: some View {
@@ -171,6 +173,7 @@ struct NativeChatMessageView: View {
       Button("Copy message", systemImage: "doc.on.doc") {
         UIPasteboard.general.string = message.text
       }
+      Button("Select text", systemImage: "character.cursor.ibeam") { selectingText = true }
       ShareLink(item: message.text) { Label("Share message", systemImage: "square.and.arrow.up") }
     }
     if let messageLink {
