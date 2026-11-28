@@ -120,6 +120,7 @@ import {
   createApprovalLedger,
   newApprovalRecord,
   resolveLiveApproval,
+  supersedeEarlierApprovals,
   withdrawCallApprovals,
   type ApprovalDecisionTurn,
 } from "./orchestrator/approvals.ts";
@@ -677,6 +678,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input,
           resolution.approvalGrantModes,
         );
+        await supersedeEarlierApprovals(pending, requestId, record);
         await pending.put(requestId, record);
         return approvalView(requestId, record);
       };
@@ -2828,7 +2830,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let approval: PendingApproval;
           try {
             approval = await withManagedRosterVersion(() =>
-              issueApproval(commandApprovalId(session.id, err.command), {
+              issueApproval(commandApprovalId(session.id, err.command, err.approvalKey, input.runId), {
                 sessionId: session.id,
                 command: err.command,
                 reason: err.approvalReason,

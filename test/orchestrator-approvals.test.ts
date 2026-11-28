@@ -590,6 +590,7 @@ test("Strict posture gates tool actions behind HiLO and honors a session grant",
 
   const second = await built.app.turn(dm("!write notes.md strict-again"));
   assert.equal(second.status, "pending_approval", "an allow-once grant covers exactly one call");
+  assert.notEqual(second.pendingApprovals![0]!.requestId, pending!.requestId, "a later card gets its own id");
   const sessionApproved = await built.app.turn(
     dm("!write notes.md strict-again", {
       approval: { requestId: second.pendingApprovals![0]!.requestId, approved: true, scope: "session" },
@@ -650,6 +651,8 @@ test("allow once authorizes a single use of the rule, not the rest of the sessio
 
   const sibling = await app.turn(dm("!run zz-tool beta"));
   assert.equal(sibling.status, "pending_approval");
+  const again = await app.turn(dm("!run zz-tool alpha"));
+  assert.notEqual(again.pendingApprovals![0]!.requestId, pending.requestId, "a later run's card gets its own id");
 });
 
 test("approvals collected during an approval re-run are still surfaced (multi-step chains)", async () => {
@@ -687,6 +690,17 @@ test("'allow once' authorizes exactly one execution — a sibling approval for t
   const stillPending = second.pendingApprovals?.[0];
   assert.ok(stillPending, "the second same-command invocation must remain pending, not be auto-approved");
   assert.equal(stillPending!.command, command);
+  assert.notEqual(stillPending!.requestId, pending.requestId, "the sibling's card gets its own id");
+});
+
+test("a later run's card for the same command retires the earlier card", async () => {
+  const { app } = await withCommandRules(freshApp());
+  const ask = "!run git push --force origin main";
+  const earlier = (await app.turn(dm(ask))).pendingApprovals![0]!;
+  const later = (await app.turn(dm(ask))).pendingApprovals![0]!;
+  const approve = (requestId: string) => app.turn(dm(ask, { approval: { requestId, approved: true } }));
+  assert.equal((await approve(later.requestId)).status, "ok");
+  assert.equal((await approve(earlier.requestId)).status, "refused");
 });
 
 test("'allow for session' approves every same-command invocation in the same turn", async () => {

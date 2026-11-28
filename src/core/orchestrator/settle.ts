@@ -180,6 +180,7 @@ export async function selectTurnResult(turn: {
           ? `${pa.command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
           : pa.command,
         pa.approvalKey,
+        input.runId,
       );
       issued.push([
         requestId,
