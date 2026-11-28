@@ -61,7 +61,11 @@ test("side-chat previews show pending work and open loaded replies immediately",
                 }),
                 ...(finalized ? [item("AgentMessage", { seq: 2, text: "Both halves are tested." })] : []),
               ]
-            : [...items, item("AgentMessage", { seq: 1, createdAt: Date.now(), text: "The queue survives restarts." })],
+            : [
+                ...items,
+                item("UserMessage", { seq: 1, createdAt: Date.now(), text: "> durable\n\nWhy durable?" }),
+                item("AgentMessage", { seq: 2, createdAt: Date.now(), text: "The queue survives restarts." }),
+              ],
         });
       if (path === "/api/sessions/side?tailTurns=1") return response();
       refreshing = true;
@@ -75,6 +79,7 @@ test("side-chat previews show pending work and open loaded replies immediately",
     await until(
       () => document.querySelector(".side-chat-preview")?.textContent?.includes("survives restarts") === true,
     );
+    assert.equal(document.querySelector(".side-chat-question")?.textContent, "Why durable?");
     document.querySelector<HTMLElement>(".side-chat-preview")!.click();
     await until(() => refreshing);
     await until(

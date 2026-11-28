@@ -1,4 +1,4 @@
-import { sideChatExcerpt } from "./side-chat-excerpt";
+import { withoutSideChatExcerpt } from "./side-chat-excerpt";
 import { createSideChatController } from "./side-chat";
 import { createReadOnlySession } from "./readonly-session";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
@@ -212,6 +212,7 @@ import {
   clearWorking,
   conversationBackground,
   cronRowMeta,
+  hasHumanMessage,
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
@@ -599,7 +600,7 @@ export function createChatSurface(
         nextThreadRef,
         sessionId: chatState.sessionId,
         pendingSend: chatState.pendingSend,
-        hasHumanMessage: (chatState.agent?.state.messages ?? []).some((m) => !(m as { opener?: boolean }).opener),
+        hasHumanMessage: hasHumanMessage(chatState.agent?.state.messages ?? []),
         draft: ctx.composer.state.draft || storedDraft(ref ?? ""),
         attachments: ctx.composer.state.attachments.length,
       })
@@ -2135,9 +2136,10 @@ export function createChatSurface(
       }
 
       const rawText = messageText(message);
-      const quote = isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined;
-      const excerpt = quote ? sideChatExcerpt(quote) : "";
-      const displayText = excerpt && rawText.startsWith(excerpt) ? rawText.slice(excerpt.length) : rawText;
+      const displayText = withoutSideChatExcerpt(
+        rawText,
+        isSideChatSurface() && index === 0 ? chatState.forkSession?.sideChat?.quote : undefined,
+      );
       const attachments = ((message as UserMessageWithAttachments).attachments ?? []) as UserAttachmentView[];
       const sendFailure = (message as { sendFailure?: string }).sendFailure;
       const speaker = speakerLabelFor(message);
@@ -3965,6 +3967,7 @@ export function createChatSurface(
     mountLoadingPane,
     mountLoadError,
     scrollToBottom,
+    holdTranscript: (element) => transcriptViewport.hold(element),
     revealEntry: (seq: number) => {
       if (chatState.inheritedMessages.some((message) => messageEntrySeqs(message).includes(seq))) {
         chatState.inheritedExpanded = true;

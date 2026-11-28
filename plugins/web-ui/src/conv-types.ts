@@ -103,6 +103,7 @@ export interface ChatSurface {
   mountLoadingPane(): () => boolean;
   mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
+  holdTranscript(element?: HTMLElement): void;
   revealEntry(seq: number): boolean;
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
