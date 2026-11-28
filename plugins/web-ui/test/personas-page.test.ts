@@ -499,7 +499,7 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
     calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
     [["POST", "/api/personas/p-ada/versions/1/restore"]],
   );
-  assert.match(flash(main) ?? "", /^Rolled back to version 1\. Slack app icon not set\./);
+  assert.ok(flash(main)?.startsWith("Rolled back to version 1. Slack app icon not set."));
 });
 
 test("an editor saves name, description and instructions with PATCH", async () => {
