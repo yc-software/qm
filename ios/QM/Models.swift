@@ -122,6 +122,7 @@ struct Conversation: Codable, Identifiable, Hashable {
     return surface == "slack" ? "Direct message" : "Untitled chat"
   }
   var needsInput: Bool { awaitingInput == true || (subagents?.waiting ?? 0) > 0 }
+  var showsWorking: Bool { working == true || (subagents?.running ?? 0) > 0 }
   var isSubagent: Bool { parentSessionId?.isEmpty == false }
   var canReply: Bool { localOnly == true || canContinue == true }
 }
